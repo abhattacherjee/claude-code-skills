@@ -3,10 +3,9 @@
 All notable changes to the **claude-code-skills** monorepo are documented here.
 Each skill also maintains its own `CHANGELOG.md` within its directory.
 
-Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
-## [2026-02-24] — Monorepo sync
+Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.## [1.1.0] - 2026-02-24
 
-Synced 7 skills from local source.
+Synced 6 skills from local source.
 
 - `changelog-keeper` v1.0.0 — Keeps CHANGELOG.md up to date by generating categorized entries from git commit history
 - `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
