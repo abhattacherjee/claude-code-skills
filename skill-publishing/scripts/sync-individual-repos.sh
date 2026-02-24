@@ -245,24 +245,43 @@ for SKILL_NAME in "${SKILLS[@]}"; do
   echo "  Version: $VERSION"
 
   # Generate updated README with monorepo option
-  TREE=$(build_tree "$SKILL_DIR" "$SKILL_NAME")
-  # Use the existing README's "What It Does" section if present, otherwise use short desc
-  WHAT_IT_DOES="$SHORT"
+  # Skip if README has custom sections (e.g., forks with unique content)
+  SKIP_README=false
   if [[ -f "$SKILL_DIR/README.md" ]]; then
-    # Try to extract existing "What It Does" content
-    existing_what=$(sed -n '/^## What It Does$/,/^## /{ /^## What It Does$/d; /^## /d; p; }' "$SKILL_DIR/README.md" | sed '/^$/d')
-    if [[ -n "$existing_what" ]]; then
-      WHAT_IT_DOES="$existing_what"
+    # Standard template sections: Installation, Updating, Uninstall, What It Does, Compatibility, Directory Structure, License
+    # If README has sections NOT in this list, it's a custom README — don't overwrite
+    CUSTOM_SECTIONS=$(grep '^## ' "$SKILL_DIR/README.md" | grep -v -E '^## (Installation|Updating|Uninstall|What It Does|Compatibility|Directory Structure|License)$' || true)
+    if [[ -n "$CUSTOM_SECTIONS" ]]; then
+      SKIP_README=true
     fi
   fi
 
-  NEW_README=$(generate_readme "$SKILL_NAME" "$SHORT" "$WHAT_IT_DOES" "$TREE")
-
-  if $DRY_RUN; then
-    echo "  WOULD UPDATE  README.md (with monorepo install option)"
+  if $SKIP_README; then
+    if $DRY_RUN; then
+      echo "  SKIP  README.md (has custom sections, won't overwrite)"
+    else
+      echo "  SKIP  README.md (has custom sections, won't overwrite)"
+    fi
   else
-    echo "$NEW_README" > "$SKILL_DIR/README.md"
-    echo "  UPDATED  README.md"
+    TREE=$(build_tree "$SKILL_DIR" "$SKILL_NAME")
+    # Use the existing README's "What It Does" section if present, otherwise use short desc
+    WHAT_IT_DOES="$SHORT"
+    if [[ -f "$SKILL_DIR/README.md" ]]; then
+      # Try to extract existing "What It Does" content
+      existing_what=$(sed -n '/^## What It Does$/,/^## /{ /^## What It Does$/d; /^## /d; p; }' "$SKILL_DIR/README.md" | sed '/^$/d')
+      if [[ -n "$existing_what" ]]; then
+        WHAT_IT_DOES="$existing_what"
+      fi
+    fi
+
+    NEW_README=$(generate_readme "$SKILL_NAME" "$SHORT" "$WHAT_IT_DOES" "$TREE")
+
+    if $DRY_RUN; then
+      echo "  WOULD UPDATE  README.md (with monorepo install option)"
+    else
+      echo "$NEW_README" > "$SKILL_DIR/README.md"
+      echo "  UPDATED  README.md"
+    fi
   fi
 
   # --- CONTRIBUTING.md (individual repo variant from template) ---
