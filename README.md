@@ -17,6 +17,18 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Installation
 
+### Install all skills
+
+```bash
+git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/claude-code-skills
+cp -r /tmp/claude-code-skills/changelog-keeper ~/.claude/skills/changelog-keeper
+cp -r /tmp/claude-code-skills/claudeception ~/.claude/skills/claudeception
+cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
+cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
+cp -r /tmp/claude-code-skills/skill-publishing ~/.claude/skills/skill-publishing
+rm -rf /tmp/claude-code-skills
+```
+
 ### Install a single skill from the monorepo
 
 ```bash

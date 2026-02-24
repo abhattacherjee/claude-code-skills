@@ -387,11 +387,20 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{GITHUB_USER}}|$GITHUB_USER|g")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$SKILL_COUNT|g")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{LAST_UPDATED}}|$TODAY|g")
-  # Replace catalog table placeholder (multi-line, use a temp file)
+  # Build install-all commands (one cp -r per skill)
+  INSTALL_ALL_CMDS=""
+  for SKILL_NAME in $SKILLS_TO_SYNC; do
+    INSTALL_ALL_CMDS="${INSTALL_ALL_CMDS}cp -r /tmp/claude-code-skills/$SKILL_NAME ~/.claude/skills/$SKILL_NAME
+"
+  done
+
+  # Replace multi-line placeholders (catalog table, install-all commands)
   TMPFILE=$(mktemp)
   echo "$ROOT_README" | while IFS= read -r line; do
     if [[ "$line" == *"{{SKILL_CATALOG_TABLE}}"* ]]; then
       echo "$CATALOG_TABLE"
+    elif [[ "$line" == *"{{SKILL_INSTALL_ALL_COMMANDS}}"* ]]; then
+      printf "%s" "$INSTALL_ALL_CMDS"
     else
       echo "$line"
     fi
