@@ -132,11 +132,11 @@ build_ruleset_json() {
     {
       "type": "required_status_checks",
       "parameters": {
+        "do_not_enforce_on_create": true,
         "strict_required_status_checks_policy": false,
         "required_status_checks": [
           {
-            "context": "validate",
-            "integration_id": null
+            "context": "validate"
           }
         ]
       }

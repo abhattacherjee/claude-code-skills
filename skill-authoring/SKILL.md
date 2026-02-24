@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.0.0
+  version: 2.1.0
 ---
 
 # Skill Authoring
@@ -110,12 +110,13 @@ Extract into `scripts/` when ANY apply:
 - Use `#!/usr/bin/env bash` shebang (portable)
 - **Choose `set` flags by script purpose** (see Pitfall below)
 
-**Pitfall: `set -euo pipefail` causes SIGPIPE (exit 141) in context-gathering scripts.**
-Three common triggers: (1) `find | sort | head -N` — `head` closes the pipe after N lines,
-(2) `grep -c` returns exit 1 when count is 0 (not SIGPIPE, but fails with `-e`),
-(3) `echo "$var" | while read` in subshells. Use `set -euo pipefail` for **validation**
-scripts where pipe failures indicate real problems; use `set -eu` (without pipefail)
-for **context-gathering** scripts that aggregate information from multiple sources.
+**Pitfall: `set -e` interacts badly with bash arithmetic and pipes.**
+Common triggers: (1) `find | sort | head -N` — `head` closes the pipe causing SIGPIPE
+(exit 141) with `pipefail`, (2) `grep -c` returns exit 1 when count is 0,
+(3) `echo "$var" | while read` in subshells, (4) **`((var++))` when var=0** — `((0))`
+evaluates to false, causing `set -e` to terminate the script. Fix: use
+`VAR=$((VAR + 1))` instead of `((VAR++))`. Use `set -euo pipefail` for **validation**
+scripts; use `set -eu` (without pipefail) for **context-gathering** scripts.
 
 **After writing the script, slim SKILL.md:**
 - Replace procedural prose with a Quick Check section pointing to the script
