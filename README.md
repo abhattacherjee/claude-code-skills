@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 6 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 7 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
@@ -13,6 +13,7 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 | [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
 | [skill-authoring](./skill-authoring/) | 2.1.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | [repo](https://github.com/abhattacherjee/skill-authoring) |
 | [skill-publishing](./skill-publishing/) | 2.0.0 | Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports both individual repos and a monorepo (claude-code-skills). | [repo](https://github.com/abhattacherjee/skill-publishing) |
+| [worktree](./worktree/) | 1.0.0 | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. | [repo](https://github.com/abhattacherjee/worktree) |
 
 
 ## Installation
@@ -27,6 +28,7 @@ cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-
 cp -r /tmp/claude-code-skills/scripts ~/.claude/skills/scripts
 cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
 cp -r /tmp/claude-code-skills/skill-publishing ~/.claude/skills/skill-publishing
+cp -r /tmp/claude-code-skills/worktree ~/.claude/skills/worktree
 rm -rf /tmp/claude-code-skills
 ```
 
