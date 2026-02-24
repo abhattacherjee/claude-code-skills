@@ -296,8 +296,13 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
   # Copy LICENSE if it exists
   copy_file "$SKILL_SRC/LICENSE" "$SKILL_DST/LICENSE" "$SKILL_NAME/LICENSE"
 
-  # Generate per-skill README.md (always overwrite — it's auto-generated)
-  SKILL_README="# $NAME
+  # Per-skill README.md: copy local if it exists, otherwise generate
+  if [[ -f "$SKILL_SRC/README.md" ]]; then
+    # Use the skill's own README (preserves fork context, custom sections, etc.)
+    copy_file "$SKILL_SRC/README.md" "$SKILL_DST/README.md" "$SKILL_NAME/README.md"
+  else
+    # Generate a default README with monorepo install instructions
+    SKILL_README="# $NAME
 
 $SHORT
 
@@ -320,18 +325,18 @@ cp -r $SKILL_NAME ~/.claude/skills/$SKILL_NAME
 rm -rf /tmp/ccs
 \`\`\`"
 
-  # Add individual repo install if it exists
-  if [[ -n "$INDIVIDUAL_REPO_URL" ]]; then
-    SKILL_README="$SKILL_README
+    # Add individual repo install if it exists
+    if [[ -n "$INDIVIDUAL_REPO_URL" ]]; then
+      SKILL_README="$SKILL_README
 
 ### From individual repo
 
 \`\`\`bash
 git clone $INDIVIDUAL_REPO_URL.git ~/.claude/skills/$SKILL_NAME
 \`\`\`"
-  fi
+    fi
 
-  SKILL_README="$SKILL_README
+    SKILL_README="$SKILL_README
 
 ## Updating
 
@@ -361,7 +366,8 @@ This skill follows the **Agent Skills** standard — a \`SKILL.md\` file with YA
 
 [MIT](LICENSE)"
 
-  write_file "$SKILL_DST/README.md" "$SKILL_README" "$SKILL_NAME/README.md" "true"
+    write_file "$SKILL_DST/README.md" "$SKILL_README" "$SKILL_NAME/README.md" "true"
+  fi
 
   echo ""
 done
