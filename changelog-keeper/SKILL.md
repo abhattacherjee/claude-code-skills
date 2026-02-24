@@ -2,7 +2,7 @@
 name: changelog-keeper
 description: "Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Use when: (1) user asks to update the changelog, (2) before committing changes that should be documented, (3) preparing a release and need changelog entries, (4) user says 'update changelog' or 'what changed since last release', (5) a commit is about to be pushed and the changelog hasn't been updated."
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Changelog Keeper
@@ -122,6 +122,62 @@ The script follows [Keep a Changelog](https://keepachangelog.com/) format:
 
 ### Added
 - Initial release features
+```
+
+## Multi-Script CHANGELOG Coordination
+
+When multiple scripts modify the same CHANGELOG (e.g., a sync script + a release script), they must recognize each other's entry format to avoid clobbering.
+
+### The Problem
+
+Script A generates `## [2026-02-24] — Monorepo sync` entries.
+Script B promotes them to `## [1.1.0] - 2026-02-24` entries.
+
+If Script A runs after Script B, it doesn't recognize `[1.1.0]` as "already handled" and prepends a new generic entry, burying or duplicating the release entry.
+
+### The Fix: Format-Aware Detection
+
+Each script must detect the other's entry format before writing:
+
+```bash
+FIRST_ENTRY=$(awk '/^## \[/{print; exit}' CHANGELOG.md)
+
+# Detect sync entry (replace it)
+if echo "$FIRST_ENTRY" | grep -q "Monorepo sync"; then
+  # Replace with fresh sync or release entry
+  ...
+
+# Detect versioned release (preserve it)
+elif echo "$FIRST_ENTRY" | grep -qE '## \[[0-9]+\.[0-9]+\.[0-9]+\]'; then
+  # Skip — release entry is the audit record
+  ...
+
+# Neither — prepend new entry
+else
+  ...
+fi
+```
+
+### Bash Newline Pitfall
+
+When building CHANGELOG content via string concatenation, bash `echo` strips trailing newlines from variable expansion. This causes:
+
+```
+Format: Monorepo-level events only.## [1.1.0] - 2026-02-24   ← MISSING BLANK LINE
+```
+
+Fix: Use `printf '%s\n\n' "$HEADER"` instead of relying on embedded newlines in heredoc-assigned variables.
+
+### Semver Tag Filtering
+
+`git describe --tags --abbrev=0` picks up ANY tag (including non-semver like `sync-2026-02-24`). For version detection, filter explicitly:
+
+```bash
+# Wrong — picks up non-semver tags
+git describe --tags --abbrev=0
+
+# Right — only semver v* tags, newest first
+git tag -l 'v[0-9]*' --sort=-v:refname | head -1
 ```
 
 ## Key Decisions

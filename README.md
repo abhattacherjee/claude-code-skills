@@ -8,7 +8,7 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 | Skill | Version | Description | Individual Repo |
 |-------|---------|-------------|-----------------|
-| [changelog-keeper](./changelog-keeper/) | 1.0.0 | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. | [repo](https://github.com/abhattacherjee/changelog-keeper) |
+| [changelog-keeper](./changelog-keeper/) | 1.1.0 | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. | [repo](https://github.com/abhattacherjee/changelog-keeper) |
 | [claudeception](./claudeception/) | 3.2.0 | Extracts reusable knowledge from work sessions and codifies it into Claude Code skills. | [repo](https://github.com/abhattacherjee/claudeception) |
 | [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
 | [skill-authoring](./skill-authoring/) | 2.1.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | [repo](https://github.com/abhattacherjee/skill-authoring) |
