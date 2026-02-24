@@ -1,0 +1,69 @@
+name: Validate Skills
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed skill directories
+        id: changed
+        run: |
+          # Find skill directories that changed in this PR
+          CHANGED_DIRS=$(git diff --name-only origin/main...HEAD | \
+            grep -E '^[a-z][a-z0-9-]+/SKILL\.md' | \
+            sed 's|/SKILL\.md||' | \
+            sort -u || true)
+
+          # Also check for changes to scripts/ within skill dirs
+          SCRIPT_DIRS=$(git diff --name-only origin/main...HEAD | \
+            grep -E '^[a-z][a-z0-9-]+/(scripts|references)/' | \
+            sed 's|/scripts/.*||; s|/references/.*||' | \
+            sort -u || true)
+
+          ALL_DIRS=$(printf "%s\n%s" "$CHANGED_DIRS" "$SCRIPT_DIRS" | sort -u | grep -v '^$' || true)
+
+          if [[ -z "$ALL_DIRS" ]]; then
+            echo "No skill directories changed"
+            echo "dirs=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed skill directories:"
+            echo "$ALL_DIRS"
+            echo "dirs<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$ALL_DIRS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate changed skills
+        if: steps.changed.outputs.dirs != ''
+        run: |
+          chmod +x scripts/validate-skill.sh
+          FAILED=0
+
+          while IFS= read -r dir; do
+            if [[ -d "$dir" ]] && [[ -f "$dir/SKILL.md" ]]; then
+              echo ""
+              echo "=========================================="
+              echo "Validating: $dir"
+              echo "=========================================="
+              if ! scripts/validate-skill.sh "$dir"; then
+                FAILED=1
+              fi
+            fi
+          done <<< "${{ steps.changed.outputs.dirs }}"
+
+          if [[ $FAILED -ne 0 ]]; then
+            echo ""
+            echo "One or more skills failed validation"
+            exit 1
+          fi
+
+      - name: Skip message
+        if: steps.changed.outputs.dirs == ''
+        run: echo "No skill directories were modified — skipping validation"

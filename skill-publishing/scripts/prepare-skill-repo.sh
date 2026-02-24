@@ -270,6 +270,75 @@ $DIRECTORY_TREE
 
 write_file "$SKILL_DIR/README.md" "$README_CONTENT" "README.md"
 
+# --- 5. CONTRIBUTING.md (from template) ---
+if [[ -f "$TEMPLATE_DIR/CONTRIBUTING-template.md" ]]; then
+  SCOPE_TMP=$(mktemp)
+  cat > "$SCOPE_TMP" <<'SCOPE_EOF'
+### Improving this skill
+
+- Edit `SKILL.md` to improve the skill's instructions or metadata
+- Add or improve scripts in `scripts/`
+- Add or update reference material in `references/`
+- Fix bugs or improve documentation
+SCOPE_EOF
+
+  CONTRIBUTING_TMP=$(mktemp)
+  sed "s|{{REPO_NAME}}|$SKILL_NAME|g; s|{{GITHUB_USER}}|$GITHUB_USER|g; s|{{VALIDATE_COMMAND}}|scripts/validate-skill.sh .|g" \
+    "$TEMPLATE_DIR/CONTRIBUTING-template.md" > "$CONTRIBUTING_TMP"
+  awk -v scopefile="$SCOPE_TMP" '{
+    if ($0 ~ /\{\{CONTRIBUTING_SCOPE\}\}/) {
+      while ((getline line < scopefile) > 0) print line
+      close(scopefile)
+    } else print
+  }' "$CONTRIBUTING_TMP" > "$CONTRIBUTING_TMP.out"
+  mv "$CONTRIBUTING_TMP.out" "$CONTRIBUTING_TMP"
+  CONTRIBUTING_CONTENT=$(cat "$CONTRIBUTING_TMP")
+  rm -f "$SCOPE_TMP" "$CONTRIBUTING_TMP"
+  write_file "$SKILL_DIR/CONTRIBUTING.md" "$CONTRIBUTING_CONTENT" "CONTRIBUTING.md"
+fi
+
+# --- 6. .github/PULL_REQUEST_TEMPLATE.md (from template) ---
+if [[ -f "$TEMPLATE_DIR/PR_TEMPLATE-template.md" ]]; then
+  PR_TEMPLATE_CONTENT=$(cat "$TEMPLATE_DIR/PR_TEMPLATE-template.md")
+  if $DRY_RUN; then
+    echo "  WOULD CREATE  .github/PULL_REQUEST_TEMPLATE.md"
+  elif [[ -f "$SKILL_DIR/.github/PULL_REQUEST_TEMPLATE.md" ]]; then
+    echo "  SKIP  .github/PULL_REQUEST_TEMPLATE.md (already exists)"
+  else
+    mkdir -p "$SKILL_DIR/.github"
+    echo "$PR_TEMPLATE_CONTENT" > "$SKILL_DIR/.github/PULL_REQUEST_TEMPLATE.md"
+    echo "  CREATED  .github/PULL_REQUEST_TEMPLATE.md"
+  fi
+fi
+
+# --- 7. .github/workflows/validate-skill.yml (individual repo variant) ---
+if [[ -f "$TEMPLATE_DIR/workflow-individual.yml" ]]; then
+  if $DRY_RUN; then
+    echo "  WOULD CREATE  .github/workflows/validate-skill.yml"
+  elif [[ -f "$SKILL_DIR/.github/workflows/validate-skill.yml" ]]; then
+    echo "  SKIP  .github/workflows/validate-skill.yml (already exists)"
+  else
+    mkdir -p "$SKILL_DIR/.github/workflows"
+    cp "$TEMPLATE_DIR/workflow-individual.yml" "$SKILL_DIR/.github/workflows/validate-skill.yml"
+    echo "  CREATED  .github/workflows/validate-skill.yml"
+  fi
+fi
+
+# --- 8. scripts/validate-skill.sh (copy from skill-publishing) ---
+VALIDATE_SRC="$SCRIPT_DIR/validate-skill.sh"
+if [[ -f "$VALIDATE_SRC" ]]; then
+  if [[ -f "$SKILL_DIR/scripts/validate-skill.sh" ]]; then
+    echo "  SKIP  scripts/validate-skill.sh (already exists)"
+  elif $DRY_RUN; then
+    echo "  WOULD CREATE  scripts/validate-skill.sh"
+  else
+    mkdir -p "$SKILL_DIR/scripts"
+    cp "$VALIDATE_SRC" "$SKILL_DIR/scripts/validate-skill.sh"
+    chmod +x "$SKILL_DIR/scripts/validate-skill.sh"
+    echo "  CREATED  scripts/validate-skill.sh"
+  fi
+fi
+
 echo ""
 if $DRY_RUN; then
   echo "Dry run complete. No files were written."

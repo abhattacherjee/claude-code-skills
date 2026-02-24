@@ -265,15 +265,84 @@ for SKILL_NAME in "${SKILLS[@]}"; do
     echo "  UPDATED  README.md"
   fi
 
+  # --- CONTRIBUTING.md (individual repo variant from template) ---
+  if [[ -f "$TEMPLATE_DIR/CONTRIBUTING-template.md" ]]; then
+    SCOPE_TMP=$(mktemp)
+    cat > "$SCOPE_TMP" <<'SCOPE_EOF'
+### Improving this skill
+
+- Edit `SKILL.md` to improve the skill's instructions or metadata
+- Add or improve scripts in `scripts/`
+- Add or update reference material in `references/`
+- Fix bugs or improve documentation
+SCOPE_EOF
+
+    CONTRIBUTING_TMP=$(mktemp)
+    sed "s|{{REPO_NAME}}|$SKILL_NAME|g; s|{{GITHUB_USER}}|$GITHUB_USER|g; s|{{VALIDATE_COMMAND}}|scripts/validate-skill.sh .|g" \
+      "$TEMPLATE_DIR/CONTRIBUTING-template.md" > "$CONTRIBUTING_TMP"
+    awk -v scopefile="$SCOPE_TMP" '{
+      if ($0 ~ /\{\{CONTRIBUTING_SCOPE\}\}/) {
+        while ((getline line < scopefile) > 0) print line
+        close(scopefile)
+      } else print
+    }' "$CONTRIBUTING_TMP" > "$CONTRIBUTING_TMP.out"
+    mv "$CONTRIBUTING_TMP.out" "$CONTRIBUTING_TMP"
+    CONTRIBUTING_CONTENT=$(cat "$CONTRIBUTING_TMP")
+    rm -f "$SCOPE_TMP" "$CONTRIBUTING_TMP"
+
+    if $DRY_RUN; then
+      echo "  WOULD UPDATE  CONTRIBUTING.md"
+    else
+      echo "$CONTRIBUTING_CONTENT" > "$SKILL_DIR/CONTRIBUTING.md"
+      echo "  UPDATED  CONTRIBUTING.md"
+    fi
+  fi
+
+  # --- .github/PULL_REQUEST_TEMPLATE.md ---
+  if [[ -f "$TEMPLATE_DIR/PR_TEMPLATE-template.md" ]]; then
+    if $DRY_RUN; then
+      echo "  WOULD UPDATE  .github/PULL_REQUEST_TEMPLATE.md"
+    else
+      mkdir -p "$SKILL_DIR/.github"
+      cp "$TEMPLATE_DIR/PR_TEMPLATE-template.md" "$SKILL_DIR/.github/PULL_REQUEST_TEMPLATE.md"
+      echo "  UPDATED  .github/PULL_REQUEST_TEMPLATE.md"
+    fi
+  fi
+
+  # --- .github/workflows/validate-skill.yml (individual variant) ---
+  if [[ -f "$TEMPLATE_DIR/workflow-individual.yml" ]]; then
+    if $DRY_RUN; then
+      echo "  WOULD UPDATE  .github/workflows/validate-skill.yml"
+    else
+      mkdir -p "$SKILL_DIR/.github/workflows"
+      cp "$TEMPLATE_DIR/workflow-individual.yml" "$SKILL_DIR/.github/workflows/validate-skill.yml"
+      echo "  UPDATED  .github/workflows/validate-skill.yml"
+    fi
+  fi
+
+  # --- scripts/validate-skill.sh (copy from skill-publishing) ---
+  VALIDATE_SRC="$SCRIPT_DIR/validate-skill.sh"
+  if [[ -f "$VALIDATE_SRC" ]]; then
+    if $DRY_RUN; then
+      echo "  WOULD UPDATE  scripts/validate-skill.sh"
+    else
+      mkdir -p "$SKILL_DIR/scripts"
+      cp "$VALIDATE_SRC" "$SKILL_DIR/scripts/validate-skill.sh"
+      chmod +x "$SKILL_DIR/scripts/validate-skill.sh"
+      echo "  UPDATED  scripts/validate-skill.sh"
+    fi
+  fi
+
   # Check if there are changes to commit
   if ! $DRY_RUN && $PUSH; then
     cd "$SKILL_DIR"
-    if git diff --quiet HEAD -- README.md 2>/dev/null; then
+    if git diff --quiet HEAD 2>/dev/null && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
       echo "  No changes to push"
     else
-      git add README.md
-      git commit -m "docs: add monorepo install option to README
+      git add README.md CONTRIBUTING.md .github/ scripts/validate-skill.sh 2>/dev/null || true
+      git commit -m "chore: sync contribution workflow files
 
+Adds CONTRIBUTING.md, PR template, CI workflow, and validate-skill.sh.
 Sync from local source ($TODAY).
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"

@@ -513,6 +513,79 @@ SOFTWARE."
 
 write_file "$MONOREPO_DIR/LICENSE" "$LICENSE_CONTENT" "LICENSE"
 
+# --- CONTRIBUTING.md (monorepo variant from template) ---
+if [[ -f "$TEMPLATE_DIR/CONTRIBUTING-template.md" ]]; then
+  # Write scope content to temp file for awk multiline replacement
+  SCOPE_TMP=$(mktemp)
+  cat > "$SCOPE_TMP" <<'SCOPE_EOF'
+### Adding a new skill
+
+1. Create a new directory at the repo root (e.g., `my-skill/`)
+2. Add a `SKILL.md` with valid YAML frontmatter
+3. Optionally add `scripts/` and `references/` directories
+
+### Improving an existing skill
+
+- Edit the skill's `SKILL.md` to improve instructions or metadata
+- Add or improve scripts in the skill's `scripts/` directory
+- Add or update reference material in the skill's `references/` directory
+- Fix bugs or improve documentation
+SCOPE_EOF
+
+  # Single-line replacements with sed, multiline with awk
+  CONTRIBUTING_TMP=$(mktemp)
+  sed "s|{{REPO_NAME}}|claude-code-skills|g; s|{{GITHUB_USER}}|$GITHUB_USER|g; s|{{VALIDATE_COMMAND}}|scripts/validate-skill.sh <skill-directory>|g" \
+    "$TEMPLATE_DIR/CONTRIBUTING-template.md" > "$CONTRIBUTING_TMP"
+  # Replace {{CONTRIBUTING_SCOPE}} line with scope file contents
+  awk -v scopefile="$SCOPE_TMP" '{
+    if ($0 ~ /\{\{CONTRIBUTING_SCOPE\}\}/) {
+      while ((getline line < scopefile) > 0) print line
+      close(scopefile)
+    } else print
+  }' "$CONTRIBUTING_TMP" > "$CONTRIBUTING_TMP.out"
+  mv "$CONTRIBUTING_TMP.out" "$CONTRIBUTING_TMP"
+
+  CONTRIBUTING_CONTENT=$(cat "$CONTRIBUTING_TMP")
+  rm -f "$SCOPE_TMP" "$CONTRIBUTING_TMP"
+  write_file "$MONOREPO_DIR/CONTRIBUTING.md" "$CONTRIBUTING_CONTENT" "CONTRIBUTING.md" "true"
+fi
+
+# --- .github/PULL_REQUEST_TEMPLATE.md ---
+if [[ -f "$TEMPLATE_DIR/PR_TEMPLATE-template.md" ]]; then
+  PR_TEMPLATE_CONTENT=$(cat "$TEMPLATE_DIR/PR_TEMPLATE-template.md")
+  if $DRY_RUN; then
+    echo "  WOULD UPDATE  .github/PULL_REQUEST_TEMPLATE.md"
+  else
+    mkdir -p "$MONOREPO_DIR/.github"
+    echo "$PR_TEMPLATE_CONTENT" > "$MONOREPO_DIR/.github/PULL_REQUEST_TEMPLATE.md"
+    echo "  SYNCED  .github/PULL_REQUEST_TEMPLATE.md"
+  fi
+fi
+
+# --- .github/workflows/validate-skill.yml (monorepo variant) ---
+if [[ -f "$TEMPLATE_DIR/workflow-monorepo.yml" ]]; then
+  if $DRY_RUN; then
+    echo "  WOULD UPDATE  .github/workflows/validate-skill.yml"
+  else
+    mkdir -p "$MONOREPO_DIR/.github/workflows"
+    cp "$TEMPLATE_DIR/workflow-monorepo.yml" "$MONOREPO_DIR/.github/workflows/validate-skill.yml"
+    echo "  SYNCED  .github/workflows/validate-skill.yml"
+  fi
+fi
+
+# --- scripts/validate-skill.sh (copy from skill-publishing) ---
+VALIDATE_SRC="$SCRIPT_DIR/validate-skill.sh"
+if [[ -f "$VALIDATE_SRC" ]]; then
+  if $DRY_RUN; then
+    echo "  WOULD UPDATE  scripts/validate-skill.sh"
+  else
+    mkdir -p "$MONOREPO_DIR/scripts"
+    cp "$VALIDATE_SRC" "$MONOREPO_DIR/scripts/validate-skill.sh"
+    chmod +x "$MONOREPO_DIR/scripts/validate-skill.sh"
+    echo "  SYNCED  scripts/validate-skill.sh"
+  fi
+fi
+
 echo ""
 
 # --- Init mode: git init + create repo ---
