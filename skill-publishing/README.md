@@ -1,6 +1,6 @@
 # skill-publishing
 
-Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports both individual repos and a monorepo (claude-code-skills).
+Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), and versioned monorepo releases with semver tags.
 
 ## Installation
 
@@ -93,6 +93,7 @@ skill-publishing/
 ├── scripts/
     ├── apply-branch-protection.sh
     ├── prepare-skill-repo.sh
+    ├── release-monorepo.sh
     ├── sync-individual-repos.sh
     ├── sync-monorepo.sh
     ├── validate-skill.sh

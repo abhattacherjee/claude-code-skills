@@ -164,6 +164,59 @@ while IFS= read -r skill_md; do
 - \`$skill_name\` v${version:-?.?.?} — $short_desc"
 done < <(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" | sort)
 
+# --- Build commit summary ---
+# Categorize commits since last tag into Added/Changed/Fixed sections
+COMMIT_SUMMARY=""
+ADDED=""
+CHANGED=""
+FIXED=""
+OTHER=""
+
+while IFS= read -r line; do
+  msg="${line#* }"  # Strip commit hash prefix
+  case "$msg" in
+    feat:*|feat\(*) ADDED="${ADDED}
+- ${msg#*: }" ;;
+    fix:*|fix\(*)   FIXED="${FIXED}
+- ${msg#*: }" ;;
+    chore:*|chore\(*|docs:*|docs\(*|style:*|refactor:*|refactor\(*)
+      CHANGED="${CHANGED}
+- ${msg#*: }" ;;
+    release:*) ;; # Skip release commits
+    Merge*) ;; # Skip merge commits
+    *)
+      OTHER="${OTHER}
+- ${msg}" ;;
+  esac
+done <<< "$COMMITS_SINCE_TAG"
+
+# Build summary sections
+if [[ -n "$ADDED" ]]; then
+  COMMIT_SUMMARY="${COMMIT_SUMMARY}
+### Added
+${ADDED}
+"
+fi
+if [[ -n "$CHANGED" ]]; then
+  COMMIT_SUMMARY="${COMMIT_SUMMARY}
+### Changed
+${CHANGED}
+"
+fi
+if [[ -n "$FIXED" ]]; then
+  COMMIT_SUMMARY="${COMMIT_SUMMARY}
+### Fixed
+${FIXED}
+"
+fi
+if [[ -n "$OTHER" && -z "$ADDED" && -z "$CHANGED" && -z "$FIXED" ]]; then
+  # Only include "other" if no categorized commits exist
+  COMMIT_SUMMARY="${COMMIT_SUMMARY}
+### Changes
+${OTHER}
+"
+fi
+
 # --- Update CHANGELOG ---
 # Replace the top "Monorepo sync" entry with a versioned release entry,
 # or prepend a new versioned entry if the top isn't a sync entry.
@@ -174,7 +227,9 @@ if [[ -f "$CHANGELOG_FILE" ]]; then
   EXISTING=$(cat "$CHANGELOG_FILE")
 
   # Extract header (everything before first ## [)
+  # Ensure it ends with exactly one trailing newline
   HEADER=$(echo "$EXISTING" | awk '/^## \[/{exit} {print}')
+  HEADER=$(printf '%s\n\n' "$HEADER")
 
   # Extract all entries
   ALL_ENTRIES=$(echo "$EXISTING" | awk '/^## \[/{found=1} found{print}')
@@ -185,22 +240,16 @@ if [[ -f "$CHANGELOG_FILE" ]]; then
     # Replace the sync entry with a versioned release entry
     # Skip the first entry, keep the rest
     REMAINING_ENTRIES=$(echo "$ALL_ENTRIES" | awk '/^## \[/{count++} count>=2{print}')
-
-    NEW_ENTRY="## [${NEW_VERSION}] - ${TODAY}
-
-Synced $SKILL_COUNT skills from local source.
-$SKILL_INVENTORY
-"
   else
-    # No sync entry to replace — prepend a new versioned entry
+    # No sync entry to replace — prepend before existing entries
     REMAINING_ENTRIES="$ALL_ENTRIES"
+  fi
 
-    NEW_ENTRY="## [${NEW_VERSION}] - ${TODAY}
-
-Release $TAG_NAME.
+  NEW_ENTRY="## [${NEW_VERSION}] - ${TODAY}
+${COMMIT_SUMMARY}
+### Skill Inventory ($SKILL_COUNT skills)
 $SKILL_INVENTORY
 "
-  fi
 
   # Rebuild changelog
   NEW_CHANGELOG="${HEADER}${NEW_ENTRY}"
