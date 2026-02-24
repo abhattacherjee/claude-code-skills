@@ -322,13 +322,23 @@ SCOPE_EOF
 
   # --- scripts/validate-skill.sh (copy from skill-publishing) ---
   VALIDATE_SRC="$SCRIPT_DIR/validate-skill.sh"
+  VALIDATE_DST="$SKILL_DIR/scripts/validate-skill.sh"
   if [[ -f "$VALIDATE_SRC" ]]; then
-    if $DRY_RUN; then
+    # Skip if source and destination are the same file (skill-publishing syncing itself)
+    VALIDATE_SRC_REAL=$(cd "$(dirname "$VALIDATE_SRC")" && pwd)/$(basename "$VALIDATE_SRC")
+    if [[ -f "$VALIDATE_DST" ]]; then
+      VALIDATE_DST_REAL=$(cd "$(dirname "$VALIDATE_DST")" && pwd)/$(basename "$VALIDATE_DST")
+    else
+      VALIDATE_DST_REAL=""
+    fi
+    if [[ "$VALIDATE_SRC_REAL" == "$VALIDATE_DST_REAL" ]]; then
+      echo "  SKIP  scripts/validate-skill.sh (same file)"
+    elif $DRY_RUN; then
       echo "  WOULD UPDATE  scripts/validate-skill.sh"
     else
       mkdir -p "$SKILL_DIR/scripts"
-      cp "$VALIDATE_SRC" "$SKILL_DIR/scripts/validate-skill.sh"
-      chmod +x "$SKILL_DIR/scripts/validate-skill.sh"
+      cp "$VALIDATE_SRC" "$VALIDATE_DST"
+      chmod +x "$VALIDATE_DST"
       echo "  UPDATED  scripts/validate-skill.sh"
     fi
   fi

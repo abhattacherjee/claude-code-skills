@@ -1,8 +1,10 @@
 # conversation-search
 
-A Claude Code skill for searching conversation history stored in `~/.claude/projects/`. Find past conversations by topic, date, branch, or project — with optional AI-generated summaries.
+Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries.
 
 ## Installation
+
+### Individual repo (recommended)
 
 Clone into your Claude Code skills directory:
 
@@ -22,6 +24,14 @@ git clone https://github.com/abhattacherjee/conversation-search.git %USERPROFILE
 git clone https://github.com/abhattacherjee/conversation-search.git .claude/skills/conversation-search
 ```
 
+### Via monorepo (all skills)
+
+```bash
+git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/claude-code-skills
+cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
+rm -rf /tmp/claude-code-skills
+```
+
 ## Updating
 
 ```bash
@@ -37,41 +47,26 @@ rm -rf ~/.claude/skills/conversation-search
 ## What It Does
 
 This skill lets you search and recall past Claude Code conversations:
-
 - **List** recent conversations across all projects
 - **Search** by topic keyword, date range, git branch, or project name
 - **Deep search** inside conversation content (full-text JSONL scanning)
 - **Show** verbatim conversation content with metadata
 - **Summarize** conversations using an AI-powered summarizer agent
 - **Statistics** on your conversation history
-
 ### Usage Examples
-
 ```bash
 # List recent conversations
 /conversation-search list
-
 # Search by topic
 /conversation-search search for "authentication" conversations
-
 # Find what you discussed on a specific date
 /conversation-search what did I work on last Tuesday?
-
 # Search a specific branch
 /conversation-search show my work on the feature/auth branch
-
 # Deep search for a specific error message
 /conversation-search find where I debugged "CSRF token mismatch"
 ```
-
 The skill translates natural language into script flags automatically.
-
-## Prerequisites
-
-The search script requires these standard Unix tools:
-
-- **jq** — JSON processing (`brew install jq` on macOS)
-- **perl** — text processing (pre-installed on macOS and most Linux)
 
 ## Compatibility
 
@@ -86,13 +81,19 @@ This skill follows the **Agent Skills** standard — a `SKILL.md` file at the re
 
 ```
 conversation-search/
+├── .github/
+    ├── PULL_REQUEST_TEMPLATE.md
+    ├── workflows/
+        ├── validate-skill.yml
 ├── .gitignore
 ├── CHANGELOG.md
+├── CONTRIBUTING.md
 ├── LICENSE
 ├── README.md
+├── scripts/
+    ├── search-conversations.sh
+    ├── validate-skill.sh
 ├── SKILL.md
-└── scripts/
-    └── search-conversations.sh
 ```
 
 ## License

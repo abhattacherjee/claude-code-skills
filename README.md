@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 5 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 6 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
@@ -24,6 +24,7 @@ git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/claude-c
 cp -r /tmp/claude-code-skills/changelog-keeper ~/.claude/skills/changelog-keeper
 cp -r /tmp/claude-code-skills/claudeception ~/.claude/skills/claudeception
 cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
+cp -r /tmp/claude-code-skills/scripts ~/.claude/skills/scripts
 cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
 cp -r /tmp/claude-code-skills/skill-publishing ~/.claude/skills/skill-publishing
 rm -rf /tmp/claude-code-skills
