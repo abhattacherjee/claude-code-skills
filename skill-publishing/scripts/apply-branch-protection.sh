@@ -16,6 +16,7 @@ ALL_REPOS=(
   skill-authoring
   skill-publishing
   changelog-keeper
+  worktree
 )
 
 usage() {

@@ -427,54 +427,56 @@ fi
 
 write_file "$MONOREPO_DIR/README.md" "$ROOT_README" "README.md" "true"
 
-# --- Generate root CHANGELOG.md ---
-# Aggregates the latest version entry from each skill's CHANGELOG
+# --- Update root CHANGELOG.md (audit log style) ---
+# The root CHANGELOG tracks monorepo-level events only.
+# Per-skill change details live in <skill>/CHANGELOG.md.
+#
+# Strategy: prepend a new sync entry to the existing file.
+# If today already has a "Monorepo sync" entry, replace it (idempotent).
+
 CHANGELOG_HEADER="# Changelog
 
 All notable changes to the **claude-code-skills** monorepo are documented here.
-Each skill also maintains its own CHANGELOG.md within its directory.
+Each skill also maintains its own \`CHANGELOG.md\` within its directory.
+
+Format: Monorepo-level events only. For per-skill change details, see \`<skill>/CHANGELOG.md\`.
 "
 
-# Build per-skill changelog entries by extracting latest version block
-CHANGELOG_SKILLS=""
+# Build a compact skill inventory: name + version
+SKILL_INVENTORY=""
 for SKILL_NAME in $SKILLS_TO_SYNC; do
-  SKILL_CL="$SKILLS_HOME/$SKILL_NAME/CHANGELOG.md"
-  if [[ -f "$SKILL_CL" ]]; then
-    # Extract the first version block: from "## [" to the next "## [" or EOF
-    LATEST_ENTRY=$(awk '/^## \[/{if(found) exit; found=1} found{print}' "$SKILL_CL")
-    if [[ -n "$LATEST_ENTRY" ]]; then
-      CHANGELOG_SKILLS="${CHANGELOG_SKILLS}
-### $SKILL_NAME
-
-$LATEST_ENTRY
-"
-    fi
+  SKILL_MD="$SKILLS_HOME/$SKILL_NAME/SKILL.md"
+  if [[ -f "$SKILL_MD" ]]; then
+    VERSION=$(extract_version "$SKILL_MD")
+    SHORT_DESC=$(extract_field "$SKILL_MD" "description" | sed 's/\. Use when:.*//')
+    SKILL_INVENTORY="${SKILL_INVENTORY}
+- \`$SKILL_NAME\` v${VERSION:-?.?.?} — $SHORT_DESC"
   fi
 done
 
-# Check for existing sync log entries and prepend new one
 SYNC_ENTRY="## [$TODAY] — Monorepo sync
 
 Synced $SKILL_COUNT skills from local source.
-$CHANGELOG_SKILLS"
+$SKILL_INVENTORY
+"
 
-# If CHANGELOG.md exists, preserve previous entries (everything after first sync entry)
+# Preserve existing entries, replacing today's "Monorepo sync" if present
 EXISTING_ENTRIES=""
 if [[ -f "$MONOREPO_DIR/CHANGELOG.md" ]]; then
-  # Extract everything after the header (skip lines until first "## [")
-  EXISTING_ENTRIES=$(awk '/^## \[/{found=1} found{print}' "$MONOREPO_DIR/CHANGELOG.md")
-  # Remove the latest sync entry if it's from today (avoid duplicates)
-  if echo "$EXISTING_ENTRIES" | head -1 | grep -q "## \[$TODAY\]"; then
-    EXISTING_ENTRIES=$(echo "$EXISTING_ENTRIES" | awk 'BEGIN{skip=1} /^## \[/{if(skip){skip=0; next}} !skip{print}')
-    # Re-find the next entry start
-    EXISTING_ENTRIES=$(echo "$EXISTING_ENTRIES" | awk '/^## \[/{found=1} found{print}')
+  # Extract all ## entries
+  ALL_ENTRIES=$(awk '/^## \[/{found=1} found{print}' "$MONOREPO_DIR/CHANGELOG.md")
+  # Check if first entry is today's sync — if so, skip it
+  if echo "$ALL_ENTRIES" | head -1 | grep -q "## \[$TODAY\] — Monorepo sync"; then
+    # Skip the first entry (today's sync), keep everything from the next ## onward
+    EXISTING_ENTRIES=$(echo "$ALL_ENTRIES" | awk '/^## \[/{count++} count>=2{print}')
+  else
+    EXISTING_ENTRIES="$ALL_ENTRIES"
   fi
 fi
 
 ROOT_CHANGELOG="${CHANGELOG_HEADER}${SYNC_ENTRY}"
 if [[ -n "$EXISTING_ENTRIES" ]]; then
   ROOT_CHANGELOG="${ROOT_CHANGELOG}
-
 ${EXISTING_ENTRIES}"
 fi
 
