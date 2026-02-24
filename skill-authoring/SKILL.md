@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.1.0
+  version: 2.2.0
 ---
 
 # Skill Authoring
@@ -409,6 +409,11 @@ npm run validate  # Or whatever validation command applies
 - **Time-sensitive info** — "After August 2025, use X" becomes stale. Use "Current method" / "Legacy" sections.
 - **Inconsistent terminology** — pick one term ("endpoint" not alternating "URL/route/path").
 - **Non-standard frontmatter** — `author`, `date`, `tags` waste tokens and aren't used.
+- **Incomplete CLI templates in agents** — when agents create GitHub artifacts (`gh issue
+  create`, `gh pr create`), include ALL metadata flags (`--label`, `--assignee`,
+  `--milestone`) explicitly in the template. Agents improvise missing fields with
+  plausible-but-wrong values (e.g., `dependencies` label instead of project's `dependabot`
+  label). Include a selection guide for dynamic fields like priority labels.
 
 ## Optimizing Existing Skills
 
