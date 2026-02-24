@@ -61,8 +61,18 @@ This skill follows the **Agent Skills** standard — a `SKILL.md` file at the re
 
 ```
 worktree/
+├── .github/
+    ├── PULL_REQUEST_TEMPLATE.md
+    ├── workflows/
+        ├── validate-skill.yml
+├── .gitignore
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── README.md
 ├── scripts/
     ├── setup-worktree.sh
+    ├── validate-skill.sh
 ├── SKILL.md
 ```
 

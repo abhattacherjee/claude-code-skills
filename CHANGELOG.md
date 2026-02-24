@@ -12,7 +12,7 @@ Synced 7 skills from local source.
 - `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
 - `conversation-search` v1.1.0 — Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries
 - `skill-authoring` v2.1.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
-- `skill-publishing` v2.0.0 — Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports both individual repos and a monorepo (claude-code-skills)
+- `skill-publishing` v2.1.0 — Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), and versioned monorepo releases with semver tags
 - `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
 
 ## [2026-02-24] — Add worktree skill

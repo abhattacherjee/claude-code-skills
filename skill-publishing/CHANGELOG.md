@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-02-24
+
+### Added
+
+- **scripts/release-monorepo.sh** — creates versioned releases of the monorepo with semver tags
+  - `patch`, `minor`, `major` bump levels
+  - `--dry-run` to preview without changes
+  - `--github-user` override (auto-detects via `gh api`)
+  - Reads current version from latest `v*` tag, calculates next version
+  - Updates CHANGELOG top entry from "Monorepo sync" to versioned section
+  - Creates annotated tag with skill inventory
+  - Pushes branch + tag to origin
+
+### Changed
+
+- **SKILL.md** — added Workflow D (monorepo release) with bump level table
+  - Updated Quick Reference with release commands
+  - Updated description to mention versioned releases
+  - Version bumped to 2.1.0
+
+### Fixed
+
+- **scripts/sync-monorepo.sh** — CHANGELOG generation now produces audit-style entries instead of duplicating per-skill changelogs
+- **scripts/release-monorepo.sh** — version detection uses `git tag -l 'v[0-9]*'` instead of `git describe --tags` to avoid non-semver tags
+
 ## [2.0.0] - 2026-02-24
 
 Monorepo support: publish skills to both individual repos and a shared `claude-code-skills` monorepo.

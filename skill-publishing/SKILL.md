@@ -1,8 +1,8 @@
 ---
 name: skill-publishing
-description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports both individual repos and a monorepo (claude-code-skills). Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo'."
+description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), and versioned monorepo releases with semver tags. Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo', (7) creating a versioned monorepo release with tag."
 metadata:
-  version: 2.0.0
+  version: 2.1.0
 ---
 
 # Skill to GitHub
@@ -36,6 +36,12 @@ $SCRIPTS/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
 # --- After reviewing, push manually:
 cd ~/dev/claude-code-skills
 git add -A && git commit -m "Sync skills (YYYY-MM-DD)" && git push
+
+# --- Monorepo release (version tag) ---
+$SCRIPTS/release-monorepo.sh --dry-run minor ~/dev/claude-code-skills
+$SCRIPTS/release-monorepo.sh patch ~/dev/claude-code-skills   # Bug fixes
+$SCRIPTS/release-monorepo.sh minor ~/dev/claude-code-skills   # New skill
+$SCRIPTS/release-monorepo.sh major ~/dev/claude-code-skills   # Breaking change
 ```
 
 ## Architecture
@@ -168,6 +174,41 @@ When you update a skill locally and want to push changes to its individual GitHu
 # Sync a specific skill
 ~/.claude/skills/skill-publishing/scripts/sync-individual-repos.sh conversation-search
 ```
+
+## Workflow D: Monorepo Release (Version Tag)
+
+After syncing skills to the monorepo and committing, create a versioned release:
+
+```bash
+# 1. Sync skills first
+~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh ~/dev/claude-code-skills
+cd ~/dev/claude-code-skills
+git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))"
+git push
+
+# 2. Create a versioned release
+~/.claude/skills/skill-publishing/scripts/release-monorepo.sh minor ~/dev/claude-code-skills
+```
+
+### Bump Levels
+
+| Level | When | Example |
+|-------|------|---------|
+| `patch` | Bug fixes, sync updates, typo fixes | 1.0.0 → 1.0.1 |
+| `minor` | New skill added, feature improvements | 1.0.0 → 1.1.0 |
+| `major` | Breaking changes, removed skills, restructured layout | 1.0.0 → 2.0.0 |
+
+The script:
+- Reads current version from the latest `v*` semver tag
+- Calculates the next version based on bump level
+- Updates the CHANGELOG top entry from "Monorepo sync" to a versioned section
+- Commits the changelog update
+- Creates an annotated tag with skill inventory
+- Pushes to `origin main --tags`
+
+Use `--dry-run` to preview without making changes.
+
+**Prerequisite**: All changes must be committed before running. The script rejects uncommitted changes.
 
 ## Key Decisions
 
