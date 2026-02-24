@@ -2,7 +2,7 @@
 name: changelog-keeper
 description: "Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Use when: (1) user asks to update the changelog, (2) before committing changes that should be documented, (3) preparing a release and need changelog entries, (4) user says 'update changelog' or 'what changed since last release', (5) a commit is about to be pushed and the changelog hasn't been updated."
 metadata:
-  version: 1.1.0
+  version: 1.1.1
 ---
 
 # Changelog Keeper
@@ -160,13 +160,28 @@ fi
 
 ### Bash Newline Pitfall
 
-When building CHANGELOG content via string concatenation, bash `echo` strips trailing newlines from variable expansion. This causes:
+When building CHANGELOG content via string concatenation, bash `$()` command substitution **always strips trailing newlines**. This causes:
 
 ```
 Format: Monorepo-level events only.## [1.1.0] - 2026-02-24   ← MISSING BLANK LINE
 ```
 
-Fix: Use `printf '%s\n\n' "$HEADER"` instead of relying on embedded newlines in heredoc-assigned variables.
+**This also affects `printf`:** `HEADER=$(printf '%s\n\n' "$HEADER")` still loses the trailing newlines because `$()` strips them after `printf` outputs them.
+
+Fix: Never rely on trailing newlines in variables. Add blank lines at the **concatenation point** instead:
+
+```bash
+# Wrong — $() strips trailing newlines from both echo and printf
+HEADER=$(echo "$EXISTING" | awk '/^## \[/{exit} {print}')
+HEADER=$(printf '%s\n\n' "$HEADER")  # Still loses \n\n!
+NEW_CHANGELOG="${HEADER}${NEW_ENTRY}"  # No blank line
+
+# Right — explicit blank line at concatenation
+HEADER=$(echo "$EXISTING" | awk '/^## \[/{exit} {print}')
+NEW_CHANGELOG="${HEADER}
+
+${NEW_ENTRY}"  # Blank line guaranteed
+```
 
 ### Semver Tag Filtering
 

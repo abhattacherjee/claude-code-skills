@@ -227,9 +227,7 @@ if [[ -f "$CHANGELOG_FILE" ]]; then
   EXISTING=$(cat "$CHANGELOG_FILE")
 
   # Extract header (everything before first ## [)
-  # Ensure it ends with exactly one trailing newline
   HEADER=$(echo "$EXISTING" | awk '/^## \[/{exit} {print}')
-  HEADER=$(printf '%s\n\n' "$HEADER")
 
   # Extract all entries
   ALL_ENTRIES=$(echo "$EXISTING" | awk '/^## \[/{found=1} found{print}')
@@ -251,8 +249,11 @@ ${COMMIT_SUMMARY}
 $SKILL_INVENTORY
 "
 
-  # Rebuild changelog
-  NEW_CHANGELOG="${HEADER}${NEW_ENTRY}"
+  # Rebuild changelog — explicit blank line between header and first entry
+  # (bash $() strips trailing newlines, so HEADER never ends with \n)
+  NEW_CHANGELOG="${HEADER}
+
+${NEW_ENTRY}"
   if [[ -n "$REMAINING_ENTRIES" ]]; then
     NEW_CHANGELOG="${NEW_CHANGELOG}
 ${REMAINING_ENTRIES}"
