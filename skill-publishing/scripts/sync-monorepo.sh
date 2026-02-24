@@ -460,24 +460,36 @@ Synced $SKILL_COUNT skills from local source.
 $SKILL_INVENTORY
 "
 
-# Preserve existing entries, replacing today's "Monorepo sync" if present
+# Preserve existing entries, replacing today's "Monorepo sync" if present.
+# If the top entry is a versioned release (from release-monorepo.sh), keep it.
 EXISTING_ENTRIES=""
+SKIP_SYNC_ENTRY=false
 if [[ -f "$MONOREPO_DIR/CHANGELOG.md" ]]; then
   # Extract all ## entries
   ALL_ENTRIES=$(awk '/^## \[/{found=1} found{print}' "$MONOREPO_DIR/CHANGELOG.md")
-  # Check if first entry is today's sync — if so, skip it
-  if echo "$ALL_ENTRIES" | head -1 | grep -q "## \[$TODAY\] — Monorepo sync"; then
-    # Skip the first entry (today's sync), keep everything from the next ## onward
+  FIRST_ENTRY=$(echo "$ALL_ENTRIES" | head -1)
+
+  if echo "$FIRST_ENTRY" | grep -q "## \[$TODAY\] — Monorepo sync"; then
+    # Today's sync entry exists — replace it with fresh one
     EXISTING_ENTRIES=$(echo "$ALL_ENTRIES" | awk '/^## \[/{count++} count>=2{print}')
+  elif echo "$FIRST_ENTRY" | grep -qE "## \[[0-9]+\.[0-9]+\.[0-9]+\] - $TODAY"; then
+    # Today's versioned release exists (from release-monorepo.sh) — don't clobber it
+    EXISTING_ENTRIES="$ALL_ENTRIES"
+    SKIP_SYNC_ENTRY=true
   else
     EXISTING_ENTRIES="$ALL_ENTRIES"
   fi
 fi
 
-ROOT_CHANGELOG="${CHANGELOG_HEADER}${SYNC_ENTRY}"
-if [[ -n "$EXISTING_ENTRIES" ]]; then
-  ROOT_CHANGELOG="${ROOT_CHANGELOG}
+if $SKIP_SYNC_ENTRY; then
+  ROOT_CHANGELOG="${CHANGELOG_HEADER}
 ${EXISTING_ENTRIES}"
+else
+  ROOT_CHANGELOG="${CHANGELOG_HEADER}${SYNC_ENTRY}"
+  if [[ -n "$EXISTING_ENTRIES" ]]; then
+    ROOT_CHANGELOG="${ROOT_CHANGELOG}
+${EXISTING_ENTRIES}"
+  fi
 fi
 
 write_file "$MONOREPO_DIR/CHANGELOG.md" "$ROOT_CHANGELOG" "CHANGELOG.md" "true"
