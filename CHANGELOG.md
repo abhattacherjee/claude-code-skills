@@ -3,7 +3,9 @@
 All notable changes to the **claude-code-skills** monorepo are documented here.
 Each skill also maintains its own `CHANGELOG.md` within its directory.
 
-Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.## [1.1.1] - 2026-02-24
+Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
+
+## [1.1.1] - 2026-02-24
 
 ### Added
 
