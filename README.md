@@ -1,13 +1,16 @@
 
 # Claude Code Skills
 
-A curated collection of 1 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 3 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
 
 | Skill | Version | Description | Individual Repo |
 |-------|---------|-------------|-----------------|
+| [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
+| [skill-authoring](./skill-authoring/) | 2.0.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | [repo](https://github.com/abhattacherjee/skill-authoring) |
+| [skill-publishing](./skill-publishing/) | 2.0.0 | Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports both individual repos and a monorepo (claude-code-skills). | [repo](https://github.com/abhattacherjee/skill-publishing) |
 
 
 ## Installation
