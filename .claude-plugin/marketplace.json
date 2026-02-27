@@ -13,6 +13,18 @@
       "source": "./plugins/git-flow",
       "description": "Git Flow branching workflow with slash commands and diagnostic tools",
       "version": "2.0.0"
+    },
+    {
+      "name": "skill-authoring",
+      "source": "./plugins/skill-authoring",
+      "description": "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism",
+      "version": "2.2.0"
+    },
+    {
+      "name": "skill-publishing",
+      "source": "./plugins/skill-publishing",
+      "description": "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo, and plugin assembly/distribution",
+      "version": "3.1.0"
     }
   ]
 }
