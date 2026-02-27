@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0] - 2026-02-27
+
+### Added
+
+- **Auto-sync on publish** — when Monorepo or Plugin targets are selected in the Interactive Publishing Flow, the skill now automatically runs `sync-monorepo.sh`, commits, and pushes instead of leaving it as a manual step
+- **Build artifact cleanup** — Post-Publish step now cleans up `build/` directories after publishing
+- **Push-blocked fallback** — documents workaround when `prevent-direct-push` hook blocks monorepo pushes
+
+### Changed
+
+- **Interactive Publishing Flow** — Step 4 renamed from "Post-Publish" to "Auto-Sync to Monorepo", Step 5 is now "Post-Publish"
+- **SKILL.md** — version bumped to 3.2.0
+
 ## [3.1.0] - 2026-02-27
 
 ### Added

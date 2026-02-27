@@ -47,6 +47,7 @@ When invoked, the skill:
 - Presents options with state labels: `Individual repo (published)`, `Monorepo (synced)`, `Plugin (synced)`
 - Handles additions AND removals (deselecting a target removes the skill from that location)
 - Confirms destructive operations before executing
+- Auto-syncs to monorepo, commits, and pushes when Monorepo/Plugin targets are selected
 
 ### Included Scripts
 

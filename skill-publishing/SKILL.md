@@ -2,7 +2,7 @@
 name: skill-publishing
 description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution. Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo', (7) creating a versioned monorepo release with tag, (8) assembling a plugin from skills + commands, (9) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 3.1.0
+  version: 3.2.0
 ---
 
 # Skill to GitHub
@@ -166,11 +166,41 @@ If no `plugin-manifest.json` exists, disable the Plugin option by adding "(requi
 
 **Always confirm destructive removals** with the user before executing. Phrase the confirmation as: "This will permanently delete `<skill-name>` from `<target>`. Proceed?"
 
-### Step 4: Post-Publish
+### Step 4: Auto-Sync to Monorepo
+
+**When any Monorepo or Plugin target is selected, automatically sync and push.** Do NOT leave this as a manual step — the user expects publishing to be end-to-end.
+
+```bash
+SCRIPTS=~/.claude/skills/skill-publishing/scripts
+MONOREPO_DIR="${HOME}/dev/claude-code-skills"
+
+# 1. Sync all skills to monorepo (always, to pick up any changes)
+$SCRIPTS/sync-monorepo.sh $MONOREPO_DIR
+
+# 2. For each plugin target, assemble and add
+# (prepare-plugin.sh + sync-monorepo.sh --add-plugin already ran in Step 3)
+
+# 3. Commit and push
+cd $MONOREPO_DIR
+git add -A
+CHANGED=$(git diff --cached --stat)
+if [[ -n "$CHANGED" ]]; then
+  git commit -m "Sync skills ($(date +%Y-%m-%d))"
+  git push origin main
+fi
+```
+
+**Important**: The `prevent-direct-push` hook in some projects blocks `git push origin main` via Claude. If push is blocked, instruct the user to push manually from their terminal:
+```
+cd ~/dev/claude-code-skills && git push origin main
+```
+
+### Step 5: Post-Publish
 
 After all targets are processed:
 1. If monorepo was modified → ask whether to create a versioned release (Workflow D)
-2. Report summary of what was published/synced/removed
+2. Clean up build artifacts: `rm -rf ~/.claude/skills/skill-publishing/build/`
+3. Report summary of what was published/synced/removed
 
 ---
 
