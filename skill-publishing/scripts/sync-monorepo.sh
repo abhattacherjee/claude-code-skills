@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# sync-monorepo.sh — Sync skills from ~/.claude/skills/ into a monorepo directory
-# Generates root README with catalog table and per-skill READMEs.
+# sync-monorepo.sh — Sync skills and plugins from ~/.claude/skills/ into a monorepo directory
+# Generates root README with catalog table, plugin section, and per-skill READMEs.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,12 +9,16 @@ SKILLS_HOME="${SKILLS_HOME:-$HOME/.claude/skills}"
 TODAY=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 
+# Load shared library
+source "$SCRIPT_DIR/_lib.sh"
+
 # Defaults
 DRY_RUN=false
 INIT_MODE=false
 GITHUB_USER=""
 SKILLS_LIST=""
 ADD_SKILL=""
+ADD_PLUGIN=""
 MONOREPO_DIR=""
 AUTHOR="Abhishek"
 
@@ -22,13 +26,14 @@ usage() {
   cat <<'EOF'
 Usage: sync-monorepo.sh [options] <monorepo-dir>
 
-Syncs skills from ~/.claude/skills/ into a monorepo directory with a
-generated root README containing a catalog table.
+Syncs skills and plugins from ~/.claude/skills/ into a monorepo directory with a
+generated root README containing a catalog table and plugin section.
 
 Options:
   --dry-run              Preview changes without writing
   --skills <list>        Comma-separated skill names (default: all in monorepo)
   --add <skill-name>     Add a new skill to the monorepo
+  --add-plugin <name>    Add a plugin from ./build/<name>/ to plugins/
   --github-user NAME     GitHub username (default: auto-detect via gh api)
   --author NAME          Name for LICENSE copyright (default: Abhishek)
   --init                 Initialize monorepo (create repo, first commit)
@@ -38,6 +43,7 @@ Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
   sync-monorepo.sh ~/dev/claude-code-skills
   sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
+  sync-monorepo.sh --add-plugin git-flow ~/dev/claude-code-skills
   sync-monorepo.sh --dry-run ~/dev/claude-code-skills
 EOF
   exit 0
@@ -50,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --init)         INIT_MODE=true; shift ;;
     --skills)       SKILLS_LIST="$2"; shift 2 ;;
     --add)          ADD_SKILL="$2"; shift 2 ;;
+    --add-plugin)   ADD_PLUGIN="$2"; shift 2 ;;
     --github-user)  GITHUB_USER="$2"; shift 2 ;;
     --author)       AUTHOR="$2"; shift 2 ;;
     -h|--help)      usage ;;
@@ -64,36 +71,15 @@ if [[ -z "$MONOREPO_DIR" ]]; then
   exit 1
 fi
 
-# --- Resolve GitHub user ---
-if [[ -z "$GITHUB_USER" ]]; then
-  GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null || echo "")
-  if [[ -z "$GITHUB_USER" ]]; then
-    echo "Error: could not detect GitHub username. Use --github-user NAME" >&2
-    exit 1
-  fi
-fi
+# --- Resolve GitHub user (via shared _lib.sh) ---
+resolve_github_user
 
 echo "GitHub user: $GITHUB_USER"
 echo "Monorepo:    $MONOREPO_DIR"
 echo "Source:      $SKILLS_HOME"
 echo ""
 
-# --- Extract frontmatter field from a SKILL.md ---
-extract_field() {
-  local skill_md="$1"
-  local field="$2"
-  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "^${field}:" | head -1 | sed "s/^${field}:[[:space:]]*//; s/^[\"']//; s/[\"']$//"
-}
-
-extract_version() {
-  local skill_md="$1"
-  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "version:" | head -1 | sed 's/.*version:[[:space:]]*//; s/^[\"'"'"']//; s/[\"'"'"']$//'
-}
-
-# Short description: first sentence (before "Use when:"), no char truncation
-short_desc() {
-  echo "$1" | sed 's/\. Use when:.*/\./'
-}
+# extract_field, extract_version, short_desc from _lib.sh
 
 # --- Init mode: create monorepo directory and git repo ---
 if $INIT_MODE; then
@@ -112,11 +98,12 @@ fi
 discover_skills() {
   # If --add specified, add it to existing skills
   if [[ -n "$ADD_SKILL" ]]; then
-    # Get existing skill dirs in monorepo
+    # Get existing skill dirs in monorepo (exclude plugins/, scripts/, .git, .github)
     local existing=""
     if [[ -d "$MONOREPO_DIR" ]]; then
       existing=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
         ! -name '.git' ! -name '.github' ! -name '.*' \
+        ! -name 'plugins' ! -name 'scripts' \
         -exec basename {} \; 2>/dev/null | sort | tr '\n' ',')
     fi
     echo "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$'
@@ -138,10 +125,11 @@ discover_skills() {
     return
   fi
 
-  # If monorepo exists, sync skills already in it
+  # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git, .github)
   if [[ -d "$MONOREPO_DIR" ]]; then
     find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
       ! -name '.git' ! -name '.github' ! -name '.*' \
+      ! -name 'plugins' ! -name 'scripts' \
       -exec basename {} \; 2>/dev/null | sort
     return
   fi
@@ -159,77 +147,7 @@ echo "Skills to sync ($SKILL_COUNT):"
 echo "$SKILLS_TO_SYNC" | sed 's/^/  - /'
 echo ""
 
-# --- Helper: write or report ---
-write_file() {
-  local filepath="$1"
-  local content="$2"
-  local label="$3"
-  local overwrite="${4:-false}"
-
-  if [[ -f "$filepath" ]] && [[ "$overwrite" != "true" ]]; then
-    echo "  SKIP    $label (already exists)"
-    return
-  fi
-
-  if $DRY_RUN; then
-    if [[ -f "$filepath" ]]; then
-      echo "  WOULD UPDATE  $label"
-    else
-      echo "  WOULD CREATE  $label"
-    fi
-  else
-    mkdir -p "$(dirname "$filepath")"
-    echo "$content" > "$filepath"
-    if [[ -f "$filepath" ]]; then
-      echo "  SYNCED  $label"
-    else
-      echo "  CREATED $label"
-    fi
-  fi
-}
-
-copy_file() {
-  local src="$1"
-  local dst="$2"
-  local label="$3"
-
-  if [[ ! -f "$src" ]]; then
-    return
-  fi
-
-  if $DRY_RUN; then
-    if [[ -f "$dst" ]]; then
-      echo "  WOULD UPDATE  $label"
-    else
-      echo "  WOULD COPY    $label"
-    fi
-  else
-    mkdir -p "$(dirname "$dst")"
-    cp "$src" "$dst"
-    echo "  SYNCED  $label"
-  fi
-}
-
-copy_dir() {
-  local src="$1"
-  local dst="$2"
-  local label="$3"
-
-  if [[ ! -d "$src" ]]; then
-    return
-  fi
-
-  if $DRY_RUN; then
-    local count
-    count=$(find "$src" -type f | wc -l | tr -d ' ')
-    echo "  WOULD COPY    $label ($count files)"
-  else
-    mkdir -p "$dst"
-    # Copy contents, excluding .git and .claude
-    rsync -a --delete --exclude='.git' --exclude='.claude' --exclude='.DS_Store' "$src/" "$dst/"
-    echo "  SYNCED  $label"
-  fi
-}
+# write_file, copy_file, copy_dir from _lib.sh
 
 # --- Sync each skill ---
 CATALOG_ROWS=""
@@ -372,6 +290,71 @@ This skill follows the **Agent Skills** standard — a \`SKILL.md\` file with YA
   echo ""
 done
 
+# --- Discover and sync plugins ---
+discover_plugins() {
+  # Scan $MONOREPO_DIR/plugins/ for directories with .claude-plugin/plugin.json
+  if [[ -d "$MONOREPO_DIR/plugins" ]]; then
+    find "$MONOREPO_DIR/plugins" -maxdepth 1 -mindepth 1 -type d \
+      -exec basename {} \; 2>/dev/null | sort
+  fi
+}
+
+# Add new plugin from build directory if --add-plugin specified
+if [[ -n "$ADD_PLUGIN" ]]; then
+  PLUGIN_BUILD="./build/$ADD_PLUGIN"
+  if [[ ! -d "$PLUGIN_BUILD" ]]; then
+    echo "Error: plugin build directory not found: $PLUGIN_BUILD" >&2
+    echo "Run: prepare-plugin.sh <manifest-file> first" >&2
+    exit 1
+  fi
+  if [[ ! -f "$PLUGIN_BUILD/.claude-plugin/plugin.json" ]]; then
+    echo "Error: $PLUGIN_BUILD is not a valid plugin (missing .claude-plugin/plugin.json)" >&2
+    exit 1
+  fi
+
+  PLUGIN_DST="$MONOREPO_DIR/plugins/$ADD_PLUGIN"
+  echo "--- Plugin: $ADD_PLUGIN ---"
+
+  if $DRY_RUN; then
+    echo "  WOULD COPY  plugins/$ADD_PLUGIN/"
+  else
+    mkdir -p "$PLUGIN_DST"
+    rsync -a --delete --exclude='.DS_Store' "$PLUGIN_BUILD/" "$PLUGIN_DST/"
+    # Preserve execute permissions on scripts
+    find "$PLUGIN_DST" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+    echo "  SYNCED  plugins/$ADD_PLUGIN/"
+  fi
+  echo ""
+fi
+
+# Build plugin catalog rows for README
+PLUGINS_TO_LIST=$(discover_plugins)
+PLUGIN_COUNT=0
+PLUGIN_CATALOG_ROWS=""
+
+if [[ -n "$PLUGINS_TO_LIST" ]]; then
+  for PLUGIN_NAME in $PLUGINS_TO_LIST; do
+    PLUGIN_DIR="$MONOREPO_DIR/plugins/$PLUGIN_NAME"
+    PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
+    if [[ -f "$PLUGIN_JSON" ]]; then
+      P_VERSION=$(jq -r '.version // "?"' "$PLUGIN_JSON")
+      P_DESC=$(jq -r '.description // ""' "$PLUGIN_JSON")
+      # Count skills and commands in the plugin
+      P_SKILLS=0
+      P_CMDS=0
+      if [[ -d "$PLUGIN_DIR/skills" ]]; then
+        P_SKILLS=$(find "$PLUGIN_DIR/skills" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+      fi
+      if [[ -d "$PLUGIN_DIR/commands" ]]; then
+        P_CMDS=$(find "$PLUGIN_DIR/commands" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+      fi
+      PLUGIN_CATALOG_ROWS="${PLUGIN_CATALOG_ROWS}| [$PLUGIN_NAME](./plugins/$PLUGIN_NAME/) | $P_VERSION | $P_SKILLS | $P_CMDS | $P_DESC |
+"
+      PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
+    fi
+  done
+fi
+
 # --- Generate root README ---
 echo "--- Root files ---"
 
@@ -394,13 +377,47 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
 "
   done
 
-  # Replace multi-line placeholders (catalog table, install-all commands)
+  # Build plugin section (only if plugins exist)
+  PLUGIN_SECTION=""
+  if [[ $PLUGIN_COUNT -gt 0 ]]; then
+    PLUGIN_TABLE="| Plugin | Version | Skills | Commands | Description |
+|--------|---------|--------|----------|-------------|
+$PLUGIN_CATALOG_ROWS"
+
+    PLUGIN_SECTION="## Plugins
+
+Plugins bundle skills, commands, agents, and hooks into a single installable package.
+
+$PLUGIN_TABLE
+
+### Install a Plugin
+
+\`\`\`bash
+git clone https://github.com/$GITHUB_USER/claude-code-skills.git /tmp/ccs
+/tmp/ccs/scripts/install-plugin.sh /tmp/ccs/plugins/PLUGIN_NAME
+rm -rf /tmp/ccs
+\`\`\`
+
+### Uninstall a Plugin
+
+\`\`\`bash
+git clone https://github.com/$GITHUB_USER/claude-code-skills.git /tmp/ccs
+/tmp/ccs/scripts/install-plugin.sh --uninstall /tmp/ccs/plugins/PLUGIN_NAME
+rm -rf /tmp/ccs
+\`\`\`"
+  fi
+
+  # Replace multi-line placeholders (catalog table, install-all commands, plugin section)
   TMPFILE=$(mktemp)
   echo "$ROOT_README" | while IFS= read -r line; do
     if [[ "$line" == *"{{SKILL_CATALOG_TABLE}}"* ]]; then
       echo "$CATALOG_TABLE"
     elif [[ "$line" == *"{{SKILL_INSTALL_ALL_COMMANDS}}"* ]]; then
       printf "%s" "$INSTALL_ALL_CMDS"
+    elif [[ "$line" == *"{{PLUGIN_SECTION}}"* ]]; then
+      if [[ -n "$PLUGIN_SECTION" ]]; then
+        echo "$PLUGIN_SECTION"
+      fi
     else
       echo "$line"
     fi
@@ -597,6 +614,32 @@ if [[ -f "$VALIDATE_SRC" ]]; then
     cp "$VALIDATE_SRC" "$MONOREPO_DIR/scripts/validate-skill.sh"
     chmod +x "$MONOREPO_DIR/scripts/validate-skill.sh"
     echo "  SYNCED  scripts/validate-skill.sh"
+  fi
+fi
+
+# --- scripts/validate-plugin.sh (copy from skill-publishing) ---
+VALIDATE_PLUGIN_SRC="$SCRIPT_DIR/validate-plugin.sh"
+if [[ -f "$VALIDATE_PLUGIN_SRC" ]]; then
+  if $DRY_RUN; then
+    echo "  WOULD UPDATE  scripts/validate-plugin.sh"
+  else
+    mkdir -p "$MONOREPO_DIR/scripts"
+    cp "$VALIDATE_PLUGIN_SRC" "$MONOREPO_DIR/scripts/validate-plugin.sh"
+    chmod +x "$MONOREPO_DIR/scripts/validate-plugin.sh"
+    echo "  SYNCED  scripts/validate-plugin.sh"
+  fi
+fi
+
+# --- scripts/install-plugin.sh (copy from skill-publishing) ---
+INSTALL_PLUGIN_SRC="$SCRIPT_DIR/install-plugin.sh"
+if [[ -f "$INSTALL_PLUGIN_SRC" ]]; then
+  if $DRY_RUN; then
+    echo "  WOULD UPDATE  scripts/install-plugin.sh"
+  else
+    mkdir -p "$MONOREPO_DIR/scripts"
+    cp "$INSTALL_PLUGIN_SRC" "$MONOREPO_DIR/scripts/install-plugin.sh"
+    chmod +x "$MONOREPO_DIR/scripts/install-plugin.sh"
+    echo "  SYNCED  scripts/install-plugin.sh"
   fi
 fi
 

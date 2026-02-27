@@ -8,6 +8,9 @@ TEMPLATE_DIR="$(dirname "$SCRIPT_DIR")/references"
 YEAR=$(date +%Y)
 TODAY=$(date +%Y-%m-%d)
 
+# Load shared library
+source "$SCRIPT_DIR/_lib.sh"
+
 # Defaults
 DRY_RUN=false
 GITHUB_USER="USERNAME"
@@ -62,16 +65,10 @@ if [[ ! -f "$SKILL_MD" ]]; then
   exit 1
 fi
 
-# --- Extract frontmatter fields ---
-# Parse YAML frontmatter between --- markers
-extract_field() {
-  local field="$1"
-  sed -n '/^---$/,/^---$/p' "$SKILL_MD" | grep "^${field}:" | head -1 | sed "s/^${field}:[[:space:]]*//; s/^[\"']//; s/[\"']$//"
-}
-
-SKILL_NAME=$(extract_field "name")
-DESCRIPTION=$(extract_field "description")
-VERSION=$(sed -n '/^---$/,/^---$/p' "$SKILL_MD" | grep "version:" | head -1 | sed 's/.*version:[[:space:]]*//; s/^[\"'"'"']//; s/[\"'"'"']$//')
+# --- Extract frontmatter fields (via shared _lib.sh) ---
+SKILL_NAME=$(extract_field "$SKILL_MD" "name")
+DESCRIPTION=$(extract_field "$SKILL_MD" "description")
+VERSION=$(extract_version "$SKILL_MD")
 
 if [[ -z "$SKILL_NAME" ]]; then
   echo "Error: could not extract 'name' from SKILL.md frontmatter" >&2
@@ -83,8 +80,8 @@ if [[ -z "$VERSION" ]]; then
   echo "Warning: no version found in frontmatter, defaulting to 1.0.0"
 fi
 
-# Short description: first sentence (before "Use when:"), no char truncation
-SHORT_DESC=$(echo "$DESCRIPTION" | sed 's/\. Use when:.*/\./')
+# Short description: first sentence (before "Use when:")
+SHORT_DESC=$(short_desc "$DESCRIPTION")
 
 echo "Skill:   $SKILL_NAME"
 echo "Version: $VERSION"
@@ -112,24 +109,7 @@ done)
 # Use the first heading's content (after frontmatter title) as the description
 WHAT_IT_DOES="$SHORT_DESC"
 
-# --- Helper: write or report ---
-write_file() {
-  local filepath="$1"
-  local content="$2"
-  local label="$3"
-
-  if [[ -f "$filepath" ]]; then
-    echo "  SKIP  $label (already exists)"
-    return
-  fi
-
-  if $DRY_RUN; then
-    echo "  WOULD CREATE  $label"
-  else
-    echo "$content" > "$filepath"
-    echo "  CREATED  $label"
-  fi
-}
+# write_file from _lib.sh (uses SKIP/WOULD CREATE/CREATED labels)
 
 echo "Files:"
 

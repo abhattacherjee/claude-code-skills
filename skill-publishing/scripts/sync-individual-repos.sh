@@ -8,6 +8,9 @@ TEMPLATE_DIR="$(dirname "$SCRIPT_DIR")/references"
 SKILLS_HOME="${SKILLS_HOME:-$HOME/.claude/skills}"
 TODAY=$(date +%Y-%m-%d)
 
+# Load shared library
+source "$SCRIPT_DIR/_lib.sh"
+
 # Defaults
 DRY_RUN=false
 SYNC_ALL=false
@@ -50,34 +53,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# --- Resolve GitHub user ---
-if [[ -z "$GITHUB_USER" ]]; then
-  GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null || echo "")
-  if [[ -z "$GITHUB_USER" ]]; then
-    echo "Error: could not detect GitHub username. Use --github-user NAME" >&2
-    exit 1
-  fi
-fi
+# --- Resolve GitHub user (via shared _lib.sh) ---
+resolve_github_user
 
 echo "GitHub user: $GITHUB_USER"
 echo "Source:      $SKILLS_HOME"
 echo ""
 
-# --- Extract frontmatter field from a SKILL.md ---
-extract_field() {
-  local skill_md="$1"
-  local field="$2"
-  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "^${field}:" | head -1 | sed "s/^${field}:[[:space:]]*//; s/^[\"']//; s/[\"']$//"
-}
-
-extract_version() {
-  local skill_md="$1"
-  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "version:" | head -1 | sed 's/.*version:[[:space:]]*//; s/^[\"'"'"']//; s/[\"'"'"']$//'
-}
-
-short_desc() {
-  echo "$1" | sed 's/\. Use when:.*/\./'
-}
+# extract_field, extract_version, short_desc from _lib.sh
 
 # --- Determine skills to sync ---
 SKILLS=()

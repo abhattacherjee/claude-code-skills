@@ -1,14 +1,15 @@
 ---
 name: skill-publishing
-description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), and versioned monorepo releases with semver tags. Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo', (7) creating a versioned monorepo release with tag."
+description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution. Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo', (7) creating a versioned monorepo release with tag, (8) assembling a plugin from skills + commands, (9) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 2.1.0
+  version: 3.0.0
 ---
 
 # Skill to GitHub
 
 Converts local Claude Code skill directories into shareable GitHub repositories.
-Supports two distribution models: **individual repos** and a **monorepo** (`claude-code-skills`).
+Supports three distribution models: **individual repos**, a **monorepo** (`claude-code-skills`),
+and **plugins** (bundles of skills + commands).
 
 ## Quick Reference
 
@@ -42,6 +43,21 @@ $SCRIPTS/release-monorepo.sh --dry-run minor ~/dev/claude-code-skills
 $SCRIPTS/release-monorepo.sh patch ~/dev/claude-code-skills   # Bug fixes
 $SCRIPTS/release-monorepo.sh minor ~/dev/claude-code-skills   # New skill
 $SCRIPTS/release-monorepo.sh major ~/dev/claude-code-skills   # Breaking change
+
+# --- Plugin (assemble from manifest) ---
+$SCRIPTS/prepare-plugin.sh --dry-run /path/to/plugin-manifest.json
+$SCRIPTS/prepare-plugin.sh /path/to/plugin-manifest.json
+
+# --- Plugin (validate) ---
+$SCRIPTS/validate-plugin.sh ./build/plugin-name
+
+# --- Plugin (add to monorepo) ---
+$SCRIPTS/sync-monorepo.sh --add-plugin plugin-name ~/dev/claude-code-skills
+
+# --- Plugin (install from assembled plugin) ---
+$SCRIPTS/install-plugin.sh --dry-run ./build/plugin-name
+$SCRIPTS/install-plugin.sh ./build/plugin-name
+$SCRIPTS/install-plugin.sh --uninstall ./build/plugin-name
 ```
 
 ## Architecture
@@ -51,6 +67,8 @@ $SCRIPTS/release-monorepo.sh major ~/dev/claude-code-skills   # Breaking change
 ├── conversation-search/
 ├── skill-authoring/
 ├── skill-publishing/
+├── git-flow/
+│   └── plugin-manifest.json   (build manifest for plugins)
 └── ...
 
 Individual repos:              (each skill has its own GitHub repo)
@@ -58,15 +76,24 @@ Individual repos:              (each skill has its own GitHub repo)
 ├── github.com/USER/skill-authoring
 └── github.com/USER/skill-publishing
 
-Monorepo:                      (all skills in one repo)
+Monorepo:                      (all skills + plugins in one repo)
 └── github.com/USER/claude-code-skills
-    ├── README.md              (auto-generated catalog table)
-    ├── conversation-search/
+    ├── README.md              (auto-generated: skill table + plugin section)
+    ├── conversation-search/   (skill — flat at root)
     ├── skill-authoring/
-    └── skill-publishing/
+    ├── skill-publishing/
+    ├── plugins/               (plugins — under plugins/ subfolder)
+    │   └── git-flow/
+    │       ├── .claude-plugin/plugin.json
+    │       ├── commands/
+    │       └── skills/
+    └── scripts/
+        ├── validate-skill.sh
+        ├── validate-plugin.sh
+        └── install-plugin.sh
 ```
 
-**Key principle**: `~/.claude/skills/` is the single source of truth. Both individual repos and the monorepo are derived from it via flat-copy (no git subtrees).
+**Key principle**: `~/.claude/skills/` is the single source of truth. Both individual repos and the monorepo are derived from it via flat-copy (no git subtrees). Plugins are assembled from build manifests and stored in `plugins/`.
 
 ## Workflow A: Publish a New Skill (Individual Repo)
 
@@ -210,6 +237,65 @@ Use `--dry-run` to preview without making changes.
 
 **Prerequisite**: All changes must be committed before running. The script rejects uncommitted changes.
 
+## Workflow E: Publish a Plugin
+
+A plugin bundles skills + commands + optional agents/hooks into a single installable package.
+
+### Plugin Format
+
+```
+plugin-name/
+├── .claude-plugin/plugin.json   # Required manifest: {name, version, description}
+├── commands/                    # Slash commands (.md files)
+├── skills/skill-name/           # Skills (SKILL.md + scripts/ + references/)
+├── agents/                      # Subagents (.md files, optional)
+└── hooks/                       # hooks.json + scripts (optional)
+```
+
+### Step 1: Create Build Manifest
+
+Create `plugin-manifest.json` in the skill directory that anchors the plugin:
+
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "Short description",
+  "skills": [{ "name": "my-skill", "source": "~/.claude/skills/my-skill" }],
+  "commands": [{ "name": "cmd-name", "source": "~/.claude/commands/cmd-name.md" }]
+}
+```
+
+### Step 2: Assemble
+
+```bash
+$SCRIPTS/prepare-plugin.sh /path/to/plugin-manifest.json
+```
+
+This creates `./build/<plugin-name>/` with the official plugin format, scaffolding, and auto-runs validation.
+
+### Step 3: Validate
+
+```bash
+$SCRIPTS/validate-plugin.sh ./build/<plugin-name>
+```
+
+### Step 4: Sync to Monorepo
+
+```bash
+$SCRIPTS/sync-monorepo.sh --add-plugin <plugin-name> ~/dev/claude-code-skills
+cd ~/dev/claude-code-skills
+git add -A && git commit -m "feat: add <plugin-name> plugin" && git push
+```
+
+### Step 5: Install (Consumer)
+
+```bash
+git clone https://github.com/USER/claude-code-skills.git /tmp/ccs
+/tmp/ccs/scripts/install-plugin.sh /tmp/ccs/plugins/<plugin-name>
+rm -rf /tmp/ccs
+```
+
 ## Key Decisions
 
 | Decision | Choice | Rationale |
@@ -217,9 +303,12 @@ Use `--dry-run` to preview without making changes.
 | `.claude/` in `.gitignore` | Always | Contains `settings.local.json` with user-specific permissions |
 | License | MIT default | Most permissive, standard for open-source tools |
 | Version from frontmatter | Use as-is | Avoids version mismatch between SKILL.md and tag |
-| No install script | By design | `git clone` IS the installer — no extra ceremony |
+| No install script for skills | By design | `git clone` IS the installer — no extra ceremony |
 | Flat copy, not subtree | By design | Simpler mental model; local dir is single source of truth |
 | Monorepo README | Auto-generated | Catalog table derived from SKILL.md frontmatter; never hand-edit |
+| Plugins in `plugins/` subfolder | By design | Different structure than bare skills; separates concerns |
+| Plugin build manifest (JSON) | `jq` dependency | Plugins bundle multiple sources; CLI-only would be unwieldy |
+| `install-plugin.sh` in monorepo | Consumer-facing | Users need it to install plugins; not just an author tool |
 
 ## See Also
 

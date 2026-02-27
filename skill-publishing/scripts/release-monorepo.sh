@@ -4,6 +4,10 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Load shared library
+source "$SCRIPT_DIR/_lib.sh"
+
 BUMP_LEVEL=""
 DRY_RUN=false
 MONOREPO_DIR=""
@@ -75,14 +79,8 @@ if [[ ! -d "$MONOREPO_DIR/.git" ]]; then
   exit 1
 fi
 
-# --- Resolve GitHub user ---
-if [[ -z "$GITHUB_USER" ]]; then
-  GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null || echo "")
-  if [[ -z "$GITHUB_USER" ]]; then
-    echo "Error: could not detect GitHub username. Use --github-user NAME" >&2
-    exit 1
-  fi
-fi
+# --- Resolve GitHub user (via shared _lib.sh) ---
+resolve_github_user
 
 cd "$MONOREPO_DIR"
 
@@ -130,29 +128,25 @@ fi
 
 # --- Collect release info ---
 # Count skills
-SKILL_COUNT=$(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" | wc -l | tr -d ' ')
+SKILL_COUNT=$(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" -not -path "./plugins/*" | wc -l | tr -d ' ')
+
+# Count plugins
+PLUGIN_COUNT=0
+if [[ -d "./plugins" ]]; then
+  PLUGIN_COUNT=$(find ./plugins -maxdepth 3 -name "plugin.json" -path "*/.claude-plugin/*" 2>/dev/null | wc -l | tr -d ' ')
+fi
 
 # Get commits since last tag
 COMMITS_SINCE_TAG=$(git log "v${CURRENT_VERSION}..HEAD" --oneline 2>/dev/null || git log --oneline)
 COMMIT_COUNT=$(echo "$COMMITS_SINCE_TAG" | wc -l | tr -d ' ')
 
 echo "Skills:          $SKILL_COUNT"
+echo "Plugins:         $PLUGIN_COUNT"
 echo "Commits since v${CURRENT_VERSION}: $COMMIT_COUNT"
 echo ""
 
-# --- Build skill inventory ---
+# --- Build skill inventory (extract_field, extract_version from _lib.sh) ---
 SKILLS_HOME="${SKILLS_HOME:-$HOME/.claude/skills}"
-
-extract_field() {
-  local skill_md="$1"
-  local field="$2"
-  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "^${field}:" | head -1 | sed "s/^${field}:[[:space:]]*//; s/^[\"']//; s/[\"']$//"
-}
-
-extract_version() {
-  local skill_md="$1"
-  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "version:" | head -1 | sed "s/.*version:[[:space:]]*//; s/^[\"']*//; s/[\"']*$//"
-}
 
 SKILL_INVENTORY=""
 while IFS= read -r skill_md; do
@@ -162,7 +156,20 @@ while IFS= read -r skill_md; do
   short_desc=$(extract_field "$skill_md" "description" | sed 's/\. Use when:.*//')
   SKILL_INVENTORY="${SKILL_INVENTORY}
 - \`$skill_name\` v${version:-?.?.?} — $short_desc"
-done < <(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" | sort)
+done < <(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" -not -path "./plugins/*" | sort)
+
+# --- Build plugin inventory ---
+PLUGIN_INVENTORY=""
+if [[ -d "./plugins" ]]; then
+  while IFS= read -r plugin_json; do
+    plugin_dir=$(dirname "$(dirname "$plugin_json")")
+    plugin_name=$(basename "$plugin_dir")
+    p_version=$(jq -r '.version // "?"' "$plugin_json" 2>/dev/null)
+    p_desc=$(jq -r '.description // ""' "$plugin_json" 2>/dev/null | sed 's/\. Use when:.*//')
+    PLUGIN_INVENTORY="${PLUGIN_INVENTORY}
+- \`$plugin_name\` v${p_version} — $p_desc"
+  done < <(find ./plugins -maxdepth 3 -name "plugin.json" -path "*/.claude-plugin/*" 2>/dev/null | sort)
+fi
 
 # --- Build commit summary ---
 # Categorize commits since last tag into Added/Changed/Fixed sections
@@ -243,11 +250,19 @@ if [[ -f "$CHANGELOG_FILE" ]]; then
     REMAINING_ENTRIES="$ALL_ENTRIES"
   fi
 
+  PLUGIN_SECTION=""
+  if [[ $PLUGIN_COUNT -gt 0 ]]; then
+    PLUGIN_SECTION="
+### Plugin Inventory ($PLUGIN_COUNT plugins)
+$PLUGIN_INVENTORY
+"
+  fi
+
   NEW_ENTRY="## [${NEW_VERSION}] - ${TODAY}
 ${COMMIT_SUMMARY}
 ### Skill Inventory ($SKILL_COUNT skills)
 $SKILL_INVENTORY
-"
+${PLUGIN_SECTION}"
 
   # Rebuild changelog — explicit blank line between header and first entry
   # (bash $() strips trailing newlines, so HEADER never ends with \n)
@@ -286,19 +301,30 @@ else
   if git diff --cached --quiet; then
     echo "No changelog changes to commit (already up to date)"
   else
+    RELEASE_MSG="Monorepo release $TAG_NAME with $SKILL_COUNT skills"
+    if [[ $PLUGIN_COUNT -gt 0 ]]; then
+      RELEASE_MSG="$RELEASE_MSG and $PLUGIN_COUNT plugins"
+    fi
     git commit -m "release: v${NEW_VERSION}
 
-Monorepo release $TAG_NAME with $SKILL_COUNT skills.
+${RELEASE_MSG}.
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
     echo "COMMITTED  release: v${NEW_VERSION}"
   fi
 
   # Create annotated tag
+  TAG_BODY="$SKILL_COUNT skills:
+$SKILL_INVENTORY"
+  if [[ $PLUGIN_COUNT -gt 0 ]]; then
+    TAG_BODY="$TAG_BODY
+
+$PLUGIN_COUNT plugins:
+$PLUGIN_INVENTORY"
+  fi
   git tag -a "$TAG_NAME" -m "Release $TAG_NAME
 
-$SKILL_COUNT skills:
-$SKILL_INVENTORY"
+$TAG_BODY"
   echo "TAGGED     $TAG_NAME"
 
   # Push (branch + tag)
@@ -309,5 +335,6 @@ $SKILL_INVENTORY"
   echo "Release complete!"
   echo "  Version: $TAG_NAME"
   echo "  Skills:  $SKILL_COUNT"
+  echo "  Plugins: $PLUGIN_COUNT"
   echo "  URL:     https://github.com/$GITHUB_USER/claude-code-skills/releases/tag/$TAG_NAME"
 fi

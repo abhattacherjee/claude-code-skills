@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 7 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 6 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
@@ -12,9 +12,34 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 | [claudeception](./claudeception/) | 3.2.0 | Extracts reusable knowledge from work sessions and codifies it into Claude Code skills. | [repo](https://github.com/abhattacherjee/claudeception) |
 | [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
 | [skill-authoring](./skill-authoring/) | 2.2.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | [repo](https://github.com/abhattacherjee/skill-authoring) |
-| [skill-publishing](./skill-publishing/) | 2.1.0 | Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), and versioned monorepo releases with semver tags. | [repo](https://github.com/abhattacherjee/skill-publishing) |
+| [skill-publishing](./skill-publishing/) | 3.0.0 | Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution. | [repo](https://github.com/abhattacherjee/skill-publishing) |
 | [worktree](./worktree/) | 1.0.0 | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. | [repo](https://github.com/abhattacherjee/worktree) |
 
+
+## Plugins
+
+Plugins bundle skills, commands, agents, and hooks into a single installable package.
+
+| Plugin | Version | Skills | Commands | Description |
+|--------|---------|--------|----------|-------------|
+| [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |
+
+
+### Install a Plugin
+
+```bash
+git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
+/tmp/ccs/scripts/install-plugin.sh /tmp/ccs/plugins/PLUGIN_NAME
+rm -rf /tmp/ccs
+```
+
+### Uninstall a Plugin
+
+```bash
+git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
+/tmp/ccs/scripts/install-plugin.sh --uninstall /tmp/ccs/plugins/PLUGIN_NAME
+rm -rf /tmp/ccs
+```
 
 ## Installation
 
@@ -25,7 +50,6 @@ git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/claude-c
 cp -r /tmp/claude-code-skills/changelog-keeper ~/.claude/skills/changelog-keeper
 cp -r /tmp/claude-code-skills/claudeception ~/.claude/skills/claudeception
 cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
-cp -r /tmp/claude-code-skills/scripts ~/.claude/skills/scripts
 cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
 cp -r /tmp/claude-code-skills/skill-publishing ~/.claude/skills/skill-publishing
 cp -r /tmp/claude-code-skills/worktree ~/.claude/skills/worktree
@@ -85,4 +109,4 @@ These skills follow the **Agent Skills** standard — a `SKILL.md` file with YAM
 [MIT](LICENSE)
 
 ---
-*Last synced: 2026-02-24*
+*Last synced: 2026-02-27*

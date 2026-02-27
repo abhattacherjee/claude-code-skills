@@ -14,6 +14,8 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 {{SKILL_CATALOG_TABLE}}
 
+{{PLUGIN_SECTION}}
+
 ## Installation
 
 ### Install all skills

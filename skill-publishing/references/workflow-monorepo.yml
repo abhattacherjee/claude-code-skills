@@ -1,11 +1,11 @@
-name: Validate Skills
+name: Validate Skills & Plugins
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-  validate:
+  validate-skills:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,3 +67,65 @@ jobs:
       - name: Skip message
         if: steps.changed.outputs.dirs == ''
         run: echo "No skill directories were modified — skipping validation"
+
+  validate-plugins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed plugin directories
+        id: changed
+        run: |
+          # Find plugin directories that changed in this PR
+          CHANGED_PLUGINS=$(git diff --name-only origin/main...HEAD | \
+            grep -E '^plugins/[a-z][a-z0-9-]+/' | \
+            sed 's|^plugins/||; s|/.*||' | \
+            sort -u || true)
+
+          if [[ -z "$CHANGED_PLUGINS" ]]; then
+            echo "No plugin directories changed"
+            echo "plugins=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed plugin directories:"
+            echo "$CHANGED_PLUGINS"
+            echo "plugins<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_PLUGINS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install jq
+        if: steps.changed.outputs.plugins != ''
+        run: sudo apt-get install -y jq
+
+      - name: Validate changed plugins
+        if: steps.changed.outputs.plugins != ''
+        run: |
+          chmod +x scripts/validate-plugin.sh
+          # validate-plugin.sh delegates to validate-skill.sh for embedded skills
+          chmod +x scripts/validate-skill.sh 2>/dev/null || true
+          FAILED=0
+
+          while IFS= read -r plugin; do
+            PLUGIN_DIR="plugins/$plugin"
+            if [[ -d "$PLUGIN_DIR" ]]; then
+              echo ""
+              echo "=========================================="
+              echo "Validating plugin: $plugin"
+              echo "=========================================="
+              if ! scripts/validate-plugin.sh "$PLUGIN_DIR"; then
+                FAILED=1
+              fi
+            fi
+          done <<< "${{ steps.changed.outputs.plugins }}"
+
+          if [[ $FAILED -ne 0 ]]; then
+            echo ""
+            echo "One or more plugins failed validation"
+            exit 1
+          fi
+
+      - name: Skip message
+        if: steps.changed.outputs.plugins == ''
+        run: echo "No plugin directories were modified — skipping validation"
