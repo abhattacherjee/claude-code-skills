@@ -432,4 +432,4 @@ When a skill exceeds 500 lines, has poor structure, or runs slowly:
 ## See Also
 - `claudeception` — when to extract knowledge into skills (the WHY/WHEN)
 - Anthropic docs: [Skill authoring best practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)
-- GitHub repo: [skill-authoring](https://github.com/abhattacherjee/skill-authoring) — install instructions, changelog, and releases
+- GitHub: [skill-authoring](https://github.com/abhattacherjee/claude-code-skills/tree/main/skill-authoring) — install instructions, changelog, and releases
