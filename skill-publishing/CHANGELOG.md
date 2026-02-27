@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.2] - 2026-02-27
+
+### Fixed
+
+- **Plugin CHANGELOG preservation** — `sync-monorepo.sh --add-plugin` now preserves both README.md and CHANGELOG.md (previously only README was preserved)
+- **Bash 3.2 compatibility** — replaced `declare -A` associative array with temp files for macOS default bash
+
 ## [3.2.1] - 2026-02-27
 
 ### Fixed

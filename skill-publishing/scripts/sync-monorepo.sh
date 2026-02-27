@@ -318,19 +318,30 @@ if [[ -n "$ADD_PLUGIN" ]]; then
   if $DRY_RUN; then
     echo "  WOULD COPY  plugins/$ADD_PLUGIN/"
   else
-    # Preserve hand-written README if one exists in the destination
-    PRESERVED_README=""
-    if [[ -f "$PLUGIN_DST/README.md" ]]; then
-      PRESERVED_README=$(cat "$PLUGIN_DST/README.md")
-    fi
+    # Preserve hand-written files that rsync --delete would overwrite with templates
+    # Uses temp files instead of associative arrays (bash 3.2 compat)
+    PRESERVE_TMP=$(mktemp -d)
+    PRESERVED_LIST=""
+    for pfile in README.md CHANGELOG.md; do
+      if [[ -f "$PLUGIN_DST/$pfile" ]]; then
+        cp "$PLUGIN_DST/$pfile" "$PRESERVE_TMP/$pfile"
+      fi
+    done
 
     mkdir -p "$PLUGIN_DST"
     rsync -a --delete --exclude='.DS_Store' "$PLUGIN_BUILD/" "$PLUGIN_DST/"
 
-    # Restore preserved README (overwrite auto-generated template)
-    if [[ -n "$PRESERVED_README" ]]; then
-      echo "$PRESERVED_README" > "$PLUGIN_DST/README.md"
-      echo "  SYNCED  plugins/$ADD_PLUGIN/ (README preserved)"
+    # Restore preserved files (overwrite auto-generated templates)
+    for pfile in README.md CHANGELOG.md; do
+      if [[ -f "$PRESERVE_TMP/$pfile" ]]; then
+        cp "$PRESERVE_TMP/$pfile" "$PLUGIN_DST/$pfile"
+        PRESERVED_LIST="${PRESERVED_LIST:+$PRESERVED_LIST, }$pfile"
+      fi
+    done
+    rm -rf "$PRESERVE_TMP"
+
+    if [[ -n "$PRESERVED_LIST" ]]; then
+      echo "  SYNCED  plugins/$ADD_PLUGIN/ ($PRESERVED_LIST preserved)"
     else
       echo "  SYNCED  plugins/$ADD_PLUGIN/"
     fi
