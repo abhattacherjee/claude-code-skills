@@ -2,7 +2,7 @@
 name: skill-publishing
 description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution. Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo', (7) creating a versioned monorepo release with tag, (8) assembling a plugin from skills + commands, (9) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 3.0.0
+  version: 3.1.0
 ---
 
 # Skill to GitHub
@@ -94,6 +94,85 @@ Monorepo:                      (all skills + plugins in one repo)
 ```
 
 **Key principle**: `~/.claude/skills/` is the single source of truth. Both individual repos and the monorepo are derived from it via flat-copy (no git subtrees). Plugins are assembled from build manifests and stored in `plugins/`.
+
+## Interactive Publishing Flow
+
+When invoked (e.g., "publish this skill", "share skill", "sync skills"), start with target selection.
+
+### Step 1: Detect Current State
+
+For the skill being published, detect which targets it's already published to:
+
+```bash
+SKILL_NAME="<name-from-frontmatter>"
+GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null)
+MONOREPO_DIR="${HOME}/dev/claude-code-skills"
+
+# Individual repo?
+INDIVIDUAL_PUBLISHED=false
+gh repo view "$GITHUB_USER/$SKILL_NAME" --json name >/dev/null 2>&1 && INDIVIDUAL_PUBLISHED=true
+
+# Monorepo?
+MONOREPO_SYNCED=false
+[[ -f "$MONOREPO_DIR/$SKILL_NAME/SKILL.md" ]] && MONOREPO_SYNCED=true
+
+# Plugin? (has a build manifest)
+PLUGIN_AVAILABLE=false
+PLUGIN_SYNCED=false
+[[ -f "$SKILL_DIR/plugin-manifest.json" ]] && PLUGIN_AVAILABLE=true
+[[ -d "$MONOREPO_DIR/plugins/$SKILL_NAME" ]] && PLUGIN_SYNCED=true
+```
+
+### Step 2: Present Target Selection
+
+Use `AskUserQuestion` with `multiSelect: true`. Label each option with its current state so the user knows what's already published. **Warn that deselecting a published target will remove the skill from that location.**
+
+**Question**: "Which publishing targets do you want for `<skill-name>`? Deselecting a currently published target will REMOVE it from that location."
+
+**Options** (dynamic labels based on Step 1):
+
+| State | Label | Description |
+|-------|-------|-------------|
+| Not published | `Individual repo` | "Create a standalone GitHub repo for this skill" |
+| Published | `Individual repo (published)` | "Keep synced. Deselect to DELETE the repo" |
+| Not synced | `Monorepo` | "Add to the claude-code-skills monorepo" |
+| Synced | `Monorepo (synced)` | "Keep synced. Deselect to REMOVE from monorepo" |
+| No manifest | `Plugin` | "Not available — no plugin-manifest.json found" |
+| Has manifest, not synced | `Plugin` | "Assemble and add plugin to monorepo" |
+| Synced | `Plugin (synced)` | "Keep synced. Deselect to REMOVE plugin from monorepo" |
+
+If no `plugin-manifest.json` exists, disable the Plugin option by adding "(requires plugin-manifest.json)" to the description. Only offer it as selectable when the manifest exists.
+
+### Step 3: Dispatch
+
+**For each SELECTED target:**
+
+| Target | Already Published? | Action |
+|--------|--------------------|--------|
+| Individual repo | No | Run **Workflow A** (prepare + push) |
+| Individual repo | Yes | Run **Workflow C** (sync individual repo) |
+| Monorepo | No | Run `sync-monorepo.sh --add <name>` then **Workflow B** |
+| Monorepo | Yes | Run **Workflow B** (sync monorepo) |
+| Plugin | No | Run **Workflow E** (assemble + sync to monorepo) |
+| Plugin | Yes | Re-assemble + re-sync via **Workflow E** |
+
+**For each DESELECTED target that was previously published (removal):**
+
+| Target | Removal Action |
+|--------|---------------|
+| Individual repo | `gh repo delete $GITHUB_USER/$SKILL_NAME --yes` (confirm with user first!) |
+| Monorepo | `rm -rf $MONOREPO_DIR/$SKILL_NAME/` then re-sync README + commit + push |
+| Plugin | `rm -rf $MONOREPO_DIR/plugins/$SKILL_NAME/` then re-sync README + commit + push |
+
+**Always confirm destructive removals** with the user before executing. Phrase the confirmation as: "This will permanently delete `<skill-name>` from `<target>`. Proceed?"
+
+### Step 4: Post-Publish
+
+After all targets are processed:
+1. If monorepo was modified → ask whether to create a versioned release (Workflow D)
+2. Report summary of what was published/synced/removed
+
+---
 
 ## Workflow A: Publish a New Skill (Individual Repo)
 

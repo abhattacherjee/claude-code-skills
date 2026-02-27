@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0] - 2026-02-27
+
+### Added
+
+- **Interactive Publishing Flow** — when invoked, detects current publishing state and presents a multiSelect prompt for target selection (individual repo, monorepo, plugin)
+  - Dynamic labels show current state (e.g., "Monorepo (synced)", "Individual repo (published)")
+  - Deselecting a published target triggers removal with confirmation
+  - Post-publish step offers versioned release if monorepo was modified
+
+### Changed
+
+- **SKILL.md** — added "Interactive Publishing Flow" section before individual workflows
+  - Version bumped to 3.1.0
+
+## [3.0.0] - 2026-02-27
+
+### Added
+
+- **Plugin distribution support** — assemble, validate, and publish Claude Code plugins
+- **scripts/prepare-plugin.sh** — assembles plugin from a JSON build manifest (`plugin-manifest.json`)
+- **scripts/validate-plugin.sh** — validates assembled plugin structure (plugin.json, commands, skills)
+- **scripts/install-plugin.sh** — consumer-facing installer/uninstaller for plugins
+- **scripts/_lib.sh** — shared library extracted from all scripts (extract_field, extract_version, write_file, etc.)
+- **Workflow E** in SKILL.md — full plugin publishing workflow (manifest → assemble → validate → sync → install)
+- **Monorepo marketplace support** — auto-generates `.claude-plugin/marketplace.json` during sync
+- **`/plugin` install instructions** — README shows `/plugin marketplace add` as recommended install method
+- **Plugin section in monorepo README** — auto-generated table with plugin inventory
+- **Plugin inventory in releases** — release script includes plugin count and inventory in CHANGELOG, tag, and summary
+- **CI validation for plugins** — `validate-plugins` job in GitHub Actions workflow
+- **PR template plugin checkboxes** — plugin.json validation, bundled skills, command frontmatter checks
+
+### Changed
+
+- **scripts/sync-monorepo.sh** — added `--add-plugin` flag, plugin discovery, README plugin section, marketplace.json generation
+- **scripts/release-monorepo.sh** — includes plugin inventory in CHANGELOG entry, commit message, tag annotation
+- **All existing scripts** — refactored to source `_lib.sh` shared library, removed duplicated helpers
+- **SKILL.md** — version bumped to 3.0.0, description updated for plugin triggers
+
 ## [2.1.0] - 2026-02-24
 
 ### Added
