@@ -390,7 +390,21 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 
 $PLUGIN_TABLE
 
-### Install a Plugin
+### Install via Claude Code (Recommended)
+
+Add this repo as a plugin marketplace, then install individual plugins:
+
+\`\`\`shell
+# Add the marketplace (one-time setup)
+/plugin marketplace add $GITHUB_USER/claude-code-skills
+
+# Install a plugin
+/plugin install PLUGIN_NAME@claude-code-skills
+\`\`\`
+
+To browse all available plugins interactively, run \`/plugin\` and go to the **Discover** tab.
+
+### Install via Script
 
 \`\`\`bash
 git clone https://github.com/$GITHUB_USER/claude-code-skills.git /tmp/ccs
@@ -401,6 +415,10 @@ rm -rf /tmp/ccs
 ### Uninstall a Plugin
 
 \`\`\`bash
+# Via Claude Code
+/plugin uninstall PLUGIN_NAME@claude-code-skills
+
+# Via script
 git clone https://github.com/$GITHUB_USER/claude-code-skills.git /tmp/ccs
 /tmp/ccs/scripts/install-plugin.sh --uninstall /tmp/ccs/plugins/PLUGIN_NAME
 rm -rf /tmp/ccs
@@ -640,6 +658,54 @@ if [[ -f "$INSTALL_PLUGIN_SRC" ]]; then
     cp "$INSTALL_PLUGIN_SRC" "$MONOREPO_DIR/scripts/install-plugin.sh"
     chmod +x "$MONOREPO_DIR/scripts/install-plugin.sh"
     echo "  SYNCED  scripts/install-plugin.sh"
+  fi
+fi
+
+# --- .claude-plugin/marketplace.json (auto-generated) ---
+# Build marketplace.json so the monorepo can be added as a plugin marketplace
+# via: /plugin marketplace add GITHUB_USER/claude-code-skills
+if [[ $PLUGIN_COUNT -gt 0 ]]; then
+  MARKETPLACE_PLUGINS=""
+  while IFS= read -r pjson; do
+    pdir=$(dirname "$(dirname "$pjson")")
+    pname=$(jq -r '.name // ""' "$pjson" 2>/dev/null)
+    pdesc=$(jq -r '.description // ""' "$pjson" 2>/dev/null)
+    pver=$(jq -r '.version // ""' "$pjson" 2>/dev/null)
+    if [[ -n "$pname" ]]; then
+      if [[ -n "$MARKETPLACE_PLUGINS" ]]; then
+        MARKETPLACE_PLUGINS="$MARKETPLACE_PLUGINS,"
+      fi
+      # Use relative path from monorepo root
+      rel_path="./plugins/$pname"
+      MARKETPLACE_PLUGINS="$MARKETPLACE_PLUGINS
+    {
+      \"name\": \"$pname\",
+      \"source\": \"$rel_path\",
+      \"description\": \"$pdesc\",
+      \"version\": \"$pver\"
+    }"
+    fi
+  done < <(find "$MONOREPO_DIR/plugins" -maxdepth 3 -name "plugin.json" -path "*/.claude-plugin/*" 2>/dev/null | sort)
+
+  MARKETPLACE_JSON="{
+  \"name\": \"claude-code-skills\",
+  \"owner\": {
+    \"name\": \"$AUTHOR\"
+  },
+  \"metadata\": {
+    \"description\": \"Reusable Agent Skills and Plugins for Claude Code\",
+    \"version\": \"$(date +%Y.%m.%d)\"
+  },
+  \"plugins\": [$MARKETPLACE_PLUGINS
+  ]
+}"
+
+  if $DRY_RUN; then
+    echo "  WOULD UPDATE  .claude-plugin/marketplace.json"
+  else
+    mkdir -p "$MONOREPO_DIR/.claude-plugin"
+    echo "$MARKETPLACE_JSON" > "$MONOREPO_DIR/.claude-plugin/marketplace.json"
+    echo "  SYNCED  .claude-plugin/marketplace.json"
   fi
 fi
 

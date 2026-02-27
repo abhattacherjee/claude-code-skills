@@ -1,0 +1,18 @@
+{
+  "name": "claude-code-skills",
+  "owner": {
+    "name": "Abhishek"
+  },
+  "metadata": {
+    "description": "Reusable Agent Skills and Plugins for Claude Code",
+    "version": "2026.02.27"
+  },
+  "plugins": [
+    {
+      "name": "git-flow",
+      "source": "./plugins/git-flow",
+      "description": "Git Flow branching workflow with slash commands and diagnostic tools",
+      "version": "2.0.0"
+    }
+  ]
+}

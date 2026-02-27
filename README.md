@@ -25,7 +25,21 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 | [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |
 
 
-### Install a Plugin
+### Install via Claude Code (Recommended)
+
+Add this repo as a plugin marketplace, then install individual plugins:
+
+```shell
+# Add the marketplace (one-time setup)
+/plugin marketplace add abhattacherjee/claude-code-skills
+
+# Install a plugin
+/plugin install PLUGIN_NAME@claude-code-skills
+```
+
+To browse all available plugins interactively, run `/plugin` and go to the **Discover** tab.
+
+### Install via Script
 
 ```bash
 git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
@@ -36,6 +50,10 @@ rm -rf /tmp/ccs
 ### Uninstall a Plugin
 
 ```bash
+# Via Claude Code
+/plugin uninstall PLUGIN_NAME@claude-code-skills
+
+# Via script
 git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
 /tmp/ccs/scripts/install-plugin.sh --uninstall /tmp/ccs/plugins/PLUGIN_NAME
 rm -rf /tmp/ccs
