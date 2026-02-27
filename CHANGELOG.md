@@ -5,6 +5,25 @@ Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
 
+## [1.2.1] - 2026-02-27
+
+### Added
+
+- add plugin marketplace support
+
+### Skill Inventory (6 skills)
+
+- `changelog-keeper` v1.1.1 — Keeps CHANGELOG.md up to date by generating categorized entries from git commit history
+- `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
+- `conversation-search` v1.1.0 — Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries
+- `skill-authoring` v2.2.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
+- `skill-publishing` v3.0.0 — Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution
+- `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
+
+### Plugin Inventory (1 plugins)
+
+- `git-flow` v2.0.0 — Git Flow branching workflow with slash commands and diagnostic tools
+
 ## [1.2.0] - 2026-02-27
 
 ### Added
