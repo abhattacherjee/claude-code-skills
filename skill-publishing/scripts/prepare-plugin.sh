@@ -317,11 +317,29 @@ done
 write_file "$OUTPUT_DIR/CHANGELOG.md" "$CHANGELOG_CONTENT" "CHANGELOG.md"
 
 # README.md
-CMD_LIST=""
-for i in $(seq 0 $((CMD_COUNT - 1))); do
-  CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
-  CMD_LIST="$CMD_LIST
+CMD_SECTION=""
+MANUAL_CMD_STEP=""
+if [[ $CMD_COUNT -gt 0 ]]; then
+  CMD_LIST=""
+  for i in $(seq 0 $((CMD_COUNT - 1))); do
+    CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
+    CMD_LIST="$CMD_LIST
 - \`/$CNAME\`"
+  done
+  CMD_SECTION="
+### Commands
+$CMD_LIST"
+  MANUAL_CMD_STEP="
+# Copy commands
+cp plugins/$PLUGIN_NAME/commands/*.md ~/.claude/commands/"
+fi
+
+# Build skill list for contents section
+SKILL_LIST=""
+for i in $(seq 0 $((SKILL_COUNT - 1))); do
+  SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
+  SKILL_LIST="$SKILL_LIST
+- \`$SNAME\`"
 done
 
 README_CONTENT="# $PLUGIN_NAME
@@ -333,12 +351,23 @@ $PLUGIN_DESC
 - **$SKILL_COUNT** skill(s)
 - **$CMD_COUNT** command(s)
 
-### Commands
-$CMD_LIST
+### Skills
+$SKILL_LIST
+$CMD_SECTION
 
 ## Installation
 
-### From monorepo
+### Via Claude Code (Recommended)
+
+\`\`\`shell
+# Add the marketplace (one-time setup)
+/plugin marketplace add $GITHUB_USER/claude-code-skills
+
+# Install this plugin
+/plugin install $PLUGIN_NAME@claude-code-skills
+\`\`\`
+
+### Via Script
 
 \`\`\`bash
 git clone https://github.com/$GITHUB_USER/claude-code-skills.git /tmp/ccs
@@ -351,15 +380,19 @@ rm -rf /tmp/ccs
 \`\`\`bash
 # Copy skills
 cp -r plugins/$PLUGIN_NAME/skills/* ~/.claude/skills/
-
-# Copy commands
-cp plugins/$PLUGIN_NAME/commands/*.md ~/.claude/commands/
+$MANUAL_CMD_STEP
 \`\`\`
 
 ## Uninstall
 
 \`\`\`bash
+# Via Claude Code
+/plugin uninstall $PLUGIN_NAME@claude-code-skills
+
+# Via script
+git clone https://github.com/$GITHUB_USER/claude-code-skills.git /tmp/ccs
 /tmp/ccs/scripts/install-plugin.sh --uninstall /tmp/ccs/plugins/$PLUGIN_NAME
+rm -rf /tmp/ccs
 \`\`\`
 
 ## Compatibility
