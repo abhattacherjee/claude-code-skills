@@ -318,11 +318,25 @@ if [[ -n "$ADD_PLUGIN" ]]; then
   if $DRY_RUN; then
     echo "  WOULD COPY  plugins/$ADD_PLUGIN/"
   else
+    # Preserve hand-written README if one exists in the destination
+    PRESERVED_README=""
+    if [[ -f "$PLUGIN_DST/README.md" ]]; then
+      PRESERVED_README=$(cat "$PLUGIN_DST/README.md")
+    fi
+
     mkdir -p "$PLUGIN_DST"
     rsync -a --delete --exclude='.DS_Store' "$PLUGIN_BUILD/" "$PLUGIN_DST/"
+
+    # Restore preserved README (overwrite auto-generated template)
+    if [[ -n "$PRESERVED_README" ]]; then
+      echo "$PRESERVED_README" > "$PLUGIN_DST/README.md"
+      echo "  SYNCED  plugins/$ADD_PLUGIN/ (README preserved)"
+    else
+      echo "  SYNCED  plugins/$ADD_PLUGIN/"
+    fi
+
     # Preserve execute permissions on scripts
     find "$PLUGIN_DST" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
-    echo "  SYNCED  plugins/$ADD_PLUGIN/"
   fi
   echo ""
 fi

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.1] - 2026-02-27
+
+### Fixed
+
+- **Plugin README preservation** — `sync-monorepo.sh --add-plugin` now preserves hand-written README.md files instead of overwriting them with the auto-generated template
+
 ## [3.2.0] - 2026-02-27
 
 ### Added
