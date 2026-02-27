@@ -289,8 +289,16 @@ SOFTWARE."
 
 write_file "$OUTPUT_DIR/LICENSE" "$LICENSE_CONTENT" "LICENSE"
 
-# CHANGELOG.md
-CHANGELOG_CONTENT="# Changelog
+# CHANGELOG.md — copy from source skill if available, else generate template
+# The first skill's directory is the canonical source for the plugin's changelog
+FIRST_SKILL_SOURCE=$(jq -r '.skills[0].source' "$MANIFEST_FILE")
+FIRST_SKILL_SOURCE=$(resolve_tilde "$FIRST_SKILL_SOURCE")
+SOURCE_CHANGELOG="$FIRST_SKILL_SOURCE/CHANGELOG.md"
+
+if [[ -f "$SOURCE_CHANGELOG" ]]; then
+  copy_file "$SOURCE_CHANGELOG" "$OUTPUT_DIR/CHANGELOG.md" "CHANGELOG.md (from source skill)"
+else
+  CHANGELOG_CONTENT="# Changelog
 
 ## [$PLUGIN_VERSION] - $TODAY
 
@@ -300,21 +308,22 @@ Initial plugin release.
 
 - **$SKILL_COUNT skill(s)**, **$CMD_COUNT command(s)**"
 
-# Add skill names
-for i in $(seq 0 $((SKILL_COUNT - 1))); do
-  SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
-  CHANGELOG_CONTENT="$CHANGELOG_CONTENT
+  # Add skill names
+  for i in $(seq 0 $((SKILL_COUNT - 1))); do
+    SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
+    CHANGELOG_CONTENT="$CHANGELOG_CONTENT
 - Skill: \`$SNAME\`"
-done
+  done
 
-# Add command names
-for i in $(seq 0 $((CMD_COUNT - 1))); do
-  CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
-  CHANGELOG_CONTENT="$CHANGELOG_CONTENT
+  # Add command names
+  for i in $(seq 0 $((CMD_COUNT - 1))); do
+    CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
+    CHANGELOG_CONTENT="$CHANGELOG_CONTENT
 - Command: \`/$CNAME\`"
-done
+  done
 
-write_file "$OUTPUT_DIR/CHANGELOG.md" "$CHANGELOG_CONTENT" "CHANGELOG.md"
+  write_file "$OUTPUT_DIR/CHANGELOG.md" "$CHANGELOG_CONTENT" "CHANGELOG.md"
+fi
 
 # README.md
 CMD_SECTION=""

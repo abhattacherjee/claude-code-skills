@@ -318,30 +318,25 @@ if [[ -n "$ADD_PLUGIN" ]]; then
   if $DRY_RUN; then
     echo "  WOULD COPY  plugins/$ADD_PLUGIN/"
   else
-    # Preserve hand-written files that rsync --delete would overwrite with templates
-    # Uses temp files instead of associative arrays (bash 3.2 compat)
-    PRESERVE_TMP=$(mktemp -d)
-    PRESERVED_LIST=""
-    for pfile in README.md CHANGELOG.md; do
-      if [[ -f "$PLUGIN_DST/$pfile" ]]; then
-        cp "$PLUGIN_DST/$pfile" "$PRESERVE_TMP/$pfile"
-      fi
-    done
+    # Preserve hand-written README if one exists in the destination.
+    # README may be customized for the monorepo audience (install instructions,
+    # feature descriptions) and should not be overwritten by the auto-generated
+    # template from prepare-plugin.sh. CHANGELOG is NOT preserved because the
+    # source skill's CHANGELOG is authoritative and the assembled build includes it.
+    PRESERVED_README=""
+    if [[ -f "$PLUGIN_DST/README.md" ]]; then
+      PRESERVED_README=$(mktemp)
+      cp "$PLUGIN_DST/README.md" "$PRESERVED_README"
+    fi
 
     mkdir -p "$PLUGIN_DST"
     rsync -a --delete --exclude='.DS_Store' "$PLUGIN_BUILD/" "$PLUGIN_DST/"
 
-    # Restore preserved files (overwrite auto-generated templates)
-    for pfile in README.md CHANGELOG.md; do
-      if [[ -f "$PRESERVE_TMP/$pfile" ]]; then
-        cp "$PRESERVE_TMP/$pfile" "$PLUGIN_DST/$pfile"
-        PRESERVED_LIST="${PRESERVED_LIST:+$PRESERVED_LIST, }$pfile"
-      fi
-    done
-    rm -rf "$PRESERVE_TMP"
-
-    if [[ -n "$PRESERVED_LIST" ]]; then
-      echo "  SYNCED  plugins/$ADD_PLUGIN/ ($PRESERVED_LIST preserved)"
+    # Restore preserved README (overwrite auto-generated template)
+    if [[ -n "$PRESERVED_README" ]]; then
+      cp "$PRESERVED_README" "$PLUGIN_DST/README.md"
+      rm -f "$PRESERVED_README"
+      echo "  SYNCED  plugins/$ADD_PLUGIN/ (README preserved)"
     else
       echo "  SYNCED  plugins/$ADD_PLUGIN/"
     fi
