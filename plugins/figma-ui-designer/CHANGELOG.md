@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.0.0] - 2026-02-28
+## [3.1.0] - 2026-02-28
 
 Initial plugin release.
 

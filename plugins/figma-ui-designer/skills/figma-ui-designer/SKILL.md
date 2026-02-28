@@ -1,8 +1,8 @@
 ---
 name: figma-ui-designer
-description: "Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. Use when: (1) user asks for Figma mockups or UI designs, (2) user shares a Figma URL to use as input for a spec or plan, (3) starting a new project and needs Figma designs, (4) mocking up a feature enhancement, (5) user wants to translate a Figma design into implementation requirements."
+description: "Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. Use when: (1) user asks for Figma mockups or UI designs, (2) user shares a Figma URL to use as input for a spec or plan, (3) starting a new project and needs Figma designs, (4) mocking up a feature enhancement, (5) user wants to translate a Figma design into implementation requirements."
 metadata:
-  version: 3.0.0
+  version: 3.1.0
 ---
 
 # Figma UI Designer
@@ -19,58 +19,72 @@ Read the spec, user description, or project requirements. Identify:
 - What screens/components need design
 - What the design should communicate
 - Technical constraints (framework, responsive, dark mode, i18n)
+- Target audience and domain (vacation, SaaS, e-commerce, etc.)
 
-### Step 0b: Present Design Options
+### Step 0b: Research & Brainstorm via UX Expert Agent
 
-Use `AskUserQuestion` with `markdown` previews to present 2-4 design directions. Each option should include an ASCII mockup showing the visual approach.
+Launch the `figma-ux-expert` agent to research real-world design references and propose grounded design directions. This replaces generic hardcoded options with informed, research-backed alternatives.
 
-**Example — pill badge design options:**
+```
+Agent({
+  subagent_type: "general-purpose",
+  model: "sonnet",
+  description: "UX research and design directions",
+  prompt: `You are the figma-ux-expert agent. Follow the instructions in ~/.claude/agents/figma-ux-expert.md.
+
+## Project Context
+- **What to design:** [screens/components from Step 0a]
+- **Domain:** [e.g., vacation booking, travel recommendations]
+- **Design goals:** [what the design should communicate]
+- **Constraints:** [framework, dark mode, i18n, responsive, etc.]
+- **Existing design tokens:** [if extracted, include key colors/fonts]
+
+Research real-world references, then propose 2-4 design directions with rationale, reference URLs, ASCII mockups, and pros/cons.`
+})
+```
+
+The agent will return a structured report with:
+- **Research summary** — 3-5 reference URLs with analysis
+- **2-4 design directions** — each with name, rationale, color palette, typography, ASCII mockup, pros/cons, accessibility notes
+- **Recommendation** — which direction is strongest and why
+
+### Step 0c: Present Design Options
+
+Use the agent's structured output to build `AskUserQuestion` options. Each option should include the agent's ASCII mockup, reference URLs, and rationale — NOT generic placeholders.
+
+**For component/feature designs** (Workflow A or C):
 ```
 AskUserQuestion({
   questions: [{
-    question: "Which design direction for the duration pill badge?",
+    question: "Which design direction? (References researched by UX expert)",
     header: "Design",
     options: [
       {
-        label: "Option A: Subtitle",
-        description: "Muted text line below the pill badge",
-        markdown: "┌─────────────────────────────┐\n│  📅  7 nights               │\n└─────────────────────────────┘\n   ↳ That's 8 calendar days\n\nPros: Always visible\nCons: Adds vertical space"
+        label: "[Agent's Direction A name]",
+        description: "[Agent's rationale summary]",
+        markdown: "[Agent's ASCII mockup]\n\nInspired by: [reference URLs]\n\nPros: [from agent]\nCons: [from agent]\nA11y: [contrast/keyboard notes]"
       },
       {
-        label: "Option B: Dual Pills",
-        description: "Two separate pill badges side by side",
-        markdown: "┌──────────────┐ ┌──────────────┐\n│ 🌙 7 nights  │ │ 📅 8 days    │\n└──────────────┘ └──────────────┘\n\nPros: Clearest comparison\nCons: More visual weight"
-      },
-      {
-        label: "Option C: Parenthetical (Recommended)",
-        description: "Days count added inline in parentheses",
-        markdown: "┌──────────────────────────────────┐\n│  📅  7 nights (8 days)           │\n└──────────────────────────────────┘\n\nPros: Minimal change, single pill\nCons: Pill slightly wider"
+        label: "[Agent's Direction B name]",
+        description: "[Agent's rationale summary]",
+        markdown: "[Agent's ASCII mockup]\n\nInspired by: [reference URLs]\n\nPros: [from agent]\nCons: [from agent]\nA11y: [contrast/keyboard notes]"
       }
+      // ... up to 4 options from agent
     ],
     multiSelect: false
   }]
 })
 ```
 
-**For new project designs**, present aesthetic directions:
-
+**For new project designs** (Workflow B), also ask about variants:
 ```
 AskUserQuestion({
   questions: [
     {
-      question: "What aesthetic direction for the UI?",
+      question: "Which aesthetic direction? (Researched by UX expert)",
       header: "Aesthetic",
       options: [
-        {
-          label: "Organic & Natural",
-          description: "Earthy tones, soft curves, nature-inspired",
-          markdown: "Color: #5f7355 olive, #8B7355 warm brown\nFont:  Lora (serif headings)\n       Montserrat (clean body)\nVibe:  Calm, premium, artisanal\n\n┌─────────────────────────────┐\n│  ╭───────────────────────╮  │\n│  │  Discover Your Escape │  │\n│  ╰───────────────────────╯  │\n│                             │\n│  [ Plan My Journey  →  ]   │\n└─────────────────────────────┘"
-        },
-        {
-          label: "Bold & Modern",
-          description: "High contrast, geometric, dynamic",
-          markdown: "Color: #1a1a2e deep navy, #e94560 accent\nFont:  Space Grotesk (bold headings)\n       Inter (minimal body)\nVibe:  Tech-forward, energetic\n\n┌─────────────────────────────┐\n│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │\n│ ▓  DISCOVER YOUR ESCAPE   ▓ │\n│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │\n│                             │\n│  [ GET STARTED ▶ ]          │\n└─────────────────────────────┘"
-        }
+        // ... populated from agent's design directions
       ],
       multiSelect: false
     },
@@ -89,7 +103,9 @@ AskUserQuestion({
 })
 ```
 
-### Step 0c: Create Task List
+**Fallback:** If the agent fails or returns incomplete results, fall back to presenting 2-3 directions based on your own knowledge, but note that references were not available.
+
+### Step 0d: Create Task List
 
 After the user picks a direction, create a trackable task list using `TaskCreate`:
 

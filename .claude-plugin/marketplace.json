@@ -12,7 +12,7 @@
       "name": "figma-ui-designer",
       "source": "./plugins/figma-ui-designer",
       "description": "Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",
-      "version": "3.0.0"
+      "version": "3.1.0"
     },
     {
       "name": "git-flow",
