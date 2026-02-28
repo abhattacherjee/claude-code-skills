@@ -379,4 +379,5 @@ AskUserQuestion({
 - `frontend-design` plugin — generates creative standalone HTML/CSS/JS (input to Workflows B/C)
 - `spec-review` skill — reviews story specs (Workflow D can generate specs as input)
 - `feature-dev` skill — guided implementation workflow (Workflow D can feed designs into implementation)
+- `context-shield` — use when analyzing 10+ Figma frames or researching 5+ competitor designs in Phase 0; delegates reads to isolated agents to avoid context overflow
 - Figma MCP tools — `generate_figma_design`, `get_screenshot`, `get_metadata`, `get_design_context`
