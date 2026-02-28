@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.0] - 2026-02-28
+
+### Added
+
+- **Rich plugin README generation** — `prepare-plugin.sh` now extracts What It Does, Key Features, Usage, See Also, Prerequisites, and agent/command descriptions from SKILL.md frontmatter and headings. Plugin READMEs are now informative without hand-editing.
+
+### Changed
+
+- **Contents section enhanced** — skills, commands, and agents now include short descriptions extracted from their YAML frontmatter
+- **`_lib.sh`** — added `extract_section()` and `extract_headings()` helpers for markdown section extraction
+
 ## [3.2.3] - 2026-02-28
 
 ### Added

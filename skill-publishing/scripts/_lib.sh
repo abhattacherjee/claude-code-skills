@@ -37,6 +37,30 @@ short_desc() {
   echo "$1" | sed 's/\. Use when:.*/\./'
 }
 
+# Extract content under a ## heading (returns lines until next ## or EOF)
+# Uses awk for BSD/GNU portability, perl for blank-line trimming.
+# Usage: extract_section <file> <heading_text>
+# Example: extract_section SKILL.md "Quick Check"
+extract_section() {
+  local file="$1"
+  local heading="$2"
+  awk -v h="$heading" '
+    $0 == "## " h { found=1; next }
+    found && /^## / { exit }
+    found { print }
+  ' "$file" 2>/dev/null | perl -0777 -pe 's/\A\s*\n//; s/\n\s*\z//'
+}
+
+# Extract ## heading titles from markdown (after frontmatter)
+# Usage: extract_headings <file> [max_count]
+# Returns one heading per line, frontmatter skipped
+extract_headings() {
+  local file="$1"
+  local max="${2:-10}"
+  awk '/^---$/{fm++; next} fm>=2{print}' "$file" 2>/dev/null | \
+    grep '^## ' | head -"$max" | sed 's/^## //'
+}
+
 # ============================================================
 # File operations (DRY_RUN-aware)
 # ============================================================

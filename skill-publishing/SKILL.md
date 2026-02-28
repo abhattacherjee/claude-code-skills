@@ -2,7 +2,7 @@
 name: skill-publishing
 description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution. Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo', (7) creating a versioned monorepo release with tag, (8) assembling a plugin from skills + commands, (9) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 3.2.3
+  version: 3.3.0
 ---
 
 # Skill to GitHub
