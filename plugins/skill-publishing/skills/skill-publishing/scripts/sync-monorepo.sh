@@ -384,6 +384,129 @@ if [[ -n "$ADD_PLUGIN" ]]; then
   echo ""
 fi
 
+# --- Auto-resync plugins when bare skill content changes ---
+# After syncing bare skills, check if any plugin copies have drifted.
+# Patches skill content directly (SKILL.md, scripts/, references/, agents/)
+# without touching plugin README/CHANGELOG/plugin.json (those are managed separately).
+if [[ -d "$MONOREPO_DIR/plugins" ]]; then
+  PLUGINS_RESYNCED=0
+  for _PLUGIN_DIR in "$MONOREPO_DIR/plugins"/*/; do
+    [[ ! -d "$_PLUGIN_DIR" ]] && continue
+    _PLUGIN_NAME=$(basename "$_PLUGIN_DIR")
+    _PLUGIN_DRIFTED=false
+
+    # Check each skill in the plugin against its source
+    for _PSKILL_MD in "$_PLUGIN_DIR"skills/*/SKILL.md; do
+      [[ ! -f "$_PSKILL_MD" ]] && continue
+      _SNAME=$(basename "$(dirname "$_PSKILL_MD")")
+      _SRC_MD="$SKILLS_HOME/$_SNAME/SKILL.md"
+      if [[ -f "$_SRC_MD" ]] && ! diff -q "$_PSKILL_MD" "$_SRC_MD" >/dev/null 2>&1; then
+        _PLUGIN_DRIFTED=true; break
+      fi
+    done
+
+    # Check scripts
+    if ! $_PLUGIN_DRIFTED; then
+      for _PSCRIPTS in "$_PLUGIN_DIR"skills/*/scripts; do
+        [[ ! -d "$_PSCRIPTS" ]] && continue
+        _SNAME=$(basename "$(dirname "$_PSCRIPTS")")
+        _SRC_SCRIPTS="$SKILLS_HOME/$_SNAME/scripts"
+        if [[ -d "$_SRC_SCRIPTS" ]]; then
+          _SDIFF=$(diff -rq "$_PSCRIPTS" "$_SRC_SCRIPTS" 2>/dev/null | grep -v '.DS_Store' || true)
+          if [[ -n "$_SDIFF" ]]; then _PLUGIN_DRIFTED=true; break; fi
+        fi
+      done
+    fi
+
+    # Check agents
+    if ! $_PLUGIN_DRIFTED; then
+      for _PAGENT in "$_PLUGIN_DIR"agents/*.md; do
+        [[ ! -f "$_PAGENT" ]] && continue
+        _AFILE=$(basename "$_PAGENT")
+        _SRC_AGENT="$HOME/.claude/agents/$_AFILE"
+        if [[ -f "$_SRC_AGENT" ]] && ! diff -q "$_PAGENT" "$_SRC_AGENT" >/dev/null 2>&1; then
+          _PLUGIN_DRIFTED=true; break
+        fi
+      done
+    fi
+
+    if $_PLUGIN_DRIFTED; then
+      echo "--- Plugin resync: $_PLUGIN_NAME ---"
+      _PATCHED=""
+
+      # Patch skill files
+      for _PSKILL_DIR in "$_PLUGIN_DIR"skills/*/; do
+        [[ ! -d "$_PSKILL_DIR" ]] && continue
+        _SNAME=$(basename "$_PSKILL_DIR")
+        _SRC="$SKILLS_HOME/$_SNAME"
+
+        # SKILL.md
+        if [[ -f "$_SRC/SKILL.md" ]] && ! diff -q "$_PSKILL_DIR/SKILL.md" "$_SRC/SKILL.md" >/dev/null 2>&1; then
+          if $DRY_RUN; then
+            echo "  WOULD UPDATE  plugins/$_PLUGIN_NAME/skills/$_SNAME/SKILL.md"
+          else
+            cp "$_SRC/SKILL.md" "$_PSKILL_DIR/SKILL.md"
+            _PATCHED="${_PATCHED:+$_PATCHED, }SKILL.md"
+          fi
+        fi
+
+        # scripts/
+        if [[ -d "$_SRC/scripts" && -d "$_PSKILL_DIR/scripts" ]]; then
+          _SDIFF=$(diff -rq "$_PSKILL_DIR/scripts" "$_SRC/scripts" 2>/dev/null | grep -v '.DS_Store' || true)
+          if [[ -n "$_SDIFF" ]]; then
+            if $DRY_RUN; then
+              echo "  WOULD UPDATE  plugins/$_PLUGIN_NAME/skills/$_SNAME/scripts/"
+            else
+              rsync -a --delete --exclude='.DS_Store' "$_SRC/scripts/" "$_PSKILL_DIR/scripts/"
+              find "$_PSKILL_DIR/scripts" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+              _PATCHED="${_PATCHED:+$_PATCHED, }scripts"
+            fi
+          fi
+        fi
+
+        # references/
+        if [[ -d "$_SRC/references" && -d "$_PSKILL_DIR/references" ]]; then
+          _RDIFF=$(diff -rq "$_PSKILL_DIR/references" "$_SRC/references" 2>/dev/null | grep -v '.DS_Store' || true)
+          if [[ -n "$_RDIFF" ]]; then
+            if $DRY_RUN; then
+              echo "  WOULD UPDATE  plugins/$_PLUGIN_NAME/skills/$_SNAME/references/"
+            else
+              rsync -a --delete --exclude='.DS_Store' "$_SRC/references/" "$_PSKILL_DIR/references/"
+              _PATCHED="${_PATCHED:+$_PATCHED, }references"
+            fi
+          fi
+        fi
+      done
+
+      # Patch agent files
+      if [[ -d "$_PLUGIN_DIR/agents" ]]; then
+        for _PAGENT in "$_PLUGIN_DIR"agents/*.md; do
+          [[ ! -f "$_PAGENT" ]] && continue
+          _AFILE=$(basename "$_PAGENT")
+          _SRC_AGENT="$HOME/.claude/agents/$_AFILE"
+          if [[ -f "$_SRC_AGENT" ]] && ! diff -q "$_PAGENT" "$_SRC_AGENT" >/dev/null 2>&1; then
+            if $DRY_RUN; then
+              echo "  WOULD UPDATE  plugins/$_PLUGIN_NAME/agents/$_AFILE"
+            else
+              cp "$_SRC_AGENT" "$_PAGENT"
+              _PATCHED="${_PATCHED:+$_PATCHED, }agents/$_AFILE"
+            fi
+          fi
+        done
+      fi
+
+      if ! $DRY_RUN && [[ -n "$_PATCHED" ]]; then
+        echo "  RESYNCED  plugins/$_PLUGIN_NAME/ ($_PATCHED)"
+      fi
+      PLUGINS_RESYNCED=$((PLUGINS_RESYNCED + 1))
+    fi
+  done
+
+  if [[ $PLUGINS_RESYNCED -gt 0 ]]; then
+    echo ""
+  fi
+fi
+
 # Build plugin catalog rows for README
 PLUGINS_TO_LIST=$(discover_plugins)
 PLUGIN_COUNT=0
