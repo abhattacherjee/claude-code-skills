@@ -291,6 +291,7 @@ if $DRY_RUN; then
   echo "WOULD COMMIT  release: v${NEW_VERSION}"
   echo "WOULD TAG     $TAG_NAME"
   echo "WOULD PUSH    origin main --tags"
+  echo "WOULD CREATE  GitHub release for $TAG_NAME"
   echo ""
   echo "Dry run complete. No changes made."
 else
@@ -330,6 +331,29 @@ $TAG_BODY"
   # Push (branch + tag)
   git push origin main --tags
   echo "PUSHED     origin main + $TAG_NAME"
+
+  # Create GitHub release from the annotated tag
+  RELEASE_TITLE="${TAG_NAME}"
+  # Extract a short title from the first Added entry, or use commit summary
+  FIRST_FEAT=$(echo "$ADDED" | head -1 | sed 's/^- //')
+  if [[ -n "$FIRST_FEAT" ]]; then
+    RELEASE_TITLE="${TAG_NAME} — ${FIRST_FEAT}"
+  fi
+
+  RELEASE_BODY="## What's Changed
+${COMMIT_SUMMARY}
+## Inventory
+
+**${SKILL_COUNT} skills** · **${PLUGIN_COUNT} plugins**
+${SKILL_INVENTORY}
+${PLUGIN_INVENTORY}"
+
+  if gh release create "$TAG_NAME" --title "$RELEASE_TITLE" --notes "$RELEASE_BODY" 2>/dev/null; then
+    echo "RELEASED   $TAG_NAME on GitHub"
+  else
+    echo "Warning: GitHub release creation failed (tag pushed successfully)" >&2
+    echo "  Create manually: gh release create $TAG_NAME --generate-notes" >&2
+  fi
 
   echo ""
   echo "Release complete!"

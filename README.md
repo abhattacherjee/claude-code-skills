@@ -28,7 +28,7 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
 | [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |
 | [skill-authoring](./plugins/skill-authoring/) | 2.2.0 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |
-| [skill-publishing](./plugins/skill-publishing/) | 3.2.2 | 1 | 0 | Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo, and plugin assembly/distribution |
+| [skill-publishing](./plugins/skill-publishing/) | 3.5.0 | 1 | 0 | Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo, and plugin assembly/distribution |
 
 
 ### Install via Claude Code (Recommended)
