@@ -330,7 +330,7 @@ case "$COMMAND" in
       esac
     done
     require_manifest
-    cmd_next_batch "${local_args[@]}"
+    cmd_next_batch ${local_args[@]+"${local_args[@]}"}
     ;;
   mark-done)
     require_jq
@@ -343,7 +343,7 @@ case "$COMMAND" in
       esac
     done
     require_manifest
-    cmd_mark_done "${local_args[@]}"
+    cmd_mark_done ${local_args[@]+"${local_args[@]}"}
     ;;
   reset)
     require_jq

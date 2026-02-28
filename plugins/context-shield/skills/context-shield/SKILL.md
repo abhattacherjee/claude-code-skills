@@ -1,8 +1,8 @@
 ---
 name: context-shield
-description: "Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Supports ralph-loop iterations for workloads too large for a single session. Use when: (1) task involves reading 3+ large external sources (URLs, Figma frames, wiki pages), (2) context is getting full from web fetches or file reads, (3) processing many Figma design frames, (4) analyzing competitor sites or design references in bulk, (5) reading a multi-page GitHub wiki or documentation site."
+description: "Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count and activates it transparently. Use when: (1) task involves reading 3+ large external sources (URLs, Figma frames, wiki pages), (2) context is getting full from web fetches or file reads, (3) processing many Figma design frames, (4) analyzing competitor sites or design references in bulk, (5) reading a multi-page GitHub wiki or documentation site, (6) reading a large website by breaking it into section URLs."
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
 # Context Shield
@@ -13,11 +13,13 @@ Prevents context overflow by delegating token-heavy content reads to isolated su
 
 | Signal | Action |
 |--------|--------|
-| Task needs 3+ large sources (URLs, Figma, files) | Use context-shield |
+| Task needs 3+ large sources (URLs, Figma, files) | Use context-shield (auto-detects mode) |
 | Single source is very large but manageable | Just use a single Agent call — no manifest needed |
 | You're about to `WebFetch` 5+ pages in the parent context | Stop — use context-shield instead |
-| Figma design has 10+ frames to analyze | Use context-shield with figma sources |
-| GitHub wiki has many pages | Use context-shield with wiki sources |
+| Figma design has 10+ frames to analyze | Use context-shield (likely auto-ralph) |
+| GitHub wiki has many pages | Use context-shield (likely auto-ralph) |
+| Large documentation site (10+ pages) | Break into section URLs, context-shield auto-ralphs |
+| >6 sources at batch-size 3 | Auto-ralph activates (>2 batches) |
 
 ## Quick Check
 
@@ -85,27 +87,49 @@ OUTPUT_DIR="/tmp/cs-$(date +%s)"
 $SCRIPTS/manage-manifest.sh create \
   --task "Brief description of what you're looking for" \
   --output-dir "$OUTPUT_DIR" \
-  --batch-size 4 \
+  --batch-size 3 \
   "type:location,label=Name" \
   "type:location,label=Name" \
   ...
 ```
 
 **Batch size guidance:**
-- 3-4 for token-heavy sources (full web pages, Figma designs)
-- 5-6 for lighter sources (short files, focused searches)
+- 3 for token-heavy sources (full web pages, Figma designs) — **default**
+- 4-5 for lighter sources (short files, focused searches)
 - Smaller batches = more iterations but less risk of agent context overflow
 
-### Step 3: Process Current Batch
+### Step 3: Auto-Detect Processing Mode
 
-Get the next batch and spawn parallel agents — one per source:
+Calculate total batches and **automatically choose** the processing mode:
 
+```
+TOTAL_SOURCES = number of sources in manifest
+BATCH_SIZE = batch size from manifest
+TOTAL_BATCHES = ceil(TOTAL_SOURCES / BATCH_SIZE)
+
+if TOTAL_BATCHES <= 2:  → DIRECT MODE (process in current session)
+if TOTAL_BATCHES > 2:   → RALPH MODE  (delegate to ralph-loop)
+```
+
+| Sources | Batch Size | Batches | Mode | Why |
+|---------|-----------|---------|------|-----|
+| 3-6 | 3 | 1-2 | Direct | Fits in single session context |
+| 7-9 | 3 | 3 | Ralph | Context accumulates across 3+ batch cycles |
+| 10+ | 3 | 4+ | Ralph | Would overflow single session context |
+| 5-10 | 5 | 1-2 | Direct | Lighter sources, larger batches |
+
+**This is automatic — do NOT ask the user which mode to use.**
+
+### Step 3a: Direct Mode (≤2 batches)
+
+Process all batches in the current session. For each batch:
+
+1. Get next batch:
 ```bash
 BATCH=$($SCRIPTS/manage-manifest.sh next-batch --manifest "$OUTPUT_DIR/manifest.json")
 ```
 
-For each item in the batch, launch a `content-distiller` agent in parallel (SINGLE message):
-
+2. For each item in the batch, launch a `content-distiller` agent in parallel (SINGLE message):
 ```
 Agent({
   subagent_type: "general-purpose",
@@ -118,10 +142,7 @@ ${JSON.stringify(item)}
 })
 ```
 
-**Launch all batch agents in ONE message** — they run in parallel.
-
-After each agent returns, mark the item done:
-
+3. After agents return, mark each done:
 ```bash
 $SCRIPTS/manage-manifest.sh mark-done \
   --manifest "$OUTPUT_DIR/manifest.json" \
@@ -129,43 +150,35 @@ $SCRIPTS/manage-manifest.sh mark-done \
   --summary "the agent's distilled summary"
 ```
 
-### Step 4: Check Progress
+4. Check status — if items remain, repeat for the next batch. Then proceed to Step 4 (Synthesize).
 
-```bash
-$SCRIPTS/manage-manifest.sh status --manifest "$OUTPUT_DIR/manifest.json"
-```
+### Step 3b: Ralph Mode (>2 batches)
 
-**If all done** → proceed to Step 5 (Synthesize).
-**If items remain** → process the next batch (repeat Step 3), OR use ralph-loop for auto-iteration (Step 4b).
+Delegate the entire batch-processing loop to `/ralph-loop`. Each iteration gets a fresh context, processes one batch, and exits. The manifest on disk is the only shared state.
 
-### Step 4b: Ralph-Loop for Multi-Batch Processing
-
-When the workload is too large for a single session (>3 batches or context is getting full), hand off to `/ralph-loop`:
+**Invoke ralph-loop with this pattern:**
 
 ```
-/ralph-loop Process content sources using context-shield.
-
-Read manifest: $OUTPUT_DIR/manifest.json
-Check status: $SCRIPTS/manage-manifest.sh status --manifest $OUTPUT_DIR/manifest.json
-
-For each iteration:
-1. Get next batch: $SCRIPTS/manage-manifest.sh next-batch --manifest $OUTPUT_DIR/manifest.json
-2. For each item in batch, spawn a content-distiller agent (parallel)
-3. Mark each done with its summary
-4. Check status — if COMPLETE, synthesize and output <promise>DONE</promise>
-
---completion-promise "DONE" --max-iterations 10
+/ralph-loop Process one batch per iteration from context-shield manifest OUTPUT_DIR/manifest.json then exit. Scripts at SCRIPTS/manage-manifest.sh. Each iteration: check status, if COMPLETE then collect summaries and synthesize and output promise DONE, otherwise get next-batch, spawn 3 parallel content-distiller agents with sonnet model and general-purpose subagent type, mark done, then exit so ralph gives a fresh context for the next batch. --completion-promise DONE --max-iterations MAX
 ```
 
-Each ralph-loop iteration:
-- Gets a fresh context (no accumulated token debt)
-- Reads manifest from disk to find remaining items
-- Processes one batch of parallel agents
-- Marks items done and saves summaries to manifest
-- Exits → stop hook feeds the prompt back for next iteration
-- When all items are done, outputs `<promise>DONE</promise>` to end the loop
+**Replace** `OUTPUT_DIR`, `SCRIPTS`, and `MAX` with actual values. Set `MAX` to `TOTAL_BATCHES + 2` (extra headroom for the synthesis iteration and any retries).
 
-### Step 5: Synthesize
+**Important: keep the ralph-loop prompt as a single simple string.** The Skill tool is sensitive to special characters — avoid parentheses, angle brackets, and multi-line formatting in the args.
+
+**How ralph-loop processes each iteration:**
+1. Reads manifest from disk → checks status
+2. If COMPLETE → collects summaries, synthesizes report, outputs `<promise>DONE</promise>`
+3. Otherwise → gets next batch, spawns parallel content-distiller agents
+4. Marks items done with summaries → exits
+5. Stop hook feeds the same prompt back → next iteration with fresh context
+
+**Token economics:**
+- Each iteration: ~50K tokens (batch of 3 web pages in sub-agents + orchestration overhead)
+- Without ralph: 12 sources × ~50K = 600K tokens in one context (impossible)
+- With ralph: 4 iterations × ~50K each, but each starts fresh (works perfectly)
+
+### Step 4: Synthesize
 
 Collect all distilled summaries:
 
@@ -257,6 +270,32 @@ $SCRIPTS/manage-manifest.sh create --task "Analyze competitor booking UIs" \
   "url:https://expedia.com,label=Expedia" \
   "url:https://hotels.com,label=Hotels.com"
 ```
+
+### Large Website / Documentation Site (auto-ralph)
+
+Break a single large site into section URLs. With 12 sources at batch-size 3 = 4 batches → **ralph mode auto-activates**.
+
+```bash
+# Example: MCP documentation (12 pages, auto-ralph)
+$SCRIPTS/manage-manifest.sh create --task "Comprehensive analysis of MCP protocol" \
+  --output-dir /tmp/cs-mcp --batch-size 3 \
+  "url:https://modelcontextprotocol.io/introduction,label=Introduction" \
+  "url:https://modelcontextprotocol.io/docs/concepts/architecture,label=Architecture" \
+  "url:https://modelcontextprotocol.io/docs/concepts/resources,label=Resources" \
+  "url:https://modelcontextprotocol.io/docs/concepts/tools,label=Tools" \
+  "url:https://modelcontextprotocol.io/docs/concepts/prompts,label=Prompts" \
+  "url:https://modelcontextprotocol.io/docs/concepts/sampling,label=Sampling" \
+  "url:https://modelcontextprotocol.io/docs/concepts/transports,label=Transports" \
+  "url:https://modelcontextprotocol.io/docs/concepts/roots,label=Roots" \
+  "url:https://modelcontextprotocol.io/docs/guides/building-servers,label=Building Servers" \
+  "url:https://modelcontextprotocol.io/docs/guides/building-clients,label=Building Clients" \
+  "url:https://modelcontextprotocol.io/specification/2025-03-26,label=Specification" \
+  "url:https://modelcontextprotocol.io/development/updates,label=Updates"
+# 12 sources / batch 3 = 4 batches → auto-detects ralph mode
+# Result: ~100:1 compression, each iteration uses fresh context
+```
+
+**How to decompose a large site**: Identify the top-level navigation or sitemap sections. Each page becomes one source. Label clearly — these labels appear in the final synthesis report.
 
 ### GitHub Wiki Crawl
 

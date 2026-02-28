@@ -1,5 +1,5 @@
 {
   "name": "context-shield",
-  "version": "1.1.0",
-  "description": "Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries"
+  "version": "1.2.0",
+  "description": "Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed for large workloads."
 }

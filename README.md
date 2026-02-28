@@ -24,7 +24,7 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 
 | Plugin | Version | Skills | Commands | Description |
 |--------|---------|--------|----------|-------------|
-| [context-shield](./plugins/context-shield/) | 1.1.0 | 1 | 0 | Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries |
+| [context-shield](./plugins/context-shield/) | 1.2.0 | 1 | 0 | Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed for large workloads. |
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
 | [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |
 | [skill-authoring](./plugins/skill-authoring/) | 2.2.0 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |
