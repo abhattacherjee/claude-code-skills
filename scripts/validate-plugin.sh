@@ -17,6 +17,7 @@ Validates a Claude Code plugin directory against quality rules:
   - Commands have YAML frontmatter or description header
   - Skills pass validate-skill.sh
   - Scripts are executable with proper shebang
+  - Agent references in SKILL.md matched against agents/ directory
   - Items declared in plugin.json exist on disk
 
 Options:
@@ -247,7 +248,37 @@ for scripts_dir in "$PLUGIN_DIR/scripts" "$PLUGIN_DIR/skills"/*/scripts; do
 done
 
 # ============================================================
-# 8. Cross-reference: structure integrity
+# 8. Agent cross-reference: SKILL.md mentions vs agents/ directory
+# ============================================================
+echo ""
+echo "--- agent references ---"
+
+AGENT_REFS_FOUND=false
+while IFS= read -r skill_md; do
+  # Extract agent filenames referenced in SKILL.md (patterns: agents/name.md, ~/.claude/agents/name.md)
+  REFERENCED_AGENTS=$(grep -ohE 'agents/[a-z][-a-z0-9]+\.md' "$skill_md" 2>/dev/null | sed 's|.*/||' | sort -u)
+
+  if [[ -n "$REFERENCED_AGENTS" ]]; then
+    AGENT_REFS_FOUND=true
+    SKILL_REL="${skill_md#$PLUGIN_DIR/}"
+
+    while IFS= read -r agent_file; do
+      AGENT_NAME="${agent_file%.md}"
+      if [[ -f "$PLUGIN_DIR/agents/$agent_file" ]]; then
+        pass "$SKILL_REL references $AGENT_NAME: found in agents/"
+      else
+        warn "$SKILL_REL references $AGENT_NAME: NOT found in agents/ (add to plugin-manifest.json agents array)"
+      fi
+    done <<< "$REFERENCED_AGENTS"
+  fi
+done < <(find "$PLUGIN_DIR/skills" -name 'SKILL.md' -type f 2>/dev/null | sort)
+
+if ! $AGENT_REFS_FOUND; then
+  pass "no agent references found in skills (none expected)"
+fi
+
+# ============================================================
+# 9. Cross-reference: structure integrity
 # ============================================================
 echo ""
 echo "--- structure ---"

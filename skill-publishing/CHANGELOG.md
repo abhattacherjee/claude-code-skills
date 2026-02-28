@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.3] - 2026-02-28
+
+### Added
+
+- **Agent cross-reference validation** — `validate-plugin.sh` now scans SKILL.md files for agent path references (e.g., `agents/figma-ux-expert.md`) and warns if the referenced agent is not included in the plugin's `agents/` directory. Prevents silent omission of associated agents during plugin assembly.
+
 ## [3.2.2] - 2026-02-27
 
 ### Fixed
