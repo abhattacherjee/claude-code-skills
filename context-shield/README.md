@@ -1,6 +1,6 @@
 # context-shield
 
-Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Supports ralph-loop iterations for workloads too large for a single session.
+Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count and activates it transparently.
 
 ## Installation
 
@@ -34,7 +34,7 @@ git -C ~/.claude/skills/context-shield pull
 
 ## What It Does
 
-Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Supports ralph-loop iterations for workloads too large for a single session.
+Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count and activates it transparently.
 
 ## Compatibility
 
