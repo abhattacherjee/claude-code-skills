@@ -90,4 +90,5 @@ with: key topics, decisions made, code changes, outcomes, and open items.
 
 ## See Also
 
+- `context-shield` — use when searching/summarizing many conversations at once; each conversation can be 10K+ messages, so distilling multiple via isolated agents avoids context overflow
 - **GitHub**: https://github.com/abhattacherjee/conversation-search — install instructions, changelog, license

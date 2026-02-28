@@ -414,5 +414,6 @@ $SCRIPTS/manage-manifest.sh create --task "Assess security advisories for depend
 - `project-code-review` — use context-shield for large PRs with 15+ changed files
 - `npm-dependency-management` — use context-shield to research 5+ package changelogs before upgrades
 - `ci-security-issue-creator` — use context-shield to triage many CVE/GHSA advisory pages
+- `conversation-search` — use context-shield when summarizing multiple large conversations at once
 - `ralph-loop` plugin — provides the iteration mechanism for multi-batch processing
 - `content-distiller` agent (`~/.claude/agents/content-distiller.md`) — the isolated reader
