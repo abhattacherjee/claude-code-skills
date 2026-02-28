@@ -208,6 +208,28 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
     copy_dir "$SKILL_SRC/references" "$SKILL_DST/references" "$SKILL_NAME/references/"
   fi
 
+  # Copy agents declared in plugin-manifest.json (if any)
+  MANIFEST="$SKILL_SRC/plugin-manifest.json"
+  if [[ -f "$MANIFEST" ]]; then
+    AGENT_COUNT=$(jq -r '.agents // [] | length' "$MANIFEST" 2>/dev/null)
+    if [[ "$AGENT_COUNT" -gt 0 ]]; then
+      if ! $DRY_RUN; then
+        mkdir -p "$SKILL_DST/agents"
+      fi
+      for (( ai=0; ai<AGENT_COUNT; ai++ )); do
+        AGENT_NAME=$(jq -r ".agents[$ai].name" "$MANIFEST")
+        AGENT_SRC=$(jq -r ".agents[$ai].source" "$MANIFEST")
+        # Resolve ~ to $HOME
+        AGENT_SRC_RESOLVED="${AGENT_SRC/#\~/$HOME}"
+        if [[ -f "$AGENT_SRC_RESOLVED" ]]; then
+          copy_file "$AGENT_SRC_RESOLVED" "$SKILL_DST/agents/$AGENT_NAME.md" "$SKILL_NAME/agents/$AGENT_NAME.md"
+        else
+          echo "  Warning: agent source not found: $AGENT_SRC_RESOLVED"
+        fi
+      done
+    fi
+  fi
+
   # Copy CHANGELOG.md if it exists
   copy_file "$SKILL_SRC/CHANGELOG.md" "$SKILL_DST/CHANGELOG.md" "$SKILL_NAME/CHANGELOG.md"
 
