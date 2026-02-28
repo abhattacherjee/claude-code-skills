@@ -1,8 +1,8 @@
 ---
 name: context-shield
-description: "Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count and activates it transparently. Use when: (1) task involves reading 3+ large external sources (URLs, Figma frames, wiki pages), (2) context is getting full from web fetches or file reads, (3) processing many Figma design frames, (4) analyzing competitor sites or design references in bulk, (5) reading a multi-page GitHub wiki or documentation site, (6) reading a large website by breaking it into section URLs."
+description: "Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count. Use when: (1) reading 3+ large external sources (URLs, Figma frames, wiki pages), (2) large documentation/API reference sites decomposed into section URLs, (3) monorepo code audits across many directories, (4) dependency upgrade research across 5+ packages, (5) large PR reviews with 15+ changed files, (6) competitive feature matrix analysis, (7) security advisory triage for dependency updates."
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # Context Shield
@@ -19,6 +19,12 @@ Prevents context overflow by delegating token-heavy content reads to isolated su
 | Figma design has 10+ frames to analyze | Use context-shield (likely auto-ralph) |
 | GitHub wiki has many pages | Use context-shield (likely auto-ralph) |
 | Large documentation site (10+ pages) | Break into section URLs, context-shield auto-ralphs |
+| API reference with many endpoint pages | Break into per-endpoint or per-section URLs |
+| Monorepo code audit across many directories | Use `codebase` type with glob patterns per layer |
+| Dependency upgrade research (5+ packages) | Fetch changelogs/release notes per package |
+| Large PR review (15+ changed files) | Use `file` type, one per changed file |
+| Competitive feature matrix (5+ competitors) | Use `url` type for each feature/pricing page |
+| Security advisory review for dependency updates | Fetch CVE/advisory pages per vulnerability |
 | >6 sources at batch-size 3 | Auto-ralph activates (>2 batches) |
 
 ## Quick Check
@@ -307,6 +313,98 @@ $SCRIPTS/manage-manifest.sh create --task "Extract architecture decisions from w
   "wiki:https://github.com/org/repo/wiki/Data-Model,label=Data Model" \
   "wiki:https://github.com/org/repo/wiki/Deployment,label=Deployment" \
   "wiki:https://github.com/org/repo/wiki/Security,label=Security"
+```
+
+### API Reference / Framework Docs
+
+Break a multi-page API reference into per-section URLs. Works for any vendor docs (OpenAI, Stripe, Twilio, AWS, etc.).
+
+```bash
+# Example: OpenAI API reference (9 pages, auto-ralph)
+$SCRIPTS/manage-manifest.sh create --task "Comprehensive OpenAI API reference" \
+  --output-dir /tmp/cs-openai --batch-size 3 \
+  "url:https://platform.openai.com/docs/api-reference/chat,label=Chat Completions" \
+  "url:https://platform.openai.com/docs/api-reference/embeddings,label=Embeddings" \
+  "url:https://platform.openai.com/docs/api-reference/fine-tuning,label=Fine-tuning" \
+  "url:https://platform.openai.com/docs/api-reference/batch,label=Batch API" \
+  "url:https://platform.openai.com/docs/api-reference/uploads,label=Uploads" \
+  "url:https://platform.openai.com/docs/api-reference/images,label=Images" \
+  "url:https://platform.openai.com/docs/api-reference/models,label=Models" \
+  "url:https://platform.openai.com/docs/api-reference/moderations,label=Moderations" \
+  "url:https://platform.openai.com/docs/api-reference/assistants,label=Assistants"
+```
+
+### Monorepo Code Audit
+
+Use `codebase` type to scan patterns across directories. Use batch-size 4-5 since code files are lighter than web pages.
+
+```bash
+$SCRIPTS/manage-manifest.sh create --task "Audit error handling across service layers" \
+  --output-dir /tmp/cs-audit --batch-size 4 \
+  "codebase:backend/src/services/**/*.ts,label=Backend Services" \
+  "codebase:backend/src/routes/**/*.ts,label=API Routes" \
+  "codebase:backend/src/middleware/**/*.ts,label=Middleware" \
+  "codebase:mcp-events-server/src/**/*.ts,label=MCP Server" \
+  "codebase:frontend/src/services/**/*.ts,label=Frontend Services"
+```
+
+### Dependency Upgrade Research
+
+Fetch changelogs and migration guides before a major upgrade. Label with version ranges.
+
+```bash
+$SCRIPTS/manage-manifest.sh create --task "Research breaking changes for dependency upgrade" \
+  --output-dir /tmp/cs-deps --batch-size 3 \
+  "url:https://github.com/expressjs/express/releases,label=Express Releases" \
+  "url:https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md,label=Vite Changelog" \
+  "url:https://github.com/vitest-dev/vitest/releases,label=Vitest Releases" \
+  "url:https://github.com/microsoft/playwright/releases,label=Playwright Releases" \
+  "url:https://github.com/usebruno/bruno/releases,label=Bruno Releases" \
+  "url:https://github.com/tailwindlabs/tailwindcss/releases,label=Tailwind Releases"
+```
+
+### Large PR Review (many changed files)
+
+Distill each changed file's diff to review a large PR without exhausting context.
+
+```bash
+# Generate file list from git diff, then create manifest
+$SCRIPTS/manage-manifest.sh create --task "Review PR changes for feature X" \
+  --output-dir /tmp/cs-pr --batch-size 5 \
+  "file:backend/src/services/eventService.ts,label=eventService" \
+  "file:backend/src/services/sessionService.ts,label=sessionService" \
+  "file:backend/src/routes/recommendations.ts,label=recommendations route" \
+  "file:frontend/src/components/Results.tsx,label=Results component" \
+  "file:frontend/src/components/Questionnaire.tsx,label=Questionnaire" \
+  "file:mcp-events-server/src/tools/recommend.ts,label=MCP recommend tool"
+```
+
+### Competitive Feature Matrix
+
+Analyze pricing/feature pages across competitors to build a comparison matrix.
+
+```bash
+$SCRIPTS/manage-manifest.sh create --task "Compare vacation rental platform features" \
+  --output-dir /tmp/cs-compete --batch-size 3 \
+  "url:https://www.airbnb.com/help/article/2503,label=Airbnb Host Features" \
+  "url:https://www.vrbo.com/discoveryhub/tips-and-resources,label=VRBO Features" \
+  "url:https://www.booking.com/content/about.html,label=Booking.com About" \
+  "url:https://www.tripadvisor.com/business,label=TripAdvisor Business" \
+  "url:https://www.expedia.com/partner-solutions,label=Expedia Partners" \
+  "url:https://www.hotels.com/page/about-us,label=Hotels.com About"
+```
+
+### Security Advisory Review
+
+Fetch and distill CVE/advisory pages when triaging dependency vulnerabilities.
+
+```bash
+$SCRIPTS/manage-manifest.sh create --task "Assess security advisories for dependency update" \
+  --output-dir /tmp/cs-security --batch-size 4 \
+  "url:https://github.com/advisories/GHSA-xxxx-yyyy-zzzz,label=minimatch ReDoS" \
+  "url:https://github.com/advisories/GHSA-aaaa-bbbb-cccc,label=express path traversal" \
+  "url:https://nvd.nist.gov/vuln/detail/CVE-2024-NNNNN,label=CVE-2024-NNNNN" \
+  "url:https://snyk.io/vuln/SNYK-JS-EXAMPLE,label=Snyk Advisory"
 ```
 
 ## See Also

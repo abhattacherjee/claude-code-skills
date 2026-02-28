@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-02-28
+
+### Added
+
+- **6 new common patterns** — API reference/framework docs, monorepo code audit, dependency upgrade research, large PR review, competitive feature matrix, security advisory review
+- **Expanded When to Use table** — added triggers for code audits, dependency research, large PRs, competitive analysis, security advisories
+- **Enhanced description** — broader trigger conditions for skill activation across all new use cases
+
 ## [1.2.0] - 2026-02-28
 
 ### Added

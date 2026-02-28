@@ -10,7 +10,7 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 |-------|---------|-------------|-----------------|
 | [changelog-keeper](./changelog-keeper/) | 1.1.1 | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. | [repo](https://github.com/abhattacherjee/changelog-keeper) |
 | [claudeception](./claudeception/) | 3.2.0 | Extracts reusable knowledge from work sessions and codifies it into Claude Code skills. | [repo](https://github.com/abhattacherjee/claudeception) |
-| [context-shield](./context-shield/) | 1.2.0 | Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count and activates it transparently. | — |
+| [context-shield](./context-shield/) | 1.3.0 | Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count. | — |
 | [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
 | [figma-ui-designer](./figma-ui-designer/) | 3.1.0 | Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. | — |
 | [skill-authoring](./skill-authoring/) | 2.2.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | — |
@@ -24,7 +24,7 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 
 | Plugin | Version | Skills | Commands | Description |
 |--------|---------|--------|----------|-------------|
-| [context-shield](./plugins/context-shield/) | 1.2.0 | 1 | 0 | Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed for large workloads. |
+| [context-shield](./plugins/context-shield/) | 1.3.0 | 1 | 0 | Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories. |
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
 | [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |
 | [skill-authoring](./plugins/skill-authoring/) | 2.2.0 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |

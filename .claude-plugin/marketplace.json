@@ -11,8 +11,8 @@
     {
       "name": "context-shield",
       "source": "./plugins/context-shield",
-      "description": "Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed for large workloads.",
-      "version": "1.2.0"
+      "description": "Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.",
+      "version": "1.3.0"
     },
     {
       "name": "figma-ui-designer",
