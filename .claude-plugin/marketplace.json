@@ -5,9 +5,15 @@
   },
   "metadata": {
     "description": "Reusable Agent Skills and Plugins for Claude Code",
-    "version": "2026.02.27"
+    "version": "2026.02.28"
   },
   "plugins": [
+    {
+      "name": "figma-ui-designer",
+      "source": "./plugins/figma-ui-designer",
+      "description": "Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",
+      "version": "3.0.0"
+    },
     {
       "name": "git-flow",
       "source": "./plugins/git-flow",
