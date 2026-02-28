@@ -176,7 +176,7 @@ if [[ $SKILL_COUNT -gt 0 ]]; then
         --exclude='.git' --exclude='.claude' --exclude='.DS_Store' \
         --exclude='.github' --exclude='README.md' --exclude='CONTRIBUTING.md' \
         --exclude='LICENSE' --exclude='.gitignore' \
-        --exclude='plugin-manifest.json' \
+        --exclude='plugin-manifest.json' --exclude='build' \
         "$SKILL_SRC/" "$SKILL_DST/"
       # Preserve execute permissions on scripts
       find "$SKILL_DST" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true

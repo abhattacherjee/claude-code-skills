@@ -1,5 +1,0 @@
-{
-  "name": "skill-authoring",
-  "version": "2.2.0",
-  "description": "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism"
-}
