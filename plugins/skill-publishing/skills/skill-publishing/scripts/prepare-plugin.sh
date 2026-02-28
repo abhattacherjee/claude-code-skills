@@ -325,44 +325,200 @@ Initial plugin release.
   write_file "$OUTPUT_DIR/CHANGELOG.md" "$CHANGELOG_CONTENT" "CHANGELOG.md"
 fi
 
-# README.md
-CMD_SECTION=""
+# README.md — enriched extraction from SKILL.md, commands, agents
+# Primary skill provides What It Does, Key Features, Usage, See Also
+PRIMARY_SKILL_SRC=$(jq -r '.skills[0].source' "$MANIFEST_FILE")
+PRIMARY_SKILL_SRC=$(resolve_tilde "$PRIMARY_SKILL_SRC")
+PRIMARY_SKILL_MD="$PRIMARY_SKILL_SRC/SKILL.md"
+
+# --- Extract data from primary skill ---
+FULL_DESC=""
+USE_WHEN=""
+KEY_FEATURES=""
+USAGE_SECTION=""
+SEE_ALSO=""
+PREREQUISITES=""
+
+if [[ -f "$PRIMARY_SKILL_MD" ]]; then
+  FULL_DESC=$(extract_field "$PRIMARY_SKILL_MD" "description")
+
+  # Extract "Use when:" bullets from description
+  USE_WHEN_RAW=$(echo "$FULL_DESC" | sed -n 's/.*Use when: *//p')
+  if [[ -n "$USE_WHEN_RAW" ]]; then
+    USE_WHEN=$(echo "$USE_WHEN_RAW" | sed 's/([0-9]*) */\n/g' | \
+      sed '/^[[:space:]]*$/d' | sed 's/^[[:space:]]*//' | sed 's/,$//' | \
+      sed 's/^/- /')
+  fi
+
+  # Key Features from ## headings (filter out generic sections)
+  HEADINGS=$(extract_headings "$PRIMARY_SKILL_MD" 12)
+  if [[ -n "$HEADINGS" ]]; then
+    KEY_FEATURES=""
+    while IFS= read -r heading; do
+      case "$heading" in
+        "See Also"|"Notes"|"Prerequisites"|"Key Decisions"|"Quick Check"|"Quick Reference"|"") continue ;;
+        *) KEY_FEATURES="${KEY_FEATURES}
+- **${heading}**" ;;
+      esac
+    done <<< "$HEADINGS"
+    # Trim leading newline
+    KEY_FEATURES=$(echo "$KEY_FEATURES" | sed '/./,$!d')
+  fi
+
+  # Usage from Quick Check or Quick Reference section
+  USAGE_SECTION=$(extract_section "$PRIMARY_SKILL_MD" "Quick Check")
+  if [[ -z "$USAGE_SECTION" ]]; then
+    USAGE_SECTION=$(extract_section "$PRIMARY_SKILL_MD" "Quick Reference")
+  fi
+
+  # Optional sections
+  SEE_ALSO=$(extract_section "$PRIMARY_SKILL_MD" "See Also")
+  PREREQUISITES=$(extract_section "$PRIMARY_SKILL_MD" "Prerequisites")
+fi
+
+# --- Build Contents lists with descriptions ---
+SKILL_LIST=""
+for i in $(seq 0 $((SKILL_COUNT - 1))); do
+  SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
+  SSRC=$(jq -r ".skills[$i].source" "$MANIFEST_FILE")
+  SSRC=$(resolve_tilde "$SSRC")
+  SDESC=$(extract_field "$SSRC/SKILL.md" "description" 2>/dev/null || echo "")
+  SDESC_SHORT=$(short_desc "$SDESC")
+  if [[ -n "$SDESC_SHORT" && "$SDESC_SHORT" != "." ]]; then
+    SKILL_LIST="${SKILL_LIST}
+- \`$SNAME\` — $SDESC_SHORT"
+  else
+    SKILL_LIST="${SKILL_LIST}
+- \`$SNAME\`"
+  fi
+done
+SKILL_LIST=$(echo "$SKILL_LIST" | sed '/./,$!d')
+
+CMD_LIST=""
 MANUAL_CMD_STEP=""
 if [[ $CMD_COUNT -gt 0 ]]; then
-  CMD_LIST=""
   for i in $(seq 0 $((CMD_COUNT - 1))); do
     CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
-    CMD_LIST="$CMD_LIST
+    CSRC=$(jq -r ".commands[$i].source" "$MANIFEST_FILE")
+    CSRC=$(resolve_tilde "$CSRC")
+    CDESC=$(extract_field "$CSRC" "description" 2>/dev/null || echo "")
+    if [[ -n "$CDESC" ]]; then
+      CMD_LIST="${CMD_LIST}
+- \`/$CNAME\` — $CDESC"
+    else
+      CMD_LIST="${CMD_LIST}
 - \`/$CNAME\`"
+    fi
   done
-  CMD_SECTION="
-### Commands
-$CMD_LIST"
+  CMD_LIST=$(echo "$CMD_LIST" | sed '/./,$!d')
   MANUAL_CMD_STEP="
 # Copy commands
 cp plugins/$PLUGIN_NAME/commands/*.md ~/.claude/commands/"
 fi
 
-# Build skill list for contents section
-SKILL_LIST=""
-for i in $(seq 0 $((SKILL_COUNT - 1))); do
-  SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
-  SKILL_LIST="$SKILL_LIST
-- \`$SNAME\`"
-done
+AGENT_LIST=""
+if [[ $AGENT_COUNT -gt 0 ]]; then
+  for i in $(seq 0 $((AGENT_COUNT - 1))); do
+    ANAME=$(jq -r ".agents[$i].name" "$MANIFEST_FILE")
+    ASRC=$(jq -r ".agents[$i].source" "$MANIFEST_FILE")
+    ASRC=$(resolve_tilde "$ASRC")
+    ADESC=$(extract_field "$ASRC" "description" 2>/dev/null || echo "")
+    ADESC_SHORT=$(short_desc "$ADESC")
+    if [[ -n "$ADESC_SHORT" && "$ADESC_SHORT" != "." ]]; then
+      AGENT_LIST="${AGENT_LIST}
+- \`$ANAME\` — $ADESC_SHORT"
+    else
+      AGENT_LIST="${AGENT_LIST}
+- \`$ANAME\`"
+    fi
+  done
+  AGENT_LIST=$(echo "$AGENT_LIST" | sed '/./,$!d')
+fi
 
+# --- Assemble README ---
 README_CONTENT="# $PLUGIN_NAME
 
-$PLUGIN_DESC
+$PLUGIN_DESC"
+
+# What It Does (from full description + use-when bullets)
+if [[ -n "$FULL_DESC" ]]; then
+  WHAT_IT_DOES_PARA=$(short_desc "$FULL_DESC")
+  README_CONTENT="$README_CONTENT
+
+## What It Does
+
+$WHAT_IT_DOES_PARA"
+  if [[ -n "$USE_WHEN" ]]; then
+    README_CONTENT="$README_CONTENT
+
+**Use when:**
+$USE_WHEN"
+  fi
+fi
+
+# Key Features
+if [[ -n "$KEY_FEATURES" ]]; then
+  README_CONTENT="$README_CONTENT
+
+## Key Features
+
+$KEY_FEATURES"
+fi
+
+# Usage
+if [[ -n "$USAGE_SECTION" ]]; then
+  README_CONTENT="$README_CONTENT
+
+## Usage
+
+$USAGE_SECTION"
+fi
+
+# Contents summary
+CONTENTS_SUMMARY="- **$SKILL_COUNT** skill(s), **$CMD_COUNT** command(s)"
+if [[ $AGENT_COUNT -gt 0 ]]; then
+  CONTENTS_SUMMARY="$CONTENTS_SUMMARY, **$AGENT_COUNT** agent(s)"
+fi
+
+README_CONTENT="$README_CONTENT
 
 ## Contents
 
-- **$SKILL_COUNT** skill(s)
-- **$CMD_COUNT** command(s)
+$CONTENTS_SUMMARY
 
 ### Skills
-$SKILL_LIST
-$CMD_SECTION
+
+$SKILL_LIST"
+
+# Commands subsection
+if [[ $CMD_COUNT -gt 0 ]]; then
+  README_CONTENT="$README_CONTENT
+
+### Commands
+
+$CMD_LIST"
+fi
+
+# Agents subsection
+if [[ $AGENT_COUNT -gt 0 ]]; then
+  README_CONTENT="$README_CONTENT
+
+### Agents
+
+$AGENT_LIST"
+fi
+
+# Prerequisites
+if [[ -n "$PREREQUISITES" ]]; then
+  README_CONTENT="$README_CONTENT
+
+## Prerequisites
+
+$PREREQUISITES"
+fi
+
+# Installation
+README_CONTENT="$README_CONTENT
 
 ## Installation
 
@@ -402,7 +558,19 @@ $MANUAL_CMD_STEP
 git clone https://github.com/$GITHUB_USER/claude-code-skills.git /tmp/ccs
 /tmp/ccs/scripts/install-plugin.sh --uninstall /tmp/ccs/plugins/$PLUGIN_NAME
 rm -rf /tmp/ccs
-\`\`\`
+\`\`\`"
+
+# See Also
+if [[ -n "$SEE_ALSO" ]]; then
+  README_CONTENT="$README_CONTENT
+
+## See Also
+
+$SEE_ALSO"
+fi
+
+# Compatibility + License
+README_CONTENT="$README_CONTENT
 
 ## Compatibility
 
