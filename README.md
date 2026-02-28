@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 6 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 7 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
@@ -10,6 +10,7 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 |-------|---------|-------------|-----------------|
 | [changelog-keeper](./changelog-keeper/) | 1.1.1 | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. | [repo](https://github.com/abhattacherjee/changelog-keeper) |
 | [claudeception](./claudeception/) | 3.2.0 | Extracts reusable knowledge from work sessions and codifies it into Claude Code skills. | [repo](https://github.com/abhattacherjee/claudeception) |
+| [context-shield](./context-shield/) | 1.1.0 | Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Supports ralph-loop iterations for workloads too large for a single session. | — |
 | [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
 | [skill-authoring](./skill-authoring/) | 2.2.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | — |
 | [skill-publishing](./skill-publishing/) | 3.3.0 | Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution. | — |
@@ -22,6 +23,7 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 
 | Plugin | Version | Skills | Commands | Description |
 |--------|---------|--------|----------|-------------|
+| [context-shield](./plugins/context-shield/) | 1.1.0 | 1 | 0 | Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries |
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
 | [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |
 | [skill-authoring](./plugins/skill-authoring/) | 2.2.0 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |
@@ -70,6 +72,7 @@ rm -rf /tmp/ccs
 git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/claude-code-skills
 cp -r /tmp/claude-code-skills/changelog-keeper ~/.claude/skills/changelog-keeper
 cp -r /tmp/claude-code-skills/claudeception ~/.claude/skills/claudeception
+cp -r /tmp/claude-code-skills/context-shield ~/.claude/skills/context-shield
 cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
 cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
 cp -r /tmp/claude-code-skills/skill-publishing ~/.claude/skills/skill-publishing

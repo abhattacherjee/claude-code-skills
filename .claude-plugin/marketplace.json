@@ -9,6 +9,12 @@
   },
   "plugins": [
     {
+      "name": "context-shield",
+      "source": "./plugins/context-shield",
+      "description": "Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries",
+      "version": "1.1.0"
+    },
+    {
       "name": "figma-ui-designer",
       "source": "./plugins/figma-ui-designer",
       "description": "Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",
