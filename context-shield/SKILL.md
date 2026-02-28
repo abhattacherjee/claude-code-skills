@@ -409,7 +409,10 @@ $SCRIPTS/manage-manifest.sh create --task "Assess security advisories for depend
 
 ## See Also
 
-- `figma-ui-designer` — spawns this skill's pattern when processing many Figma frames
+- `figma-ui-designer` — use context-shield when analyzing 10+ Figma frames or 5+ competitor designs
+- `spec-review` — use context-shield when a spec references many external docs or code directories
+- `project-code-review` — use context-shield for large PRs with 15+ changed files
+- `npm-dependency-management` — use context-shield to research 5+ package changelogs before upgrades
+- `ci-security-issue-creator` — use context-shield to triage many CVE/GHSA advisory pages
 - `ralph-loop` plugin — provides the iteration mechanism for multi-batch processing
 - `content-distiller` agent (`~/.claude/agents/content-distiller.md`) — the isolated reader
-- `conversation-summarizer` agent — similar distillation pattern for conversation content
