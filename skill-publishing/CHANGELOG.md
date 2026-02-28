@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.0] - 2026-02-28
+
+### Added
+
+- **Auto GitHub releases** — `release-monorepo.sh` now creates a GitHub release (via `gh release create`) after pushing the tag, with categorized commit summary and skill/plugin inventory. Falls back gracefully if `gh` CLI fails.
+- **Auto plugin resync** — `sync-monorepo.sh` now detects when plugin copies of SKILL.md, scripts/, references/, or agents/ have drifted from their source skills and patches them automatically during sync. Eliminates the silent plugin-content-drift problem.
+
+### Changed
+
+- **SKILL.md** — version bumped to 3.5.0
+- **plugin-manifest.json** — version bumped to 3.5.0
+
+## [3.4.0] - 2026-02-28
+
+### Added
+
+- **Agent auto-discovery in bare skill sync** — `sync-monorepo.sh` now detects agent files referenced in SKILL.md (via `agents/*.md` path patterns) and copies them from `~/.claude/agents/` into the monorepo alongside their skills
+- **Plugin CHANGELOG preservation** — `sync-monorepo.sh` preserves both README.md and CHANGELOG.md in plugin destinations during `--add-plugin` rsync, preventing overwrite of hand-written content
+
+### Fixed
+
+- **Bare-bones CHANGELOG enrichment** — when a plugin's CHANGELOG only has a template entry, it's replaced with the source skill's CHANGELOG content during sync
+
 ## [3.3.0] - 2026-02-28
 
 ### Added
