@@ -32,6 +32,15 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 - [ ] Reference files > 100 lines have table of contents
 - [ ] Descriptive filenames (`api-field-reference.md` not `ref1.md`)
 
+## Progress Tracking (if 3+ phases)
+
+- [ ] Task manifest evaluated: does the skill have 3+ sequential phases or run >2 minutes?
+- [ ] If yes: `scripts/task-manifest.sh` created with one `case` per workflow
+- [ ] Each workflow defines tasks with `subject` (imperative), `activeForm` (present continuous), `description`
+- [ ] SKILL.md includes "Progress Tracking (MANDATORY)" section with task table
+- [ ] Task update rules documented (in_progress → completed, abort → deleted)
+- [ ] Gate/abort points identified (e.g., "if tests fail, delete remaining tasks")
+
 ## Scripts (if present)
 
 - [ ] All scripts support `--help` / `-h` flag

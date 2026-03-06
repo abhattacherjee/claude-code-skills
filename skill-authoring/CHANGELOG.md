@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] - 2026-03-05
+
+### Added
+
+- **Progress tracking for long-running workflows** — skills with 3+ sequential phases now get a task manifest script (`scripts/task-manifest.sh`) that emits TaskCreate-compatible JSON per workflow
+- **`scripts/generate-task-manifest.sh`** — scaffolding tool that generates task-manifest.sh with placeholder tasks for each workflow (`--skill-dir`, `--workflows "name:count"`)
+- **`references/task-tracking-pattern.md`** — full reference with task manifest template, field table, update patterns (sequential, sub-agent, abort), and real-world examples (dependabot 8 tasks, issue-triage 5 tasks, catalog-maintainer 6 tasks)
+- **Core Principle #8** — "Track progress for long workflows" requiring task manifest for skills with 3+ phases
+- **Progress Tracking Evaluation (Step 5)** in the new-skill creation workflow
+- **Progress tracking section** in quality checklist (`references/quality-checklist.md`)
+- **Anti-pattern** — "Silent long-running workflows" warns against skills without task visibility
+
 ## [2.2.0] - 2026-02-27
 
 ### Added

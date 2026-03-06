@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.2.0
+  version: 2.3.0
 ---
 
 # Skill Authoring
@@ -27,6 +27,9 @@ metadata:
    for fragile operations, specialized agents for judgement-heavy tasks.
 7. **Default assumption** — Claude is already very smart. Skip explanations of basic
    concepts, library purposes, or general programming knowledge.
+8. **Track progress for long workflows** — skills with 3+ sequential phases must include
+   a task manifest script. Use TaskCreate/TaskUpdate to give real-time progress visibility.
+   Users should never wonder "what phase is it on?" during a 5-minute workflow.
 
 ## Frontmatter Rules
 
@@ -244,18 +247,58 @@ You are a **<Role Name>**. Your mission is to <focused task>.
 table in the orchestrator's agent file listing all sub-agents, their concurrency model
 (parallel/sequential), purpose, and model tier.
 
+## Progress Tracking for Long-Running Workflows
+
+Skills with 3+ sequential phases or workflows lasting >2 minutes should include a
+**task manifest** — a script that defines the exact TaskCreate checklist for each workflow
+the skill supports.
+
+### When to Add Task Tracking
+
+| Signal | Required? |
+|--------|-----------|
+| 3+ sequential phases | **Yes** — users need visibility |
+| Multiple workflows/subcommands | **Yes** — each workflow gets its own manifest |
+| Single-phase script | **No** — overkill |
+| Pure decision guidance (no execution) | **No** — nothing to track |
+
+### Task Manifest Script Pattern
+
+Every skill with tracking should include `scripts/task-manifest.sh` — a bash `case`
+statement that emits a JSON array of tasks per workflow. Each task has `subject`,
+`activeForm`, and `description` fields matching TaskCreate parameters.
+
+See **[references/task-tracking-pattern.md](references/task-tracking-pattern.md)** for
+the full script template with examples.
+
+**Key rules:**
+- Each workflow is a `case` branch emitting a JSON array
+- `--list` returns machine-readable workflow names; `--help` shows usage
+- SKILL.md includes a "Progress Tracking (MANDATORY)" section with the task table
+- Mark tasks `in_progress` before starting, `completed` after, `deleted` on abort
+
+### Generating a Task Manifest for a New Skill
+
+```bash
+~/.claude/skills/skill-authoring/scripts/generate-task-manifest.sh \
+  --skill-dir /path/to/my-skill \
+  --workflows "full-audit:5,quick-check:2"
+```
+
 ## Creating a New Skill — Workflow
 
 1. **Check existing skills** — search project + user-level directories
 2. **Decide**: create new vs update existing (see decision table below)
 3. **Evaluate decomposition** — can this be split into parallel agents? (see below)
 4. **Evaluate script-first** — can deterministic parts be captured in scripts? (see below)
-5. **Write agents** (if applicable) — orchestrator + sub-agent definitions
-6. **Write scripts** (if applicable) — with `--help`, error handling, exit codes
-7. **Write SKILL.md** — frontmatter + body; reference agents and scripts
-8. **Extract references/** — if lookup material exceeds ~30 lines
-9. **Validate** — run the quality checklist
-10. **Version** — start at `1.0.0`
+5. **Evaluate progress tracking** — does the skill have 3+ phases? (see below)
+6. **Write agents** (if applicable) — orchestrator + sub-agent definitions
+7. **Write scripts** (if applicable) — with `--help`, error handling, exit codes
+8. **Write task manifest** (if applicable) — `scripts/task-manifest.sh` for each workflow
+9. **Write SKILL.md** — frontmatter + body; reference agents, scripts, and task manifest
+10. **Extract references/** — if lookup material exceeds ~30 lines
+11. **Validate** — run the quality checklist
+12. **Version** — start at `1.0.0`
 
 ### Decomposition Evaluation (Step 3)
 
@@ -281,6 +324,16 @@ Ask: "Can the skill's core action be expressed as a deterministic check or proce
 **Why script-first wins:** A 140-line script replaces ~60 lines of prose in SKILL.md while being
 testable, runnable standalone, and composable with CI/hooks. The SKILL.md drops from "explain
 everything" to "explain when/why + point to script".
+
+### Progress Tracking Evaluation (Step 5)
+
+Ask: "Does this skill have 3+ sequential phases or take >2 minutes?"
+
+| Answer | Approach | Example |
+|--------|----------|---------|
+| **Yes — 3+ phases** | Add `scripts/task-manifest.sh` with one entry per phase | `review-dependabot-prs`: 8 tasks across triage→apply→test→deploy |
+| **Yes — multiple workflows** | Add one `case` branch per workflow | `github-issue-triage`: full-audit (5 tasks) + quick-check (2 tasks) |
+| **No — 1-2 fast phases** | Skip task manifest — no tracking needed | `catalog-embedding-sync`: single script, <30 seconds |
 
 ### Create vs Update Decision
 
@@ -322,7 +375,7 @@ metadata:
 [Cross-references to related skills.]
 ```
 
-### Complex Skill (orchestrator + parallel agents + scripts)
+### Complex Skill (orchestrator + parallel agents + scripts + task tracking)
 
 ```markdown
 ---
@@ -340,8 +393,13 @@ metadata:
 ## Quick Check
 ```bash
 ./scripts/extract.sh --summary          # Pre-processing (deterministic)
-./scripts/apply-fixes.sh --all --dry-run  # Post-processing (deterministic)
+./scripts/task-manifest.sh full-run     # Task checklist for full workflow
 ```
+
+## Progress Tracking (MANDATORY)
+
+Create task checklist from `scripts/task-manifest.sh full-run` before starting.
+Mark `in_progress` → `completed` per phase. On abort, mark remaining `deleted`.
 
 ## Full Workflow (Orchestration Pattern)
 
@@ -388,6 +446,13 @@ npm run validate  # Or whatever validation command applies
 - [ ] If yes: script written first, SKILL.md references it (not duplicates it)
 - [ ] Scripts have `--help` and `--fix`/`--dry-run` support and are executable
 
+**Progress tracking:**
+- [ ] Progress tracking evaluated: does the skill have 3+ sequential phases?
+- [ ] If yes: `scripts/task-manifest.sh` created with one `case` per workflow
+- [ ] Each workflow defines tasks with `subject`, `activeForm`, `description`
+- [ ] SKILL.md includes "Progress Tracking (MANDATORY)" section with task table
+- [ ] Task update rules documented (in_progress → completed, abort → deleted)
+
 **Structure & content:**
 - [ ] SKILL.md body ≤ 500 lines
 - [ ] Description ≤ 1024 chars, third person, with trigger conditions, double-quoted single-line
@@ -414,6 +479,10 @@ npm run validate  # Or whatever validation command applies
   `--milestone`) explicitly in the template. Agents improvise missing fields with
   plausible-but-wrong values (e.g., `dependencies` label instead of project's `dependabot`
   label). Include a selection guide for dynamic fields like priority labels.
+- **Silent long-running workflows** — skills with 3+ phases that don't use TaskCreate leave
+  users staring at a spinner for minutes with no visibility. Always include a task manifest
+  and update tasks between phases. If a sub-agent takes >30 seconds, the user should see
+  which task is `in_progress`.
 
 ## Optimizing Existing Skills
 
