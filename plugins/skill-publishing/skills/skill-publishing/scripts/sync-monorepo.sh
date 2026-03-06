@@ -340,37 +340,26 @@ if [[ -n "$ADD_PLUGIN" ]]; then
   if $DRY_RUN; then
     echo "  WOULD COPY  plugins/$ADD_PLUGIN/"
   else
-    # Preserve hand-written README and CHANGELOG if they exist in the destination.
+    # Preserve hand-written README if it exists in the destination.
     # README may be customized for the monorepo audience (install instructions,
     # feature descriptions) and should not be overwritten by the auto-generated
-    # template from prepare-plugin.sh. CHANGELOG is preserved for the same reason:
-    # the assembled build generates a bare-bones template, but the monorepo copy
-    # may have been enriched with detailed release history.
+    # template from prepare-plugin.sh. CHANGELOG is NOT preserved — it comes
+    # from the source skill and should always stay in sync.
     PRESERVED_README=""
-    PRESERVED_CHANGELOG=""
     if [[ -f "$PLUGIN_DST/README.md" ]]; then
       PRESERVED_README=$(mktemp)
       cp "$PLUGIN_DST/README.md" "$PRESERVED_README"
-    fi
-    if [[ -f "$PLUGIN_DST/CHANGELOG.md" ]]; then
-      PRESERVED_CHANGELOG=$(mktemp)
-      cp "$PLUGIN_DST/CHANGELOG.md" "$PRESERVED_CHANGELOG"
     fi
 
     mkdir -p "$PLUGIN_DST"
     rsync -a --delete --exclude='.DS_Store' "$PLUGIN_BUILD/" "$PLUGIN_DST/"
 
-    # Restore preserved files (overwrite auto-generated templates)
+    # Restore preserved README (overwrite auto-generated template)
     PRESERVED_FILES=""
     if [[ -n "$PRESERVED_README" ]]; then
       cp "$PRESERVED_README" "$PLUGIN_DST/README.md"
       rm -f "$PRESERVED_README"
       PRESERVED_FILES="README"
-    fi
-    if [[ -n "$PRESERVED_CHANGELOG" ]]; then
-      cp "$PRESERVED_CHANGELOG" "$PLUGIN_DST/CHANGELOG.md"
-      rm -f "$PRESERVED_CHANGELOG"
-      [[ -n "$PRESERVED_FILES" ]] && PRESERVED_FILES="$PRESERVED_FILES + CHANGELOG" || PRESERVED_FILES="CHANGELOG"
     fi
     if [[ -n "$PRESERVED_FILES" ]]; then
       echo "  SYNCED  plugins/$ADD_PLUGIN/ ($PRESERVED_FILES preserved)"
@@ -387,7 +376,8 @@ fi
 # --- Auto-resync plugins when bare skill content changes ---
 # After syncing bare skills, check if any plugin copies have drifted.
 # Patches skill content directly (SKILL.md, scripts/, references/, agents/)
-# without touching plugin README/CHANGELOG/plugin.json (those are managed separately).
+# without touching plugin README/plugin.json (those are managed separately).
+# CHANGELOG.md IS synced from source to keep version history in sync.
 if [[ -d "$MONOREPO_DIR/plugins" ]]; then
   PLUGINS_RESYNCED=0
   for _PLUGIN_DIR in "$MONOREPO_DIR/plugins"/*/; do
@@ -425,6 +415,18 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
         _AFILE=$(basename "$_PAGENT")
         _SRC_AGENT="$HOME/.claude/agents/$_AFILE"
         if [[ -f "$_SRC_AGENT" ]] && ! diff -q "$_PAGENT" "$_SRC_AGENT" >/dev/null 2>&1; then
+          _PLUGIN_DRIFTED=true; break
+        fi
+      done
+    fi
+
+    # Check CHANGELOGs (skill-level and plugin-root)
+    if ! $_PLUGIN_DRIFTED; then
+      for _PCL in "$_PLUGIN_DIR"skills/*/CHANGELOG.md; do
+        [[ ! -f "$_PCL" ]] && continue
+        _SNAME=$(basename "$(dirname "$_PCL")")
+        _SRC_CL="$SKILLS_HOME/$_SNAME/CHANGELOG.md"
+        if [[ -f "$_SRC_CL" ]] && ! diff -q "$_PCL" "$_SRC_CL" >/dev/null 2>&1; then
           _PLUGIN_DRIFTED=true; break
         fi
       done
@@ -476,7 +478,37 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
             fi
           fi
         fi
+
+        # CHANGELOG.md — sync from source skill to plugin skill directory
+        if [[ -f "$_SRC/CHANGELOG.md" && -f "$_PSKILL_DIR/CHANGELOG.md" ]]; then
+          if ! diff -q "$_PSKILL_DIR/CHANGELOG.md" "$_SRC/CHANGELOG.md" >/dev/null 2>&1; then
+            if $DRY_RUN; then
+              echo "  WOULD UPDATE  plugins/$_PLUGIN_NAME/skills/$_SNAME/CHANGELOG.md"
+            else
+              cp "$_SRC/CHANGELOG.md" "$_PSKILL_DIR/CHANGELOG.md"
+              _PATCHED="${_PATCHED:+$_PATCHED, }CHANGELOG.md"
+            fi
+          fi
+        fi
       done
+
+      # CHANGELOG.md — also sync to plugin root (top-level CHANGELOG)
+      # Use the first skill's CHANGELOG as the plugin-level CHANGELOG
+      _FIRST_SKILL_DIR=$(ls -d "$_PLUGIN_DIR"skills/*/ 2>/dev/null | head -1)
+      if [[ -n "$_FIRST_SKILL_DIR" ]]; then
+        _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
+        _FIRST_SRC_CL="$SKILLS_HOME/$_FIRST_SNAME/CHANGELOG.md"
+        if [[ -f "$_FIRST_SRC_CL" && -f "$_PLUGIN_DIR/CHANGELOG.md" ]]; then
+          if ! diff -q "$_PLUGIN_DIR/CHANGELOG.md" "$_FIRST_SRC_CL" >/dev/null 2>&1; then
+            if $DRY_RUN; then
+              echo "  WOULD UPDATE  plugins/$_PLUGIN_NAME/CHANGELOG.md"
+            else
+              cp "$_FIRST_SRC_CL" "$_PLUGIN_DIR/CHANGELOG.md"
+              _PATCHED="${_PATCHED:+$_PATCHED, }root CHANGELOG.md"
+            fi
+          fi
+        fi
+      fi
 
       # Patch agent files
       if [[ -d "$_PLUGIN_DIR/agents" ]]; then
