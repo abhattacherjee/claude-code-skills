@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.6.0] - 2026-03-06
+
+### Added
+
+- **`scripts/validate-pre-sync.sh`** — mandatory pre-sync gate that verifies each skill's CHANGELOG.md has an entry matching its SKILL.md version. Exits non-zero on mismatch, blocking sync until fixed. Supports `--fix` (remediation guidance) and `--json` (machine-readable) modes.
+- **Step 4: Pre-Sync Validation (MANDATORY GATE)** — new step in the Interactive Publishing Flow. Runs `validate-pre-sync.sh` before `sync-monorepo.sh` and blocks if any skill's CHANGELOG is behind its version.
+- **Step 6: Monorepo Release (MANDATORY)** — after every sync that changes skill content, ALWAYS create a monorepo release. No longer optional/ask-the-user. Includes bump level decision table.
+
+### Changed
+
+- **Interactive Publishing Flow** — renumbered from 5 steps to 7 steps: added Step 4 (pre-sync validation) and Step 6 (mandatory release). Previous "Post-Publish" is now Step 7.
+- **Quick Reference** — added `validate-pre-sync.sh` commands
+
+### Fixed
+
+- **Changelog drift on publish** — previously, syncing a skill with a bumped SKILL.md version but stale CHANGELOG.md went undetected. The new validation gate makes this impossible.
+- **Optional monorepo releases** — previously, the post-publish step "asked whether to create a release", making it easy to skip. Releases are now mandatory after content changes.
+
 ## [3.5.1] - 2026-03-05
 
 ### Fixed

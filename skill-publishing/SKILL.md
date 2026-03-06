@@ -2,7 +2,7 @@
 name: skill-publishing
 description: "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution. Use when: (1) a skill directory needs to be published to GitHub, (2) user wants to make a skill installable by others, (3) user says 'share this skill' or 'publish skill to GitHub', (4) preparing a skill for open-source distribution, (5) syncing skills to the monorepo, (6) user says 'sync skills' or 'update monorepo', (7) creating a versioned monorepo release with tag, (8) assembling a plugin from skills + commands, (9) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 3.5.1
+  version: 3.6.0
 ---
 
 # Skill to GitHub
@@ -26,6 +26,10 @@ $SCRIPTS/sync-individual-repos.sh --all --push
 
 # --- Monorepo (initialize) ---
 $SCRIPTS/sync-monorepo.sh --init ~/dev/claude-code-skills
+
+# --- Monorepo (pre-sync validation — MANDATORY) ---
+$SCRIPTS/validate-pre-sync.sh ~/dev/claude-code-skills
+$SCRIPTS/validate-pre-sync.sh ~/dev/claude-code-skills --fix
 
 # --- Monorepo (sync) ---
 $SCRIPTS/sync-monorepo.sh --dry-run ~/dev/claude-code-skills
@@ -166,14 +170,30 @@ If no `plugin-manifest.json` exists, disable the Plugin option by adding "(requi
 
 **Always confirm destructive removals** with the user before executing. Phrase the confirmation as: "This will permanently delete `<skill-name>` from `<target>`. Proceed?"
 
-### Step 4: Auto-Sync to Monorepo
+### Step 4: Pre-Sync Validation (MANDATORY GATE)
 
-**When any Monorepo or Plugin target is selected, automatically sync and push.** Do NOT leave this as a manual step — the user expects publishing to be end-to-end.
+**Before syncing, validate that every skill's CHANGELOG matches its version.** This catches the common failure where SKILL.md version is bumped but CHANGELOG.md is not updated.
 
 ```bash
 SCRIPTS=~/.claude/skills/skill-publishing/scripts
 MONOREPO_DIR="${HOME}/dev/claude-code-skills"
 
+# GATE: Validate all skill CHANGELOGs match their SKILL.md versions
+$SCRIPTS/validate-pre-sync.sh $MONOREPO_DIR
+```
+
+**If validation fails (exit code 1):** STOP. Do not proceed to sync. Fix each failing skill:
+1. Open the skill's `CHANGELOG.md`
+2. Add a `## [X.Y.Z] - YYYY-MM-DD` entry describing what changed
+3. Re-run validation until it passes
+
+**This gate is non-negotiable.** The monorepo must never receive a skill whose CHANGELOG is behind its version.
+
+### Step 5: Auto-Sync to Monorepo
+
+**When any Monorepo or Plugin target is selected, automatically sync and push.** Do NOT leave this as a manual step — the user expects publishing to be end-to-end.
+
+```bash
 # 1. Sync all skills to monorepo (always, to pick up any changes)
 $SCRIPTS/sync-monorepo.sh $MONOREPO_DIR
 
@@ -195,12 +215,38 @@ fi
 cd ~/dev/claude-code-skills && git push origin main
 ```
 
-### Step 5: Post-Publish
+### Step 6: Monorepo Release (MANDATORY)
+
+**After every sync that changes skill content, ALWAYS create a monorepo release.** Do NOT ask whether to release — just do it.
+
+```bash
+# Determine bump level from what changed:
+#   - patch: typo fixes, sync-only updates, no SKILL.md changes
+#   - minor: skill version bumps, new features, new scripts
+#   - major: new skill added, skill removed, breaking structure changes
+$SCRIPTS/release-monorepo.sh <patch|minor|major> $MONOREPO_DIR
+```
+
+**Bump level decision:**
+| What Changed | Bump |
+|---|---|
+| Skill version bumped (e.g., v2.3.0 → v2.4.0) | `minor` |
+| New skill added to monorepo | `minor` |
+| Plugin added or restructured | `minor` |
+| Typo/wording fixes only, no version changes | `patch` |
+| Skill removed or breaking layout change | `major` |
+
+### Step 7: Post-Publish
 
 After all targets are processed:
-1. If monorepo was modified → ask whether to create a versioned release (Workflow D)
-2. Clean up build artifacts: `rm -rf ~/.claude/skills/skill-publishing/build/`
-3. Report summary of what was published/synced/removed
+1. Clean up build artifacts: `rm -rf ~/.claude/skills/skill-publishing/build/`
+2. Report summary of what was published/synced/released
+
+**Summary must include:**
+- Skills synced (with version numbers)
+- Monorepo release version created
+- Individual repos updated (if any)
+- Any validation failures that were fixed
 
 ---
 

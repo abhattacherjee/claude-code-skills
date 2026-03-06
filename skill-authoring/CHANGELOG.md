@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0] - 2026-03-06
+
+### Added
+
+- **Dry-run testing phase (Step 12)** — every skill with scripts must be dry-run tested against real project data before release. Documents common failure patterns: regex mismatches, `grep` pipe chains where `head` causes SIGPIPE, `find` including coverage/build artifacts, and classification heuristics that misfire on edge cases.
+- **Quality checklist item** — "Scripts dry-run tested against real project data (2-3 varied inputs)"
+- **Anti-pattern** — "Untested scripts shipped as done" warns against scripts that pass code review but fail on real data; bugs cluster, so test adjacent heuristics when one fails.
+
 ## [2.3.0] - 2026-03-05
 
 ### Added
