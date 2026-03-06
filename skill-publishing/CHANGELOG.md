@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.1] - 2026-03-05
+
+### Fixed
+
+- **Plugin CHANGELOG sync** — `sync-monorepo.sh` now syncs CHANGELOGs from source skills to plugin copies during auto-resync. Previously, plugin CHANGELOGs were preserved (stale) while bare-skill CHANGELOGs were updated, causing version history drift.
+- **CHANGELOG drift detection** — Added CHANGELOG diff check to the plugin drift detection phase, so CHANGELOG-only changes trigger a resync
+- **`--add-plugin` path** — No longer preserves stale plugin CHANGELOGs; only README is preserved (CHANGELOGs come from source skill)
+
 ## [3.5.0] - 2026-02-28
 
 ### Added
