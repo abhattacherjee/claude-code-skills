@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.3.0
+  version: 2.4.0
 ---
 
 # Skill Authoring
@@ -298,7 +298,8 @@ the full script template with examples.
 9. **Write SKILL.md** — frontmatter + body; reference agents, scripts, and task manifest
 10. **Extract references/** — if lookup material exceeds ~30 lines
 11. **Validate** — run the quality checklist
-12. **Version** — start at `1.0.0`
+12. **Dry-run test** — run scripts against real project data (see below)
+13. **Version** — start at `1.0.0`
 
 ### Decomposition Evaluation (Step 3)
 
@@ -334,6 +335,24 @@ Ask: "Does this skill have 3+ sequential phases or take >2 minutes?"
 | **Yes — 3+ phases** | Add `scripts/task-manifest.sh` with one entry per phase | `review-dependabot-prs`: 8 tasks across triage→apply→test→deploy |
 | **Yes — multiple workflows** | Add one `case` branch per workflow | `github-issue-triage`: full-audit (5 tasks) + quick-check (2 tasks) |
 | **No — 1-2 fast phases** | Skip task manifest — no tracking needed | `catalog-embedding-sync`: single script, <30 seconds |
+
+### Dry-Run Testing (Step 12)
+
+**Every skill with scripts MUST be dry-run tested against real project data before release.**
+Scripts that look correct often fail due to: regex format mismatches, `grep` pipe chains
+where `head` causes SIGPIPE, `find` including coverage/build artifacts, and classification
+heuristics that misfire on edge cases.
+
+**Procedure:**
+1. Run each script with human-readable output (no `--json`), scan for zero counts,
+   unexpected items, misclassified entries, empty sections
+2. Run with `--json` — verify field values match human-readable output
+3. Test with 2-3 varied inputs (different formats, different project areas)
+4. Fix and re-test — bugs cluster (one broken heuristic often means others are too)
+
+**Common catches:** `grep -rlq ... | head -1` always exits 0 on empty `-q` output;
+`find` without `-not -path "*/coverage/*"` includes test artifacts; regex assumes one
+heading format but project uses another (e.g., `### Sub-Task` vs `### AC1:`).
 
 ### Create vs Update Decision
 
@@ -445,6 +464,7 @@ npm run validate  # Or whatever validation command applies
 - [ ] Script-first evaluated: can deterministic parts be captured in scripts?
 - [ ] If yes: script written first, SKILL.md references it (not duplicates it)
 - [ ] Scripts have `--help` and `--fix`/`--dry-run` support and are executable
+- [ ] Scripts dry-run tested against real project data (2-3 varied inputs)
 
 **Progress tracking:**
 - [ ] Progress tracking evaluated: does the skill have 3+ sequential phases?
@@ -483,6 +503,9 @@ npm run validate  # Or whatever validation command applies
   users staring at a spinner for minutes with no visibility. Always include a task manifest
   and update tasks between phases. If a sub-agent takes >30 seconds, the user should see
   which task is `in_progress`.
+- **Untested scripts shipped as "done"** — scripts that pass code review but fail on real
+  data. Always dry-run against the current project with varied inputs before declaring
+  complete. Bugs cluster: if one heuristic is wrong, test the others too.
 
 ## Optimizing Existing Skills
 
