@@ -4,9 +4,14 @@ All notable changes to the **claude-code-skills** monorepo are documented here.
 Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
-## [2026-03-05] — Monorepo sync
 
-Synced 8 skills from local source.
+## [1.13.0] - 2026-03-05
+
+### Added
+
+- v2.3.0 — add progress tracking for long-running workflows
+
+### Skill Inventory (8 skills)
 
 - `changelog-keeper` v1.1.1 — Keeps CHANGELOG.md up to date by generating categorized entries from git commit history
 - `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
@@ -16,6 +21,14 @@ Synced 8 skills from local source.
 - `skill-authoring` v2.3.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
 - `skill-publishing` v3.5.0 — Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo (claude-code-skills), versioned monorepo releases with semver tags, and plugin assembly/distribution
 - `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
+
+### Plugin Inventory (5 plugins)
+
+- `context-shield` v1.3.0 — Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.
+- `figma-ui-designer` v3.1.0 — Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP
+- `git-flow` v2.0.0 — Git Flow branching workflow with slash commands and diagnostic tools
+- `skill-authoring` v2.2.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
+- `skill-publishing` v3.5.0 — Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo, and plugin assembly/distribution
 
 ## [1.12.1] - 2026-02-28
 
