@@ -1,33 +1,35 @@
 # context-bar
 
-Color-coded context window usage bar for Claude Code statusline and /context-bar command
+Color-coded context window usage bar for Claude Code statusline and `/context-bar` command.
 
-## What It Does
+## What You Get
 
-Show a single-line context usage progress bar with color-coded statusline
+- **Statusline**: Always-visible context usage bar at the bottom of Claude Code (green/amber/red)
+- **`/context-bar` command**: Quick on-demand context check via slash command
 
-## Key Features
+```
+[Opus 4.6 (1M context)] 📁 my-project | 🌿 feature/my-branch (3)
+ctx:[███░░░░░░░░░░░░░░░░░] 16%
+▸▸ accept edits on (shift+tab to cycle)
+```
 
-- **Setup: Statusline with Context Bar**
+## Features
 
-## Contents
-
-- **1** skill(s), **0** command(s)
-
-### Skills
-
-- `context-bar` — Show a single-line context usage progress bar with color-coded statusline
+- Color-coded progress bar: **green** (<50%), **amber** (50-79%), **red** (80%+)
+- Shows model, directory, git branch, and uncommitted file count
+- Uses Claude Code's real `context_window.used_percentage` (not an estimate)
+- Statusline updates after every assistant response
 
 ## Installation
 
-### Via Claude Code (Recommended)
+### Via Claude Code Plugin (Recommended)
 
 ```shell
 # Add the marketplace (one-time setup)
-/plugin marketplace add abhattacherjee/claude-code-skills
+/plugins marketplace add abhattacherjee/claude-code-skills
 
 # Install this plugin
-/plugin install context-bar@claude-code-skills
+/plugins install context-bar@abhattacherjee-claude-code-skills
 ```
 
 ### Via Script
@@ -41,10 +43,29 @@ rm -rf /tmp/ccs
 ### Manual
 
 ```bash
-# Copy skills
 cp -r plugins/context-bar/skills/* ~/.claude/skills/
-
 ```
+
+## Statusline Setup (Required After Install)
+
+The plugin installs the `/context-bar` skill automatically. To get the **always-visible statusline**, you need to configure it manually:
+
+**1. Copy the statusline script:**
+```bash
+cp ~/.claude/skills/context-bar/statusline-command.sh ~/.claude/statusline-command.sh
+```
+
+**2. Add to your settings.json** (`~/.claude/settings.json` or project-level `.claude/settings.local.json`):
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline-command.sh"
+  }
+}
+```
+
+> **Important**: If you have a project-level `statusLine` in `.claude/settings.local.json`, it overrides the user-level one. Update whichever file takes precedence for your project.
 
 ## Uninstall
 
