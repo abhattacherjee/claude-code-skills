@@ -9,6 +9,12 @@
   },
   "plugins": [
     {
+      "name": "context-bar",
+      "source": "./plugins/context-bar",
+      "description": "Color-coded context window usage bar for Claude Code statusline and /context-bar command",
+      "version": "1.0.0"
+    },
+    {
       "name": "context-shield",
       "source": "./plugins/context-shield",
       "description": "Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.",

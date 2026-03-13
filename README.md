@@ -23,6 +23,7 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 
 | Plugin | Version | Skills | Commands | Description |
 |--------|---------|--------|----------|-------------|
+| [context-bar](./plugins/context-bar/) | 1.0.0 | 1 | 0 | Color-coded context window usage bar for Claude Code statusline and /context-bar command |
 | [context-shield](./plugins/context-shield/) | 1.3.0 | 1 | 0 | Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories. |
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
 | [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |

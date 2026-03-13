@@ -1,0 +1,5 @@
+{
+  "name": "context-bar",
+  "version": "1.0.0",
+  "description": "Color-coded context window usage bar for Claude Code statusline and /context-bar command"
+}
