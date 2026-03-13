@@ -150,9 +150,10 @@ When creating release branches, choose the version increment:
 ## Gotchas
 
 ### Squash-merged branches need force-delete
-After a squash-merge PR, `git branch -d` fails with "not fully merged" because the
-original commits aren't in the target. Use `git branch -D` after verifying the PR
-was merged (check `gh pr list --state all --head <branch>`).
+`/finish` always uses squash merge (`gh pr merge --squash`) which creates a new
+commit SHA on the target branch. This means `git branch -d` fails with "not fully
+merged" because the original commits aren't ancestors of the target. Always use
+`git branch -D` after verifying the PR was merged (`gh pr list --state all --head <branch>`).
 
 ### Stale worktrees block checkout
 If `git checkout develop` fails with "already used by worktree", run:

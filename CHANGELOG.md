@@ -4,6 +4,17 @@ All notable changes to the **claude-code-skills** monorepo are documented here.
 Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
+## [2026-03-13] — Monorepo sync
+
+Synced 7 skills from local source.
+
+- `changelog-keeper` v1.1.1 — Keeps CHANGELOG.md up to date by generating categorized entries from git commit history
+- `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
+- `context-shield` v1.3.0 — Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count
+- `conversation-search` v1.1.0 — Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries
+- `figma-ui-designer` v3.1.0 — Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code
+- `skill-authoring` v2.4.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
+- `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
 
 ## [1.14.0] - 2026-03-06
 

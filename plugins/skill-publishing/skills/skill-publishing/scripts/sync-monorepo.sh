@@ -321,7 +321,88 @@ discover_plugins() {
   fi
 }
 
-# Add new plugin from build directory if --add-plugin specified
+# --- Auto-discover and build plugins from plugin-manifest.json files ---
+# Plugin-first: any skill with a plugin-manifest.json is automatically assembled
+# and synced as a plugin. No --add-plugin needed for known plugins.
+PREPARE_SCRIPT="$SCRIPT_DIR/prepare-plugin.sh"
+AUTO_BUILT_PLUGINS=""
+
+if [[ -x "$PREPARE_SCRIPT" ]]; then
+  for _MANIFEST in "$SKILLS_HOME"/*/plugin-manifest.json; do
+    [[ ! -f "$_MANIFEST" ]] && continue
+    _MANIFEST_SKILL=$(basename "$(dirname "$_MANIFEST")")
+    _MANIFEST_NAME=$(jq -r '.name // ""' "$_MANIFEST" 2>/dev/null)
+    [[ -z "$_MANIFEST_NAME" ]] && _MANIFEST_NAME="$_MANIFEST_SKILL"
+
+    # Skip if --add-plugin targets this same plugin (handled below)
+    [[ "$ADD_PLUGIN" == "$_MANIFEST_NAME" ]] && continue
+
+    # Check if source skill content has changed vs the monorepo plugin copy.
+    # Build if: (a) plugin doesn't exist in monorepo yet, or (b) source has drifted.
+    _NEEDS_BUILD=false
+    _PLUGIN_DST="$MONOREPO_DIR/plugins/$_MANIFEST_NAME"
+
+    if [[ ! -d "$_PLUGIN_DST/.claude-plugin" ]]; then
+      _NEEDS_BUILD=true
+    else
+      # Quick drift check: compare SKILL.md versions
+      _FIRST_SKILL=$(jq -r '.skills[0].name // ""' "$_MANIFEST" 2>/dev/null)
+      if [[ -n "$_FIRST_SKILL" ]]; then
+        _SRC_MD="$SKILLS_HOME/$_FIRST_SKILL/SKILL.md"
+        _DST_MD="$_PLUGIN_DST/skills/$_FIRST_SKILL/SKILL.md"
+        if [[ -f "$_SRC_MD" && -f "$_DST_MD" ]]; then
+          if ! diff -q "$_SRC_MD" "$_DST_MD" >/dev/null 2>&1; then
+            _NEEDS_BUILD=true
+          fi
+        elif [[ -f "$_SRC_MD" ]]; then
+          _NEEDS_BUILD=true
+        fi
+      fi
+    fi
+
+    if $_NEEDS_BUILD; then
+      echo "--- Auto-build plugin: $_MANIFEST_NAME ---"
+      if $DRY_RUN; then
+        echo "  WOULD BUILD + SYNC  plugins/$_MANIFEST_NAME/"
+      else
+        # Build the plugin via prepare-plugin.sh
+        if "$PREPARE_SCRIPT" "$_MANIFEST" >/dev/null 2>&1; then
+          _BUILD_DIR="./build/$_MANIFEST_NAME"
+          if [[ -d "$_BUILD_DIR/.claude-plugin" ]]; then
+            # Preserve hand-written README if it exists in destination
+            _PRESERVED_README=""
+            if [[ -f "$_PLUGIN_DST/README.md" ]]; then
+              _PRESERVED_README=$(mktemp)
+              cp "$_PLUGIN_DST/README.md" "$_PRESERVED_README"
+            fi
+
+            mkdir -p "$_PLUGIN_DST"
+            rsync -a --delete --exclude='.DS_Store' "$_BUILD_DIR/" "$_PLUGIN_DST/"
+
+            # Restore preserved README
+            _PRESERVED_MSG=""
+            if [[ -n "$_PRESERVED_README" ]]; then
+              cp "$_PRESERVED_README" "$_PLUGIN_DST/README.md"
+              rm -f "$_PRESERVED_README"
+              _PRESERVED_MSG=" (README preserved)"
+            fi
+
+            find "$_PLUGIN_DST" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+            echo "  AUTO-SYNCED  plugins/$_MANIFEST_NAME/$_PRESERVED_MSG"
+            AUTO_BUILT_PLUGINS="${AUTO_BUILT_PLUGINS:+$AUTO_BUILT_PLUGINS }$_MANIFEST_NAME"
+          else
+            echo "  Warning: build produced no plugin at $_BUILD_DIR"
+          fi
+        else
+          echo "  Warning: prepare-plugin.sh failed for $_MANIFEST"
+        fi
+      fi
+      echo ""
+    fi
+  done
+fi
+
+# Add new plugin from build directory if --add-plugin specified (manual override)
 if [[ -n "$ADD_PLUGIN" ]]; then
   PLUGIN_BUILD="./build/$ADD_PLUGIN"
   if [[ ! -d "$PLUGIN_BUILD" ]]; then
@@ -341,10 +422,6 @@ if [[ -n "$ADD_PLUGIN" ]]; then
     echo "  WOULD COPY  plugins/$ADD_PLUGIN/"
   else
     # Preserve hand-written README if it exists in the destination.
-    # README may be customized for the monorepo audience (install instructions,
-    # feature descriptions) and should not be overwritten by the auto-generated
-    # template from prepare-plugin.sh. CHANGELOG is NOT preserved — it comes
-    # from the source skill and should always stay in sync.
     PRESERVED_README=""
     if [[ -f "$PLUGIN_DST/README.md" ]]; then
       PRESERVED_README=$(mktemp)
@@ -950,6 +1027,9 @@ if $DRY_RUN; then
   echo "Dry run complete. No files were written."
 else
   echo "Sync complete. $SKILL_COUNT skills synced to $MONOREPO_DIR"
+  if [[ -n "$AUTO_BUILT_PLUGINS" ]]; then
+    echo "Auto-built plugins: $AUTO_BUILT_PLUGINS"
+  fi
   if ! $INIT_MODE; then
     echo ""
     echo "Next steps:"

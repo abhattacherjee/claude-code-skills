@@ -1,5 +1,5 @@
 {
   "name": "skill-publishing",
-  "version": "3.5.0",
-  "description": "Makes any Claude Code skill shareable on GitHub by adding README, LICENSE, CHANGELOG, .gitignore, initializing a git repo, and pushing to GitHub. Supports individual repos, a monorepo, and plugin assembly/distribution"
+  "version": "4.0.0",
+  "description": "Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos"
 }

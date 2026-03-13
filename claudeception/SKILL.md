@@ -223,4 +223,5 @@ should have the opportunity to benefit future work sessions.
 
 ## See Also
 - `skill-authoring` — how to structure, write, and optimize skills (the HOW)
+- `scaffold-backport` — propagates project fixes back to scaffold template (complementary auto-trigger)
 - Anthropic docs: [Skill authoring best practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)

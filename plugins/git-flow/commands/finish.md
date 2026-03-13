@@ -53,6 +53,19 @@ fi
 
 ### 3. Feature Branch Finish
 
+#### Via PR (preferred — always squash merge)
+
+```bash
+# Find the open PR for this branch
+PR_NUMBER=$(gh pr list --head "$CURRENT_BRANCH" --json number --jq '.[0].number')
+
+# Squash merge — combines all commits into a single commit on develop
+gh pr merge $PR_NUMBER --squash --delete-branch
+git checkout develop && git pull origin develop
+```
+
+#### Local fallback (when no PR exists)
+
 ```bash
 git push
 git checkout develop
@@ -63,8 +76,10 @@ $(git log develop..feature/$NAME --oneline)
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 git push origin develop
-git branch -d feature/$NAME
-git push origin --delete feature/$NAME
+
+# Use -D (force) because squash merge creates different SHA
+git branch -D feature/$NAME 2>/dev/null || true
+git push origin --delete feature/$NAME 2>/dev/null || true
 ```
 
 ### 4. Release Branch Finish

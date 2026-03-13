@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.0.0] - 2026-03-13
+
+### Changed (BREAKING)
+
+- **Plugin-first publishing** — plugins are now the default distribution format. Every skill with a `plugin-manifest.json` is auto-assembled and synced as a plugin during `sync-monorepo.sh`. Bare skills (without manifests) remain supported as a secondary path.
+- **`sync-monorepo.sh` auto-discovers plugins** — scans `$SKILLS_HOME/*/plugin-manifest.json` during regular sync, runs `prepare-plugin.sh` automatically, and syncs built plugins to `plugins/`. The `--add-plugin` flag is now a manual override, no longer required for known plugins.
+- **SKILL.md rewritten for plugin-first** — frontmatter, architecture, interactive publishing flow, and key decisions table all updated to reflect plugins as primary, bare skills as secondary, individual repos as optional.
+- **Target selection defaults to Plugin** when a `plugin-manifest.json` exists (previously defaulted to Bare Skill)
+- **Quick Reference reordered** — monorepo sync (auto-discovers plugins) listed first, manual plugin commands second, individual repo last
+
+### Added
+
+- **Auto-build on drift** — `sync-monorepo.sh` detects when plugin source skills have changed and rebuilds the plugin automatically, with README preservation
+- **Manifest creation prompt** — when publishing a skill without a `plugin-manifest.json`, the flow now suggests creating a minimal manifest with a JSON template
+
 ## [3.6.0] - 2026-03-06
 
 ### Added
