@@ -21,6 +21,12 @@
       "version": "1.3.0"
     },
     {
+      "name": "custom-statusline",
+      "source": "./plugins/custom-statusline",
+      "description": "4-tier adaptive statusline with icons for folder, git branch, and context usage",
+      "version": "1.0.0"
+    },
+    {
       "name": "figma-ui-designer",
       "source": "./plugins/figma-ui-designer",
       "description": "Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",

@@ -1,0 +1,5 @@
+{
+  "name": "custom-statusline",
+  "version": "1.0.0",
+  "description": "4-tier adaptive statusline with icons for folder, git branch, and context usage"
+}
