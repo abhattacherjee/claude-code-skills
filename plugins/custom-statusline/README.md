@@ -1,15 +1,40 @@
 # custom-statusline
 
-4-tier adaptive statusline with icons for folder, git branch, and context usage
+4-tier adaptive statusline with icons for folder, git branch, and context usage.
+
+## Preview
+
+**Wide (desktop / iPad) — single line:**
+```
+Claude Opus 4.6 (1M context) | 📁 my-project | 🌿 develop(ok) | 🧠 ●●●●●●●●●○○○○○○○○○○○○○○○○ 36%
+```
+
+**Narrow (phone SSH / small terminal) — two lines:**
+```
+Claude Opus 4.6 (1M context) | 📁 my-project
+🌿 feature/auth(~2|+1) | 🧠 ●●●●●●○○○○○○○○○ 42%
+```
+
+**Ultra-narrow (<40 cols):**
+```
+●●●○○○○○ 38% develop(ok)
+```
+
+The layout switches dynamically based on your terminal width — no configuration needed. Works across Mac, iPad, and iPhone via tmux SSH.
 
 ## What It Does
 
-Install a custom 4-tier adaptive statusline with icons for folder, git branch, and context usage
+Installs an adaptive Claude Code statusline showing:
+
+- 📁 **Project directory** name
+- 🌿 **Git branch** with compact sync status: `develop(ok)`, `feat/foo(~2|+1)`, `main(local)`
+- 🧠 **Context usage** with color-coded progress bar (green < 50%, yellow < 80%, red 80%+)
 
 ## Key Features
 
-- **Install**
-- **Layout Tiers**
+- **Dynamic layout** — auto-detects content width and switches between 1-line and 2-line
+- **tmux-aware** — reads `#{window_width}` so it adapts when you switch between devices
+- **Multi-device SSH** — works on Mac, iPad, and iPhone via tmux sessions
 
 ## Contents
 
