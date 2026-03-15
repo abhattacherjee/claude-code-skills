@@ -29,16 +29,16 @@ if [ -d ".git" ] || git rev-parse --git-dir >/dev/null 2>&1; then
     AHEAD=$(git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
     BEHIND=$(git rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
     if [ "$AHEAD" -gt 0 ] && [ "$BEHIND" -gt 0 ]; then
-      SYNC="${RED}+${AHEAD}-${BEHIND}${R}"
+      SYNC="${RED}⇡${AHEAD}⇣${BEHIND}${R}"
     elif [ "$AHEAD" -gt 0 ]; then
-      SYNC="${GREEN}+${AHEAD}${R}"
+      SYNC="${GREEN}⇡${AHEAD}${R}"
     elif [ "$BEHIND" -gt 0 ]; then
-      SYNC="${RED}-${BEHIND}${R}"
+      SYNC="${YELLOW}⇣${BEHIND}${R}"
     else
-      SYNC="${DIM}ok${R}"
+      SYNC="${CYAN}⇡⇣${R}"
     fi
   else
-    SYNC="${DIM}local${R}"
+    SYNC="${DIM}?${R}"
   fi
 fi
 
