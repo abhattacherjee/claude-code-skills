@@ -1,7 +1,7 @@
 ---
 name: install-statusline
 description: Install a custom 4-tier adaptive statusline with icons for folder, git branch, and context usage
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Custom Statusline Installer
