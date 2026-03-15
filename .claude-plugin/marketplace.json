@@ -39,6 +39,12 @@
       "version": "2.0.0"
     },
     {
+      "name": "product-video-creation",
+      "source": "./plugins/product-video-creation",
+      "description": "Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.",
+      "version": "2.0.0"
+    },
+    {
       "name": "skill-authoring",
       "source": "./plugins/skill-authoring",
       "description": "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism",
