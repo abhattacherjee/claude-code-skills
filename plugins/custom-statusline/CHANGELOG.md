@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0] - 2026-03-14
+
+### Added
+- Dynamic single/two-line layout based on content width (no fixed breakpoints)
+- tmux window width detection via `tmux display-message -p '#{window_width}'`
+- Parent process TTY detection via `ps -o tty= -p $PPID` + `stty size`
+- Folder name shown in narrow tier (was previously hidden)
+
+### Fixed
+- Terminal width detection in Claude Code pipe context (no /dev/tty access)
+- Width detection in tmux sessions (adapts when switching iPhone/iPad/Mac)
+- `${#MODEL}` vs `${#DISPLAY_MODEL}` mismatch in width calculation
+
 ## [1.0.0] - 2026-03-14
 
 ### Added

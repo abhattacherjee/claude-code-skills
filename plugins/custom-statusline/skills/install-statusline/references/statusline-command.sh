@@ -66,7 +66,7 @@ else
   C="${RED}"
 fi
 
-# Display model name (full name as-is from Claude Code)
+# Display model name as-is from Claude Code
 DISPLAY_MODEL="$MODEL"
 
 # Build progress bar helper: build_bar <width>
@@ -92,20 +92,29 @@ trunc() {
   fi
 }
 
-# Detect terminal width robustly (even in pipe/SSH contexts)
-# $COLUMNS is only set in interactive shells, not in pipe context
-# tput/stty fail when stdin is pipe; test if /dev/tty is openable first
-HAS_TTY=false
-(exec </dev/tty) 2>/dev/null && HAS_TTY=true
-
+# Detect terminal width robustly
+# Priority: tmux (most accurate when attached) > parent TTY > /dev/tty > fallback
 COLS="${COLUMNS:-0}"
-if [ "$COLS" -eq 0 ] 2>/dev/null && $HAS_TTY; then
-  COLS=$(tput cols </dev/tty 2>/dev/null || echo 0)
+
+if [ "$COLS" -eq 0 ] 2>/dev/null && [ -n "$TMUX" ]; then
+  # Inside tmux: get the actual pane/window width (adapts to current client)
+  COLS=$(tmux display-message -p '#{window_width}' 2>/dev/null || echo 0)
 fi
-if [ "$COLS" -eq 0 ] 2>/dev/null && $HAS_TTY; then
-  COLS=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
+
+if [ "$COLS" -eq 0 ] 2>/dev/null; then
+  # Try parent process's TTY (works in Claude Code outside tmux)
+  PARENT_TTY=$(ps -o tty= -p $PPID 2>/dev/null | tr -d ' ')
+  if [ -n "$PARENT_TTY" ] && [ "$PARENT_TTY" != "??" ] && [ -e "/dev/$PARENT_TTY" ]; then
+    COLS=$(stty size < "/dev/$PARENT_TTY" 2>/dev/null | awk '{print $2}')
+  fi
 fi
-# Final fallback: assume narrow (safe default for mobile SSH)
+
+if [ "$COLS" -eq 0 ] 2>/dev/null; then
+  # Fallback: try /dev/tty directly (works in direct SSH)
+  (exec </dev/tty) 2>/dev/null && COLS=$(tput cols </dev/tty 2>/dev/null || echo 0)
+fi
+
+# Final fallback: assume narrow (safe for mobile SSH)
 COLS="${COLS:-40}"
 [ "$COLS" -eq 0 ] 2>/dev/null && COLS=40
 
@@ -116,19 +125,30 @@ if [ "$COLS" -lt 40 ]; then
 
 elif [ "$COLS" -lt 60 ]; then
   # ── NARROW (iPhone landscape / small tablet ~40-59 cols) ────
-  printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${GIT_INFO}\n"
-  bar=$(build_bar 12)
-  printf " 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
-
-elif [ "$COLS" -lt 100 ]; then
-  # ── MEDIUM (iPhone SSH / small laptop ~60-99 cols) ──────────
   printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
-  bar=$(build_bar 15)
+  bar=$(build_bar 10)
   printf "${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
 
 else
-  # ── WIDE (desktop / large iPad ~100+ cols) ──────────────────
-  printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R} ${DIM}|${R} ${GIT_INFO_ICON}\n"
-  bar=$(build_bar 25)
-  printf " 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+  # ── 60+ cols: auto-detect single vs two lines ───────────────
+  # Measure visible width: count chars of each plain-text segment
+  # MODEL " | " 📁(2) " " DIR " | " 🌿(2) " " BRANCH "(" detail ")" " | " 🧠(2) " " bar " " PCT "%"
+  # detail = CHANGES + "|" + SYNC (worst case ~8 chars: "~99|+99")
+  min_bar=8
+  detail_len=6
+  fixed_len=$(( ${#DISPLAY_MODEL} + 3 + 2 + 1 + ${#DIR} + 3 + 2 + 1 + ${#BRANCH} + 1 + detail_len + 1 + 3 + 2 + 1 + min_bar + 1 + ${#PCT} + 1 ))
+
+  if [ "$COLS" -ge "$fixed_len" ]; then
+    # Single line — use remaining space for the bar
+    bar_width=$(( COLS - fixed_len + min_bar ))
+    [ $bar_width -gt 25 ] && bar_width=25
+    [ $bar_width -lt 8 ] && bar_width=8
+    bar=$(build_bar $bar_width)
+    printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R} ${DIM}|${R} ${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+  else
+    # Two lines
+    printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
+    bar=$(build_bar 15)
+    printf "${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+  fi
 fi
