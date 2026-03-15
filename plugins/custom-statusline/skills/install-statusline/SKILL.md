@@ -1,7 +1,7 @@
 ---
 name: install-statusline
 description: Install a custom 4-tier adaptive statusline with icons for folder, git branch, and context usage
-version: 1.2.0
+version: 1.3.0
 ---
 
 # Custom Statusline Installer
@@ -26,7 +26,6 @@ Then restart Claude Code.
 
 | Width | Device | Layout |
 |-------|--------|--------|
-| <40 | iPhone portrait | `●●○○○○○○ 12% develop(ok)` |
-| 40-59 | iPhone landscape | Model + git / context bar |
-| 60-99 | SSH / small laptop | Model + dir / git + context bar |
-| 100+ | Desktop / iPad | Everything on two clean lines |
+| <40 | iPhone portrait | 3 lines: model / branch / bar |
+| 40-59 | iPhone landscape | 2-3 lines: model+dir / branch(+bar) / (bar) |
+| 60+ | Desktop / iPad | 1-3 lines: auto-adapts to branch length |

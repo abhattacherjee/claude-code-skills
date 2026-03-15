@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.3.0] - 2026-03-15
+
+### Added
+- Adaptive 1-3 line layout based on branch name length (not just terminal width)
+- Branch gets its own line when truncation would lose >1/3 of the name
+- Ultra-narrow tier (<40 cols) always uses 3 lines for readability
+
+### Changed
+- Layout tiers simplified to <40 / 40-59 / 60+ (was 4 tiers)
+- Each tier auto-selects between 2 and 3 lines based on content fit
+
 ## [1.2.0] - 2026-03-15
 
 ### Changed

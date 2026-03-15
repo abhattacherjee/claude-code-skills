@@ -1,0 +1,5 @@
+{
+  "name": "statusline-creator",
+  "version": "1.0.0",
+  "description": "Creates and customizes Claude Code statusline scripts from composable items"
+}

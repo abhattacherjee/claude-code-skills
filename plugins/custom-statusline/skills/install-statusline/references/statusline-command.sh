@@ -44,14 +44,26 @@ fi
 
 # Build compact git info: branch(changes|sync)
 # e.g. "develop(ok)" or "feat/foo(~2|+1)"
-if [ -n "$BRANCH" ]; then
-  GIT_DETAIL=""
-  [ -n "$CHANGES" ] && GIT_DETAIL="${CHANGES}"
-  if [ -n "$SYNC" ]; then
-    [ -n "$GIT_DETAIL" ] && GIT_DETAIL="${GIT_DETAIL}${DIM}|${R}"
-    GIT_DETAIL="${GIT_DETAIL}${SYNC}"
+# $1 = max chars for branch name (0 = no limit)
+build_git_info() {
+  local max_branch="${1:-0}"
+  if [ -n "$BRANCH" ]; then
+    local display_branch="$BRANCH"
+    if [ "$max_branch" -gt 0 ] && [ ${#BRANCH} -gt "$max_branch" ]; then
+      display_branch="${BRANCH:0:$((max_branch-2))}.."
+    fi
+    local gd=""
+    [ -n "$CHANGES" ] && gd="${CHANGES}"
+    if [ -n "$SYNC" ]; then
+      [ -n "$gd" ] && gd="${gd}${DIM}|${R}"
+      gd="${gd}${SYNC}"
+    fi
+    echo "${GREEN}${display_branch}${R}${DIM}(${R}${gd}${DIM})${R}"
   fi
-  GIT_INFO="${GREEN}${BRANCH}${R}${DIM}(${R}${GIT_DETAIL}${DIM})${R}"
+}
+
+if [ -n "$BRANCH" ]; then
+  GIT_INFO=$(build_git_info 0)
   GIT_INFO_ICON="🌿 ${GIT_INFO}"
 fi
 
@@ -118,37 +130,95 @@ fi
 COLS="${COLS:-40}"
 [ "$COLS" -eq 0 ] 2>/dev/null && COLS=40
 
+# Helper: check if branch + context bar fit on one line
+# Args: $1=branch_budget_min, $2=bar_width, $3=overhead (icons, separators, pct)
+# Returns 0 if branch fits alongside bar, 1 if needs separate lines
+branch_fits_with_bar() {
+  local overhead=$1 bar_w=$2
+  local avail=$(( COLS - overhead - bar_w ))
+  # Need at least 12 chars AND must show at least 2/3 of the branch name
+  local min_to_show=$(( ${#BRANCH} * 2 / 3 ))
+  [ "$min_to_show" -lt 12 ] && min_to_show=12
+  [ "$avail" -ge "$min_to_show" ]
+}
+
 if [ "$COLS" -lt 40 ]; then
   # ── ULTRA-NARROW (iPhone portrait ~30-39 cols) ──────────────
+  # Always 3 lines: model, branch, context bar
+  printf "${BOLD}${MAGENTA}$(trunc "$DISPLAY_MODEL" $((COLS-2)))${R}\n"
+  max_b=$(( COLS - 3 ))  # "🌿 " prefix
+  [ $max_b -lt 6 ] && max_b=6
+  git_trunc=$(build_git_info $max_b)
+  printf "🌿 ${git_trunc}\n"
   bar=$(build_bar 8)
-  printf "${C}${bar}${R} ${C}${BOLD}${ctx_int}%%${R} ${GIT_INFO}\n"
+  printf "🧠 ${C}${bar}${R} ${C}${BOLD}${ctx_int}%%${R}\n"
 
 elif [ "$COLS" -lt 60 ]; then
   # ── NARROW (iPhone landscape / small tablet ~40-59 cols) ────
+  # Line 1: model | dir (always)
   printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
-  bar=$(build_bar 10)
-  printf "${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+  # Check if branch + bar fit on one line
+  # overhead: "🌿 "(3) + "(detail)"(~8) + " | "(3) + "🧠 "(3) + " PCT%"(~5) = ~22
+  if branch_fits_with_bar 22 10; then
+    # 2 lines total: branch + bar together
+    max_b=$(( COLS - 22 - 10 ))
+    [ $max_b -lt 8 ] && max_b=8
+    git_trunc=$(build_git_info $max_b)
+    bar=$(build_bar 10)
+    printf "🌿 ${git_trunc} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+  else
+    # 3 lines: branch alone, then bar alone
+    max_b=$(( COLS - 3 ))
+    [ $max_b -lt 8 ] && max_b=8
+    git_trunc=$(build_git_info $max_b)
+    printf "🌿 ${git_trunc}\n"
+    bar_w=$(( COLS - 8 ))  # "🧠 "(3) + " PCT%"(~5)
+    [ $bar_w -gt 20 ] && bar_w=20
+    [ $bar_w -lt 8 ] && bar_w=8
+    bar=$(build_bar $bar_w)
+    printf "🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+  fi
 
 else
-  # ── 60+ cols: auto-detect single vs two lines ───────────────
-  # Measure visible width: count chars of each plain-text segment
-  # MODEL " | " 📁(2) " " DIR " | " 🌿(2) " " BRANCH "(" detail ")" " | " 🧠(2) " " bar " " PCT "%"
-  # detail = CHANGES + "|" + SYNC (worst case ~8 chars: "~99|+99")
+  # ── 60+ cols: auto-detect 1, 2, or 3 lines ─────────────────
   min_bar=8
   detail_len=6
+  # Check if everything fits on 1 line
   fixed_len=$(( ${#DISPLAY_MODEL} + 3 + 2 + 1 + ${#DIR} + 3 + 2 + 1 + ${#BRANCH} + 1 + detail_len + 1 + 3 + 2 + 1 + min_bar + 1 + ${#PCT} + 1 ))
 
   if [ "$COLS" -ge "$fixed_len" ]; then
-    # Single line — use remaining space for the bar
+    # Single line
     bar_width=$(( COLS - fixed_len + min_bar ))
     [ $bar_width -gt 25 ] && bar_width=25
     [ $bar_width -lt 8 ] && bar_width=8
     bar=$(build_bar $bar_width)
     printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R} ${DIM}|${R} ${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
   else
-    # Two lines
-    printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
-    bar=$(build_bar 15)
-    printf "${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+    # 2-line attempt: line1=model|dir, line2=branch+bar
+    # overhead for line2: "🌿 "(3) + "(detail)"(~8) + " | "(3) + "🧠 "(3) + " PCT%"(~5) = ~22
+    pct_len=${#PCT}
+    line2_overhead=$(( 3 + 1 + detail_len + 1 + 3 + 3 + 1 + pct_len + 1 ))
+    line2_bar=15
+    line2_branch_budget=$(( COLS - line2_overhead - line2_bar ))
+
+    if [ "$line2_branch_budget" -ge 12 ]; then
+      # 2 lines: branch fits with bar
+      git_trunc=$(build_git_info $line2_branch_budget)
+      printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
+      bar=$(build_bar $line2_bar)
+      printf "🌿 ${git_trunc} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+    else
+      # 3 lines: branch and bar each get their own line
+      printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
+      max_b=$(( COLS - 3 ))
+      [ $max_b -lt 10 ] && max_b=10
+      git_trunc=$(build_git_info $max_b)
+      printf "🌿 ${git_trunc}\n"
+      bar_w=$(( COLS - 8 ))
+      [ $bar_w -gt 25 ] && bar_w=25
+      [ $bar_w -lt 8 ] && bar_w=8
+      bar=$(build_bar $bar_w)
+      printf "🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+    fi
   fi
 fi
