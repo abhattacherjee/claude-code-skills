@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 8 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 7 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
@@ -13,7 +13,6 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 | [context-shield](./context-shield/) | 1.3.0 | Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count. | — |
 | [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
 | [figma-ui-designer](./figma-ui-designer/) | 3.1.0 | Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. | — |
-| [product-video-creation](./product-video-creation/) | 2.0.0 | Creates polished, narrated product demo videos using Remotion (React) with AI-crafted storytelling (Opus 4.6), real app screenshots, animated phone mockups, brand-aligned styling, and TTS voiceover (OpenAI or macOS). | — |
 | [skill-authoring](./skill-authoring/) | 2.4.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | — |
 | [worktree](./worktree/) | 1.0.0 | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. | [repo](https://github.com/abhattacherjee/worktree) |
 
@@ -80,7 +79,6 @@ cp -r /tmp/claude-code-skills/claudeception ~/.claude/skills/claudeception
 cp -r /tmp/claude-code-skills/context-shield ~/.claude/skills/context-shield
 cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
 cp -r /tmp/claude-code-skills/figma-ui-designer ~/.claude/skills/figma-ui-designer
-cp -r /tmp/claude-code-skills/product-video-creation ~/.claude/skills/product-video-creation
 cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
 cp -r /tmp/claude-code-skills/worktree ~/.claude/skills/worktree
 rm -rf /tmp/claude-code-skills
