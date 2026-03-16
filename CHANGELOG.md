@@ -4,9 +4,14 @@ All notable changes to the **claude-code-skills** monorepo are documented here.
 Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
-## [2026-03-16] — Monorepo sync
 
-Synced 7 skills from local source.
+## [2.8.0] - 2026-03-16
+
+### Added
+
+- v4.2.0 — storyteller agent, progress tracking, preview improvements
+
+### Skill Inventory (7 skills)
 
 - `changelog-keeper` v1.1.1 — Keeps CHANGELOG.md up to date by generating categorized entries from git commit history
 - `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
@@ -15,6 +20,19 @@ Synced 7 skills from local source.
 - `figma-ui-designer` v3.1.0 — Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code
 - `skill-authoring` v2.4.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
 - `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
+
+### Plugin Inventory (10 plugins)
+
+- `context-bar` v1.0.0 — Color-coded context window usage bar for Claude Code statusline and /context-bar command
+- `context-shield` v1.3.0 — Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.
+- `custom-statusline` v1.3.0 — 4-tier adaptive statusline with icons for folder, git branch, and context usage
+- `figma-ui-designer` v3.1.0 — Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP
+- `git-flow` v2.0.0 — Git Flow branching workflow with slash commands and diagnostic tools
+- `product-video-creation` v2.0.0 — Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.
+- `skill-authoring` v2.2.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
+- `skill-publishing` v4.0.0 — Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos
+- `smart-screen-recorder` v4.2.0 — AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.
+- `statusline-creator` v1.0.0 — Creates and customizes Claude Code statusline scripts from composable items
 
 ## [2.7.0] - 2026-03-15
 
