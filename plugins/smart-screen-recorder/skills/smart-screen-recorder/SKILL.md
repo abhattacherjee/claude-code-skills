@@ -2,7 +2,7 @@
 name: smart-screen-recorder
 description: "AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor + window bounds, then uses AI vision to analyze the recording, create a zoom script targeting specific UI elements, generate voiceover narration, and produce a polished demo video. Use when: (1) creating product demo videos, (2) recording and polishing UI walkthroughs, (3) turning raw screen recordings into narrated presentations, (4) re-processing existing recordings with different zoom/voiceover."
 metadata:
-  version: 4.1.0
+  version: 4.2.0
 ---
 
 # Smart Screen Recorder
@@ -46,6 +46,37 @@ The video and narration are built TOGETHER, not separately:
 
 This replaces the old approach where voiceover was overlaid on a continuously-playing
 video that rushed past the content being described.
+
+## Progress Tracking (MANDATORY)
+
+**Before starting, create a task checklist so the user always knows where we are.**
+
+Use `TaskCreate` at the start to create these tasks. Mark each `in_progress` when starting,
+`completed` when done. The user sees this as a live progress indicator.
+
+| # | Task | Description |
+|---|------|-------------|
+| 1 | Record screen | Capture raw video + cursor data |
+| 2 | Extract frames | Pull key frames as PNGs for AI analysis |
+| 3 | Voice & context | Select TTS voice + gather product description |
+| 4 | Brainstorm narrative | Present demo theme options, get user direction |
+| 5 | Demo Director | AI analyzes frames, creates zoom + voiceover scripts |
+| 6 | Verify zoom targets | QA verifier corrects bounding boxes at full resolution |
+| 7 | Generate TTS | Create audio segments from voiceover script |
+| 8 | Build timeline | Construct integrated PLAY + HOLD segment sequence |
+| 9 | Preview & feedback | Serve HTML preview, iterate on user feedback |
+| 10 | Render video | Full 4K render from approved timeline |
+| 11 | Mix audio | Place TTS segments at precise output timestamps |
+| 12 | Post-production | Quality gate: PASS / NEEDS_FIXES / RESHOOT |
+
+**Update rules:**
+- Mark `in_progress` immediately before starting each task
+- Mark `completed` immediately after it succeeds
+- If a task requires user input (3, 4, 9), mark `in_progress` while waiting
+- If preview feedback requires re-work, mark affected tasks back to `in_progress`
+- On abort, mark remaining tasks as `deleted`
+
+**Skip tasks that don't apply** (e.g., skip Step 1 if user provides existing recording).
 
 ## Step-by-Step Workflow
 
@@ -110,6 +141,51 @@ What product/feature is this demo showing? Give me a brief description:
 This context is passed to the Demo Director so it can craft narration that accurately
 describes the product, rather than guessing from screenshots alone. The user's description
 becomes the `product_context` field in the Demo Director prompt.
+
+### Step 3.7: Narrative Brainstorming (Agent + Interactive)
+
+**Before the Demo Director runs, launch the Demo Storyteller agent to craft theme options.**
+
+This is a two-part step: the AI proposes, the user chooses.
+
+**Part 1: Launch Demo Storyteller agent**
+
+Launch a `general-purpose` sub-agent using the **Demo Storyteller** persona
+(`~/.claude/agents/demo-storyteller.md`). Pass it:
+- The extracted frames directory
+- The manifest.json
+- The product context from Step 3.5
+- The chosen TTS voice
+
+The agent reads ALL frames, identifies compelling moments, and writes
+`narrative-themes.json` with 3 distinct narrative approaches. Each theme includes:
+- Name, tagline, tone, target audience
+- Concrete opening line (so the user can "hear" the difference)
+- Narrative arc, pacing, and which sections to emphasize vs skip
+
+**Part 2: Present to user and capture choice**
+
+Present the 3 themes to the user using the Storyteller's formatted summary.
+The user picks one theme, mixes elements, or provides their own direction.
+
+Capture the result as `narrative_brief` — a structured object passed to the Demo Director:
+
+```json
+{
+  "chosen_theme": "A",
+  "theme_name": "The Journey",
+  "tone": "warm, personal, storytelling",
+  "opening_line": "Meet the Escape Planner...",
+  "narrative_arc": "Follow a first-time user from curiosity to delight",
+  "emphasis": ["questionnaire flow", "AI generation reveal", "tiny home match scores"],
+  "de_emphasis": ["scrolling between sections", "loading states"],
+  "user_notes": "Any additional direction from the user"
+}
+```
+
+**Why an agent instead of hardcoded options:** The Storyteller reads the actual frames,
+so its themes reference real UI elements and screens — not generic templates. A recording
+of a code editor gets different themes than a recording of a vacation planner.
 
 ### Step 4: AI Analysis (Demo Director)
 
@@ -212,6 +288,27 @@ Generate TTS segments (OpenAI or macOS), then render the integrated timeline:
 The renderer tracks `tts_placement` — a list of `{file, output_time, duration}` entries
 that tell ffmpeg where to place each audio segment in the final mix.
 
+### Step 7.5: Preview Before Rendering (MANDATORY)
+
+**Before spending 5+ minutes on a full render, generate an HTML preview.**
+
+```bash
+python3 ~/.claude/skills/smart-screen-recorder/scripts/preview-timeline.py \
+  raw.mp4 zoom-script.json integrated-timeline.json tts/ -o preview/
+```
+
+This opens a localhost page (http://localhost:8111) showing:
+- A screenshot for each HOLD frame (what the viewer will see)
+- Play buttons for each TTS segment (what the viewer will hear)
+- Timeline structure (PLAY durations, HOLD durations, output timestamps)
+- A "Play All" button to hear the full narration sequentially
+
+**The user reviews and provides feedback** (e.g., "Hold 3 narration mentions tiny homes
+but the frame shows excursions — move to Hold 6"). Adjust the zoom-script.json and
+voiceover-script.json based on feedback, then rebuild the timeline and re-preview.
+
+**Only proceed to full render after the user approves the preview.**
+
 ### Step 8: Post-Production Review (Quality Gate)
 
 **Launch the Post-Production Editor agent** (`demo-post-production-editor`) to review
@@ -247,7 +344,8 @@ python3 ~/.claude/skills/smart-screen-recorder/scripts/apply-zoom-script.py \
 
 | Agent | File | Model | Purpose |
 |-------|------|-------|---------|
-| Demo Director | `~/.claude/agents/demo-director.md` | opus | Analyzes all frames, creates zoom-script.json + voiceover-script.json |
+| Demo Storyteller | `~/.claude/agents/demo-storyteller.md` | sonnet | Analyzes frames, proposes 3 narrative themes for user to choose from |
+| Demo Director | `~/.claude/agents/demo-director.md` | opus | Analyzes all frames + narrative brief, creates zoom-script.json + voiceover-script.json |
 | Zoom QA Verifier | `~/.claude/agents/zoom-qa-verifier.md` | opus | Extracts full-res frames at zoom timestamps, corrects bounding boxes |
 | Voiceover Timing Fixer | `~/.claude/agents/voiceover-timing-fixer.md` | sonnet | Detects TTS audio overlaps, rebuilds sequential timestamps |
 | Post-Production Editor | `~/.claude/agents/demo-post-production-editor.md` | opus | Reviews final output for quality, requests re-cuts if needed |
@@ -258,7 +356,8 @@ All agents are NOT user-invocable — spawned by the skill orchestrator.
 
 | Phase | Agent | Concurrency | Input | Output |
 |-------|-------|-------------|-------|--------|
-| Step 4 | Demo Director | Sequential | Frames + manifest | zoom-script.json, voiceover-script.json |
+| Step 3.7 | Demo Storyteller | Sequential | Frames + product context | narrative-themes.json (3 options) |
+| Step 4 | Demo Director | Sequential (after user picks theme) | Frames + narrative brief | zoom-script.json, voiceover-script.json |
 | Step 5 | Zoom QA Verifier | Sequential (after Step 4) | zoom-script.json + raw video | Corrected zoom-script.json |
 | Step 7b | Voiceover Timing Fixer | Sequential (after Step 7) | TTS audio files + manifest | Fixed manifest with 0 overlaps |
 | Step 8 | Post-Production Editor | Sequential (after merge) | Final video + zoom/VO scripts | PASS/NEEDS_FIXES/RESHOOT verdict |

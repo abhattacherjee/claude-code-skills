@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Reusable Agent Skills and Plugins for Claude Code",
-    "version": "2026.03.15"
+    "version": "2026.03.16"
   },
   "plugins": [
     {
@@ -55,6 +55,12 @@
       "source": "./plugins/skill-publishing",
       "description": "Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos",
       "version": "4.0.0"
+    },
+    {
+      "name": "smart-screen-recorder",
+      "source": "./plugins/smart-screen-recorder",
+      "description": "AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.",
+      "version": "4.2.0"
     },
     {
       "name": "statusline-creator",

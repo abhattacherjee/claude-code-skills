@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.2.0] - 2026-03-16
+
+### Added
+- **Demo Storyteller agent** (`demo-storyteller.md`) — analyzes frames and proposes 3 narrative theme options before Demo Director runs
+- **Progress tracking** — 12-step task checklist using TaskCreate/TaskUpdate for user visibility
+- **Narrative brainstorming step** (Step 3.7) — Storyteller agent + user interactive session to choose demo direction
+- **Narrative brief** flows from Storyteller → user choice → Demo Director as creative brief
+- **Preview improvements**: numbered audio segments (#N), transcribed text, stacked layout, POST feedback endpoint
+- **Server-side feedback** — preview POSTs to `/feedback` endpoint instead of file download
+- Higher resolution preview frames (1920px, JPEG quality 92)
+
+### Changed
+- Demo Director now accepts `narrative_brief` input (tone, pacing, emphasis from brainstorming)
+- Plugin manifest updated with `demo-storyteller` agent
+- Preview HTML layout: full-width screenshots on top, audio segments below, feedback at bottom
+
 ## [4.1.0] - 2026-03-15
 
 ### Added

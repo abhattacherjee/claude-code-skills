@@ -1,5 +1,5 @@
 {
   "name": "smart-screen-recorder",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "description": "AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos."
 }
