@@ -1,0 +1,5 @@
+{
+  "name": "spec-review",
+  "version": "2.1.0",
+  "description": "Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans."
+}

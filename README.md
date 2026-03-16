@@ -33,6 +33,7 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 | [skill-publishing](./plugins/skill-publishing/) | 4.0.0 | 1 | 0 | Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos |
 | [smart-screen-recorder](./plugins/smart-screen-recorder/) | 4.2.0 | 1 | 0 | AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos. |
 | [spec-creator](./plugins/spec-creator/) | 2.3.0 | 1 | 0 | Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues). |
+| [spec-review](./plugins/spec-review/) | 2.1.0 | 1 | 0 | Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans. |
 | [statusline-creator](./plugins/statusline-creator/) | 1.0.0 | 1 | 0 | Creates and customizes Claude Code statusline scripts from composable items |
 
 

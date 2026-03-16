@@ -69,6 +69,12 @@
       "version": "2.3.0"
     },
     {
+      "name": "spec-review",
+      "source": "./plugins/spec-review",
+      "description": "Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.",
+      "version": "2.1.0"
+    },
+    {
       "name": "statusline-creator",
       "source": "./plugins/statusline-creator",
       "description": "Creates and customizes Claude Code statusline scripts from composable items",
