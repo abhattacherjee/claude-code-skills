@@ -1,52 +1,162 @@
-# smart-screen-recorder
+# Smart Screen Recorder
 
-AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.
+AI-driven screen recording and demo production pipeline for macOS. Records your screen, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos with a narration-first integrated timeline.
+
+**Version:** 4.2.0 | **1** skill, **6** agents | **License:** MIT
 
 ## What It Does
 
-AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor + window bounds, then uses AI vision to analyze the recording, create a zoom script targeting specific UI elements, generate voiceover narration, and produce a polished demo video.
+Turn any raw screen recording into a professional narrated demo video. The pipeline:
+
+1. **Records** your screen + cursor movements
+2. **Extracts** key frames for AI analysis
+3. **Brainstorms** narrative themes with a dedicated Storyteller agent
+4. **Directs** the demo with AI-crafted zoom scripts and voiceover
+5. **Previews** the timeline in an interactive HTML page before rendering
+6. **Renders** a polished 4K video with synchronized narration
 
 **Use when:**
-- creating product demo videos, 
-- recording and polishing UI walkthroughs, 
-- turning raw screen recordings into narrated presentations, 
-- re-processing existing recordings with different zoom/voiceover.
+- Creating product demo videos from screen recordings
+- Recording and polishing UI walkthroughs
+- Turning raw recordings into narrated presentations
+- Re-processing existing recordings with different zoom/voiceover
 
-## Key Features
+## Pipeline Architecture
 
-- **Pipeline Overview**
-- **Step-by-Step Workflow**
-- **Agent Definitions**
-- **Scripts Reference**
-- **Dependencies**
-- **Lessons Learned**
+```
+Record ──> Extract ──> Voice  ──> Storyteller ──> Demo Director ──> TTS ──> Preview ──> Render
+  |          Frames     Select     (brainstorm     (AI agent)       |       HTML        4K
+  MKV +      as PNGs    (user)      3 themes)      Zoom script +   OpenAI  Review      Video
+  cursor     + manifest             User picks      voiceover       nova    Iterate     + Audio
+```
 
-## Usage
+**Key architecture (v4.0+): Narration-first integrated timeline.**
+
+The video and narration are built TOGETHER, not separately:
+- Each narration segment is paired with a specific source frame to freeze on
+- The renderer alternates between PLAY (advance source) and HOLD (freeze + narrate)
+- Output is longer than source — extra time is frozen frames where the narrator describes what's on screen
+
+## Workflow (12 Steps with Progress Tracking)
+
+The skill tracks progress with a live task checklist so you always know where you are:
+
+```
+ 1. [x] Record screen              - Capture raw video + cursor data
+ 2. [x] Extract frames             - Pull key frames as PNGs for AI analysis
+ 3. [x] Voice & context            - Select TTS voice + gather product description
+ 4. [x] Brainstorm narrative       - Storyteller proposes 3 themes, you pick one
+ 5. [x] Demo Director              - AI creates zoom + voiceover scripts
+ 6. [x] Verify zoom targets        - QA agent corrects bounding boxes at full resolution
+ 7. [x] Generate TTS               - Create audio segments from voiceover script
+ 8. [x] Build timeline             - Construct integrated PLAY + HOLD sequence
+ 9. [ ] Preview & feedback          - Interactive HTML review with per-section feedback
+10. [ ] Render video               - Full 4K render from approved timeline
+11. [ ] Mix audio                  - Place TTS at precise output timestamps
+12. [ ] Post-production            - Quality gate: PASS / NEEDS_FIXES / RESHOOT
+```
+
+### Step 3.7: Narrative Brainstorming
+
+Before the Demo Director runs autonomously, the **Demo Storyteller** agent analyzes your recording frames and proposes 3 distinct narrative themes:
+
+```
+Based on your recording, I identified these key moments:
+- Landing page with vineyard hero image
+- Multi-step questionnaire with colorful interest tags
+- AI generation loading screen with progress animation
+- Day-by-day itinerary cards with daily schedules
+
+Here are 3 narrative directions:
+
+A) The Journey — "Meet the Escape Planner. Your personal guide to Central Portugal."
+   Tone: warm, personal, storytelling
+   Best for: social media, landing pages
+
+B) Two Minutes Flat — "Two minutes. That's all it takes to plan your perfect escape."
+   Tone: punchy, energetic, feature-focused
+   Best for: Product Hunt, investor pitches
+
+C) Behind the Curtain — "Powered by AI. Grounded in local expertise."
+   Tone: authoritative, detailed, trust-building
+   Best for: blog posts, comparison pages
+
+Which direction resonates? You can also mix elements.
+```
+
+Your choice becomes the **narrative brief** that guides the Demo Director's tone, pacing, and emphasis.
+
+### Step 7.5: Interactive Preview
+
+Before spending 5+ minutes on a full render, review everything in an interactive HTML preview:
+
+![Preview - Landing page hold frame](docs/preview-hold-frame.jpg)
+
+The preview shows:
+- **Full-width screenshot** for each HOLD and PLAY segment
+- **Numbered audio segments** (#1, #2, ...) with transcribed text and play buttons
+- **Progress bars** on each audio clip during playback
+- **Per-section feedback** text boxes that auto-save
+- **Play All** button for sequential narration review
+- **Server-side feedback** — click "Save Feedback" and Claude reads it directly
+
+![Preview - Activity view with excursion details](docs/preview-activity-view.jpg)
+
+Each section shows the exact frame the viewer will see, paired with the narration they'll hear. You can reference specific clips by number: *"Audio #14 doesn't match the screenshot — move to a frame showing the day carousel."*
+
+![Preview - Tiny home recommendations](docs/preview-tiny-homes.jpg)
+
+## Agents
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| **Demo Storyteller** | sonnet | Analyzes frames, proposes 3 narrative themes for user brainstorming |
+| **Demo Director** | opus | Creates zoom-script.json + voiceover-script.json from frames + narrative brief |
+| **Zoom QA Verifier** | opus | Extracts full-res frames at zoom timestamps, corrects bounding boxes |
+| **Voiceover Timing Fixer** | sonnet | Detects TTS audio overlaps, rebuilds sequential timestamps |
+| **Post-Production Editor** | opus | Reviews final output for quality, can request re-cuts |
+
+## Quick Start
 
 ```bash
 # Install dependencies
 ~/.claude/skills/smart-screen-recorder/scripts/install-deps.sh
 
-# Record (Ctrl+C to stop) — captures screen + cursor + window bounds
+# Record (Ctrl+C to stop)
 ~/.claude/skills/smart-screen-recorder/scripts/record.sh
 
-# Then tell Claude: "process my recording into a demo video"
+# Then tell Claude:
+# "process my recording into a demo video"
 ```
 
-## Contents
+Or invoke the skill directly:
+```
+/smart-screen-recorder
+```
 
-- **1** skill(s), **0** command(s), **4** agent(s)
+## Scripts
 
-### Skills
+| Script | Purpose |
+|--------|---------|
+| `record.sh` | Record screen + cursor (MKV for crash safety, remux to MP4) |
+| `extract-frames.py` | Extract key frames as PNGs for AI analysis |
+| `generate-tts.py` | Generate OpenAI/macOS TTS audio |
+| `build-timeline.py` | Build integrated PLAY+HOLD timeline |
+| `preview-timeline.py` | Generate interactive HTML preview (localhost:8111) |
+| `render-timeline.py` | Render video from timeline with zoom effects |
+| `mix-audio.py` | Mix TTS segments into rendered video |
+| `install-deps.sh` | Install ffmpeg, pyobjc, opencv, numpy |
 
-- `smart-screen-recorder` — AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor + window bounds, then uses AI vision to analyze the recording, create a zoom script targeting specific UI elements, generate voiceover narration, and produce a polished demo video.
+## Dependencies
 
-### Agents
+| Dependency | Install | Purpose |
+|------------|---------|---------|
+| ffmpeg | `brew install ffmpeg` | Screen capture + video encoding |
+| opencv-python | `pip3 install opencv-python` | Frame extraction + processing |
+| pyobjc-framework-Quartz | `pip3 install pyobjc-framework-Quartz` | Cursor + window tracking |
+| OPENAI_API_KEY (optional) | `export OPENAI_API_KEY=sk-...` | Natural TTS voices (nova recommended) |
 
-- `demo-director` — Senior Product Demo Director who analyzes screen recording frames to create zoom scripts and voiceover narration. NOT user-invocable — spawned by smart-screen-recorder skill.
-- `zoom-qa-verifier` — Verifies and corrects zoom target bounding boxes by extracting full-resolution video frames and measuring actual UI element positions. NOT user-invocable — spawned by smart-screen-recorder skill.
-- `voiceover-timing-fixer` — Post-production agent that detects and fixes voiceover timing overlaps by measuring actual TTS audio durations and rebuilding sequential timestamps. NOT user-invocable — spawned by smart-screen-recorder skill.
-- `demo-post-production-editor` — Post-production editor who reviews the final demo video output for quality, verifying zoom targets match voiceover, pacing feels natural, and the overall narrative is compelling. Can request re-cuts from other agents. NOT user-invocable — spawned by smart-screen-recorder skill.
+macOS only. Requires Screen Recording + Accessibility permissions.
 
 ## Installation
 
@@ -71,9 +181,8 @@ rm -rf /tmp/ccs
 ### Manual
 
 ```bash
-# Copy skills
 cp -r plugins/smart-screen-recorder/skills/* ~/.claude/skills/
-
+cp plugins/smart-screen-recorder/agents/* ~/.claude/agents/
 ```
 
 ## Uninstall
