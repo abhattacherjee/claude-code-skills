@@ -62,22 +62,22 @@ Before the Demo Director runs autonomously, the **Demo Storyteller** agent analy
 
 ```
 Based on your recording, I identified these key moments:
-- Landing page with vineyard hero image
-- Multi-step questionnaire with colorful interest tags
-- AI generation loading screen with progress animation
-- Day-by-day itinerary cards with daily schedules
+- Landing page with hero image and CTA
+- Multi-step onboarding flow with user selections
+- Processing/loading screen with progress indicators
+- Results dashboard with personalized recommendations
 
 Here are 3 narrative directions:
 
-A) The Journey — "Meet the Escape Planner. Your personal guide to Central Portugal."
+A) The Journey — "Meet [Product]. Your personal guide to [domain]."
    Tone: warm, personal, storytelling
    Best for: social media, landing pages
 
-B) Two Minutes Flat — "Two minutes. That's all it takes to plan your perfect escape."
+B) Two Minutes Flat — "Two minutes. That's all it takes."
    Tone: punchy, energetic, feature-focused
    Best for: Product Hunt, investor pitches
 
-C) Behind the Curtain — "Powered by AI. Grounded in local expertise."
+C) Behind the Curtain — "Powered by AI. Built on real data."
    Tone: authoritative, detailed, trust-building
    Best for: blog posts, comparison pages
 
@@ -88,23 +88,50 @@ Your choice becomes the **narrative brief** that guides the Demo Director's tone
 
 ### Step 7.5: Interactive Preview
 
-Before spending 5+ minutes on a full render, review everything in an interactive HTML preview:
+Before spending 5+ minutes on a full render, review everything in an interactive HTML preview at `http://localhost:8111`:
 
-![Preview - Landing page hold frame](docs/preview-hold-frame.jpg)
+```
++---------------------------------------------------------------+
+| Demo Preview — Timeline Review                                |
+| Total: 2:59 | Segments: 29 | Holds: 14 | TTS: 28 clips      |
+| [Play All (Sequential)]                                       |
++---------------------------------------------------------------+
+|                                                                |
+| HOLD — 4.7s at source t=82.5s              0:54 -> 0:59       |
+| Results dashboard — personalized recommendations              |
+| +----------------------------------------------------------+  |
+| |                                                          |  |
+| |              [Full-width screenshot of the               |  |
+| |               frame frozen during this hold]             |  |
+| |                                                          |  |
+| +----------------------------------------------------------+  |
+|                                                                |
+| #9  [Play] And here it is. Your personalized        4.7s      |
+|            dashboard. Everything in one place,                 |
+|            built just for you.                                 |
+|     [==========>                         ] progress            |
+|                                                                |
+| [Feedback for this section...                              ]   |
+|                                                                |
++---------------------------------------------------------------+
+| PLAY — 1.5s (source 83.0s -> 87.5s)                           |
+| Carousel advances to show more days                            |
++---------------------------------------------------------------+
+|                                                                |
+| HOLD — 5.4s at source t=87.5s              0:59 -> 1:05       |
+| ...                                                            |
++---------------------------------------------------------------+
+```
 
-The preview shows:
+**Preview features:**
 - **Full-width screenshot** for each HOLD and PLAY segment
-- **Numbered audio segments** (#1, #2, ...) with transcribed text and play buttons
+- **Numbered audio segments** (#1, #2, ...) with transcribed narration text and play/pause buttons
 - **Progress bars** on each audio clip during playback
-- **Per-section feedback** text boxes that auto-save
-- **Play All** button for sequential narration review
-- **Server-side feedback** — click "Save Feedback" and Claude reads it directly
+- **Per-section feedback** text boxes that auto-save to localStorage
+- **Play All** button for sequential narration review (spacebar to pause)
+- **Server-side feedback** — "Save Feedback" POSTs directly to the server so Claude reads it without file downloads
 
-![Preview - Activity view with excursion details](docs/preview-activity-view.jpg)
-
-Each section shows the exact frame the viewer will see, paired with the narration they'll hear. You can reference specific clips by number: *"Audio #14 doesn't match the screenshot — move to a frame showing the day carousel."*
-
-![Preview - Tiny home recommendations](docs/preview-tiny-homes.jpg)
+Reference specific clips by number in your feedback: *"Audio #14 doesn't match the screenshot"* or *"#9 sounds too fast, regenerate slower."*
 
 ## Agents
 
