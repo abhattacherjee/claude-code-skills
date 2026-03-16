@@ -63,6 +63,12 @@
       "version": "4.2.0"
     },
     {
+      "name": "spec-creator",
+      "source": "./plugins/spec-creator",
+      "description": "Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).",
+      "version": "2.3.0"
+    },
+    {
       "name": "statusline-creator",
       "source": "./plugins/statusline-creator",
       "description": "Creates and customizes Claude Code statusline scripts from composable items",
