@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0] - 2026-03-17
+
+### Added
+
+- **Team mode note** — when Agent Teams are enabled, multiple UX expert teammates can explore different design directions simultaneously during Phase 0 brainstorming
+
 ## [3.1.0] - 2026-02-28
 
 ### Added

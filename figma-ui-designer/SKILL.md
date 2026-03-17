@@ -2,7 +2,7 @@
 name: figma-ui-designer
 description: "Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. Use when: (1) user asks for Figma mockups or UI designs, (2) user shares a Figma URL to use as input for a spec or plan, (3) starting a new project and needs Figma designs, (4) mocking up a feature enhancement, (5) user wants to translate a Figma design into implementation requirements."
 metadata:
-  version: 3.1.0
+  version: 3.2.0
 ---
 
 # Figma UI Designer
@@ -102,6 +102,8 @@ AskUserQuestion({
   ]
 })
 ```
+
+**Team mode:** When Agent Teams are enabled, multiple UX expert teammates can explore different design directions simultaneously (e.g., one researching minimalist approaches while another explores bold/editorial styles), then present all findings together for the user to pick from. This is especially valuable for new project designs (Workflow B) where the design space is wide.
 
 **Fallback:** If the agent fails or returns incomplete results, fall back to presenting 2-3 directions based on your own knowledge, but note that references were not available.
 

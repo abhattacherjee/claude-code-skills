@@ -2,6 +2,11 @@
 
 All notable changes to spec-review are documented here.
 
+## [2.2.0] - 2026-03-17
+
+### Added
+- **Team Mode (Optional)** — Phase 2 can use Agent Teams instead of parallel sub-agents when `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is enabled; enables cross-pollination between reviewers (e.g., Codebase Verifier alerts Architecture Reviewer about missing files mid-review)
+
 ## [2.1.0] - 2026-03-14
 
 ### Added

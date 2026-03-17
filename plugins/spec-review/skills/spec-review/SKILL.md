@@ -2,7 +2,7 @@
 name: spec-review
 description: "Reviews and enriches story specifications with codebase-verified technical sub-tasks, architecture alignment checks, design simplification suggestions, and API test plans. Dynamically discovers project architecture at runtime. Use when: (1) a new story spec needs review before implementation, (2) a spec has high-level tasks but lacks implementation-ready detail, (3) need to verify spec assumptions against actual codebase, (4) a spec references API changes but has no test plan, (5) reviewing specs that reference data shapes or pipeline ordering, (6) spec subtasks mention add field X to object Y or call function at line N."
 metadata:
-  version: 2.1.0
+  version: 2.2.0
 ---
 
 # Spec Review
@@ -288,6 +288,25 @@ OUTPUT FORMAT:
 ### Test Specifications
 1. **TEST.1** Create [folder/file] — [description with key assertions]
 ```
+
+### Team Mode (Optional)
+
+When `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is enabled, Phase 2 can use a team instead
+of 4 parallel Agent calls. Benefits:
+- **Cross-pollination**: Codebase Verifier can alert Architecture Reviewer about missing
+  files mid-review (via SendMessage), rather than discovering mismatches only during synthesis
+- **Iterative refinement**: If Design Simplifier identifies a simplification that affects
+  the Test Plan, the Test Plan Extractor adjusts in real-time
+
+**Team workflow:**
+1. `TeamCreate("spec-review-{spec-name}")`
+2. Create 4 tasks (one per analysis dimension)
+3. Spawn 4 teammates with specialized prompts
+4. Teammates claim tasks, work independently, message each other with findings
+5. Lead synthesizes all findings in Phase 3
+6. `TeamDelete` cleanup
+
+**Default**: Sub-agent mode (no teams). Teams are opt-in when enabled.
 
 ### Phase 3: Synthesize and Generate Enrichments
 

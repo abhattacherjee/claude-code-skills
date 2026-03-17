@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.4.0
+  version: 2.5.0
 ---
 
 # Skill Authoring
@@ -143,13 +143,14 @@ pure decision guidance. Every skill with 2+ independent subtasks should use para
 
 ### When to Use Agents
 
-| Signal | Agent Approach |
-|--------|---------------|
-| Task has 2+ independent subtasks | Parallel sub-agents for each |
-| Task requires web search, content reading, or AI judgement | Dedicated agent per domain |
-| Task processes N items of the same type | Fan-out: one agent per item (or per batch) |
-| Task has sequential phases with parallel work within | Orchestrator coordinates phase gates |
-| Task is a single deterministic check | **No agent** — use a script instead |
+| Signal | Agent Approach | Teams? |
+|--------|---------------|--------|
+| Task has 2+ independent subtasks | Parallel sub-agents for each | No |
+| Task requires web search, content reading, or AI judgement | Dedicated agent per domain | No |
+| Task processes N items of the same type | Fan-out: one agent per item (or per batch) | No |
+| Task has sequential phases with parallel work within | Orchestrator coordinates phase gates | Maybe |
+| Task is a single deterministic check | **No agent** — use a script instead | No |
+| Multi-phase workflow with inter-agent feedback | Named teammates via TeamCreate | **Yes** |
 
 ### Orchestrator Pattern
 
@@ -219,6 +220,75 @@ The most powerful pattern combines both:
 - **Scripts** handle deterministic post-processing (applying fixes, generating reports)
 
 Example flow: `extract-urls.sh` → 3 parallel verification agents → `apply-fixes.sh`
+
+### Agent Teams Orchestration
+
+Use Agent Teams when teammates need to **communicate with each other** across phases —
+not just report back to an orchestrator.
+
+#### When to Use Teams vs Sub-Agents
+
+| Signal | Use Teams | Use Sub-Agents |
+|--------|-----------|----------------|
+| Multi-phase workflow with feedback loops | ✓ | |
+| Independent parallel tasks (fan-out) | | ✓ |
+| Teammates need each other's findings | ✓ | |
+| One-shot parallel analysis | | ✓ |
+| Iterative creative workflow (design, video) | ✓ | |
+| Quick research/validation | | ✓ |
+
+#### Team Orchestration Pattern
+
+```
+TeamCreate("my-workflow")
+├── TaskCreate tasks for each work item
+├── Spawn teammates (Agent tool with team_name + name)
+│   ├── Teammate A claims + works tasks
+│   ├── Teammate B claims + works tasks
+│   └── Teammates communicate via SendMessage
+├── Lead monitors progress via TaskList
+├── Lead synthesizes results
+└── TeamDelete (cleanup)
+```
+
+#### Conditional Team Usage
+
+Skills should support both modes — teams when available, sub-agents as fallback:
+
+```markdown
+## Orchestration Mode
+
+Check `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`:
+- **If enabled**: Use TeamCreate for persistent multi-phase coordination
+- **If disabled** (default): Use parallel Agent tool calls (existing pattern)
+
+Both modes produce identical results. Teams add inter-agent communication.
+```
+
+#### Complex Skill Template (Teams Variant)
+
+When using teams instead of anonymous sub-agents:
+
+```markdown
+## Full Workflow (Team Orchestration)
+
+### Step 1: Create Team
+TeamCreate("my-workflow") → spawns shared task list.
+
+### Step 2: Define Tasks
+TaskCreate for each work item (extraction, validation, enrichment, etc.)
+
+### Step 3: Spawn Named Teammates
+Launch via Agent tool with `team_name` + `name` parameters.
+Each teammate claims tasks from the shared list.
+
+### Step 4: Monitor & Synthesize
+Lead polls TaskList, teammates SendMessage findings to each other.
+Lead collects completed results and generates final report.
+
+### Step 5: Cleanup
+TeamDelete("my-workflow")
+```
 
 ### Defining Agent Files
 
@@ -473,6 +543,12 @@ npm run validate  # Or whatever validation command applies
 - [ ] SKILL.md includes "Progress Tracking (MANDATORY)" section with task table
 - [ ] Task update rules documented (in_progress → completed, abort → deleted)
 
+**Teams (optional):**
+- [ ] Team mode evaluated: does this skill have multi-phase feedback loops?
+- [ ] If yes: team pattern documented alongside sub-agent pattern
+- [ ] Conditional check for `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` documented
+- [ ] TeamDelete cleanup documented in workflow
+
 **Structure & content:**
 - [ ] SKILL.md body ≤ 500 lines
 - [ ] Description ≤ 1024 chars, third person, with trigger conditions, double-quoted single-line
@@ -506,6 +582,8 @@ npm run validate  # Or whatever validation command applies
 - **Untested scripts shipped as "done"** — scripts that pass code review but fail on real
   data. Always dry-run against the current project with varied inputs before declaring
   complete. Bugs cluster: if one heuristic is wrong, test the others too.
+- **Using teams for one-shot parallel work** — teams add overhead (shared task list, message
+  routing). For independent fan-out tasks, sub-agents are faster and cheaper.
 
 ## Optimizing Existing Skills
 

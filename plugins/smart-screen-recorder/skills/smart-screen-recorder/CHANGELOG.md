@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.0] - 2026-03-17
+
+### Added
+
+- **Team Mode section** — optional persistent team structure (`demo-production`) where Storyteller, Director, and QA Verifier teammates persist across phases, enabling cross-phase communication and parallel iteration during preview-feedback cycles
+- **When to use guidance** — decision table for teams vs sub-agents based on scenario complexity
+
 ## [4.2.0] - 2026-03-16
 
 ### Added

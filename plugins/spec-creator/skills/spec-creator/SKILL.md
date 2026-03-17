@@ -2,7 +2,7 @@
 name: spec-creator
 description: "Creates detailed story specification files from various inputs (Claude plan, requirement file, prompt, GitHub issue). Discovers project spec conventions at runtime, brainstorms approaches with vertical splitting recommendations for large stories, generates template-compliant specs, checks for over-engineering, and optionally chains to spec-review. Use when: (1) user wants to write a new story spec, (2) converting a plan or requirements into a formal spec, (3) creating specs from GitHub issues, (4) breaking a large feature into shippable vertical slices."
 metadata:
-  version: 2.3.0
+  version: 2.4.0
 ---
 
 # Spec Creator
@@ -242,6 +242,11 @@ Option 3: Ambitious (optional)
 - Complexity: L
 - Key tradeoff: [effort vs completeness]
 ```
+
+**Team Mode (Optional):** When `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is enabled, Phase 2
+research agents and Phase 3 brainstorming agents can be persistent teammates that iterate
+on user feedback via `SendMessage` rather than running as one-shot sub-agents. This allows
+the Feature Scout to refine its research based on real-time Convention Scanner findings.
 
 **Brainstorming rules:**
 - **YAGNI ruthlessly** — strip unnecessary features from all approaches before presenting.

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0] - 2026-03-17
+
+### Added
+
+- **Agent Teams Orchestration section** — when to use Teams (persistent, inter-agent communication) vs Sub-Agents (one-shot, parallel fan-out). Includes team orchestration pattern (TeamCreate → TaskCreate → named teammates → SendMessage → TeamDelete), conditional usage pattern for `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, and complex skill template (teams variant).
+- **"Teams?" column** in "When to Use Agents" table — indicates which signals warrant team-based orchestration
+- **Teams quality checklist** — 4 items covering team mode evaluation, conditional feature flag check, and TeamDelete cleanup
+- **Anti-pattern** — "Using teams for one-shot parallel work" warns that teams add overhead vs sub-agents for independent fan-out
+
 ## [2.4.0] - 2026-03-06
 
 ### Added

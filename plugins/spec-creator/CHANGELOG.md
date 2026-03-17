@@ -2,6 +2,11 @@
 
 All notable changes to spec-creator are documented here.
 
+## [2.4.0] - 2026-03-17
+
+### Added
+- **Team Mode note** — Phase 2/3 agents can be persistent teammates when Agent Teams is enabled, allowing iterative refinement via SendMessage
+
 ## [2.3.0] - 2026-03-16
 
 ### Added

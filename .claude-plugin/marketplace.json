@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Reusable Agent Skills and Plugins for Claude Code",
-    "version": "2026.03.16"
+    "version": "2026.03.17"
   },
   "plugins": [
     {
@@ -48,7 +48,7 @@
       "name": "skill-authoring",
       "source": "./plugins/skill-authoring",
       "description": "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism",
-      "version": "2.2.0"
+      "version": "2.3.0"
     },
     {
       "name": "skill-publishing",
@@ -60,7 +60,7 @@
       "name": "smart-screen-recorder",
       "source": "./plugins/smart-screen-recorder",
       "description": "AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.",
-      "version": "4.2.0"
+      "version": "4.3.0"
     },
     {
       "name": "spec-creator",

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.1.0] - 2026-03-17
+
+### Added
+
+- **Team mode note** — when Agent Teams are enabled and publishing multiple skills, each skill's validation + sync can be assigned to a separate teammate for parallel processing
+
 ## [4.0.0] - 2026-03-13
 
 ### Changed (BREAKING)

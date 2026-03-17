@@ -2,7 +2,7 @@
 name: smart-screen-recorder
 description: "AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor + window bounds, then uses AI vision to analyze the recording, create a zoom script targeting specific UI elements, generate voiceover narration, and produce a polished demo video. Use when: (1) creating product demo videos, (2) recording and polishing UI walkthroughs, (3) turning raw screen recordings into narrated presentations, (4) re-processing existing recordings with different zoom/voiceover."
 metadata:
-  version: 4.2.0
+  version: 4.3.0
 ---
 
 # Smart Screen Recorder
@@ -361,6 +361,41 @@ All agents are NOT user-invocable — spawned by the skill orchestrator.
 | Step 5 | Zoom QA Verifier | Sequential (after Step 4) | zoom-script.json + raw video | Corrected zoom-script.json |
 | Step 7b | Voiceover Timing Fixer | Sequential (after Step 7) | TTS audio files + manifest | Fixed manifest with 0 overlaps |
 | Step 8 | Post-Production Editor | Sequential (after merge) | Final video + zoom/VO scripts | PASS/NEEDS_FIXES/RESHOOT verdict |
+
+## Team Mode (Optional)
+
+When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), the pipeline can use persistent teammates instead of one-shot sub-agents.
+
+### Why Teams Help Here
+
+The standard pipeline launches 5 sequential sub-agents — each starts fresh with no memory of prior phases. Teams change this:
+
+1. **Persistent creative team**: Instead of destroying agents between phases, teammates persist across the session. The Director can refer back to the Storyteller's themes. The QA Verifier can ask the Director about intent behind a zoom target. The Post-Production Editor can request the Timing Fixer to adjust specific segments — all without re-explaining context.
+
+2. **Parallel iteration**: During the preview-feedback cycle (Step 9), multiple teammates can work simultaneously — one regenerating TTS clips for segments the user flagged, while another adjusts zoom targets, and a third rewrites narration for a different section.
+
+3. **Cross-phase communication**: When the Post-Production Editor returns NEEDS_FIXES, it can message the Director directly about which narration segments need rewriting, rather than the orchestrator relaying instructions.
+
+### Team Structure
+
+```
+TeamCreate("demo-production")
+├── storyteller   — brainstorms themes, stays available for creative reference
+├── director      — creates zoom + voiceover scripts, iterates on feedback
+├── qa-verifier   — validates zoom targets, can ask director about intent
+└── Lead orchestrates phases, manages user feedback, coordinates iteration
+```
+
+The Voiceover Timing Fixer and Post-Production Editor roles are handled by the lead or existing teammates, since their work is tightly coupled with the Director's output.
+
+### When to Use Teams vs Sub-Agents
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Single recording, no iteration | Sub-agents (simpler) |
+| Multiple recordings in one session | Teams (reuse creative direction) |
+| Heavy preview-feedback iteration | Teams (parallel fixes) |
+| User wants to re-process with different narrative | Teams (Storyteller remembers previous themes) |
 
 ## Scripts Reference
 
