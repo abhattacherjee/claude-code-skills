@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.5.0
+  version: 2.6.0
 ---
 
 # Skill Authoring
@@ -171,6 +171,22 @@ Orchestrator (coordinates, decides, reports)
   Only sequence agents when one depends on another's output.
 - **Progress reporting** — output status updates between tool calls so the user is never
   left wondering what's happening.
+
+### MCP Tool Constraint (CRITICAL for skills using MCP servers)
+
+**Agent Teams teammates and sub-agents CANNOT call MCP tools.** MCP server connections
+and tool permissions are session-scoped — they don't propagate to tmux panes or child
+agent sessions. When a teammate calls an MCP tool, it shows "Permission request sent to
+team leader" and deadlocks — the lead has no mechanism to approve.
+
+**"Lead Reads, Agents Analyze" pattern:**
+1. The orchestrator/lead reads ALL MCP content in Phase 1 (it has the permissions)
+2. File contents are passed as TEXT in agent prompts — agents analyze text, not MCP resources
+3. Agents must NOT call any `mcp__*` or `ReadMcpResourceTool` tools
+
+This applies to ALL MCP servers (Figma, Sentry, Railway, etc.) and both Agent Teams
+teammates and non-team sub-agents (`Agent` tool calls). Always design skills that use
+MCP data with this constraint in mind.
 
 ### Sub-Agent Design
 
