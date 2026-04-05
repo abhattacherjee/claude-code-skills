@@ -60,9 +60,37 @@ git push -u origin release/$ARGUMENTS
 
 ### 3. CHANGELOG Generation
 
+**If CHANGELOG.md has entries under `## [Unreleased]`:**
+
+Move those entries into a new versioned section. Replace:
+```markdown
+## [Unreleased]
+
+### Added
+- existing entry from feature branches
+...
+```
+
+With:
+```markdown
+## [Unreleased]
+
+## [$ARGUMENTS] - [Current Date]
+
+### Added
+- existing entry from feature branches
+...
+```
+
+The `[Unreleased]` header stays but is now empty. The existing entries move under the new versioned header. Review the entries and supplement with any additional changes from commits since the last tag that aren't already listed.
+
+**If CHANGELOG.md has no entries under `## [Unreleased]`:**
+
 Generate changelog from commits since last tag, grouped by type:
 
 ```markdown
+## [Unreleased]
+
 ## [$ARGUMENTS] - [Current Date]
 
 ### Added

@@ -132,9 +132,34 @@ After tagging and pushing, **always create a GitHub release** with user-friendly
    gh release create $VERSION --title "$VERSION" --notes "<user-friendly notes>"
    ```
 
+### 4b. Post-release develop version bump (release and hotfix only)
+
+After merging back to develop, bump the version to the next patch and ensure `[Unreleased]` is ready for new entries:
+
+1. **Bump version** — run `./scripts/bump-version.sh patch` if the script exists, otherwise manually increment the patch version in the project's version file (package.json, plugin.json, etc.)
+
+2. **Ensure `[Unreleased]` header exists** — check if CHANGELOG.md has an empty `## [Unreleased]` section at the top (above the just-released version). If not, add one:
+   ```markdown
+   ## [Unreleased]
+
+   ## [x.y.z] - date
+   ...
+   ```
+
+3. **Commit** on develop:
+   ```bash
+   git add -A
+   git commit -m "chore(develop): bump version for next development cycle
+
+   Previous release: $VERSION
+
+   Co-Authored-By: Claude <noreply@anthropic.com>"
+   git push origin develop
+   ```
+
 ### 5. Hotfix Branch Finish
 
-Same as release finish but uses hotfix branch name. The tag is the hotfix version (already set on the branch). **Also creates a GitHub release** (step 4a).
+Same as release finish but uses hotfix branch name. The tag is the hotfix version (already set on the branch). **Also creates a GitHub release** (step 4a) and **bumps develop version** (step 4b).
 
 ### 6. Error Handling
 

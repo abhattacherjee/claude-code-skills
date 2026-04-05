@@ -60,8 +60,9 @@ Next Steps:
 1. Start implementing your feature
 2. Make commits using conventional format:
    git commit -m "feat: your changes"
-3. Push changes regularly: git push
-4. When complete, use /finish to merge back to develop
+3. Add CHANGELOG entries under [Unreleased] — never assign a version number on feature branches
+4. Push changes regularly: git push
+5. When complete, use /finish to merge back to develop
 ```
 
 ### 4. Error Handling
