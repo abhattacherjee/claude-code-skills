@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **MCP Tool Constraint section** under Agent & Orchestration Design — documents that Agent Teams teammates and sub-agents cannot call MCP tools (permission deadlock). Provides the "Lead Reads, Agents Analyze" workaround pattern. Applies to all MCP servers (Figma, Sentry, Railway, etc.). Discovered during figma-make-prd skill development where team agents deadlocked on Figma MCP permission requests.
+- **MCP Tool Constraint section** under Agent & Orchestration Design — documents that Agent Teams teammates and sub-agents cannot call MCP tools (permission deadlock). Provides the "Lead Reads, Agents Analyze" workaround pattern. Applies to all MCP servers (Figma, Sentry, Railway, etc.). Discovered during prd-creator skill development where team agents deadlocked on Figma MCP permission requests.
 
 ## [2.5.0] - 2026-03-17
 

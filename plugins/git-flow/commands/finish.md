@@ -112,9 +112,29 @@ git branch -d release/$VERSION
 git push origin --delete release/$VERSION
 ```
 
+### 4a. Create GitHub Release (release and hotfix only)
+
+After tagging and pushing, **always create a GitHub release** with user-friendly notes.
+
+1. **Check previous release format** to match conventions:
+   ```bash
+   gh release view $(git tag --sort=-v:refname | sed -n '2p') --json body --jq '.body' | head -20
+   ```
+
+2. **Generate user-friendly release notes** from the CHANGELOG. Read the `[VERSION]` section
+   from CHANGELOG.md, then rewrite each entry to be product/user-facing:
+   - Remove internal implementation details (file paths, function names, config keys)
+   - Describe what changed from the user's perspective, not what code was modified
+   - Keep the same section headers (### Fixed, ### Added, ### Changed, etc.)
+
+3. **Create the release** matching the format of previous releases:
+   ```bash
+   gh release create $VERSION --title "$VERSION" --notes "<user-friendly notes>"
+   ```
+
 ### 5. Hotfix Branch Finish
 
-Same as release finish but uses hotfix branch name. The tag is the hotfix version (already set on the branch).
+Same as release finish but uses hotfix branch name. The tag is the hotfix version (already set on the branch). **Also creates a GitHub release** (step 4a).
 
 ### 6. Error Handling
 

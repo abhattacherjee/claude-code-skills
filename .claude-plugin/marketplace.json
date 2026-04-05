@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Reusable Agent Skills and Plugins for Claude Code",
-    "version": "2026.03.20"
+    "version": "2026.04.05"
   },
   "plugins": [
     {
