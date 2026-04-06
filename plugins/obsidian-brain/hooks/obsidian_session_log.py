@@ -2,8 +2,10 @@
 """
 obsidian_session_log.py -- SessionEnd hook for obsidian-brain plugin.
 
-Reads the session transcript, writes a raw fallback note to the Obsidian vault,
-then attempts AI summarization to upgrade it. Always exits 0.
+Reads the session transcript and writes a raw note to the Obsidian vault.
+AI summarization is deferred to /recall (SessionEnd hooks are fire-and-forget;
+slow subprocess calls like `claude -p` get killed when the process tree exits).
+Always exits 0.
 """
 
 import datetime
@@ -23,7 +25,6 @@ from obsidian_utils import (  # noqa: E402
     extract_session_metadata,
     extract_tool_uses,
     extract_user_messages,
-    generate_summary,
     is_resumed_session,
     load_config,
     make_filename,
@@ -123,7 +124,6 @@ def _run() -> None:
         return
 
     sessions_folder = config.get("sessions_folder", "claude-sessions")
-    summary_model = config.get("summary_model", "haiku")
     min_messages = config.get("min_messages", 3)
     min_duration = config.get("min_duration_minutes", 2)
 
@@ -169,23 +169,7 @@ def _run() -> None:
     if not write_vault_note(vault_path, sessions_folder, filename, raw_content):
         print("[obsidian-brain] failed to write raw note, aborting", file=sys.stderr)
         return
-    print("[obsidian-brain] raw note written, attempting summarization...", file=sys.stderr)
-
-    # 10. Attempt AI summarization with 15s timeout
-    summary = generate_summary(
-        user_msgs, assistant_msgs, metadata,
-        model=summary_model, timeout=15,
-    )
-
-    # 11. If summary succeeds, overwrite with summarized version
-    if summary:
-        summarized_content = _build_note(session_id, metadata, summary, resumed=resumed)
-        if write_vault_note(vault_path, sessions_folder, filename, summarized_content):
-            print("[obsidian-brain] upgraded to AI summary", file=sys.stderr)
-        else:
-            print("[obsidian-brain] summary write failed, raw note preserved", file=sys.stderr)
-    else:
-        print("[obsidian-brain] summarization failed/timed out, raw note preserved", file=sys.stderr)
+    print("[obsidian-brain] raw note written (summarization deferred to /recall)", file=sys.stderr)
 
 
 if __name__ == "__main__":

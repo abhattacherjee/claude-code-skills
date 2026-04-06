@@ -10,6 +10,8 @@ Extracted from the validated spike (spike_session_log.py) with these changes:
 Every public function catches its own errors and logs to stderr.
 """
 
+from __future__ import annotations
+
 import datetime
 import hashlib
 import json

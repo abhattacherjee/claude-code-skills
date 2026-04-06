@@ -248,8 +248,8 @@ Precede all project sections with a header block that includes a highlights summ
 **Sessions:** $SESSION_COUNT | **Insights:** $INSIGHT_COUNT
 
 ### Highlights
-- **$PROJECT_A** — 1-2 sentence summary of what was accomplished this period
-- **$PROJECT_B** — 1-2 sentence summary of what was accomplished this period
+- **$PROJECT_A** — 1-2 sentences summarizing what was accomplished this period
+- **$PROJECT_B** — 1-2 sentences summarizing what was accomplished this period
 
 ### Key Open Items
 - [ ] $PROJECT_A: $MOST_IMPORTANT_OPEN_ITEM
