@@ -39,6 +39,12 @@
       "version": "2.0.0"
     },
     {
+      "name": "obsidian-brain",
+      "source": "./plugins/obsidian-brain",
+      "description": "Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, and enables project-scoped context resume via structured markdown notes.",
+      "version": "1.5.2"
+    },
+    {
       "name": "product-video-creation",
       "source": "./plugins/product-video-creation",
       "description": "Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.",
