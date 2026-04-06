@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 7 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 7 reusable [Agent Skills](https://agentskills.io) and 13 plugins for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
@@ -28,6 +28,7 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 | [custom-statusline](./plugins/custom-statusline/) | 1.3.0 | 1 | 0 | 4-tier adaptive statusline with icons for folder, git branch, and context usage |
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
 | [git-flow](./plugins/git-flow/) | 2.0.0 | 1 | 5 | Git Flow branching workflow with slash commands and diagnostic tools |
+| [obsidian-brain](./plugins/obsidian-brain/) | 1.5.2 | 11 | 0 | Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, and enables project-scoped context resume via structured markdown notes. |
 | [product-video-creation](./plugins/product-video-creation/) | 2.0.0 | 1 | 0 | Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music. |
 | [skill-authoring](./plugins/skill-authoring/) | 2.3.0 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |
 | [skill-publishing](./plugins/skill-publishing/) | 4.0.0 | 1 | 0 | Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos |

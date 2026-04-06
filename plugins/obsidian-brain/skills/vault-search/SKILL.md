@@ -1,0 +1,120 @@
+---
+name: vault-search
+description: "Searches the Obsidian vault by keyword, tag, or structured query across session and insight notes. Use when: (1) /vault-search command, (2) user asks to find past notes, decisions, or error fixes, (3) user wants to recall something from their vault."
+metadata:
+  version: 1.0.0
+---
+
+# Vault Search
+
+Search the entire Obsidian vault by keyword, tag, or structured field query. Returns ranked results with snippets from both `claude-sessions/` and `claude-insights/` folders.
+
+**Tools needed:** Grep, Read, Bash
+
+## Procedure
+
+Follow these steps exactly. Do not skip steps or reorder them.
+
+### Step 1 — Load config
+
+Read `~/.claude/obsidian-brain-config.json` using the Read tool.
+
+If the file does not exist, tell the user:
+
+> Config not found. Run `/obsidian-setup` first to configure your vault path.
+
+Stop here if config is missing.
+
+Extract `vault_path`, `sessions_folder`, and `insights_folder` from the config. Construct the two search directories:
+
+- `SESSIONS_DIR` = `<vault_path>/<sessions_folder>`
+- `INSIGHTS_DIR` = `<vault_path>/<insights_folder>`
+
+### Step 2 — Parse the query
+
+The user provides a query after `/vault-search`. Determine the search mode:
+
+**Tag mode** — query starts with `#` (e.g. `#claude/topic/auth`):
+- Strip the leading `#`
+- The search target is frontmatter `tags` fields
+- Pattern: the tag string as a literal grep pattern
+- Search only within the first 30 lines of each file (frontmatter region)
+
+**Structured mode** — query contains `key:value` pairs (e.g. `project:api-service type:decision`):
+- Parse each `key:value` pair
+- Each pair maps to a frontmatter field grep: pattern `^key:.*value` (case-insensitive)
+- All pairs must match in the same file (intersection)
+
+**Keyword mode** — everything else (e.g. `jwt refresh`):
+- Treat the entire query as a content search
+- Grep for the full phrase first; if zero results, grep for each word individually and intersect
+
+### Step 3 — Search both folders in parallel
+
+Use the Grep tool (never Bash grep) for all searching. Launch searches across both `SESSIONS_DIR` and `INSIGHTS_DIR` in parallel.
+
+**For tag mode:**
+Run two parallel Grep calls:
+- `Grep(pattern="<tag>", path=SESSIONS_DIR, glob="*.md", output_mode="files_with_matches")`
+- `Grep(pattern="<tag>", path=INSIGHTS_DIR, glob="*.md", output_mode="files_with_matches")`
+
+**For structured mode:**
+For each `key:value` pair, run two parallel Grep calls (one per folder):
+- `Grep(pattern="^<key>:.*<value>", path=<folder>, glob="*.md", output_mode="files_with_matches", -i=true)`
+
+Then intersect results across all pairs — only files matching every pair are kept.
+
+**For keyword mode:**
+Run two parallel Grep calls:
+- `Grep(pattern="<query>", path=SESSIONS_DIR, glob="*.md", output_mode="files_with_matches", -i=true)`
+- `Grep(pattern="<query>", path=INSIGHTS_DIR, glob="*.md", output_mode="files_with_matches", -i=true)`
+
+If zero results and query has multiple words, retry by grepping each word separately and intersecting the file lists.
+
+### Step 4 — Extract metadata from matches
+
+For each matched file (up to 20 files), use Read to read the first 40 lines. Extract from frontmatter:
+
+- **date** — the `date:` field
+- **type** — the `type:` field (e.g. `claude-session`, `claude-insight`, `claude-decision`, `claude-error-fix`)
+- **project** — the `project:` field
+- **title** — the first `# ` heading, or the filename without extension
+
+Also extract a **snippet**: the first 200 characters of content after the frontmatter closing `---`.
+
+If there are more than 20 matched files, sort by filename (which contains the date in YYYY-MM-DD format) descending and take only the 20 most recent.
+
+**Performance note:** If there are 10 or fewer matches, read all files in parallel. If there are 11-20, read in two parallel batches.
+
+### Step 5 — Sort and present results
+
+Sort results by date descending (most recent first). Present in this format:
+
+```
+Found <N> notes matching "<query>":
+
+1. <icon> <title> (<type-label>, <date>)
+   "<snippet>..."
+
+2. <icon> <title> (<type-label>, <date>)
+   "<snippet>..."
+```
+
+Use these icons for type labels:
+- `claude-session` → session
+- `claude-insight` → insight
+- `claude-decision` → decision
+- `claude-error-fix` → error-fix
+- anything else → note
+
+Truncate snippets at 200 characters, ending with `...` if truncated.
+
+After the list, tell the user:
+
+> Pick a number to load the full note, or refine your search.
+
+### Step 6 — Handle user selection
+
+If the user picks a number, read the full content of that file using the Read tool and present it in the conversation.
+
+If the user provides a new query, go back to Step 2.
