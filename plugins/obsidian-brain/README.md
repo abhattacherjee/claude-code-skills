@@ -78,6 +78,7 @@ Run `/obsidian-setup` after installation. It will:
 | `/link` | Cross-reference related notes with bidirectional wikilinks |
 | `/retro` | Session retrospective — what worked, what didn't, process improvements |
 | `/vault-ask` | Ask questions and get synthesized answers grounded in vault history |
+| `/check-items` | Cross-project sweep for completed open items — auto-checks off matches after user confirmation |
 
 ### Usage Examples
 
@@ -119,6 +120,12 @@ Run `/obsidian-setup` after installation. It will:
 
 # Ask a question across all vault history
 /vault-ask what patterns have I used for error handling?
+
+# Sweep open items across all projects (default 14-day evidence window)
+/check-items
+
+# Sweep with a 30-day evidence window
+/check-items 30d
 ```
 
 ## Auto-Logging
@@ -165,7 +172,7 @@ Stores hand-picked insights you save via `/compress`, `/decide`, and `/error-log
 
 Contains Obsidian Dataview dashboard templates that auto-update as notes are added. These are for browsing your vault visually in Obsidian — they don't get loaded into Claude Code sessions.
 
-**Dashboards included:** Sessions Overview (recent activity across all projects), Project Index (sessions grouped by project), Weekly Review (this week's activity).
+**Dashboards included:** Sessions Overview, Project Index, Weekly Review, Learning Velocity, Decision Timeline, Open Items. See the [Dataview Dashboards](#dataview-dashboards) section below for descriptions.
 
 **Requires:** [Dataview](https://github.com/blacksmithgu/obsidian-dataview) community plugin with JavaScript Queries enabled.
 
@@ -204,13 +211,14 @@ All tags use the `claude/` prefix to separate from your existing vault tags:
 
 ## Dataview Dashboards
 
-Five dashboard templates are installed to `claude-dashboards/`:
+Six dashboard templates are installed to `claude-dashboards/`:
 
 - **Sessions Overview** — recent sessions, insights, and active decisions across all projects
 - **Project Index** — sessions grouped by project with counts and date ranges
 - **Weekly Review** — this week's activity
 - **Learning Velocity** — topic frequency from curated insights, recent retrospectives, and error patterns
 - **Decision Timeline** — chronological view of all decisions with active/superseded status tracking
+- **Open Items** — cross-project view of all unchecked `- [ ]` items from session notes' Open Questions sections, scoped to the last 90 days
 
 These use [Dataview](https://github.com/blacksmithgu/obsidian-dataview) queries that auto-update as new notes are added.
 

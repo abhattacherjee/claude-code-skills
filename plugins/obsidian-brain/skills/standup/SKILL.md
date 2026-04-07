@@ -1,8 +1,8 @@
 ---
 name: standup
-description: "Generates daily/weekly standup summaries across all projects from the Obsidian vault. Use when: (1) /standup for today's summary, (2) /standup this week for weekly summary, (3) /standup <date range> for custom range."
+description: "Generates daily/weekly standup summaries across all projects from the Obsidian vault. Includes a Closed This Period section listing items checked off during the window, grouped by project. Use when: (1) /standup for today's summary, (2) /standup this week for weekly summary, (3) /standup <date range> for custom range."
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Standup — Generate Standup Summaries from Obsidian Vault
@@ -198,6 +198,17 @@ When multiple notes need sub-agent reads, spawn them in parallel (one sub-agent 
 
 From each note (whether read directly or via sub-agent), extract: project name (from frontmatter `project:` field), note type (`type:` field), date, title (first `# Heading`), summary (content of `## Summary` section), decisions (bullets from `## Key Decisions`), errors resolved (bullets from `## Errors Encountered`), open items (checkboxes from `## Open Questions / Next Steps`), and the filename (for wikilinks).
 
+**Also extract closed items for the "Closed This Period" section:** For each session note in the date range, get the file modification time as a YYYY-MM-DD string (in the local timezone, matching how `START_DATE` and `END_DATE` were calculated):
+
+```bash
+# Get mtime as epoch, then format. Both forms work cross-platform.
+MTIME_DATE=$(date -r "$file" +%Y-%m-%d 2>/dev/null || date -d @"$(stat -c %Y "$file")" +%Y-%m-%d)
+```
+
+The first form (`date -r FILE`) works on macOS. The Linux fallback uses `stat -c %Y` for the epoch then `date -d @EPOCH` to format. Both produce a YYYY-MM-DD string in the local timezone, which matches the format of `START_DATE` and `END_DATE`.
+
+If `MTIME_DATE` is lexicographically within the range (`MTIME_DATE >= START_DATE && MTIME_DATE <= END_DATE`), Grep the file for `- \[x\]` lines under the `## Open Questions / Next Steps` section using the same line-range verification as for open items. Collect `(project, item_text)` tuples for each checked item.
+
 Collect all distilled records as `NOTE_DATA`.
 
 ### Step 8 — Group by project
@@ -255,6 +266,23 @@ Precede all project sections with a header block that includes a highlights summ
 - [ ] $PROJECT_A: $MOST_IMPORTANT_OPEN_ITEM
 - [ ] $PROJECT_B: $MOST_IMPORTANT_OPEN_ITEM
 ```
+
+### Closed This Period
+
+For each project that had at least one item closed within the standup window, render:
+
+- **<project name>** (<N> closed)
+  - <item text 1>
+  - <item text 2>
+  - ...
+
+After the list, append this footnote on its own line in italics:
+
+> _Detected via file modification time — may include items checked off earlier if a session note was edited during this window for unrelated reasons._
+
+If zero items were closed across all projects, **omit this entire section** — do not render an empty header or the footnote.
+
+Order projects alphabetically. Within each project, preserve the order items were extracted (file mtime descending — newest checkoffs first).
 
 Rules for the header sections:
 - **Highlights:** Include only projects with substantive work (skip vault-import-only or config-tweak sessions). Write 1-2 sentences per project summarizing the outcome, not the process. Order by impact/significance, not alphabetically.
