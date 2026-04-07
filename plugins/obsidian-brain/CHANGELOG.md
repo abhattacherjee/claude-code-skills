@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-04-07
+
+### Fixed
+- `/recall` now produces accurate summaries for long sessions. Previously the raw session note was truncated to ~40 conversation turns and `/recall` summarized only that slice; now `/recall` deterministically locates the original Claude Code transcript JSONL by `session_id` and re-parses it when it has more data than the raw note. Very large transcripts (>5 MB) are sliced into head+tail halves with an explicit warning surfaced to the user. Falls back gracefully when the JSONL is no longer on disk.
+
+### Changed
+- Raw session notes now keep more context standalone — `build_raw_fallback()` caps bumped: 120 conversation turns (was 40), 1200 chars per message (was 600), 80 tool uses (was 30), 60 files touched (was 30), 30 errors (was 15). Typical sessions remain self-contained without needing the JSONL fallback.
+
 ## [1.6.0] - 2026-04-07
 
 ### Added

@@ -41,9 +41,9 @@ basename "$(pwd)"
 
 Store as `PROJECT`. Normalize: lowercase, hyphens for spaces.
 
-### Step 3 — Summarize unsummarized notes (deferred summarization)
+### Step 3 — Summarize unsummarized notes (deferred summarization, truncation-aware)
 
-This is the critical upgrade step. Search for raw/unsummarized session notes matching this project.
+This is the critical upgrade step. Search for raw/unsummarized session notes matching this project, and prefer the original Claude Code transcript JSONL over the truncated raw note when the JSONL has more data.
 
 Use Grep to find notes containing the "AI summary unavailable" marker in the sessions folder:
 
@@ -63,29 +63,68 @@ output_mode: content
 
 For each file that matches BOTH conditions (unsummarized AND belongs to this project):
 
-1. **Read the full file** using the Read tool.
-2. **Extract frontmatter** — preserve it exactly as-is (everything between the opening `---` and closing `---`).
-3. **Extract the full conversation** — look for all content after frontmatter. The raw note now includes:
-   - `## Conversation (raw)` — interleaved user and assistant messages
-   - `## Tool Usage` — commands run, files edited, searches performed
-   - `## Changes Made` — files touched (from tool_use extraction)
-   - `## Errors Encountered` — errors from tool results
-   Read ALL of these sections — they provide the context needed for a high-quality summary.
+1. **Read the raw note in full** with the Read tool. Preserve frontmatter exactly. Extract the `session_id` value from the frontmatter and **store it as `SESSION_ID`** — the Bash snippet in sub-step 3 references this exact variable name.
 
-4. **Generate a detailed, specific summary** from the raw content. Be precise — include file paths, function names, config values, and technical specifics. Produce these sections:
-   - `## Summary` — 3-5 sentence overview. Include: what problem was being solved, what approach was taken, what was the outcome. Name specific technologies, files, and patterns.
-   - `## Key Decisions` — Bulleted list with rationale. Each bullet should explain the decision AND why it was made (e.g., "Chose Redis over Memcached for session store — needed TTL per key for token expiry"). If none, write "None noted."
-   - `## Changes Made` — Bulleted list with file paths and descriptions. Be specific: "Modified `src/auth/handler.ts` — added JWT refresh token rotation with 15min access / 7day refresh windows". Include commit messages if visible. If none, write "None noted."
-   - `## Errors Encountered` — Bulleted list with error messages, root causes, AND fixes. Be specific: "`TypeError: Cannot read property 'token' of undefined` in handler.ts:42 — caused by null user object when session expired, fixed with optional chaining". If none, write "None."
-   - `## Open Questions / Next Steps` — Checkbox list of specific, actionable items. Not vague ("improve performance") but concrete ("Add rate limiting to /api/auth/refresh endpoint, max 10 req/min per user"). If none, write "None."
-5. **Preserve the Session Metadata section** at the bottom if it exists (commits, files touched).
-6. **Write the upgraded note** using the Write tool — same file path. The structure must be:
-   - Original frontmatter (unchanged)
+2. **No raw-note turn count needed.** Earlier revisions of this skill counted `^\*\*User:\*\*` / `^\*\*Assistant:\*\*` markers in the raw note to detect truncation, but that count is unreliable. The raw fallback's `## Conversation (raw)` section filters out system noise (`<task-notification>`, `<local-command…>`, "Base directory for this skill:", …) before emitting a `**User:**` line. Its `turn` counter is incremented whenever a `**User:**` OR `**Assistant:**` line is actually written, with user lines sometimes skipped due to noise filtering. So the marker count in a written raw note does not necessarily correspond to the underlying user/assistant message count in the transcript — filtered user messages are invisible. Use the shared `raw_note_max_turns` constant returned by the helper in sub-step 3 instead — it is the only deterministic truncation signal.
+
+3. **Locate the source JSONL and re-parse it in one shot.** Invoke the helper via argv (no shell interpolation of paths — pass `SESSION_ID` as an argument so session_ids with unusual characters cannot break the quoting). The parsed JSON is printed directly to stdout — no temp files, no traps:
+
+   Run the following Bash command from the obsidian-brain project root. It prints the parsed transcript JSON **directly to stdout** — no temp files, no traps, no `$TMPFILE` that would need to persist across tool invocations. Capture the stdout from the Bash tool result in the next step:
+
+   ```bash
+   cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+   python3 -c '
+   import sys, json
+   sys.path.insert(0, "hooks")
+   from obsidian_utils import find_transcript_jsonl, parse_full_transcript, RAW_NOTE_MAX_TURNS
+   p = find_transcript_jsonl(sys.argv[1])
+   if p is None:
+       # Emit the same schema as the success branch so downstream steps
+       # do not need to special-case missing fields. All fields present,
+       # lists empty, booleans False.
+       print(json.dumps({
+           "jsonl_path": None,
+           "user_msgs": [], "assistant_msgs": [], "tool_uses": [],
+           "files_touched": [], "errors": [],
+           "truncated": False,
+           "warnings": [],
+           "raw_note_max_turns": RAW_NOTE_MAX_TURNS,
+           "raw_note_would_truncate": False,
+       }))
+   else:
+       data = parse_full_transcript(p)
+       data["jsonl_path"] = str(p)
+       print(json.dumps(data))
+   ' "$SESSION_ID"
+   ```
+
+   The Bash tool's stdout result is the JSON payload. Parse it directly from the tool response — it contains either `{"jsonl_path": null}` (not found) or the full parsed transcript plus `jsonl_path`, `truncated`, and `warnings`. Very large transcripts can produce multi-MB JSON; if the Bash tool truncates the output, fall back to writing to a known path such as `$VAULT_PATH/.obsidian-brain-transcript-cache.json` and reading it with the Read tool (this file is not in the vault's git repo and is safe to overwrite).
+
+4. **Decide which source to summarize from.** Two independent signals mean "raw note is incomplete":
+   - **`raw_note_would_truncate: true`** — `parse_full_transcript` simulates the exact same write loop as `build_raw_fallback` (including the system-noise filter that skips filtered user messages without incrementing the cap counter). This field is true iff that simulation would have bailed on the cap before consuming all messages. It is the fully deterministic signal — immune to false positives from noise filtering or false negatives from cap drift.
+   - **`truncated: true`** — the transcript exceeded the 5 MB byte budget and was sliced into head+tail halves. In that case some real content is missing from the middle regardless of the cap simulation, so this must be OR'd with the cap signal.
+
+   Decision branches:
+   - **`jsonl_path` is null** → use the raw note as the input. Append to the Summary section: `_(Source transcript not found on disk — summary built from the raw session note; fidelity depends on whether the raw note was itself capped at write time.)_`
+   - **`jsonl_path` is set AND (`raw_note_would_truncate == true` OR `truncated == true`)** → re-parse path engages. Use the parsed `user_msgs`, `assistant_msgs`, `tool_uses`, `files_touched`, and `errors` as the summarization input. If `truncated == true`, note that the summary reflects only the head and tail of the transcript.
+   - **`jsonl_path` is set AND `raw_note_would_truncate == false` AND `truncated == false`** → the raw note captured everything; use it instead.
+   - **If the parsed data's `warnings` list is non-empty** (regardless of which branch), prepend a visible callout section `## ⚠️ Transcript re-parse warnings` at the top of the upgraded note (above `# <title>`), listing each warning as a bullet. This surfaces partial-line losses, malformed JSONL records, unknown block types, and byte-budget slicing so the user knows what's in the summary and what isn't.
+
+5. **Generate a detailed, specific summary** from whichever input source was chosen above. Be precise — include file paths, function names, config values, and technical specifics. Produce these sections (unchanged from before):
+   - `## Summary` — 3-5 sentences
+   - `## Key Decisions` — bulleted list with rationale
+   - `## Changes Made` — bulleted list with file paths
+   - `## Errors Encountered` — bulleted list with messages, root causes, fixes
+   - `## Open Questions / Next Steps` — checkbox list of concrete actionable items
+
+6. **Write the upgraded note** with the Write tool to the same file path. Preserve original frontmatter unchanged but flip `status: auto-logged` to `status: summarized`. Structure:
+   - Original frontmatter (unchanged except `status`)
    - `# <title from original note>`
-   - The five summary sections generated above
-   - The Session Metadata section (if it existed)
+   - The five summary sections
+   - The existing `## Tool Usage` / `## Changes Made` / `## Errors Encountered` / `## Conversation (raw)` sections from the raw note (preserve them as the audit trail — only the leading summary changes)
+   - The Session Metadata section if present
 
-**Important:** Do NOT modify frontmatter. Do NOT change the filename. Do NOT add or remove tags.
+**Important:** Do NOT modify frontmatter fields other than `status`. Do NOT change the filename. Do NOT add or remove tags.
 
 If no unsummarized notes are found for this project, skip to Step 4.
 
