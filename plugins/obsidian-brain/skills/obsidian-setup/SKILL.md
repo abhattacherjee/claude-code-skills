@@ -2,7 +2,7 @@
 name: obsidian-setup
 description: "First-run configuration and upgrade for the Obsidian Brain plugin. Sets up vault path, creates folders, copies dashboard templates, configures hookify nudges, and writes config. Idempotent — safe to re-run to pick up new features without overwriting existing config or dashboards. Use when: (1) first time installing obsidian-brain, (2) changing vault path, (3) /obsidian-setup command, (4) upgrading to a new version."
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
 # Obsidian Brain Setup
@@ -47,6 +47,45 @@ If **cancel**: stop here.
 
 **If the file does not exist or is invalid JSON**: store `MODE=fresh`. Proceed to Step 2 (Ask for vault path) — first-time setup.
 
+### Step 1.5 — Permission pre-flight check
+
+Before any out-of-workspace writes, test whether Claude Code can write to `~/.claude/`:
+
+```bash
+echo "test" > ~/.claude/.obsidian-brain-canary 2>&1 && rm -f ~/.claude/.obsidian-brain-canary && echo "OK" || echo "FAIL"
+```
+
+If **OK**: proceed silently to Step 2.
+
+If **FAIL**: present the following message using AskUserQuestion:
+
+> **Heads up — setup needs write access outside this project directory.**
+>
+> Obsidian Brain writes config to `~/.claude/` and notes to your Obsidian vault. Your current Claude Code permissions block writes outside the working directory.
+>
+> Choose how to fix this:
+>
+> 1. **Switch permission mode (recommended)** — Press `Shift+Tab` to switch to "accept edits" mode for this session. Or use `/config` to change `permissions.defaultMode` permanently. Then re-run `/obsidian-setup`.
+>
+> 2. **Whitelist paths permanently** — Add `$HOME/.claude` and your vault's parent directory to `sandbox.filesystem.allowWrite` in `~/.claude/settings.json`. **Use absolute paths** — `~` is not expanded inside JSON string values:
+>    ```json
+>    {
+>      "sandbox": {
+>        "filesystem": {
+>          "allowWrite": ["/Users/you/.claude", "/Users/you/Documents/vault-parent"]
+>        }
+>      }
+>    }
+>    ```
+>    Replace `/Users/you` with your actual home directory (run `echo $HOME` to find it). Then re-run `/obsidian-setup`.
+>
+> 3. **I'll handle it myself** — Continue setup and approve or fix writes as they come up.
+
+**Behavior per option:**
+- **Option 1:** Print the instruction, then stop. User changes mode and re-runs `/obsidian-setup`.
+- **Option 2:** Print the JSON snippet with absolute paths. In upgrade mode (`MODE=upgrade`), substitute the known vault parent path from the existing config. In fresh mode, show only the `$HOME/.claude` entry with a note that the vault parent must be added after the user provides the vault path. Then stop. User edits settings and re-runs.
+- **Option 3:** Continue with setup as normal. Writes may fail and the user deals with each one.
+
 ### Step 2 — Ask for vault path
 
 Ask the user:
@@ -81,7 +120,19 @@ Continue regardless — this is a warning, not a blocker.
 
 ### Step 5 — Create vault folders
 
-Run:
+First, test that the vault path is writable:
+
+```bash
+echo "test" > "$VAULT_PATH/.obsidian-brain-canary" 2>&1 && rm -f "$VAULT_PATH/.obsidian-brain-canary" && echo "OK" || echo "FAIL"
+```
+
+If **FAIL**, tell the user:
+
+> **Cannot write to your vault at `$VAULT_PATH`.** This is likely a sandbox restriction. Add your vault's parent directory to `sandbox.filesystem.allowWrite` in `~/.claude/settings.json`, or switch to "accept edits" mode (`Shift+Tab`), then re-run `/obsidian-setup`.
+
+Stop here if FAIL.
+
+If **OK**, create the folders:
 
 ```bash
 mkdir -p "$VAULT_PATH/claude-sessions" "$VAULT_PATH/claude-insights" "$VAULT_PATH/claude-dashboards"

@@ -126,10 +126,9 @@ Run `/obsidian-setup` after installation. It will:
 Sessions are automatically logged to your vault on every session end (via hooks). No manual action needed. The hook:
 
 1. Reads the session transcript
-2. Writes a raw session note immediately (guaranteed)
-3. Attempts `claude -p --model haiku` summarization with 15s timeout (best-effort)
-4. Falls back to raw data extraction if summarization fails
-5. Unsummarized notes are upgraded when `/recall` is invoked
+2. Extracts metadata, user/assistant messages, and tool usage
+3. Writes a raw session note immediately (guaranteed, fast)
+4. Unsummarized notes are upgraded with AI summaries when `/recall` is invoked
 
 **Smart filtering:** Sessions with fewer than 3 user messages or shorter than 2 minutes are skipped.
 
@@ -238,6 +237,44 @@ Machine-local config at `~/.claude/obsidian-brain-config.json`:
 
 - **Obsidian Sync:** Works seamlessly — all vault writes are new markdown files (no conflict risk). Config lives at `~/.claude/` (machine-local, outside the vault).
 - **New machine setup:** Install the plugin, run `/obsidian-setup` with your vault path on that machine.
+
+## Troubleshooting
+
+### Setup fails silently / writes not working
+
+**Symptom:** `/obsidian-setup` appears to complete but config file, vault folders, or dashboards were not created.
+
+**Cause:** Claude Code's permission mode or filesystem sandbox is blocking writes outside the working directory.
+
+**Fix:** Press `Shift+Tab` and switch to "accept edits" mode, then re-run `/obsidian-setup`. For a permanent fix, use `/config` to change `permissions.defaultMode`, or add paths to `sandbox.filesystem.allowWrite` in `~/.claude/settings.json`. **Use absolute paths** — `~` is not expanded inside JSON string values:
+
+```json
+{
+  "sandbox": {
+    "filesystem": {
+      "allowWrite": ["/Users/you/.claude", "/Users/you/Documents/vault-parent"]
+    }
+  }
+}
+```
+
+Replace `/Users/you` with your actual home directory (run `echo $HOME` to find it).
+
+### `python` not found on macOS
+
+**Symptom:** Hook scripts fail with "command not found: python".
+
+**Cause:** macOS ships `python3`, not `python`.
+
+**Fix:** The hooks use `python3` by default. If you see this error, check that `python3` is on your PATH (`which python3`). Install via Xcode Command Line Tools (`xcode-select --install`) or Homebrew (`brew install python`).
+
+### Vault path not writable
+
+**Symptom:** Setup reports the vault path is not writable, or session notes fail to save.
+
+**Cause:** Directory permissions, Obsidian Sync lock files, or cloud sync conflicts.
+
+**Fix:** Check `ls -la` on the vault directory. Ensure your user owns it and has write permission. If using Obsidian Sync or iCloud, ensure the sync agent isn't locking files during writes.
 
 ## Architecture
 
