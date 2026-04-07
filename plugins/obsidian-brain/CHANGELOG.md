@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-04-07
+
+### Added
+- **`commit-preflight.sh` plugin manifest version sync check** — Preflight now parses `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` and fails the commit if the registry pointer version drifts from the actual plugin version. Prevents the class of bug where the marketplace listing advertises a stale version to users.
+- **`bump-version.sh` auto-updates `marketplace.json`** — Running `./scripts/bump-version.sh <type>` now updates every matching plugin entry in `marketplace.json` alongside `plugin.json`, so release-branch bumps stay in lockstep by default.
+
+### Fixed
+- Bumped `.claude-plugin/marketplace.json` plugin version from stale `1.1.0` to `1.6.1` so the marketplace registry pointer matches the actually published plugin version.
+
+### Changed
+- **`/recall` Step 3 hardened against skipping** — Added an explicit mandatory-step callout, large-note chunked-read handling (Read token-limit errors are not a skip signal), missing-JSONL fallback clarification, and a required one-line status emission (`Step 3: processing N unsummarized note(s)` / `no unsummarized notes`) so the upgrade decision is auditable in the tool trace. Fixes the failure mode where `/recall` silently skipped unsummarized notes under execution momentum.
+
 ## [1.6.1] - 2026-04-07
 
 ### Fixed
