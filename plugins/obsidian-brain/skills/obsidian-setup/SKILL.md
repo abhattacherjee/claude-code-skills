@@ -17,13 +17,24 @@ Follow these steps exactly. Do not skip steps or reorder them.
 
 ### Step 1 — Check for existing installation
 
-Read `~/.claude/obsidian-brain-config.json`:
+Check for existing config:
 
 ```bash
-cat ~/.claude/obsidian-brain-config.json 2>/dev/null
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys
+sys.path.insert(0, "hooks")
+from obsidian_utils import load_config
+c = load_config()
+vp = c.get("vault_path", "")
+if vp:
+    print(f"EXISTING VAULT={vp} SESS={c.get(\"sessions_folder\",\"claude-sessions\")} INS={c.get(\"insights_folder\",\"claude-insights\")} DASH={c.get(\"dashboards_folder\",\"claude-dashboards\")}")
+else:
+    print("NO_CONFIG")
+'
 ```
 
-**If the file exists and is valid JSON**, extract `vault_path` and present:
+**If the output starts with `EXISTING`**, extract `VAULT_PATH` and present:
 
 > **Existing obsidian-brain installation detected.**
 > - Vault path: `<vault_path from config>`
@@ -45,7 +56,7 @@ If **reconfigure**: store `MODE=reconfigure`. Proceed to Step 2 (Ask for vault p
 
 If **cancel**: stop here.
 
-**If the file does not exist or is invalid JSON**: store `MODE=fresh`. Proceed to Step 2 (Ask for vault path) — first-time setup.
+**If the output is `NO_CONFIG`**: store `MODE=fresh`. Proceed to Step 2 (Ask for vault path) — first-time setup.
 
 ### Step 1.5 — Permission pre-flight check
 

@@ -145,6 +145,8 @@ def _run() -> None:
 
     # 6. Extract metadata
     metadata = extract_session_metadata(messages, cwd)
+    metadata["vault_path"] = vault_path
+    metadata["sessions_folder"] = sessions_folder
 
     # Re-check with actual duration
     if should_skip_session(user_msgs, metadata["duration_minutes"],

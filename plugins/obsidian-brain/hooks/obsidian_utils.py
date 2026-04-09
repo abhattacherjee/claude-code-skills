@@ -22,6 +22,119 @@ import sys
 import tempfile
 from pathlib import Path
 
+# --- Session-scoped cache ---
+# File-based cache at /tmp/.obsidian-brain-cache-{session_id}.json
+# Avoids repeated vault scans when multiple skills run in one session.
+
+_CACHE_PREFIX = '/tmp/.obsidian-brain-cache-'
+_BOOTSTRAP_PREFIX = '/tmp/.obsidian-brain-sid-'
+
+
+def _get_session_id_fast() -> str:
+    """Derive session ID, using bootstrap file for speed on repeat calls."""
+    project = os.path.basename(os.getcwd())
+    bootstrap = f"{_BOOTSTRAP_PREFIX}{project}"
+
+    # Try bootstrap file first (~0.1ms)
+    try:
+        with open(bootstrap, 'r') as f:
+            cached_sid = f.read().strip()
+        if cached_sid:
+            # Cheap validation: check the JSONL file still exists (~0.1ms stat)
+            import glob as _glob
+            pattern = os.path.expanduser(f"~/.claude/projects/*{project}/{cached_sid}.jsonl")
+            if _glob.glob(pattern):
+                return cached_sid
+    except OSError:
+        pass
+
+    # Fall back to full glob + mtime sort (~5ms)
+    import glob as _glob
+    pattern = os.path.expanduser(f"~/.claude/projects/*{project}/*.jsonl")
+    matches = _glob.glob(pattern)
+    if not matches:
+        return "unknown"
+    newest = max(matches, key=os.path.getmtime)
+    sid = os.path.splitext(os.path.basename(newest))[0]
+
+    # Write bootstrap for next call
+    try:
+        with open(bootstrap, 'w') as f:
+            f.write(sid)
+    except OSError:
+        pass
+
+    return sid
+
+
+def cache_get(session_id: str, key: str):
+    """Read a key from the session cache. Returns None on miss."""
+    cache_path = f"{_CACHE_PREFIX}{session_id}.json"
+    try:
+        with open(cache_path, 'r') as f:
+            data = json.load(f)
+        return data.get(key)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def cache_set(session_id: str, key: str, value) -> None:
+    """Write a key to the session cache. Atomic write."""
+    cache_path = f"{_CACHE_PREFIX}{session_id}.json"
+    try:
+        with open(cache_path, 'r') as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        if isinstance(exc, json.JSONDecodeError):
+            print(f"[obsidian-brain] cache corrupted, resetting: {exc}", file=sys.stderr)
+        data = {}
+
+    data[key] = value
+
+    fd, tmp = tempfile.mkstemp(prefix='.ob-cache-', suffix='.json.tmp', dir='/tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f)
+        os.replace(tmp, cache_path)
+    except OSError as exc:
+        print(f"[obsidian-brain] cache write failed: {exc}", file=sys.stderr)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def cache_invalidate(session_id: str, *keys: str) -> None:
+    """Remove specific keys from cache. No keys = clear all."""
+    cache_path = f"{_CACHE_PREFIX}{session_id}.json"
+    if not keys:
+        try:
+            os.unlink(cache_path)
+        except OSError:
+            pass
+        return
+
+    try:
+        with open(cache_path, 'r') as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+
+    for k in keys:
+        data.pop(k, None)
+
+    fd, tmp = tempfile.mkstemp(prefix='.ob-cache-', suffix='.json.tmp', dir='/tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f)
+        os.replace(tmp, cache_path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Default configuration
 # ---------------------------------------------------------------------------
@@ -55,7 +168,16 @@ _DEFAULTS: dict = {
 
 
 def load_config() -> dict:
-    """Read ~/.claude/obsidian-brain-config.json, returning defaults for missing keys."""
+    """Read ~/.claude/obsidian-brain-config.json, returning defaults for missing keys.
+
+    Session-scoped caching: first call loads from disk and writes to cache;
+    subsequent calls within the same session hit the cache.
+    """
+    sid = _get_session_id_fast()
+    cached = cache_get(sid, "config")
+    if cached is not None:
+        return cached
+
     config = dict(_DEFAULTS)
     try:
         with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
@@ -72,7 +194,207 @@ def load_config() -> dict:
             f"[obsidian-brain] error reading config: {exc}, using defaults",
             file=sys.stderr,
         )
+
+    cache_set(sid, "config", config)
     return config
+
+
+def get_session_context(vault_path: str | None = None, sessions_folder: str | None = None) -> dict:
+    """Get session ID, hash, project, and session note name. Cached.
+
+    Returns {session_id, hash, project, session_note_name} or
+    {session_id: 'unknown', hash: '', project: <cwd basename>, session_note_name: ''}.
+    """
+    sid = _get_session_id_fast()
+    # Include args in cache key so different call signatures don't collide
+    cache_key = f"session_context:{vault_path or ''}:{sessions_folder or ''}"
+    cached = cache_get(sid, cache_key)
+    if cached is not None:
+        return cached
+
+    project = os.path.basename(os.getcwd()).lower().replace(' ', '-')
+    if sid == "unknown":
+        # Don't cache "unknown" — would pollute cache shared across projects
+        return {"session_id": "unknown", "hash": "", "project": project, "session_note_name": ""}
+
+    h = hashlib.sha256(sid.encode()).hexdigest()[:4]
+
+    session_note_name = ""
+    if vault_path and sessions_folder:
+        sessions_dir = os.path.join(vault_path, sessions_folder)
+        if os.path.isdir(sessions_dir):
+            for fname in os.listdir(sessions_dir):
+                if fname.endswith(f'-{h}.md'):
+                    session_note_name = fname[:-3]  # strip .md
+                    break
+
+    # If not found, construct expected name
+    if not session_note_name:
+        from datetime import date
+        session_note_name = f"{date.today().isoformat()}-{project}-{h}"
+
+    ctx = {"session_id": sid, "hash": h, "project": project, "session_note_name": session_note_name}
+    cache_set(sid, cache_key, ctx)
+    return ctx
+
+
+def read_note_metadata(file_path: str) -> dict | None:
+    """Parse YAML frontmatter from a vault note. Returns dict or None.
+
+    Reads first 40 lines, extracts fields between --- markers.
+    Cached per file path within the session.
+    """
+    sid = _get_session_id_fast()
+    cache_key = f"metadata:{file_path}"
+    _CACHE_SENTINEL = {"__no_frontmatter__": True}
+    cached = cache_get(sid, cache_key)
+    if cached is not None:
+        return None if cached == _CACHE_SENTINEL else cached
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = []
+            for i, line in enumerate(f):
+                if i >= 40:
+                    break
+                lines.append(line)
+    except OSError:
+        return None
+
+    if not lines or lines[0].strip() != '---':
+        cache_set(sid, cache_key, _CACHE_SENTINEL)
+        return None
+
+    meta: dict = {}
+    tags: list[str] = []
+    in_tags = False
+
+    for line in lines[1:]:
+        stripped = line.strip()
+        if stripped == '---':
+            break
+        if stripped.startswith('- ') and in_tags:
+            tags.append(stripped[2:].strip())
+            continue
+        in_tags = False
+        if ':' in stripped:
+            key, _, val = stripped.partition(':')
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key == 'tags':
+                in_tags = True
+                continue
+            meta[key] = val
+
+    if tags:
+        meta['tags'] = tags
+
+    cache_set(sid, cache_key, meta)
+    return meta
+
+
+def match_items_against_evidence(
+    evidence_text: str,
+    open_items: list[tuple[str, int, str]],
+) -> list[dict]:
+    """Match open items against evidence prose for completion detection.
+
+    Different from find_duplicates() — this matches items (short checkbox
+    lines) against free-form text (summaries, changelogs, commit messages).
+
+    Returns [{"file": f, "line": l, "text": t, "evidence": snippet, "confidence": score}]
+    for items that appear to be completed based on the evidence.
+    """
+    try:
+        _hooks_dir = os.path.dirname(os.path.abspath(__file__))
+        if _hooks_dir not in sys.path:
+            sys.path.insert(0, _hooks_dir)
+        from open_item_dedup import (
+            _strip_markdown, _extract_distinctive_tokens, _tokenize,
+            _COMPLETION_PHRASES,
+        )
+    except ImportError as exc:
+        print(f"[obsidian-brain] match_items: import failed: {exc}", file=sys.stderr)
+        return []
+
+    if not evidence_text.strip():
+        return []
+
+    evidence_lower = evidence_text.lower()
+    evidence_tokens = _tokenize(evidence_text)
+    candidates: list[dict] = []
+
+    for fpath, line_num, item_text in open_items:
+        cleaned = _strip_markdown(item_text)
+        distinctive = _extract_distinctive_tokens(cleaned)
+        tokens = _tokenize(cleaned)
+
+        # Score: distinctive tokens get higher weight
+        score = 0
+        match_positions: list[int] = []
+
+        # Check distinctive tokens
+        for dt in distinctive:
+            dt_lower = dt.lower()
+            pos = evidence_lower.find(dt_lower)
+            if pos >= 0:
+                score += 3
+                match_positions.append(pos)
+
+        # Check regular tokens (3+ chars) — set intersection for word-boundary matching
+        matched_token_set = tokens & evidence_tokens
+        matched_tokens = len(matched_token_set)
+        # Find positions for matched tokens (for evidence snippet extraction)
+        for t in matched_token_set:
+            pos = evidence_lower.find(t)
+            if pos >= 0:
+                match_positions.append(pos)
+
+        score += matched_tokens
+
+        # Minimum threshold: 3+ token matches, or any distinctive token match
+        if score < 3:
+            continue
+
+        # Completion phrase boost: check ±100 char window around EACH match position
+        has_completion_phrase = False
+        if match_positions:
+            for mpos in match_positions:
+                if has_completion_phrase:
+                    break
+                window_start = max(0, mpos - 100)
+                window_end = min(len(evidence_lower), mpos + 100)
+                window = evidence_lower[window_start:window_end]
+                for phrase in _COMPLETION_PHRASES:
+                    if phrase in window:
+                        has_completion_phrase = True
+                        score += 2
+                        break
+
+        # Extract evidence snippet (~60 chars around best match (first position)
+        best_match_pos = min(match_positions) if match_positions else -1
+        snippet = ""
+        if best_match_pos >= 0:
+            start = max(0, best_match_pos - 30)
+            end = min(len(evidence_text), best_match_pos + 30)
+            snippet = evidence_text[start:end].strip()
+            if start > 0:
+                snippet = "..." + snippet
+            if end < len(evidence_text):
+                snippet = snippet + "..."
+
+        candidates.append({
+            "file": fpath,
+            "line": line_num,
+            "text": item_text,
+            "evidence": snippet,
+            "confidence": score,
+            "has_completion_phrase": has_completion_phrase,
+        })
+
+    # Sort by confidence descending
+    candidates.sort(key=lambda c: c["confidence"], reverse=True)
+    return candidates
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +634,58 @@ def _extract_errors(messages: list[dict]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _dedup_summary_open_items(summary_text: str, existing_items: list) -> str:
+    """Remove duplicate open items from AI-generated summary text.
+
+    Operates on the string before disk write. Uses find_duplicates()
+    for matching — same logic as dedup_note_open_items() but on a string.
+    """
+    # Lazy import to avoid top-level dependency on hooks/ being on sys.path
+    _hooks_dir = os.path.dirname(os.path.abspath(__file__))
+    if _hooks_dir not in sys.path:
+        sys.path.insert(0, _hooks_dir)
+    from open_item_dedup import find_duplicates
+
+    # Find the ## Open Questions / Next Steps section
+    pattern = r'(## Open Questions / Next Steps\n)(.*?)(?=\n## |\Z)'
+    match = re.search(pattern, summary_text, re.DOTALL)
+    if not match:
+        return summary_text
+
+    section_header = match.group(1)
+    section_body = match.group(2)
+
+    # Parse individual - [ ] items
+    lines = section_body.split('\n')
+    kept_lines: list[str] = []
+    removed = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('- [ ] '):
+            item_text = stripped[6:]
+            dupes = find_duplicates(item_text, existing_items)
+            # Only auto-remove high-confidence matches; fuzzy could be false positives
+            high_dupes = [d for d in dupes if d[3] == "high"]
+            if high_dupes:
+                removed = True
+                continue  # drop this line
+        kept_lines.append(line)
+
+    if not removed:
+        return summary_text
+
+    new_body = '\n'.join(kept_lines)
+    # If all items removed, add placeholder
+    if not any(l.strip().startswith('- [ ]') for l in kept_lines):
+        new_body = 'None.'
+    # Ensure consistent trailing newline before next section
+    if not new_body.endswith('\n'):
+        new_body += '\n'
+
+    return summary_text[:match.start()] + section_header + new_body + summary_text[match.end():]
+
+
 def generate_summary(
     user_msgs: list[str],
     assistant_msgs: list[str],
@@ -377,6 +751,31 @@ OUTPUT EXACTLY these markdown sections with no preamble, no commentary, no quest
 - [ ] Checkbox list of unresolved items. Write "None." if none.
 """
 
+    # Layer 1: Append existing open items to prevent AI duplication
+    existing_items = []
+    if metadata.get("vault_path") and metadata.get("sessions_folder"):
+        try:
+            _hooks_dir = os.path.dirname(os.path.abspath(__file__))
+            if _hooks_dir not in sys.path:
+                sys.path.insert(0, _hooks_dir)
+            from open_item_dedup import collect_open_items
+            existing_items = collect_open_items(
+                metadata["vault_path"],
+                metadata["sessions_folder"],
+                metadata.get("project", "unknown"),
+                max_sessions=10,
+            )
+        except Exception as exc:
+            print(f"[obsidian-brain] open item collection failed (non-fatal): {exc}", file=sys.stderr)
+
+    if existing_items:
+        prompt += "\n\n## Existing Open Items for This Project (DO NOT DUPLICATE)\n"
+        prompt += "The following items are already tracked in older session notes. Do NOT include any item\n"
+        prompt += "that is semantically equivalent to these — same PR, same branch, same task, same file.\n"
+        prompt += "Only add genuinely NEW open items from this session's conversation.\n\n"
+        for _, _, item_text in existing_items:
+            prompt += f"- {item_text}\n"
+
     try:
         result = subprocess.run(
             ["claude", "-p", "--model", model],
@@ -386,7 +785,11 @@ OUTPUT EXACTLY these markdown sections with no preamble, no commentary, no quest
             timeout=timeout,
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            summary_text = result.stdout.strip()
+            # Layer 2: Post-generation dedup pass (string-based, pre-write)
+            if existing_items:
+                summary_text = _dedup_summary_open_items(summary_text, existing_items)
+            return summary_text
         print(
             f"[obsidian-brain] claude -p failed (rc={result.returncode}): "
             f"{result.stderr[:200]}",
@@ -993,3 +1396,224 @@ def is_resumed_session(
     for _ in sessions_dir.glob(f"*-{h}.md"):
         return True
     return False
+
+
+def upgrade_unsummarized_note(
+    note_path: str,
+    vault_path: str,
+    sessions_folder: str,
+    project: str,
+    summary_model: str = "haiku",
+    summary_timeout: int = 15,
+) -> str:
+    """Upgrade an unsummarized session note with an AI summary.
+
+    Orchestrates: find JSONL → parse transcript → decide source →
+    generate summary → dedup open items → atomic write.
+
+    Returns a one-line status string for the model to relay.
+    """
+    # Read the raw note
+    try:
+        with open(note_path, 'r', encoding='utf-8') as f:
+            raw_lines = f.readlines()
+    except OSError as exc:
+        return f"Failed: cannot read {os.path.basename(note_path)}: {exc}"
+
+    # Extract session_id from frontmatter
+    session_id = None
+    for line in raw_lines[:20]:
+        stripped = line.strip()
+        if stripped.startswith('session_id:'):
+            session_id = stripped.split(':', 1)[1].strip().strip('"').strip("'")
+            break
+    if not session_id:
+        return f"Failed: no session_id in frontmatter of {os.path.basename(note_path)}"
+
+    # Find and parse the JSONL transcript
+    jsonl_path = find_transcript_jsonl(session_id)
+    parsed: dict = {}
+    warnings: list[str] = []
+    user_msgs: list[str] = []
+    assistant_msgs: list[str] = []
+    source = "raw note"
+
+    if jsonl_path:
+        parsed = parse_full_transcript(jsonl_path)
+        user_msgs = parsed.get("user_msgs", [])
+        assistant_msgs = parsed.get("assistant_msgs", [])
+        warnings = parsed.get("warnings", [])
+
+        # Decide which source to use
+        raw_note_would_truncate = parsed.get("raw_note_would_truncate", False)
+        truncated = parsed.get("truncated", False)
+
+        # Data always comes from JSONL when found — label accurately
+        if truncated:
+            source = "JSONL transcript (head+tail, middle truncated)"
+        elif raw_note_would_truncate:
+            source = "JSONL transcript (raw note would have truncated)"
+        else:
+            source = "JSONL transcript (full, raw note also sufficient)"
+    else:
+        # Fall back to raw note content for summarization
+        source = "raw note (JSONL not found)"
+        # Extract user/assistant messages from raw note conversation section
+        in_conversation = False
+        for line in raw_lines:
+            stripped = line.strip()
+            if stripped == '## Conversation (raw)':
+                in_conversation = True
+                continue
+            if in_conversation:
+                if stripped.startswith('## '):
+                    break
+                if stripped.startswith('**User:**'):
+                    user_msgs.append(stripped[9:].strip())
+                elif stripped.startswith('**Assistant:**'):
+                    assistant_msgs.append(stripped[14:].strip())
+
+    # Fall back to raw note if JSONL yielded empty messages (corrupted/empty JSONL)
+    if jsonl_path and not user_msgs and not assistant_msgs:
+        source = "raw note (JSONL found but empty)"
+        in_conversation = False
+        for line in raw_lines:
+            stripped = line.strip()
+            if stripped == '## Conversation (raw)':
+                in_conversation = True
+                continue
+            if in_conversation:
+                if stripped.startswith('## '):
+                    break
+                if stripped.startswith('**User:**'):
+                    user_msgs.append(stripped[9:].strip())
+                elif stripped.startswith('**Assistant:**'):
+                    assistant_msgs.append(stripped[14:].strip())
+
+    if not user_msgs and not assistant_msgs:
+        return f"Failed: no conversation content in {os.path.basename(note_path)}"
+
+    # Build metadata for generate_summary
+    metadata: dict = {"project": project, "vault_path": vault_path, "sessions_folder": sessions_folder}
+    for line in raw_lines[:20]:
+        stripped = line.strip()
+        if stripped.startswith('git_branch:'):
+            metadata["git_branch"] = stripped.split(':', 1)[1].strip().strip('"')
+        elif stripped.startswith('duration_minutes:'):
+            try:
+                metadata["duration_minutes"] = float(stripped.split(':', 1)[1].strip())
+            except ValueError:
+                pass
+
+    # Add files_touched and errors from parsed transcript if available
+    if jsonl_path and parsed:
+        metadata["files_touched"] = parsed.get("files_touched", [])
+        metadata["errors"] = parsed.get("errors", [])
+
+    # Generate summary
+    summary_text = generate_summary(
+        user_msgs, assistant_msgs, metadata,
+        model=summary_model, timeout=summary_timeout,
+    )
+
+    if not summary_text:
+        return f"Failed: AI summarization returned empty for {os.path.basename(note_path)}"
+
+    # Build upgraded note: original frontmatter + new summary + original audit trail
+    new_lines: list[str] = []
+
+    # Copy frontmatter, flipping status
+    past_first_marker = False
+    frontmatter_end = 0
+    for i, line in enumerate(raw_lines):
+        if line.strip() == '---':
+            if not past_first_marker:
+                past_first_marker = True
+                new_lines.append(line)
+                continue
+            else:
+                # End of frontmatter
+                new_lines.append(line)
+                frontmatter_end = i + 1
+                break
+        if past_first_marker:
+            if line.strip().startswith('status:'):
+                new_lines.append(re.sub(r'^(\s*status:\s*).*', r'\1summarized', line) + '\n' if not line.endswith('\n') else re.sub(r'^(\s*status:\s*).*', r'\1summarized', line))
+            else:
+                new_lines.append(line)
+
+    if frontmatter_end == 0:
+        return f"Failed: malformed frontmatter in {os.path.basename(note_path)} (missing closing ---)"
+
+    # Add title from original
+    title_found = False
+    for line in raw_lines[frontmatter_end:]:
+        if line.strip().startswith('# '):
+            new_lines.append('\n')
+            new_lines.append(line)
+            title_found = True
+            break
+    if not title_found:
+        new_lines.append('\n# Untitled Session\n')
+
+    # Add warnings if any
+    if warnings:
+        new_lines.append('\n## ⚠️ Transcript re-parse warnings\n')
+        for w in warnings:
+            new_lines.append(f'- {w}\n')
+
+    # Add summary sections
+    new_lines.append('\n')
+    new_lines.append(summary_text + '\n')
+
+    # Add source note
+    new_lines.append(f'\n_(Summary source: {source})_\n')
+
+    # Preserve original audit trail sections
+    in_audit = False
+    for line in raw_lines:
+        stripped = line.strip()
+        if stripped.startswith('## Tool Usage') or stripped.startswith('## Errors Encountered') or \
+           stripped.startswith('## Conversation (raw)') or stripped.startswith('## Session Metadata') or \
+           stripped.startswith('## Files Touched') or stripped.startswith('## Changes Made'):
+            in_audit = True
+        if in_audit:
+            new_lines.append(line)
+
+    # Atomic write
+    note_dir = os.path.dirname(note_path)
+    fd, tmp_path = tempfile.mkstemp(prefix='.ob-upgrade-', suffix='.md.tmp', dir=note_dir)
+    try:
+        try:
+            orig_mode = os.stat(note_path).st_mode
+        except OSError:
+            orig_mode = 0o644
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+        os.chmod(tmp_path, orig_mode)
+        os.replace(tmp_path, note_path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return f"Failed: atomic write error for {os.path.basename(note_path)}: {exc}"
+
+    # Run dedup pass (non-fatal — note is already upgraded)
+    removed = []
+    try:
+        _hooks_dir = os.path.dirname(os.path.abspath(__file__))
+        if _hooks_dir not in sys.path:
+            sys.path.insert(0, _hooks_dir)
+        from open_item_dedup import dedup_note_open_items
+        removed = dedup_note_open_items(vault_path, sessions_folder, project, note_path)
+    except Exception as exc:
+        print(f"[obsidian-brain] dedup failed (non-fatal, note already upgraded): {exc}", file=sys.stderr)
+
+    # Build status
+    status = f"Upgraded {os.path.basename(note_path)} (source: {source})"
+    if removed:
+        status += f", deduped {len(removed)} item(s)"
+    if warnings:
+        status += f", {len(warnings)} warning(s)"
+    return status

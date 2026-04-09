@@ -20,16 +20,26 @@ Follow these steps exactly. Do not skip steps or reorder them.
 Run:
 
 ```bash
-cat ~/.claude/obsidian-brain-config.json
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys
+sys.path.insert(0, "hooks")
+from obsidian_utils import load_config
+c = load_config()
+if not c.get("vault_path"):
+    print("ERROR: vault_path not configured", file=sys.stderr)
+    sys.exit(1)
+print(f"VAULT={c[\"vault_path\"]} SESS={c.get(\"sessions_folder\",\"claude-sessions\")} INS={c.get(\"insights_folder\",\"claude-insights\")}")
+'
 ```
+
+Parse the output line to extract `VAULT_PATH`, `SESSIONS_FOLDER`, and `INSIGHTS_FOLDER`.
 
 If the file does not exist or is invalid JSON, tell the user:
 
 > Config not found. Please run `/obsidian-setup` first to configure your Obsidian vault.
 
 Stop here if config is missing.
-
-Parse the JSON and extract `vault_path`, `insights_folder`, and `sessions_folder`. Store them as `VAULT_PATH`, `INSIGHTS_FOLDER` (default `claude-insights`), and `SESSIONS_FOLDER` (default `claude-sessions`).
 
 ### Step 2 — Validate vault access
 
@@ -83,29 +93,23 @@ Draft the note body using this exact structure:
 
 ### Step 5 — Derive session ID and backlinks
 
-Find the session ID by running:
+Get session context via the shared helper:
 
 ```bash
-SESSION_ID=$(ls -t ~/.claude/projects/*"$(basename "$PWD")"/*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl)
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys
+sys.path.insert(0, "hooks")
+from obsidian_utils import load_config, get_session_context
+c = load_config()
+ctx = get_session_context(c["vault_path"], c.get("sessions_folder", "claude-sessions"))
+print(f"SID={ctx[\"session_id\"]} HASH={ctx[\"hash\"]} PROJECT={ctx[\"project\"]} SESSION_NOTE={ctx[\"session_note_name\"]}")
+'
 ```
 
-**Important:** If `SESSION_ID` is empty (glob matched nothing), use `unknown` for `source_session` and omit `source_session_note` entirely. Do NOT proceed to hash derivation with an empty string.
+Parse the output to get `SESSION_ID`, `HASH`, `PROJECT`, and `SESSION_NOTE`.
 
-If `SESSION_ID` is non-empty, derive the 4-char hash and find the matching session note:
-
-```bash
-HASH=$(echo -n "$SESSION_ID" | shasum -a 256 | cut -c1-4)
-SESSION_NOTE_PATH=$(ls "$VAULT_PATH/$SESSIONS_FOLDER"/*-"$HASH".md 2>/dev/null | head -1)
-if [ -n "$SESSION_NOTE_PATH" ]; then
-  SESSION_NOTE=$(basename "$SESSION_NOTE_PATH" .md)
-else
-  SESSION_NOTE=
-fi
-```
-
-If the session note file doesn't exist yet (current session hasn't ended), construct the expected filename as `YYYY-MM-DD-<project-slug>-<HASH>` and include it anyway — Obsidian shows unresolved wikilinks as greyed out, and they auto-resolve once the session note is created at session end.
-
-Project name: `basename "$(pwd)"`.
+**Important:** If `SESSION_ID` is `unknown`, use `unknown` for `source_session` and omit `source_session_note` entirely.
 
 ### Step 6 — Show preview and ask for edits
 

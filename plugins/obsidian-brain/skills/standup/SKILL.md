@@ -17,17 +17,29 @@ Follow these steps exactly. Do not skip steps or reorder them.
 
 ### Step 1 — Load config
 
-Read `~/.claude/obsidian-brain-config.json`:
+Run:
 
 ```bash
-cat ~/.claude/obsidian-brain-config.json
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys
+sys.path.insert(0, "hooks")
+from obsidian_utils import load_config
+c = load_config()
+if not c.get("vault_path"):
+    print("ERROR: vault_path not configured", file=sys.stderr)
+    sys.exit(1)
+print(f"VAULT={c[\"vault_path\"]} SESS={c.get(\"sessions_folder\",\"claude-sessions\")} INS={c.get(\"insights_folder\",\"claude-insights\")}")
+'
 ```
 
-If the file does not exist or is not valid JSON, tell the user:
+Parse the output line to extract `VAULT_PATH`, `SESSIONS_FOLDER`, and `INSIGHTS_FOLDER`.
+
+If the command exits non-zero or prints ERROR, tell the user:
 
 > Config not found. Run `/obsidian-setup` first to configure your Obsidian vault.
 
-Stop here if config is missing. Otherwise, extract `vault_path`, `sessions_folder` (default `claude-sessions`), and `insights_folder` (default `claude-insights`). Store as `VAULT_PATH`, `SESSIONS_FOLDER`, `INSIGHTS_FOLDER`.
+Stop here if config is missing.
 
 ### Step 2 — Validate vault access
 
@@ -158,7 +170,22 @@ Split into:
 
 If `UNSUMMARIZED` is empty, skip to Step 7.
 
-For each file in `UNSUMMARIZED`, perform the upgrade (process multiple notes in parallel via sub-agents when there are more than 2):
+**Always parallelize unsummarized note upgrades.** For each unsummarized note, spawn a sub-agent immediately — even for 1-2 notes. Each sub-agent should call:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys
+sys.path.insert(0, "hooks")
+from obsidian_utils import upgrade_unsummarized_note
+status = upgrade_unsummarized_note(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+print(status)
+' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
+```
+
+The function returns a one-line status. If the status starts with `Failed:`, note the failure and fall back to the manual procedure below for that note. Collect results from all sub-agents before proceeding.
+
+For each file in `UNSUMMARIZED`, if `upgrade_unsummarized_note()` is unavailable or returns a `Failed:` status, fall back to the manual upgrade procedure:
 
 1. **Read the full file** using the Read tool.
 2. **Extract frontmatter** — preserve it exactly as-is (everything between the opening `---` and closing `---`).

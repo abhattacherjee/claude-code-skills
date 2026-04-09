@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-09
+
+### Added
+- **Open item deduplication** — new `hooks/open_item_dedup.py` module with hybrid matching (distinctive tokens + fuzzy overlap) prevents duplicate open items across session notes
+  - Creation-time prevention: `generate_summary()` appends existing items to Haiku prompt + post-generation dedup pass strips duplicates before disk write
+  - Check-off cascading: checking off an item auto-checks matching duplicates in older notes (high confidence) or suggests them (fuzzy confidence)
+  - `/recall` Step 3: `dedup_note_open_items()` runs after note upgrade (zero items loaded into model context)
+  - `/recall` Step 7.5 + `/check-items`: `batch_cascade_checkoff()` handles cascade in a single Python call
+- **Session-scoped cache** — file-based cache at `/tmp/.obsidian-brain-cache-{session_id}.json` avoids repeated vault scans across skills within one session (~650 tokens + ~190ms saved for 5 skills)
+- **Shared helpers** — `load_config()` (cache-backed), `get_session_context()`, `read_note_metadata()` consolidate redundant config/session/frontmatter parsing across skills
+- **`upgrade_unsummarized_note()`** — single Python call replaces the multi-step JSONL parse → summarize → write → dedup pipeline in `/recall` Step 3 (~1,000 tokens saved per note upgrade)
+- **`match_items_against_evidence()`** — moves completion detection matching from model context to Python (~400-600 tokens saved per `/recall` invocation)
+- **Config/session consolidation** — all 12 skills now use `load_config()` shared helper instead of inline `cat`/`Read` config parsing (~2,470 tokens saved per multi-skill session)
+- **`/standup` always parallelizes** unsummarized note upgrades via `upgrade_unsummarized_note()` helper (60-80% time reduction)
+
+### Fixed
+- Defensive initialization of `parsed` variable in `upgrade_unsummarized_note()` to prevent potential `NameError` on future refactors
+- **`/recall` Step 8 UX** — replaced vague "Want me to load this context?" with an explicit load manifest showing which sessions and insights are in the conversation, and made the session history table actionable for loading additional sessions
+
 ## [1.6.2] - 2026-04-07
 
 ### Added

@@ -17,17 +17,29 @@ Follow these steps exactly. Do not skip steps or reorder them.
 
 ### Step 1 — Load config
 
-Read `~/.claude/obsidian-brain-config.json`:
+Run:
 
 ```bash
-cat ~/.claude/obsidian-brain-config.json
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys
+sys.path.insert(0, "hooks")
+from obsidian_utils import load_config
+c = load_config()
+if not c.get("vault_path"):
+    print("ERROR: vault_path not configured", file=sys.stderr)
+    sys.exit(1)
+print(f"VAULT={c[\"vault_path\"]} SESS={c.get(\"sessions_folder\",\"claude-sessions\")} INS={c.get(\"insights_folder\",\"claude-insights\")}")
+'
 ```
 
-If the file does not exist or is not valid JSON, tell the user:
+Parse the output line to extract `VAULT_PATH`, `SESSIONS_FOLDER`, and `INSIGHTS_FOLDER`.
+
+If the output is empty or errors, tell the user:
 
 > Config not found. Run `/obsidian-setup` first to configure your Obsidian vault.
 
-Stop here if config is missing. Otherwise, extract `vault_path`, `sessions_folder` (default `claude-sessions`), and `insights_folder` (default `claude-insights`).
+Stop here if config is missing.
 
 ### Step 2 — Derive project name
 
@@ -73,68 +85,24 @@ output_mode: content
 
 For each file that matches BOTH conditions (unsummarized AND belongs to this project):
 
-1. **Read the raw note in full** with the Read tool. Preserve frontmatter exactly. Extract the `session_id` value from the frontmatter and **store it as `SESSION_ID`** — the Bash snippet in sub-step 3 references this exact variable name.
-
-2. **No raw-note turn count needed.** Earlier revisions of this skill counted `^\*\*User:\*\*` / `^\*\*Assistant:\*\*` markers in the raw note to detect truncation, but that count is unreliable. The raw fallback's `## Conversation (raw)` section filters out system noise (`<task-notification>`, `<local-command…>`, "Base directory for this skill:", …) before emitting a `**User:**` line. Its `turn` counter is incremented whenever a `**User:**` OR `**Assistant:**` line is actually written, with user lines sometimes skipped due to noise filtering. So the marker count in a written raw note does not necessarily correspond to the underlying user/assistant message count in the transcript — filtered user messages are invisible. Use the shared `raw_note_max_turns` constant returned by the helper in sub-step 3 instead — it is the only deterministic truncation signal.
-
-3. **Locate the source JSONL and re-parse it in one shot.** Invoke the helper via argv (no shell interpolation of paths — pass `SESSION_ID` as an argument so session_ids with unusual characters cannot break the quoting). The parsed JSON is printed directly to stdout — no temp files, no traps:
-
-   Run the following Bash command from the obsidian-brain project root. It prints the parsed transcript JSON **directly to stdout** — no temp files, no traps, no `$TMPFILE` that would need to persist across tool invocations. Capture the stdout from the Bash tool result in the next step:
+1. **Run the upgrade pipeline in Python** — a single Bash call that handles JSONL lookup, transcript parsing, source decision, AI summarization, dedup, and atomic write:
 
    ```bash
    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
    python3 -c '
-   import sys, json
+   import sys
    sys.path.insert(0, "hooks")
-   from obsidian_utils import find_transcript_jsonl, parse_full_transcript, RAW_NOTE_MAX_TURNS
-   p = find_transcript_jsonl(sys.argv[1])
-   if p is None:
-       # Emit the same schema as the success branch so downstream steps
-       # do not need to special-case missing fields. All fields present,
-       # lists empty, booleans False.
-       print(json.dumps({
-           "jsonl_path": None,
-           "user_msgs": [], "assistant_msgs": [], "tool_uses": [],
-           "files_touched": [], "errors": [],
-           "truncated": False,
-           "warnings": [],
-           "raw_note_max_turns": RAW_NOTE_MAX_TURNS,
-           "raw_note_would_truncate": False,
-       }))
-   else:
-       data = parse_full_transcript(p)
-       data["jsonl_path"] = str(p)
-       print(json.dumps(data))
-   ' "$SESSION_ID"
+   from obsidian_utils import upgrade_unsummarized_note
+   status = upgrade_unsummarized_note(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+   print(status)
+   ' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
    ```
 
-   The Bash tool's stdout result is the JSON payload. Parse it directly from the tool response — it contains either `{"jsonl_path": null}` (not found) or the full parsed transcript plus `jsonl_path`, `truncated`, and `warnings`. Very large transcripts can produce multi-MB JSON; if the Bash tool truncates the output, fall back to writing to a known path such as `$VAULT_PATH/.obsidian-brain-transcript-cache.json` and reading it with the Read tool (this file is not in the vault's git repo and is safe to overwrite).
+   Where `$NOTE_PATH` is the full path of the unsummarized note. The function returns a one-line status like:
+   - `"Upgraded 2026-04-07-obsidian-brain-aeb5.md (source: JSONL transcript), deduped 2 item(s)"`
+   - `"Failed: AI summarization returned empty for 2026-04-07-obsidian-brain-aeb5.md"`
 
-4. **Decide which source to summarize from.** Two independent signals mean "raw note is incomplete":
-   - **`raw_note_would_truncate: true`** — `parse_full_transcript` simulates the exact same write loop as `build_raw_fallback` (including the system-noise filter that skips filtered user messages without incrementing the cap counter). This field is true iff that simulation would have bailed on the cap before consuming all messages. It is the fully deterministic signal — immune to false positives from noise filtering or false negatives from cap drift.
-   - **`truncated: true`** — the transcript exceeded the 5 MB byte budget and was sliced into head+tail halves. In that case some real content is missing from the middle regardless of the cap simulation, so this must be OR'd with the cap signal.
-
-   Decision branches:
-   - **`jsonl_path` is null** → use the raw note as the input. Append to the Summary section: `_(Source transcript not found on disk — summary built from the raw session note; fidelity depends on whether the raw note was itself capped at write time.)_`
-   - **`jsonl_path` is set AND (`raw_note_would_truncate == true` OR `truncated == true`)** → re-parse path engages. Use the parsed `user_msgs`, `assistant_msgs`, `tool_uses`, `files_touched`, and `errors` as the summarization input. If `truncated == true`, note that the summary reflects only the head and tail of the transcript.
-   - **`jsonl_path` is set AND `raw_note_would_truncate == false` AND `truncated == false`** → the raw note captured everything; use it instead.
-   - **If the parsed data's `warnings` list is non-empty** (regardless of which branch), prepend a visible callout section `## ⚠️ Transcript re-parse warnings` at the top of the upgraded note (above `# <title>`), listing each warning as a bullet. This surfaces partial-line losses, malformed JSONL records, unknown block types, and byte-budget slicing so the user knows what's in the summary and what isn't.
-
-5. **Generate a detailed, specific summary** from whichever input source was chosen above. Be precise — include file paths, function names, config values, and technical specifics. Produce these sections (unchanged from before):
-   - `## Summary` — 3-5 sentences
-   - `## Key Decisions` — bulleted list with rationale
-   - `## Changes Made` — bulleted list with file paths
-   - `## Errors Encountered` — bulleted list with messages, root causes, fixes
-   - `## Open Questions / Next Steps` — checkbox list of concrete actionable items
-
-6. **Write the upgraded note** with the Write tool to the same file path. Preserve original frontmatter unchanged but flip `status: auto-logged` to `status: summarized`. Structure:
-   - Original frontmatter (unchanged except `status`)
-   - `# <title from original note>`
-   - The five summary sections
-   - The existing `## Tool Usage` / `## Changes Made` / `## Errors Encountered` / `## Conversation (raw)` sections from the raw note (preserve them as the audit trail — only the leading summary changes)
-   - The Session Metadata section if present
-
-**Important:** Do NOT modify frontmatter fields other than `status`. Do NOT change the filename. Do NOT add or remove tags.
+   Report the status to the user. If it starts with "Failed:", note the failure but continue to the next unsummarized note (do not stop the entire `/recall` flow).
 
 If no unsummarized notes are found for this project, skip to Step 4.
 
@@ -164,7 +132,7 @@ Collect both result sets.
 
 From the session files found, sort by date (extract from frontmatter `date:` field or filename). Select:
 
-- **Most recent session** — read in full (this is the primary context)
+- **Most recent session** — read in full (this is the primary context). Store its full path as `MOST_RECENT_SESSION_PATH` for use in Step 7.5.
 - **Second most recent session** — read summary + open questions only
 - **Last 5 sessions** — collect titles and dates for the session list
 
@@ -218,36 +186,55 @@ If unsummarized notes were upgraded in Step 3, also mention:
 
 After presenting the context brief, scan the loaded context for evidence that any open items have been completed.
 
-1. **Collect open items for the current project.** **Re-use the project-scoped file list from Step 4** (the result of Search A — sessions matching `project: $PROJECT`). For each file in that list, run a per-file Grep:
+1. **Match open items against evidence in Python.** Run a single Bash call that collects open items and matches them against the most recent session note:
 
-```
-pattern: ^- \[ \] 
-path: <each session file from Step 4>
-output_mode: content
--n: true
-```
+   ```bash
+   cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+   python3 -c '
+   import sys, json
+   sys.path.insert(0, "hooks")
+   from obsidian_utils import match_items_against_evidence
+   from open_item_dedup import collect_open_items
 
-This avoids an O(vault size) Grep across the entire sessions folder — we already have the project-scoped file list and reuse it directly.
+   vault_path, sessions_folder, project = sys.argv[1], sys.argv[2], sys.argv[3]
+   evidence_file = sys.argv[4]
 
-For each match, extract `(file_path, line_number, item_text)` tuples for items appearing under a `## Open Questions / Next Steps` section. To verify the section context, read 30 lines before each match and confirm the most recent `## ` heading is `## Open Questions / Next Steps`.
+   try:
+       with open(evidence_file, "r") as f:
+           content = f.read()
+       # Extract only evidence sections (Summary, Changes, Errors) — exclude
+       # Open Questions to avoid self-matching open items as candidates
+       import re as _re
+       evidence_parts = []
+       for section in ["Summary", "Key Decisions", "Changes Made", "Errors Encountered"]:
+           m = _re.search(rf"## {section}\n(.*?)(?=\n## |\Z)", content, _re.DOTALL)
+           if m:
+               evidence_parts.append(m.group(1))
+       evidence = "\n".join(evidence_parts) if evidence_parts else content
+   except OSError as exc:
+       print("NO_CANDIDATES")
+       sys.exit(0)
 
-2. **Skip if zero open items.** If no items found, skip to Step 8 silently.
+   items = collect_open_items(vault_path, sessions_folder, project)
+   if not items:
+       print("NO_ITEMS")
+       sys.exit(0)
 
-3. **Use loaded context as evidence pool.** The most recent session was already read in full during Step 5. Concatenate the text of its `## Summary`, `## Changes Made`, and `## Errors Encountered` sections — store as `EVIDENCE_TEXT`.
+   candidates = match_items_against_evidence(evidence, items)
+   if not candidates:
+       print("NO_CANDIDATES")
+   else:
+       print(json.dumps(candidates))
+   ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "$MOST_RECENT_SESSION_PATH"
+   ```
 
-4. **Match items to evidence.** For each open item:
-   - **Tokenize** the item text into words, lowercase, drop common stopwords (`the`, `a`, `an`, `to`, `for`, `in`, `on`, `of`, `and`, `or`, `but`, `is`, `are`, `was`, `were`, `be`).
-   - **Substring match:** Count how many tokens (3+ characters) appear as substrings in `EVIDENCE_TEXT` (also lowercased). If count >= 3, mark as candidate.
-   - **Distinctive token match:** If the item contains any of these distinctive tokens and they appear in evidence, mark as candidate even if substring count < 3:
-     - File paths (contains `/` or `.py`/`.md`/`.json`/`.ts`/`.js`/`.tsx`/`.jsx`)
-     - PR/issue references (matches `#\d+` or `PR \d+` or `issue \d+`)
-     - Branch names (contains `feature/` or `release/` or `hotfix/`)
-     - Version numbers (matches `v?\d+\.\d+\.\d+`)
-   - **Completion phrase boost:** If a completion phrase (`merged`, `shipped`, `fixed`, `released`, `closed`, `removed`, `implemented`, `deleted`, `done`, `completed`) appears within 200 characters of any matched token in evidence, increase confidence.
+   Where `$MOST_RECENT_SESSION_PATH` is the path to the most recent session note (already read in Step 5).
 
-5. **Skip if no candidates.** Fast path: if zero items match, skip to Step 8.
+2. **Skip if no candidates.** If the output is `NO_ITEMS` or `NO_CANDIDATES`, skip to Step 8 silently.
 
-6. **Present candidates to user.** Print:
+3. **Parse candidates.** The JSON array contains objects with `file`, `line`, `text`, `evidence`, `confidence`, `has_completion_phrase`. Only present items with `confidence >= 3` to the user.
+
+4. **Present candidates to user.** Print:
 
 ```
 I noticed these open items may now be done:
@@ -262,36 +249,59 @@ I noticed these open items may now be done:
 Confirm checkoff? (e.g. `1` or `1,2` or `all` or `none`)
 ```
 
-7. **Wait for user response.** Parse the response:
+5. **Wait for user response.** Parse the response:
    - `none` or empty → skip checkoff entirely, proceed to Step 8
    - `all` → check off all candidates
    - Comma-separated numbers (e.g. `1,3`) → check off only those
 
-8. **For each confirmed checkoff, edit the source file.** Use Read to load the full source file. Find the exact line containing `- [ ] <item text>`. Replace it with `- [x] <item text>`. Use the Edit tool with `replace_all: false` and provide enough context (the full line plus the line before and after if available) to ensure uniqueness within the file. If the line is ambiguous (multiple matches), skip that item and warn:
+6. **For each confirmed checkoff, edit the source file.** Use Read to load the full source file. Find the exact line containing `- [ ] <item text>`. Replace it with `- [x] <item text>`. Use the Edit tool with `replace_all: false` and provide enough context (the full line plus the line before and after if available) to ensure uniqueness within the file. If the line is ambiguous (multiple matches), skip that item and warn:
 
 ```
 ⚠️  Could not check off item "<item text>" — line is not unique in <file>. Edit manually in Obsidian.
 ```
 
-9. **Confirm checkoffs to user.** Print:
+7. **Confirm checkoffs to user.** Print:
 
 ```
 ✅ Checked off N item(s) across <list of files>.
 ```
 
+8. **Cascade check-offs to duplicate items in older notes.** Run a single Bash call that collects, matches, and edits files in Python:
+
+    ```bash
+    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    python3 -c '
+    import sys, json
+    sys.path.insert(0, "hooks")
+    from open_item_dedup import batch_cascade_checkoff
+    items = json.loads(sys.argv[4])
+    summary = batch_cascade_checkoff(sys.argv[1], sys.argv[2], sys.argv[3], items)
+    print(summary)
+    ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "$CHECKED_ITEMS_JSON"
+    ```
+
+    Before running, construct `$CHECKED_ITEMS_JSON` as a JSON array of the confirmed item texts from sub-step 5. Use a Bash heredoc or inline Python to build it:
+    ```bash
+    CHECKED_ITEMS_JSON=$(python3 -c "import json; print(json.dumps([\"Git-flow migration spec pending\", \"Land PR #14\"]))")
+    ```
+    Replace the example items with the actual confirmed item texts. Then run the cascade command above. Report the cascade summary to the user alongside the checkoff confirmation.
+
 Then proceed to Step 8.
 
-### Step 8 — Offer options
+### Step 8 — Show load manifest and offer options
 
-Ask:
+After the context brief, explicitly list what was loaded into the conversation so the user knows exactly what context is available:
 
-> Want me to load this context? Or focus on a specific session/insight?
+> **Loaded into this conversation:**
+> - Full session: *"[most recent session title]"* ([date])
+> - Summary only: *"[second session title]"* ([date])
+> - [N] curated insight(s)
+>
+> Pick any session from the history table above to load it, or ready to start working?
 
-If the user says yes or wants to load it, the context brief is already in the conversation — it is loaded. Confirm:
+The session history table from Step 6 serves as a menu — if the user picks a session by name or date, use the Read tool to load that specific file and present its full contents.
 
-> Context loaded. Ready to continue where you left off.
-
-If the user asks about a specific session or insight, use the Read tool to load that specific file and present its full contents.
+If the user says they're ready to work, the context is already loaded — proceed.
 
 ## Edge Cases
 
