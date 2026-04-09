@@ -776,34 +776,43 @@ OUTPUT EXACTLY these markdown sections with no preamble, no commentary, no quest
         for _, _, item_text in existing_items:
             prompt += f"- {item_text}\n"
 
-    try:
-        result = subprocess.run(
-            ["claude", "-p", "--model", model],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            summary_text = result.stdout.strip()
-            # Layer 2: Post-generation dedup pass (string-based, pre-write)
-            if existing_items:
-                summary_text = _dedup_summary_open_items(summary_text, existing_items)
-            return summary_text
-        print(
-            f"[obsidian-brain] claude -p failed (rc={result.returncode}): "
-            f"{result.stderr[:200]}",
-            file=sys.stderr,
-        )
-    except FileNotFoundError:
-        print(
-            "[obsidian-brain] claude CLI not found, summarization unavailable",
-            file=sys.stderr,
-        )
-    except subprocess.TimeoutExpired:
-        print("[obsidian-brain] claude -p timed out", file=sys.stderr)
-    except Exception as exc:
-        print(f"[obsidian-brain] claude -p error: {exc}", file=sys.stderr)
+    attempts = (timeout, timeout * 2)  # escalate on first timeout
+    for i, attempt_timeout in enumerate(attempts):
+        try:
+            result = subprocess.run(
+                ["claude", "-p", "--model", model],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=attempt_timeout,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                summary_text = result.stdout.strip()
+                # Layer 2: Post-generation dedup pass (string-based, pre-write)
+                if existing_items:
+                    summary_text = _dedup_summary_open_items(summary_text, existing_items)
+                return summary_text
+            print(
+                f"[obsidian-brain] claude -p failed (rc={result.returncode}): "
+                f"{result.stderr[:200]}",
+                file=sys.stderr,
+            )
+            break  # non-timeout failure, don't retry
+        except FileNotFoundError:
+            print(
+                "[obsidian-brain] claude CLI not found, summarization unavailable",
+                file=sys.stderr,
+            )
+            break  # won't succeed on retry
+        except subprocess.TimeoutExpired as exc:
+            stderr_snippet = f" stderr: {exc.stderr[:200]}" if exc.stderr else ""
+            if i < len(attempts) - 1:
+                print(f"[obsidian-brain] claude -p timed out at {attempt_timeout}s, retrying with {attempts[i+1]}s{stderr_snippet}", file=sys.stderr)
+                continue
+            print(f"[obsidian-brain] claude -p timed out at {attempt_timeout}s, giving up{stderr_snippet}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[obsidian-brain] claude -p error ({type(exc).__name__}): {exc}", file=sys.stderr)
+            break  # unknown error, don't retry
 
     return None
 

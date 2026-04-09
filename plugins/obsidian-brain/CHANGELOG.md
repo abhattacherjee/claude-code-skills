@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-04-09
+
+### Fixed
+- **Haiku summarization timeout retry** — `generate_summary()` now retries once at 2x timeout (15s → 30s) before giving up, reducing unnecessary sub-agent fallbacks
+
 ## [1.7.1] - 2026-04-09
 
 ### Added
