@@ -1398,6 +1398,157 @@ def is_resumed_session(
     return False
 
 
+def upgrade_note_with_summary(
+    note_path: str,
+    summary_text: str,
+    vault_path: str,
+    sessions_folder: str,
+    project: str,
+    source: str = "sub-agent fallback",
+    warnings: list[str] | None = None,
+) -> str:
+    """Apply a pre-generated summary to a raw session note.
+
+    Handles the pipeline finish: read raw note, validate summary has
+    ## Summary, rebuild note (frontmatter with status: summarized, title,
+    summary sections, audit trail), run dedup, atomic write.
+
+    Returns a one-line status string.
+    """
+    if warnings is None:
+        warnings = []
+
+    if not re.search(r"^## Summary\s*$", summary_text, re.MULTILINE):
+        return f"Failed: malformed summary (no ## Summary section) from {source} for {os.path.basename(note_path)}"
+
+    # Read the raw note
+    try:
+        with open(note_path, 'r', encoding='utf-8') as f:
+            raw_lines = f.readlines()
+    except OSError as exc:
+        return f"Failed: cannot read {os.path.basename(note_path)}: {exc}"
+
+    # Build upgraded note: original frontmatter + new summary + original audit trail
+    new_lines: list[str] = []
+
+    # Copy frontmatter, flipping status
+    past_first_marker = False
+    frontmatter_end = 0
+    for i, line in enumerate(raw_lines):
+        if line.strip() == '---':
+            if not past_first_marker:
+                past_first_marker = True
+                new_lines.append(line)
+                continue
+            else:
+                # End of frontmatter
+                new_lines.append(line)
+                frontmatter_end = i + 1
+                break
+        if past_first_marker:
+            if line.strip().startswith('status:'):
+                new_lines.append(re.sub(r'^(\s*status:\s*).*', r'\1summarized', line) + '\n' if not line.endswith('\n') else re.sub(r'^(\s*status:\s*).*', r'\1summarized', line))
+            else:
+                new_lines.append(line)
+
+    if frontmatter_end == 0:
+        return f"Failed: malformed frontmatter in {os.path.basename(note_path)} (missing closing ---)"
+
+    # Add title from original
+    title_found = False
+    for line in raw_lines[frontmatter_end:]:
+        if line.strip().startswith('# '):
+            new_lines.append('\n')
+            new_lines.append(line)
+            title_found = True
+            break
+    if not title_found:
+        new_lines.append('\n# Untitled Session\n')
+
+    # Add warnings if any
+    if warnings:
+        new_lines.append('\n## ⚠️ Transcript re-parse warnings\n')
+        for w in warnings:
+            new_lines.append(f'- {w}\n')
+
+    # Add summary sections
+    new_lines.append('\n')
+    new_lines.append(summary_text + '\n')
+
+    # Add source note
+    new_lines.append(f'\n_(Summary source: {source})_\n')
+
+    # Preserve original audit trail sections (skip frontmatter).
+    # Only exclude ## Changes Made / ## Errors Encountered if summary_text
+    # actually contains them — otherwise preserve the raw audit data.
+    audit_sections = [
+        '## Tool Usage', '## Conversation (raw)',
+        '## Session Metadata', '## Files Touched',
+    ]
+    if '## Changes Made' not in summary_text:
+        audit_sections.append('## Changes Made')
+    if '## Errors Encountered' not in summary_text:
+        audit_sections.append('## Errors Encountered')
+
+    in_audit = False
+    for line in raw_lines[frontmatter_end:]:
+        stripped = line.strip()
+        if any(stripped.startswith(s) for s in audit_sections):
+            in_audit = True
+        elif stripped.startswith('## '):
+            in_audit = False
+        if in_audit:
+            new_lines.append(line)
+
+    # Atomic write
+    note_dir = os.path.dirname(note_path)
+    try:
+        fd, tmp_path = tempfile.mkstemp(prefix='.ob-upgrade-', suffix='.md.tmp', dir=note_dir)
+    except OSError as exc:
+        return f"Failed: cannot create temp file in {note_dir}: {exc}"
+    try:
+        try:
+            orig_mode = os.stat(note_path).st_mode
+        except OSError:
+            orig_mode = 0o644
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+        os.chmod(tmp_path, orig_mode)
+        os.replace(tmp_path, note_path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return f"Failed: atomic write error for {os.path.basename(note_path)}: {exc}"
+
+    # Run dedup pass (non-fatal — note is already upgraded)
+    removed = []
+    dedup_failed = False
+    try:
+        _hooks_dir = os.path.dirname(os.path.abspath(__file__))
+        if _hooks_dir not in sys.path:
+            sys.path.insert(0, _hooks_dir)
+        from open_item_dedup import dedup_note_open_items
+        removed = dedup_note_open_items(vault_path, sessions_folder, project, note_path)
+    except (ImportError, OSError) as exc:
+        dedup_failed = True
+        print(f"[obsidian-brain] dedup failed (non-fatal, note already upgraded): {exc}", file=sys.stderr)
+    except Exception as exc:
+        dedup_failed = True
+        print(f"[obsidian-brain] dedup unexpected error: {exc}", file=sys.stderr)
+
+    # Build status
+    status = f"Upgraded {os.path.basename(note_path)} (source: {source})"
+    if removed:
+        status += f", deduped {len(removed)} item(s)"
+    if dedup_failed:
+        status += ", dedup failed (see stderr)"
+    if warnings:
+        status += f", {len(warnings)} warning(s)"
+    return status
+
+
 def upgrade_unsummarized_note(
     note_path: str,
     vault_path: str,
@@ -1519,101 +1670,7 @@ def upgrade_unsummarized_note(
     if not summary_text:
         return f"Failed: AI summarization returned empty for {os.path.basename(note_path)}"
 
-    # Build upgraded note: original frontmatter + new summary + original audit trail
-    new_lines: list[str] = []
-
-    # Copy frontmatter, flipping status
-    past_first_marker = False
-    frontmatter_end = 0
-    for i, line in enumerate(raw_lines):
-        if line.strip() == '---':
-            if not past_first_marker:
-                past_first_marker = True
-                new_lines.append(line)
-                continue
-            else:
-                # End of frontmatter
-                new_lines.append(line)
-                frontmatter_end = i + 1
-                break
-        if past_first_marker:
-            if line.strip().startswith('status:'):
-                new_lines.append(re.sub(r'^(\s*status:\s*).*', r'\1summarized', line) + '\n' if not line.endswith('\n') else re.sub(r'^(\s*status:\s*).*', r'\1summarized', line))
-            else:
-                new_lines.append(line)
-
-    if frontmatter_end == 0:
-        return f"Failed: malformed frontmatter in {os.path.basename(note_path)} (missing closing ---)"
-
-    # Add title from original
-    title_found = False
-    for line in raw_lines[frontmatter_end:]:
-        if line.strip().startswith('# '):
-            new_lines.append('\n')
-            new_lines.append(line)
-            title_found = True
-            break
-    if not title_found:
-        new_lines.append('\n# Untitled Session\n')
-
-    # Add warnings if any
-    if warnings:
-        new_lines.append('\n## ⚠️ Transcript re-parse warnings\n')
-        for w in warnings:
-            new_lines.append(f'- {w}\n')
-
-    # Add summary sections
-    new_lines.append('\n')
-    new_lines.append(summary_text + '\n')
-
-    # Add source note
-    new_lines.append(f'\n_(Summary source: {source})_\n')
-
-    # Preserve original audit trail sections
-    in_audit = False
-    for line in raw_lines:
-        stripped = line.strip()
-        if stripped.startswith('## Tool Usage') or stripped.startswith('## Errors Encountered') or \
-           stripped.startswith('## Conversation (raw)') or stripped.startswith('## Session Metadata') or \
-           stripped.startswith('## Files Touched') or stripped.startswith('## Changes Made'):
-            in_audit = True
-        if in_audit:
-            new_lines.append(line)
-
-    # Atomic write
-    note_dir = os.path.dirname(note_path)
-    fd, tmp_path = tempfile.mkstemp(prefix='.ob-upgrade-', suffix='.md.tmp', dir=note_dir)
-    try:
-        try:
-            orig_mode = os.stat(note_path).st_mode
-        except OSError:
-            orig_mode = 0o644
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
-        os.chmod(tmp_path, orig_mode)
-        os.replace(tmp_path, note_path)
-    except OSError as exc:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        return f"Failed: atomic write error for {os.path.basename(note_path)}: {exc}"
-
-    # Run dedup pass (non-fatal — note is already upgraded)
-    removed = []
-    try:
-        _hooks_dir = os.path.dirname(os.path.abspath(__file__))
-        if _hooks_dir not in sys.path:
-            sys.path.insert(0, _hooks_dir)
-        from open_item_dedup import dedup_note_open_items
-        removed = dedup_note_open_items(vault_path, sessions_folder, project, note_path)
-    except Exception as exc:
-        print(f"[obsidian-brain] dedup failed (non-fatal, note already upgraded): {exc}", file=sys.stderr)
-
-    # Build status
-    status = f"Upgraded {os.path.basename(note_path)} (source: {source})"
-    if removed:
-        status += f", deduped {len(removed)} item(s)"
-    if warnings:
-        status += f", {len(warnings)} warning(s)"
-    return status
+    return upgrade_note_with_summary(
+        note_path, summary_text, vault_path, sessions_folder, project,
+        source=source, warnings=warnings,
+    )

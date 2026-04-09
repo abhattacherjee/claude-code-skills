@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-04-09
+
+### Added
+- **Sub-agent summary fallback** — when Haiku API times out during `/recall` Step 3, parallel sub-agents (inheriting parent model) produce structured summaries. New `upgrade_note_with_summary()` function accepts pre-generated summary text and handles the pipeline finish (frontmatter flip, dedup, atomic write). Minimal overhead when Haiku succeeds.
+
 ## [1.7.0] - 2026-04-09
 
 ### Added
