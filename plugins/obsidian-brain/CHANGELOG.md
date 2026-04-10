@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-04-10
+
+### Added
+- User-visible task manifest during `/recall` showing progress across all
+  steps with per-note granularity during summarization.
+- `prepare_summary_input()` helper in `obsidian_utils.py` for conditional
+  JSONL-to-temp-file extraction.
+- `/dev-test` skill and `test-dev-skill.sh` script for swapping the installed
+  plugin cache with the repo working copy during local testing.
+
+### Changed
+- `/recall` Step 2 now uses parallel sub-agents as the default summarization
+  strategy when 2+ unsummarized notes are found, with conditional JSONL
+  transcript extraction for truncated sessions. Sub-agent summaries written to
+  temp files (no heredoc pass-through). Per-note sub-tasks skipped when N>5.
+  Single-note case unchanged (Haiku pipeline + sub-agent fallback).
+- `/recall` Step 3 context building done by pure Python `build_context_brief()`
+  function (<3s, direct file I/O) instead of sub-agent (~145s, 70 Read calls).
+  Unsummarized note detection also moved to Python `find_unsummarized_notes()`.
+  Total `/recall` reduced from ~4 min to ~1.3 min.
+- `/recall` steps reduced from 8 to 4. Config + project merged into single call.
+  Task manifest collapsed from 6 to 4 top-level tasks.
+- Session history table titles use first sentence of `## Summary` instead of
+  generic H1 heading, making each row descriptive of what happened.
+
+### Fixed
+- f-string SyntaxError in all 10 skill templates — `python3 -c '...'` one-liners
+  used f-strings with dict key access (`c[\"vault_path\"]`) which breaks inside
+  Bash single-quoted strings. Replaced with string concatenation across config
+  load (10 skills) and session context (4 skills).
+- `/recall` and `/standup` grep for unsummarized notes matched tool-usage logs
+  in conversation excerpts, causing false positives and unnecessary re-summarization.
+  Changed from body text pattern (`"AI summary unavailable"`) to frontmatter
+  field (`^status: auto-logged`).
+- Legacy notes (119 across all projects) had `status: auto-logged` but already
+  contained real AI summaries from old SessionEnd inline-summarization path.
+  Added defense-in-depth guard to `/recall` Step 2 and `/standup` Step 5 that
+  checks for `## Summary` before re-summarizing and auto-fixes stale status fields.
+- Stale metadata cache caused `find_unsummarized_notes()` to skip genuinely
+  unsummarized notes and re-summarize already-upgraded ones. Function now reads
+  frontmatter directly from disk, and `upgrade_note_with_summary()` invalidates
+  cache entries after status changes.
+
 ## [1.7.2] - 2026-04-09
 
 ### Fixed

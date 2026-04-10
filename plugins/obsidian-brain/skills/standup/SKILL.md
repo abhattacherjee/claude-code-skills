@@ -29,7 +29,7 @@ c = load_config()
 if not c.get("vault_path"):
     print("ERROR: vault_path not configured", file=sys.stderr)
     sys.exit(1)
-print(f"VAULT={c[\"vault_path\"]} SESS={c.get(\"sessions_folder\",\"claude-sessions\")} INS={c.get(\"insights_folder\",\"claude-insights\")}")
+print("VAULT=" + c["vault_path"] + " SESS=" + c.get("sessions_folder", "claude-sessions") + " INS=" + c.get("insights_folder", "claude-insights"))
 '
 ```
 
@@ -154,17 +154,23 @@ Stop here.
 
 ### Step 5 — Identify unsummarized session notes
 
-From `MATCHED_FILES`, isolate those in `$SESSIONS_FOLDER/`. Use Grep to check each for the unsummarized marker:
+From `MATCHED_FILES`, isolate those in `$SESSIONS_FOLDER/`. Use Grep to check each for the unsummarized frontmatter status (NOT body text — body text matches cause false positives from logged tool usage):
 
 ```
-pattern: "AI summary unavailable"
+pattern: "^status: auto-logged"
 path: <each session file>
 output_mode: files_with_matches
 ```
 
+**Defense-in-depth:** For each file matching `^status: auto-logged`, also check if it already has a real `## Summary` section (without `"AI summary unavailable"`). If so, the note was summarized by a legacy code path that never flipped the status. Skip it and fix the status:
+
+```bash
+sed -i '' 's/^status: auto-logged/status: summarized/' "$FILE_PATH"
+```
+
 Split into:
-- `UNSUMMARIZED` — session files containing "AI summary unavailable"
-- `SUMMARIZED` — all other matched files (sessions + insights)
+- `UNSUMMARIZED` — session files with `status: auto-logged` AND no real `## Summary`
+- `SUMMARIZED` — all other matched files (sessions + insights + auto-fixed legacy notes)
 
 ### Step 6 — Deferred summarization for unsummarized notes
 
