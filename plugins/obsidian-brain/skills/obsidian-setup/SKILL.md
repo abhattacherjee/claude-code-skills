@@ -28,7 +28,10 @@ from obsidian_utils import load_config
 c = load_config()
 vp = c.get("vault_path", "")
 if vp:
-    print(f"EXISTING VAULT={vp} SESS={c.get(\"sessions_folder\",\"claude-sessions\")} INS={c.get(\"insights_folder\",\"claude-insights\")} DASH={c.get(\"dashboards_folder\",\"claude-dashboards\")}")
+    sess = c.get("sessions_folder", "claude-sessions")
+    ins = c.get("insights_folder", "claude-insights")
+    dash = c.get("dashboards_folder", "claude-dashboards")
+    print(f"EXISTING VAULT={vp} SESS={sess} INS={ins} DASH={dash}")
 else:
     print("NO_CONFIG")
 '

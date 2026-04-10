@@ -1,0 +1,14 @@
+{
+  "name": "obsidian-brain-repo",
+  "owner": {
+    "name": "Abhishek"
+  },
+  "plugins": [
+    {
+      "name": "obsidian-brain",
+      "source": "./",
+      "version": "1.8.1",
+      "description": "Persistent brain for Claude Code sessions using Obsidian."
+    }
+  ]
+}
