@@ -1041,11 +1041,17 @@ def build_context_brief(
     insights_dir = Path(vault_path) / insights_folder
 
     # --- 1. Scan and filter sessions ---
+    def _safe_sort_key(p: Path) -> tuple:
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (p.name[:10], mtime)
+
     session_files: list[tuple[str, str, dict]] = []  # (filename, path, metadata)
     if sessions_dir.is_dir():
-        for f in sorted(sessions_dir.iterdir(), reverse=True):
-            if not f.suffix == '.md':
-                continue
+        md_files = [f for f in sessions_dir.iterdir() if f.suffix == '.md']
+        for f in sorted(md_files, key=_safe_sort_key, reverse=True):
             meta = read_note_metadata(str(f))
             if not meta:
                 continue
@@ -1114,6 +1120,18 @@ def build_context_brief(
         date = meta.get('date', '')
         title = meta.get('project', project)
         branch = meta.get('git_branch', '')
+        # Format duration as readable time
+        dur_min = meta.get('duration_minutes', 0)
+        try:
+            dur_min = float(dur_min)
+        except (ValueError, TypeError):
+            dur_min = 0.0
+        if dur_min >= 60:
+            duration = f"{int(dur_min // 60)}h {int(dur_min % 60)}m"
+        elif dur_min > 0:
+            duration = f"{int(dur_min)}m"
+        else:
+            duration = ""
         try:
             with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
                 content_text = f.read()
@@ -1129,7 +1147,7 @@ def build_context_brief(
                         break
         except OSError:
             pass
-        history_rows.append(f"| {date} | {title} | {branch} |")
+        history_rows.append(f"| {i+1} | {date} | {duration} | {title} | {branch} |")
 
     # --- 3. Scan and read insights ---
     insight_entries: list[tuple[str, str]] = []  # (title, key_point)
@@ -1216,8 +1234,8 @@ def build_context_brief(
 
     if history_rows:
         brief_parts.append("\n### Recent Session History")
-        brief_parts.append("| Date | Title | Branch |")
-        brief_parts.append("|------|-------|--------|")
+        brief_parts.append("| # | Date | Duration | Title | Branch |")
+        brief_parts.append("|---|------|----------|-------|--------|")
         brief_parts.extend(history_rows)
 
     brief = "\n".join(brief_parts)

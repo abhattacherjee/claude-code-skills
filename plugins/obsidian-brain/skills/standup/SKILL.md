@@ -22,8 +22,8 @@ Run:
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
-import sys
-sys.path.insert(0, "hooks")
+import sys, os
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
 from obsidian_utils import load_config
 c = load_config()
 if not c.get("vault_path"):
@@ -181,8 +181,8 @@ If `UNSUMMARIZED` is empty, skip to Step 7.
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
-import sys
-sys.path.insert(0, "hooks")
+import sys, os
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
 from obsidian_utils import upgrade_unsummarized_note
 status = upgrade_unsummarized_note(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
 print(status)

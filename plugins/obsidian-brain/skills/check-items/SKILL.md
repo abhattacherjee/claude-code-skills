@@ -22,8 +22,8 @@ Run:
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
-import sys
-sys.path.insert(0, "hooks")
+import sys, os
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
 from obsidian_utils import load_config
 c = load_config()
 if not c.get("vault_path"):
@@ -198,7 +198,7 @@ For each project that had confirmed checkoffs, run:
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
 import sys, json
-sys.path.insert(0, "hooks")
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
 from open_item_dedup import batch_cascade_checkoff
 items = json.loads(sys.argv[4])
 summary = batch_cascade_checkoff(sys.argv[1], sys.argv[2], sys.argv[3], items)

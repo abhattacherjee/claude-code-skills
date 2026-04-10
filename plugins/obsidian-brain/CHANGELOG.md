@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-04-10
+
+### Added
+- `/recall` session history table now includes a Duration column (e.g. `1h 20m`, `27m`)
+- `/recall` session history table now includes a `#` column for easy session selection
+- `/recall` skill now instructs Claude to paraphrase session titles into concise one-liners
+- `_safe_sort_key()` helper for graceful handling of broken symlinks during session scan
+- 12 new tests: sort order, duration formatting, session number, stat failure, 60-min boundary, cache glob regression guards
+
+### Fixed
+- `/recall` session history now sorts by date descending then mtime descending, fixing random hash-based ordering for same-day sessions
+- All 12 skills now resolve hooks from plugin cache, fixing `ModuleNotFoundError` when running from non-obsidian-brain project directories
+- Session scan now filters to `.md` files before sorting, avoiding unnecessary `stat()` calls on non-session files
+
 ## [1.8.1] - 2026-04-10
 
 ### Added

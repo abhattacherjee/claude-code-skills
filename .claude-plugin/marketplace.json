@@ -42,7 +42,7 @@
       "name": "obsidian-brain",
       "source": "./plugins/obsidian-brain",
       "description": "Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, and enables project-scoped context resume via structured markdown notes.",
-      "version": "1.8.1"
+      "version": "1.8.2"
     },
     {
       "name": "product-video-creation",

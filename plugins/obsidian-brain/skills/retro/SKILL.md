@@ -22,8 +22,8 @@ Run:
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
-import sys
-sys.path.insert(0, "hooks")
+import sys, os
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
 from obsidian_utils import load_config
 c = load_config()
 if not c.get("vault_path"):
@@ -98,8 +98,8 @@ Get session context via the shared helper:
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
-import sys
-sys.path.insert(0, "hooks")
+import sys, os
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
 from obsidian_utils import load_config, get_session_context
 c = load_config()
 ctx = get_session_context(c["vault_path"], c.get("sessions_folder", "claude-sessions"))
