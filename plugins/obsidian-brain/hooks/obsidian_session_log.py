@@ -36,6 +36,24 @@ from obsidian_utils import (  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
+# Session cache cleanup
+# ---------------------------------------------------------------------------
+
+
+def _cleanup_session_cache(session_id: str) -> None:
+    """Remove the per-session disk cache file for a finished session."""
+    if not session_id:
+        return
+    try:
+        import obsidian_utils
+        cache_path = f"{obsidian_utils._CACHE_PREFIX}{session_id}.json"
+        if os.path.exists(cache_path):
+            os.unlink(cache_path)
+    except Exception as exc:  # noqa: BLE001 — best-effort cleanup, never fatal
+        print(f"[obsidian-brain] session cache cleanup failed: {exc}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Note construction
 # ---------------------------------------------------------------------------
 
@@ -99,79 +117,91 @@ def _run() -> None:
     # 1. Read hook input from stdin
     try:
         raw = sys.stdin.read()
-        hook_input = json.loads(raw)
+        hook_input = json.loads(raw) if raw.strip() else {}
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"[obsidian-brain] invalid stdin JSON: {exc}", file=sys.stderr)
-        return
+        hook_input = {}
 
+    # Extract session_id up front so the finally block can always clean up,
+    # regardless of which early-return path below we take.
     session_id = hook_input.get("session_id", "")
-    cwd = hook_input.get("cwd", "")
-    transcript_path = hook_input.get("transcript_path", "")
 
-    if not session_id or not transcript_path:
-        print("[obsidian-brain] missing session_id or transcript_path, skipping", file=sys.stderr)
-        return
+    try:
+        if not hook_input:
+            return
 
-    # 2. Load config
-    config = load_config()
-    if not config.get("auto_log_enabled", True):
-        print("[obsidian-brain] auto_log_enabled is False, skipping", file=sys.stderr)
-        return
+        cwd = hook_input.get("cwd", "")
+        transcript_path = hook_input.get("transcript_path", "")
 
-    vault_path = config.get("vault_path", "")
-    if not vault_path:
-        print("[obsidian-brain] no vault_path configured, skipping", file=sys.stderr)
-        return
+        if not session_id or not transcript_path:
+            print("[obsidian-brain] missing session_id or transcript_path, skipping", file=sys.stderr)
+            return
 
-    sessions_folder = config.get("sessions_folder", "claude-sessions")
-    min_messages = config.get("min_messages", 3)
-    min_duration = config.get("min_duration_minutes", 2)
+        # 2. Load config
+        config = load_config()
+        if not config.get("auto_log_enabled", True):
+            print("[obsidian-brain] auto_log_enabled is False, skipping", file=sys.stderr)
+            return
 
-    # 3. Read and parse transcript
-    messages = read_transcript(transcript_path)
-    if not messages:
-        print("[obsidian-brain] empty transcript, skipping", file=sys.stderr)
-        return
+        vault_path = config.get("vault_path", "")
+        if not vault_path:
+            print("[obsidian-brain] no vault_path configured, skipping", file=sys.stderr)
+            return
 
-    # 4. Extract user and assistant messages
-    user_msgs = extract_user_messages(messages)
-    assistant_msgs = extract_assistant_messages(messages)
+        sessions_folder = config.get("sessions_folder", "claude-sessions")
+        min_messages = config.get("min_messages", 3)
+        min_duration = config.get("min_duration_minutes", 2)
 
-    # 5. Skip check
-    if should_skip_session(user_msgs, 0, min_messages=min_messages, min_duration=min_duration):
-        # Duration not yet known; check message count only (duration=0 bypasses duration check)
-        print(f"[obsidian-brain] too few user messages ({len(user_msgs)}), skipping", file=sys.stderr)
-        return
+        # 3. Read and parse transcript
+        messages = read_transcript(transcript_path)
+        if not messages:
+            print("[obsidian-brain] empty transcript, skipping", file=sys.stderr)
+            return
 
-    # 6. Extract metadata
-    metadata = extract_session_metadata(messages, cwd)
-    metadata["vault_path"] = vault_path
-    metadata["sessions_folder"] = sessions_folder
+        # 4. Extract user and assistant messages
+        user_msgs = extract_user_messages(messages)
+        assistant_msgs = extract_assistant_messages(messages)
 
-    # Re-check with actual duration
-    if should_skip_session(user_msgs, metadata["duration_minutes"],
-                           min_messages=min_messages, min_duration=min_duration):
-        print(f"[obsidian-brain] session below thresholds, skipping", file=sys.stderr)
-        return
+        # 5. Skip check
+        if should_skip_session(user_msgs, 0, min_messages=min_messages, min_duration=min_duration):
+            # Duration not yet known; check message count only (duration=0 bypasses duration check)
+            print(f"[obsidian-brain] too few user messages ({len(user_msgs)}), skipping", file=sys.stderr)
+            return
 
-    # 7. Detect resumed session
-    resumed = is_resumed_session(vault_path, sessions_folder, session_id)
-    if resumed:
-        print(f"[obsidian-brain] resumed session detected", file=sys.stderr)
+        # 6. Extract metadata
+        metadata = extract_session_metadata(messages, cwd)
+        metadata["vault_path"] = vault_path
+        metadata["sessions_folder"] = sessions_folder
 
-    # 8. Build filename
-    date_str = datetime.date.today().isoformat()
-    project_slug = slugify(metadata.get("project", "session"))
-    filename = make_filename(date_str, project_slug, session_id)
+        # Re-check with actual duration
+        if should_skip_session(user_msgs, metadata["duration_minutes"],
+                               min_messages=min_messages, min_duration=min_duration):
+            print(f"[obsidian-brain] session below thresholds, skipping", file=sys.stderr)
+            return
 
-    # 9. Extract tool usage details and write raw note FIRST
-    tool_uses = extract_tool_uses(messages)
-    raw_body = build_raw_fallback(user_msgs, metadata, assistant_msgs=assistant_msgs, tool_uses=tool_uses)
-    raw_content = _build_note(session_id, metadata, raw_body, resumed=resumed)
-    if not write_vault_note(vault_path, sessions_folder, filename, raw_content):
-        print("[obsidian-brain] failed to write raw note, aborting", file=sys.stderr)
-        return
-    print("[obsidian-brain] raw note written (summarization deferred to /recall)", file=sys.stderr)
+        # 7. Detect resumed session
+        resumed = is_resumed_session(vault_path, sessions_folder, session_id)
+        if resumed:
+            print(f"[obsidian-brain] resumed session detected", file=sys.stderr)
+
+        # 8. Build filename
+        date_str = datetime.date.today().isoformat()
+        project_slug = slugify(metadata.get("project", "session"))
+        filename = make_filename(date_str, project_slug, session_id)
+
+        # 9. Extract tool usage details and write raw note FIRST
+        tool_uses = extract_tool_uses(messages)
+        raw_body = build_raw_fallback(user_msgs, metadata, assistant_msgs=assistant_msgs, tool_uses=tool_uses)
+        raw_content = _build_note(session_id, metadata, raw_body, resumed=resumed)
+        if not write_vault_note(vault_path, sessions_folder, filename, raw_content):
+            print("[obsidian-brain] failed to write raw note, aborting", file=sys.stderr)
+            return
+        print("[obsidian-brain] raw note written (summarization deferred to /recall)", file=sys.stderr)
+    finally:
+        # Run cache cleanup regardless of how _run() exits so /tmp does not
+        # accumulate stale cache files on any SessionEnd outcome — including
+        # threshold skips, missing config, auto_log_disabled, or errors.
+        _cleanup_session_cache(session_id)
 
 
 if __name__ == "__main__":

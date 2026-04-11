@@ -30,41 +30,149 @@ _CACHE_PREFIX = '/tmp/.obsidian-brain-cache-'
 _BOOTSTRAP_PREFIX = '/tmp/.obsidian-brain-sid-'
 
 
-def _get_session_id_fast() -> str:
-    """Derive session ID, using bootstrap file for speed on repeat calls."""
-    project = os.path.basename(os.getcwd())
-    bootstrap = f"{_BOOTSTRAP_PREFIX}{project}"
+def _bootstrap_prefix() -> str:
+    """Return the bootstrap file prefix, honoring OBSIDIAN_BRAIN_BOOTSTRAP_PREFIX env override."""
+    return os.environ.get("OBSIDIAN_BRAIN_BOOTSTRAP_PREFIX", _BOOTSTRAP_PREFIX)
 
-    # Try bootstrap file first (~0.1ms)
+
+def _safe_mtime(path: str) -> float:
+    """Return file mtime, or -1.0 if the path is missing/unstatable.
+
+    Used by _get_session_id_fast() and similar helpers that need best-effort
+    mtime comparison over globs — filesystem races (a JSONL rotated between
+    glob and stat) must not crash the caller.
+    """
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return -1.0
+
+
+def _slow_path_newest_sid() -> str:
+    """Determine the current session id by scanning JSONL files directly.
+
+    Bootstrap-independent — does NOT read, write, or trust the bootstrap
+    cache. Used by health checks that must not be fooled by stale cache
+    entries. Returns 'unknown' if no JSONLs are found for the current cwd.
+    """
+    project = os.path.basename(os.getcwd())
+    import glob as _glob
+    safe_project = _glob.escape(project)
+    pattern = os.path.expanduser(f"~/.claude/projects/*{safe_project}/*.jsonl")
+    matches = _glob.glob(pattern)
+    entries = [(_safe_mtime(p), p) for p in matches]
+    viable = [(m, p) for m, p in entries if m >= 0]
+    if not viable:
+        return "unknown"
+    _, newest = max(viable)
+    return os.path.splitext(os.path.basename(newest))[0]
+
+
+def _get_session_id_fast() -> str:
+    """Derive session ID, using bootstrap file for speed on repeat calls.
+
+    Validation strategy:
+      1. Read bootstrap file (~0.1 ms)
+      2. Verify cached JSONL still exists
+      3. Determine the newest JSONL deterministically via (mtime, path)
+         tuple comparison. Ties broken by path string so the result is
+         reproducible on filesystems with 1-second mtime resolution.
+      4. If the newest JSONL's basename equals the cached sid, trust the
+         cache. If the cached JSONL shares the newest mtime (same-second
+         race), also trust the cache — the SessionStart hook has already
+         authoritatively written the current sid and same-mtime ties
+         effectively mean "these happened simultaneously."
+      5. Otherwise fall through to the slow path (full glob + deterministic
+         max) which is the authoritative answer.
+
+    Comparing basenames rather than mtime values directly is important
+    because the active session's JSONL is appended throughout the session,
+    so its mtime increases continuously. A naive mtime comparison would
+    invalidate the bootstrap on every call after a few seconds, defeating
+    the optimization.
+
+    The slow path is strictly READ-ONLY — it never writes the bootstrap
+    file. The SessionStart hook is the sole authoritative writer of the
+    bootstrap. Writing from the slow path would clobber the hook's correct
+    write if the slow path ran during the hook's own invocation (which
+    happens whenever downstream hook code calls a function that triggers
+    this, before CC has flushed the new session's JSONL to disk).
+    """
+    project = os.path.basename(os.getcwd())
+    bootstrap = f"{_bootstrap_prefix()}{project}"
+
+    import glob as _glob
+    safe_project = _glob.escape(project)
+    pattern = os.path.expanduser(f"~/.claude/projects/*{safe_project}/*.jsonl")
+
+    # Fast path: bootstrap file
     try:
         with open(bootstrap, 'r') as f:
             cached_sid = f.read().strip()
         if cached_sid:
-            # Cheap validation: check the JSONL file still exists (~0.1ms stat)
-            import glob as _glob
-            pattern = os.path.expanduser(f"~/.claude/projects/*{project}/{cached_sid}.jsonl")
-            if _glob.glob(pattern):
-                return cached_sid
+            safe_cached = _glob.escape(cached_sid)
+            cached_pattern = os.path.expanduser(
+                f"~/.claude/projects/*{safe_project}/{safe_cached}.jsonl"
+            )
+            cached_matches = _glob.glob(cached_pattern)
+            if cached_matches:
+                # Determine the newest JSONL deterministically: order by
+                # (mtime, path). Ties broken by path string so results are
+                # reproducible across filesystems that report 1-second mtime
+                # resolution.
+                all_matches = _glob.glob(pattern)
+                if all_matches:
+                    # Determine the newest JSONL deterministically via (mtime, path).
+                    # _safe_mtime returns -1.0 for files that disappear between glob
+                    # and stat, so transient races never crash the caller.
+                    entries = [(_safe_mtime(p), p) for p in all_matches]
+                    viable = [(m, p) for m, p in entries if m >= 0]
+                    if viable:
+                        newest_mtime, newest_path = max(viable)
+                        newest_sid = os.path.splitext(os.path.basename(newest_path))[0]
+                        if newest_sid == cached_sid:
+                            return cached_sid
+                        # Tie-breaker: if ANY cached JSONL matches the newest
+                        # mtime (across all worktree/project-dir matches), trust
+                        # the cache. When multiple project-dir variants exist
+                        # (e.g. worktrees), the cached sid's JSONL may appear in
+                        # several of them; comparing only cached_matches[0]
+                        # could miss the tie and cause an unnecessary
+                        # fall-through. This handles the same-second race where
+                        # the previous session's JSONL and the current
+                        # session's JSONL report identical mtimes on
+                        # coarse-resolution filesystems, and the SessionStart
+                        # hook has already authoritatively written the current
+                        # sid.
+                        cached_mtimes = [_safe_mtime(p) for p in cached_matches]
+                        cached_newest = max(
+                            (m for m in cached_mtimes if m >= 0), default=-1.0
+                        )
+                        if cached_newest == newest_mtime:
+                            return cached_sid
+                        # Otherwise a different session is strictly newer; fall through.
+                    else:
+                        return cached_sid  # no viable JSONLs; trust cache
+                else:
+                    return cached_sid  # no other JSONLs; trust cache
     except OSError:
         pass
 
-    # Fall back to full glob + mtime sort (~5ms)
-    import glob as _glob
-    pattern = os.path.expanduser(f"~/.claude/projects/*{project}/*.jsonl")
+    # Slow path: full glob + mtime sort with deterministic tiebreaker.
+    # This path is READ-ONLY — never writes the bootstrap file. The
+    # SessionStart hook is the sole authoritative writer. Writing here
+    # would clobber the hook's correct write if the slow path ran
+    # during the hook's own invocation (which happens whenever the
+    # hook's downstream code calls a function that triggers this).
+    # Use _safe_mtime so a JSONL deleted or rotated between glob and
+    # stat cannot crash the caller (e.g. load_config).
     matches = _glob.glob(pattern)
-    if not matches:
+    entries = [(_safe_mtime(p), p) for p in matches]
+    viable = [(m, p) for m, p in entries if m >= 0]
+    if not viable:
         return "unknown"
-    newest = max(matches, key=os.path.getmtime)
-    sid = os.path.splitext(os.path.basename(newest))[0]
-
-    # Write bootstrap for next call
-    try:
-        with open(bootstrap, 'w') as f:
-            f.write(sid)
-    except OSError:
-        pass
-
-    return sid
+    _, newest = max(viable)
+    return os.path.splitext(os.path.basename(newest))[0]
 
 
 def cache_get(session_id: str, key: str):
@@ -197,6 +305,71 @@ def load_config() -> dict:
 
     cache_set(sid, "config", config)
     return config
+
+
+def check_hook_status() -> dict:
+    """Inspect the bootstrap file to report SessionStart hook health.
+
+    Returns:
+        {"ok": bool, "message": str, "bootstrap_sid": str, "current_sid": str}
+
+    "ok" is True if the bootstrap file exists and matches the current session.
+    "ok" is False if the bootstrap is missing or points at a different sid
+    (which would indicate the SessionStart hook did not fire, or the fast
+    path is returning a stale value).
+    """
+    project = os.path.basename(os.getcwd())
+    bootstrap = f"{_bootstrap_prefix()}{project}"
+
+    # Read bootstrap BEFORE deriving current_sid so we see its real state.
+    try:
+        with open(bootstrap, "r") as f:
+            bootstrap_sid = f.read().strip()
+    except OSError:
+        bootstrap_sid = None
+
+    # Use the bootstrap-independent slow path so the check isn't circular.
+    # _get_session_id_fast() can return the cached bootstrap value, which
+    # would make this health check report OK even when the bootstrap is
+    # stale.
+    current_sid = _slow_path_newest_sid()
+
+    if bootstrap_sid is None:
+        return {
+            "ok": False,
+            "message": "bootstrap file missing — SessionStart hook may not have fired",
+            "bootstrap_sid": "",
+            "current_sid": current_sid,
+        }
+
+    if current_sid == "unknown":
+        return {
+            "ok": False,
+            "message": (
+                "could not determine current session id from JSONLs "
+                "(no session files found)"
+            ),
+            "bootstrap_sid": bootstrap_sid,
+            "current_sid": current_sid,
+        }
+
+    if bootstrap_sid == current_sid:
+        return {
+            "ok": True,
+            "message": "SessionStart hook fired; bootstrap matches current session",
+            "bootstrap_sid": bootstrap_sid,
+            "current_sid": current_sid,
+        }
+
+    return {
+        "ok": False,
+        "message": (
+            f"bootstrap sid {bootstrap_sid[:8]} does not match current "
+            f"session {current_sid[:8]} — hook may be stale"
+        ),
+        "bootstrap_sid": bootstrap_sid,
+        "current_sid": current_sid,
+    }
 
 
 def get_session_context(vault_path: str | None = None, sessions_folder: str | None = None) -> dict:
@@ -1025,11 +1198,21 @@ def build_context_brief(
     sessions_folder: str,
     insights_folder: str,
     project: str,
+    hook_status_line: str | None = None,
 ) -> str:
     """Build the /recall context brief entirely in Python.
 
     Reads session and insight files directly (no sub-agent), composes
     a structured markdown brief, and runs open-item detection.
+
+    Args:
+        vault_path: Obsidian vault root.
+        sessions_folder: Folder name (relative to vault) containing sessions.
+        insights_folder: Folder name (relative to vault) containing insights.
+        project: Project slug to filter on.
+        hook_status_line: Optional pre-formatted status line (e.g. "[OK] …" or
+            "[WARN] …") to prepend to the brief so /recall can surface SessionStart
+            hook health at a glance.
 
     Returns a structured string with labeled sections:
       CONTEXT_BRIEF: <markdown brief>
@@ -1215,7 +1398,11 @@ def build_context_brief(
     insights_section = "\n".join(insight_text_parts) if insight_text_parts else "No curated insights yet for this project."
 
     # --- 4. Compose brief ---
-    brief_parts: list[str] = [f"## Project Context: {project}"]
+    brief_parts: list[str] = []
+    if hook_status_line:
+        brief_parts.append(hook_status_line)
+        brief_parts.append("")
+    brief_parts.append(f"## Project Context: {project}")
 
     if most_recent_summary:
         brief_parts.append(f"\n### Last Session ({most_recent_date})")

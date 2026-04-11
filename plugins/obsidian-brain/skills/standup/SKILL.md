@@ -2,7 +2,7 @@
 name: standup
 description: "Generates daily/weekly standup summaries across all projects from the Obsidian vault. Includes a Closed This Period section listing items checked off during the window, grouped by project. Use when: (1) /standup for today's summary, (2) /standup this week for weekly summary, (3) /standup <date range> for custom range."
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
 # Standup — Generate Standup Summaries from Obsidian Vault
@@ -409,6 +409,44 @@ If `UPGRADED_COUNT > 0`, append:
 Then confirm the saved file:
 
 > **Saved:** `$VAULT_PATH/$INSIGHTS_FOLDER/<filename>`
+
+### Step 14 — Cascade completed open items across vault
+
+When open items are checked off in the standup note (either during generation or by the user afterwards), those same items may appear as unchecked `- [ ]` entries in other session notes across the vault. This step ensures all references are updated.
+
+**14a — Collect confirmed completed items.** Gather all items that were marked `[x]` in the standup note's per-project `### Open Items` sections or the top-level `### Key Open Items` section. Include items from the `### Closed This Period` section as well. Extract just the item text (without the checkbox prefix or project prefix).
+
+**14b — For each project that has completed items, cascade checkoffs across the vault.** Run:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+printf '%s' "$CHECKED_ITEMS_JSON" | python3 -c '
+import sys, json, os
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from open_item_dedup import batch_cascade_checkoff
+items = json.load(sys.stdin)
+summary = batch_cascade_checkoff(sys.argv[1], sys.argv[2], sys.argv[3], items)
+print(summary)
+' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
+```
+
+Where `$CHECKED_ITEMS_JSON` is a JSON array of the confirmed item texts for that project (passed via stdin to avoid shell quoting issues with special characters in item text), and `$PROJECT` is the project name.
+
+Run one call per project that has completed items. If multiple projects have items, run the calls in parallel.
+
+If the command exits with a non-zero exit code, report the error to the user:
+
+> Cascade checkoff failed for $PROJECT: [first line of stderr]. The standup note is unaffected.
+
+Note: `batch_cascade_checkoff()` may emit warnings to stderr while still succeeding (e.g., a specific line changed). Only treat non-zero exit code as a failure.
+
+**14c — Report cascade results.** After all cascade calls complete, report:
+
+> Cascaded N checkoff(s) across M vault note(s) for project(s): list.
+
+If `batch_cascade_checkoff` is unavailable (import error), warn the user:
+
+> Could not cascade checkoffs: [error details]. The standup note is correct, but duplicate open items in other session notes were not updated. Run `/recall` to cascade manually.
 
 ## Edge Cases
 

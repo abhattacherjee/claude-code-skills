@@ -79,6 +79,7 @@ Run `/obsidian-setup` after installation. It will:
 | `/retro` | Session retrospective — what worked, what didn't, process improvements |
 | `/vault-ask` | Ask questions and get synthesized answers grounded in vault history |
 | `/check-items` | Cross-project sweep for completed open items — auto-checks off matches after user confirmation |
+| `/vault-doctor` | Audit and repair the vault — detects stale `source_session` backlinks and other health issues (dry-run by default) |
 
 ### Usage Examples
 

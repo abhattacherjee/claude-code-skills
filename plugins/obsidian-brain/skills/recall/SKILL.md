@@ -266,10 +266,14 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
 import sys, os
 import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-from obsidian_utils import build_context_brief
-print(build_context_brief(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]))
+from obsidian_utils import build_context_brief, check_hook_status
+hs = check_hook_status()
+status_line = ("[OK] " if hs["ok"] else "[WARN] ") + hs["message"]
+print(build_context_brief(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], hook_status_line=status_line))
 ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$INSIGHTS_FOLDER" "$PROJECT"
 ```
+
+The first line of the emitted `CONTEXT_BRIEF` is always the hook-status line (prefixed `[OK]` when the SessionStart hook fired and bootstrap matches the current sid, `[WARN]` otherwise). Preserve it verbatim when displaying the brief — it is the user's only visible signal that hooks are alive.
 
 If the command fails (non-zero exit code), print the error and stop — do not fall back to in-context reads.
 

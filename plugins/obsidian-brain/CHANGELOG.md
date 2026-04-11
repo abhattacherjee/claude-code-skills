@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-04-11
+
+### Added
+- `/standup` Step 14: cascade completed open items across vault notes using `batch_cascade_checkoff()` — when items are marked done in standup, all matching `- [ ]` entries in other session notes are automatically checked off
+- `/vault-doctor` skill — diagnostic and repair tool for the Obsidian vault with a pluggable check-module registry. Ships with a `source-sessions` check that scans the last 7 days of insight/decision/error-fix/retro notes, detects stale `source_session` backlinks by matching note mtimes against JSONL session windows, and atomically rewrites only the affected frontmatter fields under `--apply` with per-project confirmation and automatic backups.
+- `~/.claude/obsidian-brain-hook.log` — rolling audit log of SessionStart hook invocations with the authoritative session id, rotated at 100 KB.
+- `scripts/verify-hooks.sh` — manual diagnostic that simulates a SessionStart hook invocation and confirms the bootstrap and log were written.
+- `/recall` brief now leads with a `[OK]`/`[WARN]` SessionStart hook status line.
+
+### Fixed
+- Session hint hook now writes the authoritative session id to the bootstrap cache, fixing stale `source_session` backlinks that pointed at previous sessions when `/compress`, `/decide`, `/error-log`, or `/retro` were run in a second-or-later session of a given project.
+- `_get_session_id_fast()` now detects a new session by comparing the newest JSONL's basename against the cached sid (with a same-second mtime tie-breaker that trusts the hook-written bootstrap), invalidating the cache when a different session has become authoritative. This is defense-in-depth against the rare case where the SessionStart hook did not fire.
+- `_get_session_id_fast()` slow path is now strictly read-only so it can no longer clobber the SessionStart hook's authoritative bootstrap write during the hook's own invocation, preventing a race where Claude Code fires SessionStart before flushing the new session's JSONL to disk.
+- `apply()` preserves the patched note's original mtime so `/vault-doctor` re-runs never re-flag their own fixes.
+- `apply()` sanitizes the project name via `_safe_project_slug()` before joining it onto the backup path, preventing path-traversal via frontmatter-provided project values.
+- `apply()` separates backup and rewrite error reporting so failures are distinguishable and the backup path is preserved for recovery even when the rewrite stage fails.
+- `_jsonl_dir_for_project()` uses `glob.escape()` on project names and `_safe_mtime()` wrapper to tolerate transient filesystem races between glob and stat.
+- `_find_matching_session()` iterates deterministically with a same-mtime tiebreaker so window-boundary cases pick the most recently started session reproducibly.
+- `_write_bootstrap_atomic()` forces absolute paths before computing the temp directory, preventing `EXDEV` errors when `OBSIDIAN_BRAIN_BOOTSTRAP_PREFIX` is relative and `/tmp` is a separate filesystem.
+- `_write_bootstrap_atomic()` and `apply()` clean up orphaned temp files in `finally` blocks if `os.replace()` did not consume them.
+- `vault_doctor_checks` registry now catches per-module import errors and logs them to stderr rather than aborting the whole dispatcher, keeping the check system pluggable.
+- `check_hook_status()` now uses a bootstrap-independent slow-path helper so the health check is not circular and correctly flags stale bootstraps as `[WARN]`.
+- `/recall` brief hook status line handles the "no JSONLs discoverable" case with a clear `could not determine current session id from JSONLs` message.
+- `verify-hooks.sh` derives `PROJECT` via `get_project_name()` so it agrees with the Python hook's project-name resolution, and passes `cwd` to its Python helper via `sys.argv` rather than string interpolation (quote-safe for paths containing special characters).
+- `_cleanup_session_cache()` now runs in a `try/finally` at the top level of the SessionEnd hook, so orphaned cache files are cleaned up on every SessionEnd path (threshold skips, missing config, auto-log disabled, errors) — not just the happy path.
+- Several test suites migrated from `time.mktime()` (local time) to `calendar.timegm()` (UTC) to prevent CI flakiness on non-UTC runners.
+- `vault_doctor.py` `_load_config()` respects strict `CLI > env > config file > default` precedence for every field; previously environment-set folder names could be overridden by config file values.
+- `vault_doctor.py` validates `--days` as positive before running any check.
+- `apply()` now writes backups to `<backup_root>/<project>/<folder>/<basename>` to prevent basename collisions across insight-type folders.
+- All generated output uses ASCII glyphs (`[OK]`/`[WARN]`/`[FAIL]`) instead of Unicode emoji, matching the project-wide no-emoji convention.
+
+### Changed
+- SessionEnd hook now cleans up the per-session disk cache file `/tmp/.obsidian-brain-cache-<sid>.json` to prevent `/tmp` accumulation over time.
+
 ## [1.8.2] - 2026-04-10
 
 ### Added
