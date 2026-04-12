@@ -31,13 +31,17 @@ if vp:
     sess = c.get("sessions_folder", "claude-sessions")
     ins = c.get("insights_folder", "claude-insights")
     dash = c.get("dashboards_folder", "claude-dashboards")
-    print(f"EXISTING VAULT={vp} SESS={sess} INS={ins} DASH={dash}")
+    print(f"EXISTING")
+    print(f"VAULT={vp}")
+    print(f"SESS={sess}")
+    print(f"INS={ins}")
+    print(f"DASH={dash}")
 else:
     print("NO_CONFIG")
 '
 ```
 
-**If the output starts with `EXISTING`**, extract `VAULT_PATH` and present:
+**If the output starts with `EXISTING`**, parse each subsequent line as KEY=VALUE, splitting on the first `=`. Extract `VAULT_PATH` and present:
 
 > **Existing obsidian-brain installation detected.**
 > - Vault path: `<vault_path from config>`
@@ -482,6 +486,12 @@ Write `~/.claude/obsidian-brain-config.json` with this exact structure:
 Replace `<VAULT_PATH value from Step 2>` with the actual vault path. Ensure the file is valid JSON.
 
 First run `mkdir -p ~/.claude` to ensure the directory exists.
+
+After writing the config file, restrict permissions so only the current user can read it:
+
+```bash
+chmod 600 ~/.claude/obsidian-brain-config.json
+```
 
 ### Step 8 — Verify vault access
 

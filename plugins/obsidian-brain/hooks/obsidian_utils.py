@@ -17,22 +17,39 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+# --- Secure working directory ---
+# All temp/cache files use ~/.claude/obsidian-brain/ (0o700) instead of /tmp.
+# This prevents symlink attacks and cache poisoning on multi-user systems.
+
+_SECURE_DIR = os.path.expanduser("~/.claude/obsidian-brain")
+
+
+def _ensure_secure_dir() -> str:
+    """Create and return the secure working directory with 0o700 permissions."""
+    os.makedirs(_SECURE_DIR, mode=0o700, exist_ok=True)
+    st = os.stat(_SECURE_DIR)
+    if st.st_mode & 0o077:
+        os.chmod(_SECURE_DIR, 0o700)
+    return _SECURE_DIR
+
+
 # --- Session-scoped cache ---
-# File-based cache at /tmp/.obsidian-brain-cache-{session_id}.json
 # Avoids repeated vault scans when multiple skills run in one session.
 
-_CACHE_PREFIX = '/tmp/.obsidian-brain-cache-'
-_BOOTSTRAP_PREFIX = '/tmp/.obsidian-brain-sid-'
+_CACHE_PREFIX = os.path.join(_SECURE_DIR, "cache-")
+_BOOTSTRAP_PREFIX = os.path.join(_SECURE_DIR, "sid-")
 
 
 def _bootstrap_prefix() -> str:
-    """Return the bootstrap file prefix, honoring OBSIDIAN_BRAIN_BOOTSTRAP_PREFIX env override."""
-    return os.environ.get("OBSIDIAN_BRAIN_BOOTSTRAP_PREFIX", _BOOTSTRAP_PREFIX)
+    """Return the bootstrap file prefix. Fixed to secure directory."""
+    return _BOOTSTRAP_PREFIX
 
 
 def _safe_mtime(path: str) -> float:
@@ -188,6 +205,7 @@ def cache_get(session_id: str, key: str):
 
 def cache_set(session_id: str, key: str, value) -> None:
     """Write a key to the session cache. Atomic write."""
+    _ensure_secure_dir()
     cache_path = f"{_CACHE_PREFIX}{session_id}.json"
     try:
         with open(cache_path, 'r') as f:
@@ -199,7 +217,7 @@ def cache_set(session_id: str, key: str, value) -> None:
 
     data[key] = value
 
-    fd, tmp = tempfile.mkstemp(prefix='.ob-cache-', suffix='.json.tmp', dir='/tmp')
+    fd, tmp = tempfile.mkstemp(prefix='.ob-cache-', suffix='.json.tmp', dir=_SECURE_DIR)
     try:
         with os.fdopen(fd, 'w') as f:
             json.dump(data, f)
@@ -231,7 +249,8 @@ def cache_invalidate(session_id: str, *keys: str) -> None:
     for k in keys:
         data.pop(k, None)
 
-    fd, tmp = tempfile.mkstemp(prefix='.ob-cache-', suffix='.json.tmp', dir='/tmp')
+    _ensure_secure_dir()
+    fd, tmp = tempfile.mkstemp(prefix='.ob-cache-', suffix='.json.tmp', dir=_SECURE_DIR)
     try:
         with os.fdopen(fd, 'w') as f:
             json.dump(data, f)
@@ -303,20 +322,34 @@ def load_config() -> dict:
             file=sys.stderr,
         )
 
+    # Auto-fix config file permissions if group/world readable
+    try:
+        config_stat = os.stat(_CONFIG_PATH)
+    except OSError:
+        pass  # file doesn't exist or can't stat — nothing to fix
+    else:
+        if config_stat.st_mode & 0o077:
+            try:
+                os.chmod(_CONFIG_PATH, 0o600)
+                print("[obsidian-brain] fixed config permissions to 0o600", file=sys.stderr)
+            except OSError as exc:
+                print(f"[obsidian-brain] WARNING: config is world-readable and chmod failed: {exc}", file=sys.stderr)
+
     cache_set(sid, "config", config)
     return config
 
 
 def check_hook_status() -> dict:
-    """Inspect the bootstrap file to report SessionStart hook health.
+    """Inspect the bootstrap file to report session-logging health.
 
     Returns:
         {"ok": bool, "message": str, "bootstrap_sid": str, "current_sid": str}
 
-    "ok" is True if the bootstrap file exists and matches the current session.
-    "ok" is False if the bootstrap is missing or points at a different sid
-    (which would indicate the SessionStart hook did not fire, or the fast
-    path is returning a stale value).
+    "ok" is True if the bootstrap file exists (session logging is active).
+    A SID mismatch (bootstrap points at a previous session) is normal after
+    reconnects and does NOT indicate a problem — sessions are still logged.
+    "ok" is False only when the bootstrap file is missing entirely or no
+    session files can be found.
     """
     project = os.path.basename(os.getcwd())
     bootstrap = f"{_bootstrap_prefix()}{project}"
@@ -337,7 +370,7 @@ def check_hook_status() -> dict:
     if bootstrap_sid is None:
         return {
             "ok": False,
-            "message": "bootstrap file missing — SessionStart hook may not have fired",
+            "message": "Session logging may not be active — run /obsidian-setup to configure",
             "bootstrap_sid": "",
             "current_sid": current_sid,
         }
@@ -345,28 +378,25 @@ def check_hook_status() -> dict:
     if current_sid == "unknown":
         return {
             "ok": False,
-            "message": (
-                "could not determine current session id from JSONLs "
-                "(no session files found)"
-            ),
+            "message": "No session files found — run /obsidian-setup to verify configuration",
             "bootstrap_sid": bootstrap_sid,
             "current_sid": current_sid,
         }
 
-    if bootstrap_sid == current_sid:
+    # Bootstrap exists = session logging is working. SID mismatch is
+    # expected after reconnects and is not a problem — keep ok=True
+    # but include diagnostic detail for debugging.
+    if bootstrap_sid != current_sid:
         return {
             "ok": True,
-            "message": "SessionStart hook fired; bootstrap matches current session",
+            "message": "Session logging active (resumed session)",
             "bootstrap_sid": bootstrap_sid,
             "current_sid": current_sid,
         }
 
     return {
-        "ok": False,
-        "message": (
-            f"bootstrap sid {bootstrap_sid[:8]} does not match current "
-            f"session {current_sid[:8]} — hook may be stale"
-        ),
+        "ok": True,
+        "message": "Session logging active",
         "bootstrap_sid": bootstrap_sid,
         "current_sid": current_sid,
     }
@@ -864,7 +894,7 @@ def generate_summary(
     assistant_msgs: list[str],
     metadata: dict,
     model: str = "haiku",
-    timeout: int = 15,
+    timeout: int = 30,
 ) -> str | None:
     """Call ``claude -p --model <model>`` to summarize the session.
 
@@ -991,6 +1021,27 @@ OUTPUT EXACTLY these markdown sections with no preamble, no commentary, no quest
 
 
 # ---------------------------------------------------------------------------
+# Secret scrubbing
+# ---------------------------------------------------------------------------
+
+_SECRET_PATTERNS = [
+    (re.compile(r'gh[ps]_[A-Za-z0-9_]{36,}'), '[REDACTED:github-token]'),
+    (re.compile(r'AKIA[0-9A-Z]{16}'), '[REDACTED:aws-key]'),
+    (re.compile(r'(?i)(password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+'), r'\1=[REDACTED]'),
+    (re.compile(r'-----BEGIN [A-Z ]+-----'), '[REDACTED:pem-header]'),
+    (re.compile(r'(?i)Bearer\s+[A-Za-z0-9._\-]{20,}'), 'Bearer [REDACTED]'),
+    (re.compile(r'(?i)(key|secret|token)\s*[=:]\s*[A-Za-z0-9+/=]{40,}'), r'\1=[REDACTED:base64]'),
+]
+
+
+def scrub_secrets(text: str) -> str:
+    """Best-effort redaction of common secret patterns."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Vault operations
 # ---------------------------------------------------------------------------
 
@@ -998,11 +1049,19 @@ OUTPUT EXACTLY these markdown sections with no preamble, no commentary, no quest
 def write_vault_note(
     vault_path: str, folder: str, filename: str, content: str
 ) -> bool:
-    """Atomic write: temp file + chmod 0o644 + rename into vault folder.
+    """Atomic write: temp file + chmod 0o600 + rename into vault folder.
 
     Creates the target folder if it does not exist.  Returns True on success.
     """
     dest_dir = Path(vault_path) / folder
+    dest = dest_dir / filename
+
+    # Path traversal check — BEFORE any filesystem side effects
+    vault_real = Path(vault_path).resolve()
+    if not dest.resolve().is_relative_to(vault_real):
+        print(f"[obsidian-brain] path traversal blocked: {dest}", file=sys.stderr)
+        return False
+
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1012,7 +1071,6 @@ def write_vault_note(
         )
         return False
 
-    dest = dest_dir / filename
     try:
         fd, tmp_path = tempfile.mkstemp(
             dir=str(dest_dir), prefix=".ob-", suffix=".md.tmp"
@@ -1020,7 +1078,7 @@ def write_vault_note(
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(content)
-            os.chmod(tmp_path, 0o644)
+            os.chmod(tmp_path, 0o600)
             os.rename(tmp_path, str(dest))
         except Exception:
             try:
@@ -1033,6 +1091,57 @@ def write_vault_note(
         return False
 
     print(f"[obsidian-brain] wrote {dest}", file=sys.stderr)
+    return True
+
+
+def flip_note_status(path: str, old_status: str, new_status: str) -> bool:
+    """Atomically change a note's frontmatter status field.
+
+    Reads the file, replaces 'status: <old>' with 'status: <new>' in the
+    frontmatter, and writes back via temp file + rename.
+    Returns True on success.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError as exc:
+        print(f"[obsidian-brain] cannot read {path}: {exc}", file=sys.stderr)
+        return False
+
+    old_line = f"status: {old_status}"
+    new_line = f"status: {new_status}"
+
+    # Constrain replacement to the frontmatter block (between --- delimiters)
+    if not content.startswith("---"):
+        return False
+    end_idx = content.index("\n---", 3) + 1 if "\n---" in content[3:] else -1
+    if end_idx < 0:
+        return False
+    frontmatter = content[:end_idx]
+    if old_line not in frontmatter:
+        return False
+
+    new_content = frontmatter.replace(old_line, new_line, 1) + content[end_idx:]
+
+    dir_path = os.path.dirname(path)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".ob-flip-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(new_content)
+            orig_mode = stat.S_IMODE(os.stat(path).st_mode)
+            os.chmod(tmp_path, orig_mode)
+            os.rename(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except Exception as exc:
+        print(f"[obsidian-brain] flip_note_status failed for {path}: {exc}", file=sys.stderr)
+        return False
+
     return True
 
 
@@ -1332,52 +1441,122 @@ def build_context_brief(
             pass
         history_rows.append(f"| {i+1} | {date} | {duration} | {title} | {branch} |")
 
-    # --- 3. Scan and read insights ---
+    # --- 3. Load insights via vault index (layered ranking) ---
     insight_entries: list[tuple[str, str]] = []  # (title, key_point)
     insight_count = 0
-    if insights_dir.is_dir():
-        insight_files = sorted(
-            [f for f in insights_dir.iterdir() if f.suffix == '.md'],
-            reverse=True
-        )
-        project_insights: list[Path] = []
-        for f in insight_files:
-            meta = read_note_metadata(str(f))
-            if not meta:
-                continue
-            fm_project = meta.get('project', '')
-            if fm_project.lower() != project.lower() and slugify(fm_project) != slugify(project):
-                continue
-            project_insights.append(f)
 
-        insight_count = len(project_insights)
-        for f in project_insights[:20]:
-            title = f.stem
-            key_point = ""
-            try:
-                with open(f, 'r', encoding='utf-8', errors='replace') as fh:
-                    past_frontmatter = False
-                    frontmatter_closed = False
-                    for line_text in fh:
-                        stripped = line_text.strip()
-                        if stripped == '---':
-                            if not past_frontmatter:
-                                past_frontmatter = True
+    # Collect session context for layered ranking
+    _session_ids: list[str] = []
+    _session_tags: list[str] = []
+    _session_summary = ""
+    for _, _, _meta in session_files[:5]:
+        sid = _meta.get("session_id", "")
+        if sid:
+            _session_ids.append(sid)
+        for tag in _meta.get("tags", []):
+            if "claude/topic/" in tag and tag not in _session_tags:
+                _session_tags.append(tag)
+
+    # Build summary from loaded sessions
+    if most_recent_summary:
+        _session_summary = most_recent_summary
+
+    _use_vault_index = True
+    try:
+        from vault_index import ensure_index, query_related_notes
+    except ImportError:
+        _use_vault_index = False
+
+    if _use_vault_index:
+        try:
+            db_path = ensure_index(vault_path, [sessions_folder, insights_folder])
+            ranked_notes = query_related_notes(
+                db_path=db_path,
+                project=project,
+                session_ids=_session_ids,
+                session_tags=_session_tags,
+                session_summary=_session_summary,
+                note_types=["claude-insight", "claude-decision", "claude-error-fix", "claude-retro"],
+                limit=20,
+            )
+            insight_count = len(ranked_notes)
+            for note in ranked_notes:
+                title = note["title"]
+                key_point = ""
+                note_path = note["path"]
+                try:
+                    with open(note_path, "r", encoding="utf-8", errors="replace") as fh:
+                        past_frontmatter = False
+                        frontmatter_closed = False
+                        for line_text in fh:
+                            stripped = line_text.strip()
+                            if stripped == "---":
+                                if not past_frontmatter:
+                                    past_frontmatter = True
+                                    continue
+                                else:
+                                    frontmatter_closed = True
+                                    continue
+                            if not frontmatter_closed:
                                 continue
-                            else:
-                                frontmatter_closed = True
+                            if stripped.startswith("# "):
                                 continue
-                        if not frontmatter_closed:
-                            continue
-                        if stripped.startswith('# '):
-                            title = stripped[2:].strip()
-                            continue
-                        if stripped and not stripped.startswith('#') and not stripped.startswith('---'):
-                            key_point = stripped[:100]
-                            break
-            except OSError:
-                pass
-            insight_entries.append((title, key_point))
+                            if stripped and not stripped.startswith("#") and not stripped.startswith("---"):
+                                key_point = stripped[:100]
+                                break
+                except OSError:
+                    pass
+                insight_entries.append((title, key_point))
+        except (sqlite3.Error, OSError) as _vi_exc:
+            print(f"[obsidian-brain] vault index failed ({type(_vi_exc).__name__}: {_vi_exc}); "
+                  "falling back to file scan", file=sys.stderr)
+            _use_vault_index = False
+
+    if not _use_vault_index:
+        # Fallback to original file scan if vault index unavailable
+        if insights_dir.is_dir():
+            insight_files = sorted(
+                [f for f in insights_dir.iterdir() if f.suffix == '.md'],
+                reverse=True
+            )
+            project_insights: list[Path] = []
+            for f in insight_files:
+                meta = read_note_metadata(str(f))
+                if not meta:
+                    continue
+                fm_project = meta.get('project', '')
+                if fm_project.lower() != project.lower() and slugify(fm_project) != slugify(project):
+                    continue
+                project_insights.append(f)
+
+            insight_count = len(project_insights)
+            for f in project_insights[:20]:
+                title = f.stem
+                key_point = ""
+                try:
+                    with open(f, 'r', encoding='utf-8', errors='replace') as fh:
+                        past_frontmatter = False
+                        frontmatter_closed = False
+                        for line_text in fh:
+                            stripped = line_text.strip()
+                            if stripped == '---':
+                                if not past_frontmatter:
+                                    past_frontmatter = True
+                                    continue
+                                else:
+                                    frontmatter_closed = True
+                                    continue
+                            if not frontmatter_closed:
+                                continue
+                            if stripped.startswith('# '):
+                                title = stripped[2:].strip()
+                                continue
+                            if stripped and not stripped.startswith('#') and not stripped.startswith('---'):
+                                key_point = stripped[:100]
+                                break
+                except OSError:
+                    pass
+                insight_entries.append((title, key_point))
 
     # Trim insights to ~500 tokens (~375 words, ~1875 chars)
     insight_text_parts: list[str] = []
@@ -1618,7 +1797,12 @@ def find_transcript_jsonl(session_id: str) -> Path | None:
         )
         if result.stdout.strip():
             first = result.stdout.strip().split("\n")[0]
-            return Path(first) if first else None
+            if first:
+                real_first = os.path.realpath(first)
+                if not real_first.startswith(str(projects_dir.resolve()) + os.sep):
+                    return None
+                return Path(real_first)
+            return None
     except subprocess.TimeoutExpired:
         # If `find` already timed out on this tree, a pure-Python rglob
         # will almost certainly be slower — the tree is too large. Treat
@@ -1638,7 +1822,10 @@ def find_transcript_jsonl(session_id: str) -> Path | None:
     try:
         for path in projects_dir.rglob(target):
             if path.is_file():
-                return path
+                real = os.path.realpath(str(path))
+                if not real.startswith(str(projects_dir.resolve()) + os.sep):
+                    continue  # skip symlinks escaping projects_dir
+                return Path(real)
     except OSError:
         return None
     return None
@@ -1881,6 +2068,7 @@ def build_raw_fallback(
     metadata: dict,
     assistant_msgs: list[str] | None = None,
     tool_uses: list[dict] | None = None,
+    config: dict | None = None,
 ) -> str:
     """Build a detailed note body without AI summarization -- raw data extraction.
 
@@ -1910,12 +2098,12 @@ def build_raw_fallback(
         sections.append("None detected.")
     sections.append("")
 
-    # Tool usage details (commands run, files edited)
+    # Tool usage details (commands run, files edited) — scrubbed for secrets
     if tool_uses:
         sections.append("## Tool Usage")
         for tu in tool_uses[:80]:
             name = tu.get("name", "")
-            detail = tu.get("detail", "")
+            detail = scrub_secrets(tu.get("detail", ""))
             if name and detail:
                 sections.append(f"- **{name}**: {detail}")
             elif name:
@@ -1934,25 +2122,26 @@ def build_raw_fallback(
     sections.append("## Open Questions / Next Steps")
     sections.append("_Not extracted (AI summary unavailable)._\n")
 
-    # Interleaved conversation for /recall to summarize
-    sections.append("## Conversation (raw)")
-    max_turns = RAW_NOTE_MAX_TURNS
-    u_idx, a_idx = 0, 0
-    turn = 0
-    while turn < max_turns and (u_idx < len(user_msgs) or (assistant_msgs and a_idx < len(assistant_msgs))):
-        if u_idx < len(user_msgs):
-            snippet = user_msgs[u_idx][:1200].replace("\n", " ")
-            # Skip system noise (task notifications, command loading, etc.)
-            if not snippet.startswith("<task-notification>") and not snippet.startswith("Base directory for this skill:") and not snippet.startswith("<local-command"):
-                sections.append(f"**User:** {snippet}")
+    # Interleaved conversation for /recall to summarize (controlled by config toggle)
+    if (config or {}).get("log_raw_messages", True):
+        sections.append("## Conversation (raw)")
+        max_turns = RAW_NOTE_MAX_TURNS
+        u_idx, a_idx = 0, 0
+        turn = 0
+        while turn < max_turns and (u_idx < len(user_msgs) or (assistant_msgs and a_idx < len(assistant_msgs))):
+            if u_idx < len(user_msgs):
+                snippet = scrub_secrets(user_msgs[u_idx][:1200].replace("\n", " "))
+                # Skip system noise (task notifications, command loading, etc.)
+                if not snippet.startswith("<task-notification>") and not snippet.startswith("Base directory for this skill:") and not snippet.startswith("<local-command"):
+                    sections.append(f"**User:** {snippet}")
+                    turn += 1
+                u_idx += 1
+            if assistant_msgs and a_idx < len(assistant_msgs):
+                snippet = scrub_secrets(assistant_msgs[a_idx][:1200].replace("\n", " "))
+                sections.append(f"**Assistant:** {snippet}")
+                a_idx += 1
                 turn += 1
-            u_idx += 1
-        if assistant_msgs and a_idx < len(assistant_msgs):
-            snippet = assistant_msgs[a_idx][:1200].replace("\n", " ")
-            sections.append(f"**Assistant:** {snippet}")
-            a_idx += 1
-            turn += 1
-    sections.append("")
+        sections.append("")
 
     return "\n".join(sections)
 
@@ -2072,8 +2261,48 @@ def upgrade_note_with_summary(
         if in_audit:
             new_lines.append(line)
 
-    # Atomic write
-    note_dir = os.path.dirname(note_path)
+    # Extract the summary body signature BEFORE writing so we can fail the
+    # upgrade with a clear "malformed summary" error rather than silently
+    # degrading post-write verification. The signature is the first non-blank,
+    # non-heading line of the Summary section — used to prove on re-read that
+    # the body actually landed, not just the status flip.
+    #
+    # Heading detection follows ATX-heading rules strictly: `#{1,6}` must be
+    # followed by whitespace or end-of-line. A line like `#1234 issue ref` or
+    # `#hashtag note` is legitimate content, not a heading, and must not be
+    # skipped — otherwise it could produce a false "empty or heading-only
+    # Summary body" failure when it is the first real content line.
+    #
+    # The level-2 break uses `##(?:\s|$)` (any whitespace after, or EOL) so
+    # a tab-separated or double-space-separated next section like
+    # `##\tKey Decisions` still terminates the Summary block cleanly.
+    _atx_heading_re = re.compile(r'^#{1,6}(?:\s|$)')
+    _h2_re = re.compile(r'^##(?:\s|$)')
+    summary_signature = None
+    in_summary = False
+    for line in summary_text.split('\n'):
+        if line.strip() == '## Summary':
+            in_summary = True
+            continue
+        if in_summary:
+            stripped = line.strip()
+            if _h2_re.match(stripped):
+                break  # next top-level section — Summary body was empty
+            if _atx_heading_re.match(stripped):
+                continue  # sub-heading inside Summary — skip but keep looking
+            if stripped:
+                summary_signature = stripped
+                break
+
+    if summary_signature is None:
+        return f"Failed: malformed summary (empty or heading-only Summary body) from {source} for {os.path.basename(note_path)}"
+
+    # Atomic write with fsync + post-write verification.
+    # Guarantees the summary actually landed on disk before returning success.
+    # `or "."` handles the case where note_path is a bare filename (no
+    # directory component), which would otherwise produce `dir=""` and
+    # crash tempfile.mkstemp on every platform.
+    note_dir = os.path.dirname(note_path) or "."
     try:
         fd, tmp_path = tempfile.mkstemp(prefix='.ob-upgrade-', suffix='.md.tmp', dir=note_dir)
     except OSError as exc:
@@ -2082,17 +2311,86 @@ def upgrade_note_with_summary(
         try:
             orig_mode = os.stat(note_path).st_mode
         except OSError:
-            orig_mode = 0o644
+            orig_mode = 0o600
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)
+            f.flush()
+            os.fsync(f.fileno())
         os.chmod(tmp_path, orig_mode)
         os.replace(tmp_path, note_path)
+        # fsync the containing directory so the rename itself is durable
+        # across a crash, not just the file contents.
+        try:
+            dir_fd = os.open(note_dir, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            # Directory fsync is best-effort on filesystems that don't
+            # support it (e.g. some network mounts). The in-process
+            # verification below is the real guarantee for non-crash
+            # failure modes.
+            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)
-        except OSError:
-            pass
+        except OSError as cleanup_exc:
+            print(
+                f"[obsidian-brain] failed to clean up temp file {tmp_path}: {cleanup_exc}",
+                file=sys.stderr,
+            )
         return f"Failed: atomic write error for {os.path.basename(note_path)}: {exc}"
+
+    # Post-write verification: re-read the target file and confirm the
+    # summary actually landed. Protects against silent write-loss from
+    # concurrent writers, filesystem races, or phantom "success" returns.
+    try:
+        with open(note_path, 'r', encoding='utf-8') as f:
+            verify_content = f.read()
+    except OSError as exc:
+        return f"Failed: post-write read verification failed for {os.path.basename(note_path)}: {exc}"
+
+    # Scope the status check to the YAML frontmatter block so a note body
+    # that happens to mention "status: summarized" (in a conversation
+    # excerpt, a code block, or this very PR's diff) cannot false-positive
+    # the check. Anchor to the start of the file (allowing an optional
+    # UTF-8 BOM) so a Markdown horizontal rule `---` in the body cannot
+    # be mistaken for the opening frontmatter delimiter.
+    fm_match = re.match(
+        r'\ufeff?---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)',
+        verify_content,
+        re.DOTALL,
+    )
+    if fm_match is None:
+        return f"Failed: post-write verification — YAML frontmatter not found at start of {os.path.basename(note_path)}"
+    frontmatter_block = fm_match.group(1)
+    if not re.search(r'^\s*status:\s*summarized\s*$', frontmatter_block, re.MULTILINE):
+        return f"Failed: post-write verification — status not flipped to summarized in {os.path.basename(note_path)}"
+
+    # Scope the signature check to the ## Summary section specifically.
+    # Checking the whole file would false-positive if the signature text
+    # happens to appear in a preserved audit trail (Conversation raw,
+    # Tool Usage), even though the actual Summary body was clobbered.
+    # Boundary uses `##(?:\s|$)` to be consistent with ATX-heading rules —
+    # tab-separated or multi-space-separated next sections still terminate
+    # the Summary block extraction cleanly.
+    summary_match = re.search(
+        r'^## Summary\s*\n(.*?)(?=^##(?:\s|$)|\Z)',
+        verify_content,
+        re.MULTILINE | re.DOTALL,
+    )
+    if summary_match is None:
+        return f"Failed: post-write verification — ## Summary section not found in {os.path.basename(note_path)}"
+    summary_block = summary_match.group(1)
+    # Compare at line granularity — a substring match could false-positive
+    # if the signature is a substring of some other line in the Summary
+    # (e.g. the signature is "Fixed the bug." and an adjacent line says
+    # "Before: Fixed the bug. After: also broken."). The signature must
+    # appear as its own stripped line in the Summary block on disk.
+    summary_block_lines = {line.strip() for line in summary_block.split('\n')}
+    if summary_signature not in summary_block_lines:
+        return f"Failed: post-write verification — summary body missing from {os.path.basename(note_path)}"
 
     # Run dedup pass (non-fatal — note is already upgraded)
     removed = []
@@ -2221,7 +2519,7 @@ def prepare_summary_input(note_path: str) -> str:
 """
 
         # Write to temp file (use full session_id to avoid collisions)
-        temp_path = f"/tmp/ob-prep-{session_id}.md"
+        temp_path = os.path.join(_ensure_secure_dir(), f"prep-{session_id}.md")
         try:
             with open(temp_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -2242,7 +2540,7 @@ def upgrade_unsummarized_note(
     sessions_folder: str,
     project: str,
     summary_model: str = "haiku",
-    summary_timeout: int = 15,
+    summary_timeout: int | None = None,
 ) -> str:
     """Upgrade an unsummarized session note with an AI summary.
 
@@ -2349,9 +2647,11 @@ def upgrade_unsummarized_note(
         metadata["errors"] = parsed.get("errors", [])
 
     # Generate summary
+    gen_kwargs: dict = {"model": summary_model}
+    if summary_timeout is not None:
+        gen_kwargs["timeout"] = summary_timeout
     summary_text = generate_summary(
-        user_msgs, assistant_msgs, metadata,
-        model=summary_model, timeout=summary_timeout,
+        user_msgs, assistant_msgs, metadata, **gen_kwargs,
     )
 
     if not summary_text:

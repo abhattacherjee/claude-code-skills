@@ -29,11 +29,13 @@ c = load_config()
 if not c.get("vault_path"):
     print("ERROR: vault_path not configured", file=sys.stderr)
     sys.exit(1)
-print("VAULT=" + c["vault_path"] + " SESS=" + c.get("sessions_folder", "claude-sessions") + " INS=" + c.get("insights_folder", "claude-insights"))
+print("VAULT=" + c["vault_path"])
+print("SESS=" + c.get("sessions_folder", "claude-sessions"))
+print("INS=" + c.get("insights_folder", "claude-insights"))
 '
 ```
 
-Parse the output line to extract `VAULT_PATH`, `SESSIONS_FOLDER`, and `INSIGHTS_FOLDER`.
+Parse each output line as KEY=VALUE, splitting on the first `=`.
 
 If the output is empty or errors, tell the user:
 
@@ -196,21 +198,21 @@ For each project that had confirmed checkoffs, run:
 
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-python3 -c '
-import sys, json
+printf '%s' "$CHECKED_ITEMS_JSON" | python3 -c '
+import sys, json, os
 import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
 from open_item_dedup import batch_cascade_checkoff
-items = json.loads(sys.argv[4])
+items = json.load(sys.stdin)
 summary = batch_cascade_checkoff(sys.argv[1], sys.argv[2], sys.argv[3], items)
 print(summary)
-' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT_NAME" "$CHECKED_ITEMS_JSON"
+' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT_NAME"
 ```
 
 Before running, construct `$CHECKED_ITEMS_JSON` as a JSON array of confirmed item texts for that project from Step 11:
 ```bash
 CHECKED_ITEMS_JSON=$(python3 -c "import json; print(json.dumps([\"Fix bug #42\", \"Land PR #14\"]))")
 ```
-Replace the example items with the actual confirmed texts. Include the cascade summary in the Step 13 report.
+Replace the example items with the actual confirmed texts. The JSON is passed via stdin to avoid shell quoting issues with special characters in item text. Include the cascade summary in the Step 13 report.
 
 ### Step 13 — Report
 

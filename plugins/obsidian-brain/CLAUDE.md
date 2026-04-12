@@ -61,6 +61,19 @@ All frontmatter tags use the `claude/` prefix: `claude/session`, `claude/insight
 - **Version:** Bump in both `.claude-plugin/plugin.json` and update `CHANGELOG.md` for releases.
 - **Branching:** Never commit directly to develop/main — use feature branches.
 
+## Security Patterns
+
+When writing new hooks, skills, or scripts, follow these rules:
+
+- **Path containment:** Never construct file paths from user input without `resolve()` + `is_relative_to()` containment check against the vault root.
+- **No predictable /tmp paths:** Use `~/.claude/obsidian-brain/` (0o700) or `tempfile.mkstemp` — never hardcoded `/tmp/ob-*` paths.
+- **No path interpolation in python3 -c:** Always pass paths via `sys.argv`, never as string literals in the source code.
+- **JSON via stdin, not shell args:** Use `printf '%s' "$VAR" | python3 -c '... json.load(sys.stdin)'` — never pass JSON arrays as shell arguments.
+- **Atomic writes only:** All vault file writes must use temp file + rename — never `sed -i` or direct overwrite.
+- **Owner-only permissions:** `0o600` for files containing user data (notes, DB, config). `0o700` for working directories.
+- **Cap stdin reads:** Hook entry points must use `sys.stdin.read(1_000_000)` — never unbounded `read()`.
+- **Scrub secrets:** Apply `scrub_secrets()` to any user message content before writing to vault notes.
+
 ## Git Flow Rules
 
 - Never commit directly to `main` or `develop` — use feature branches

@@ -29,11 +29,15 @@ c = load_config()
 if not c.get("vault_path"):
     print("ERROR: vault_path not configured", file=sys.stderr)
     sys.exit(1)
-print("VAULT=" + c["vault_path"] + " SESS=" + c.get("sessions_folder", "claude-sessions") + " INS=" + c.get("insights_folder", "claude-insights"))
+project = os.path.basename(os.getcwd()).lower().replace(" ", "-")
+print("VAULT=" + c["vault_path"])
+print("SESS=" + c.get("sessions_folder", "claude-sessions"))
+print("INS=" + c.get("insights_folder", "claude-insights"))
+print("PROJECT=" + project)
 '
 ```
 
-Parse the output line to extract `VAULT_PATH`, `SESSIONS_FOLDER`, and `INSIGHTS_FOLDER`.
+Parse each output line as KEY=VALUE, splitting on the first `=`.
 
 If the command exits non-zero or prints ERROR, tell the user:
 
@@ -66,9 +70,35 @@ The user provides a question after `/vault-ask`. Extract 3–6 key search terms 
 - **Concept keywords** — e.g. `error handling`, `rate limiting`, `caching`
 - **Action words indicating note types** — e.g. `decided` → look for decision notes, `fixed` → look for error-fix notes
 
-Store the extracted terms as `SEARCH_TERMS`. Keep the original question for use in Step 6.
+Store the extracted terms as `SEARCH_TERMS`. Keep the original question for use in Step 7.
 
-### Step 3 — Search vault (3 parallel agents)
+### Step 3 — FTS pre-filter (fast path)
+
+Before spawning search agents, try the vault index for instant results. Join `SEARCH_TERMS` into a single space-separated string (`SEARCH_TERMS_JOINED`). Then run:
+
+```bash
+python3 -c '
+import sys, os, json, glob
+sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from obsidian_utils import load_config
+from vault_index import ensure_index, search_vault
+c = load_config()
+db = ensure_index(c["vault_path"], [c.get("sessions_folder", "claude-sessions"), c.get("insights_folder", "claude-insights")])
+results = search_vault(
+    db,
+    sys.argv[1],
+    project=sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "None" else None,
+    limit=15,
+)
+print(json.dumps(results))
+' "$SEARCH_TERMS_JOINED" "$PROJECT"
+```
+
+If the output is a non-empty JSON array with 5+ results: extract the `path` field from each result and use those file paths as `CANDIDATE_FILES`. Skip Step 4 entirely and proceed directly to Step 5.
+
+If fewer than 5 results or the command fails (non-zero exit, invalid JSON, import error): fall through to Step 4 to cast a wider net with parallel Grep agents.
+
+### Step 4 — Search vault (3 parallel agents)
 
 Launch three Grep searches in parallel — one per agent below. Use the Grep tool (never Bash grep).
 
@@ -102,7 +132,7 @@ If `CANDIDATE_FILES` is empty, tell the user:
 
 Stop here.
 
-### Step 4 — Rank results
+### Step 5 — Rank results
 
 Score each file in `CANDIDATE_FILES` using these rules:
 
@@ -122,7 +152,7 @@ to get frontmatter fields (`type:`, `date:`). Use 40 lines because some notes (e
 
 Sort `CANDIDATE_FILES` by score descending. Take the top 10. Store as `RANKED_FILES`.
 
-### Step 5 — Read top notes (context shield)
+### Step 6 — Read top notes (context shield)
 
 Read the top 5–10 files from `RANKED_FILES`. Apply the following size-based strategy:
 
@@ -137,7 +167,7 @@ For each file, extract:
 
 Store all extracted content as `NOTE_SUMMARIES`.
 
-### Step 6 — Synthesize answer
+### Step 7 — Synthesize answer
 
 Using `NOTE_SUMMARIES`, synthesize a comprehensive answer to the user's question. Follow these rules strictly:
 
@@ -161,9 +191,9 @@ Using `NOTE_SUMMARIES`, synthesize a comprehensive answer to the user's question
 If the notes contain contradictory information (e.g. a decision was changed later), surface that explicitly:
 > "You initially chose X ([[older-note]]), but later switched to Y ([[newer-note]])."
 
-### Step 7 — Present answer
+### Step 8 — Present answer
 
-Display the synthesized answer from Step 6 in the conversation.
+Display the synthesized answer from Step 7 in the conversation.
 
 Do NOT write anything to the vault — this skill is read-only.
 

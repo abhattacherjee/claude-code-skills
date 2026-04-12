@@ -29,11 +29,13 @@ c = load_config()
 if not c.get("vault_path"):
     print("ERROR: vault_path not configured", file=sys.stderr)
     sys.exit(1)
-print("VAULT=" + c["vault_path"] + " SESS=" + c.get("sessions_folder", "claude-sessions") + " INS=" + c.get("insights_folder", "claude-insights"))
+print("VAULT=" + c["vault_path"])
+print("SESS=" + c.get("sessions_folder", "claude-sessions"))
+print("INS=" + c.get("insights_folder", "claude-insights"))
 '
 ```
 
-Parse the output line to extract `VAULT_PATH`, `SESSIONS_FOLDER`, and `INSIGHTS_FOLDER`.
+Parse each output line as KEY=VALUE, splitting on the first `=`.
 
 If the command exits non-zero or prints ERROR, tell the user:
 
@@ -165,7 +167,12 @@ output_mode: files_with_matches
 **Defense-in-depth:** For each file matching `^status: auto-logged`, also check if it already has a real `## Summary` section (without `"AI summary unavailable"`). If so, the note was summarized by a legacy code path that never flipped the status. Skip it and fix the status:
 
 ```bash
-sed -i '' 's/^status: auto-logged/status: summarized/' "$FILE_PATH"
+python3 -c '
+import sys, os
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from obsidian_utils import flip_note_status
+flip_note_status(sys.argv[1], "auto-logged", "summarized")
+' "$FILE_PATH"
 ```
 
 Split into:

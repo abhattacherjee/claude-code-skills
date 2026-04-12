@@ -130,7 +130,7 @@ def main() -> None:
 def _run() -> None:
     # 1. Read hook input from stdin
     try:
-        raw = sys.stdin.read()
+        raw = sys.stdin.read(1_000_000)
         hook_input = json.loads(raw)
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"[obsidian-brain] invalid stdin JSON: {exc}", file=sys.stderr)
@@ -140,6 +140,13 @@ def _run() -> None:
     cwd = hook_input.get("cwd", "")
     transcript_path = hook_input.get("transcript_path", "")
     source = hook_input.get("source", "compact")
+
+    # Validate transcript_path stays inside ~/.claude/projects/
+    if transcript_path:
+        allowed_root = os.path.realpath(os.path.expanduser("~/.claude/projects"))
+        if not os.path.realpath(transcript_path).startswith(allowed_root + os.sep):
+            print("[obsidian-brain] transcript_path outside ~/.claude/projects, skipping", file=sys.stderr)
+            return
 
     if not session_id or not transcript_path:
         print("[obsidian-brain] missing session_id or transcript_path, skipping", file=sys.stderr)

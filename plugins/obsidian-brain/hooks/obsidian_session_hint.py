@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from obsidian_utils import (  # noqa: E402
     _bootstrap_prefix,
+    _ensure_secure_dir,
     find_latest_session,
     get_project_name,
     load_config,
@@ -38,15 +39,15 @@ _HOOK_LOG_MAX_BYTES = 100 * 1024  # 100 KB
 def _write_bootstrap_atomic(project: str, session_id: str) -> bool:
     """Write session_id to the project's bootstrap file. Returns True on success."""
     # Force absolute path so os.path.dirname() always returns a real
-    # directory. If OBSIDIAN_BRAIN_BOOTSTRAP_PREFIX is a relative path with
-    # no dir component, dirname() would return "" and we'd fall back to
-    # "/tmp" — but then os.replace(tmp, path) could raise EXDEV when /tmp
-    # is on a different filesystem (e.g., tmpfs) than the relative target.
+    # directory.  With _bootstrap_prefix() fixed to the secure directory,
+    # dirname() always returns a real directory — but keep abspath() as
+    # belt-and-suspenders.
     # Making the target absolute keeps the temp file and target on the
     # same filesystem, so os.replace() is always safe.
     path = os.path.abspath(f"{_bootstrap_prefix()}{project}")
     tmp = None
     try:
+        _ensure_secure_dir()
         dir_name = os.path.dirname(path)
         if not dir_name:
             # Defensive fallback — should be unreachable after abspath().
@@ -108,7 +109,7 @@ def main() -> None:
 def _run() -> None:
     # 1. Read hook input from stdin
     try:
-        raw = sys.stdin.read()
+        raw = sys.stdin.read(1_000_000)
         hook_input = json.loads(raw) if raw.strip() else {}
     except (json.JSONDecodeError, ValueError):
         hook_input = {}

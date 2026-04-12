@@ -30,11 +30,14 @@ if not c.get("vault_path"):
     print("ERROR: vault_path not configured", file=sys.stderr)
     sys.exit(1)
 project = os.path.basename(os.getcwd()).lower().replace(" ", "-")
-print("VAULT=" + c["vault_path"] + " SESS=" + c.get("sessions_folder", "claude-sessions") + " INS=" + c.get("insights_folder", "claude-insights") + " PROJECT=" + project)
+print("VAULT=" + c["vault_path"])
+print("SESS=" + c.get("sessions_folder", "claude-sessions"))
+print("INS=" + c.get("insights_folder", "claude-insights"))
+print("PROJECT=" + project)
 '
 ```
 
-Parse the output to extract `VAULT_PATH`, `SESSIONS_FOLDER`, `INSIGHTS_FOLDER`, and `PROJECT`.
+Parse each output line as KEY=VALUE, splitting on the first `=`.
 
 If the user passed a project name argument (e.g. `/recall my-project`), override `PROJECT` with that value.
 
@@ -118,7 +121,7 @@ If the status starts with "Failed:", use the sub-agent fallback:
    ```
    Agent({
      description: "Summarize session note <basename>",
-     prompt: "Read the session note at <NOTE_PATH>. Produce a structured summary with these exact markdown sections:\n\n## Summary\n1-3 sentence overview of what was accomplished.\n\n## Key Decisions\n- Bullet list of important technical decisions. Write \"None noted.\" if none.\n\n## Changes Made\n- Bullet list of files modified/created with brief description. Write \"None noted.\" if none.\n\n## Errors Encountered\n- Bullet list of errors and how resolved. Write \"None.\" if none.\n\n## Open Questions / Next Steps\n- [ ] Checkbox list of unresolved items. Write \"None.\" if none.\n\nWrite the summary to /tmp/ob-summary-<basename>.md using the Write tool. Return ONLY the single line: WRITTEN:/tmp/ob-summary-<basename>.md"
+     prompt: "Read the session note at <NOTE_PATH>. Produce a structured summary with these exact markdown sections:\n\n## Summary\n1-3 sentence overview of what was accomplished.\n\n## Key Decisions\n- Bullet list of important technical decisions. Write \"None noted.\" if none.\n\n## Changes Made\n- Bullet list of files modified/created with brief description. Write \"None noted.\" if none.\n\n## Errors Encountered\n- Bullet list of errors and how resolved. Write \"None.\" if none.\n\n## Open Questions / Next Steps\n- [ ] Checkbox list of unresolved items. Write \"None.\" if none.\n\nWrite the summary to ~/.claude/obsidian-brain/summary-<basename>.md using the Write tool. Return ONLY the single line: WRITTEN:~/.claude/obsidian-brain/summary-<basename>.md"
    })
    ```
 
@@ -127,17 +130,17 @@ If the status starts with "Failed:", use the sub-agent fallback:
    ```bash
    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
    python3 -c '
-   import sys
+   import sys, os
    import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
    from obsidian_utils import upgrade_note_with_summary
    with open(sys.argv[5], "r") as f:
        summary = f.read()
    status = upgrade_note_with_summary(sys.argv[1], summary, sys.argv[2], sys.argv[3], sys.argv[4])
    print(status)
-   ' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "/tmp/ob-summary-<basename>.md"
+   ' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "~/.claude/obsidian-brain/summary-<basename>.md"
    ```
 
-   Then clean up: `rm -f /tmp/ob-summary-<basename>.md`
+   Then clean up: `rm -f ~/.claude/obsidian-brain/summary-<basename>.md`
 
 Mark the sub-task and task #2 as completed. Report the result.
 
@@ -190,13 +193,13 @@ Spawn all sub-agents in a **single message turn** so they run in parallel. Each 
 ```
 Agent({
   description: "Summarize session note <basename>",
-  prompt: "Read the file at <READ_PATH>. Produce a structured summary with these exact markdown sections:\n\n## Summary\n1-3 sentence overview of what was accomplished.\n\n## Key Decisions\n- Bullet list of important technical decisions. Write \"None noted.\" if none.\n\n## Changes Made\n- Bullet list of files modified/created with brief description. Write \"None noted.\" if none.\n\n## Errors Encountered\n- Bullet list of errors and how resolved. Write \"None.\" if none.\n\n## Open Questions / Next Steps\n- [ ] Checkbox list of unresolved items. Write \"None.\" if none.\n\nWrite the summary to the file /tmp/ob-summary-<basename>.md using the Write tool. Return ONLY the single line: WRITTEN:/tmp/ob-summary-<basename>.md"
+  prompt: "Read the file at <READ_PATH>. Produce a structured summary with these exact markdown sections:\n\n## Summary\n1-3 sentence overview of what was accomplished.\n\n## Key Decisions\n- Bullet list of important technical decisions. Write \"None noted.\" if none.\n\n## Changes Made\n- Bullet list of files modified/created with brief description. Write \"None noted.\" if none.\n\n## Errors Encountered\n- Bullet list of errors and how resolved. Write \"None.\" if none.\n\n## Open Questions / Next Steps\n- [ ] Checkbox list of unresolved items. Write \"None.\" if none.\n\nWrite the summary to the file ~/.claude/obsidian-brain/summary-<basename>.md using the Write tool. Return ONLY the single line: WRITTEN:~/.claude/obsidian-brain/summary-<basename>.md"
 })
 ```
 
 Where `<READ_PATH>` is:
 - For `RAW_OK` notes: the raw note path
-- For `JSONL_PREPPED` notes: the temp file path (e.g. `/tmp/ob-prep-{session_id}.md`)
+- For `JSONL_PREPPED` notes: the temp file path (e.g. `~/.claude/obsidian-brain/prep-{session_id}.md`)
 
 And `<basename>` is the note filename without extension (e.g. `2026-04-09-obsidian-brain-2322`).
 
@@ -227,7 +230,7 @@ with open(sys.argv[6], "r") as f:
     summary = f.read()
 status = upgrade_note_with_summary(sys.argv[1], summary, sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
 print(status)
-' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "sub-agent" "/tmp/ob-summary-<basename>.md"
+' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "sub-agent" "~/.claude/obsidian-brain/summary-<basename>.md"
 ```
 
 **Important:** `$NOTE_PATH` is always the **original vault note path** (not the temp file), even for JSONL_PREPPED notes.
@@ -246,7 +249,7 @@ If N > 5: update task #2 subject to `Summarize N notes: Wave 3 complete (M writt
 Clean up all temp files created in Waves 1 and 2 (specific paths only — avoids racing with concurrent `/recall` invocations):
 
 ```bash
-rm -f /tmp/ob-prep-<session_id_1>.md /tmp/ob-prep-<session_id_2>.md /tmp/ob-summary-<basename_1>.md /tmp/ob-summary-<basename_2>.md ...
+rm -f ~/.claude/obsidian-brain/prep-<session_id_1>.md ~/.claude/obsidian-brain/prep-<session_id_2>.md ~/.claude/obsidian-brain/summary-<basename_1>.md ~/.claude/obsidian-brain/summary-<basename_2>.md ...
 ```
 
 Mark task #2 as completed. Report results: how many upgraded, how many skipped (NO_CONTENT), how many failed.
@@ -273,7 +276,7 @@ print(build_context_brief(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], ho
 ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$INSIGHTS_FOLDER" "$PROJECT"
 ```
 
-The first line of the emitted `CONTEXT_BRIEF` is always the hook-status line (prefixed `[OK]` when the SessionStart hook fired and bootstrap matches the current sid, `[WARN]` otherwise). Preserve it verbatim when displaying the brief — it is the user's only visible signal that hooks are alive.
+The first line of the emitted `CONTEXT_BRIEF` is always the hook-status line. If it starts with `[OK]`, omit it from the displayed output — the user doesn't need to see "session logging active" every time. If it starts with `[WARN]`, display it verbatim so the user knows to take action (e.g., run `/obsidian-setup`).
 
 If the command fails (non-zero exit code), print the error and stop — do not fall back to in-context reads.
 
@@ -340,17 +343,17 @@ Confirm checkoff? (e.g. `1` or `1,2` or `all` or `none`)
 
     ```bash
     cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    python3 -c '
-    import sys, json
+    printf '%s' "$CHECKED_ITEMS_JSON" | python3 -c '
+    import sys, json, os
     import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
     from open_item_dedup import batch_cascade_checkoff
-    items = json.loads(sys.argv[4])
+    items = json.load(sys.stdin)
     summary = batch_cascade_checkoff(sys.argv[1], sys.argv[2], sys.argv[3], items)
     print(summary)
-    ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "$CHECKED_ITEMS_JSON"
+    ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
     ```
 
-    Construct `$CHECKED_ITEMS_JSON` as a JSON array of the confirmed item texts. Report the cascade summary.
+    Construct `$CHECKED_ITEMS_JSON` as a JSON array of the confirmed item texts (passed via stdin to avoid shell quoting issues). Report the cascade summary.
 
 **Show load manifest** (same step — saves one parent round):
 
