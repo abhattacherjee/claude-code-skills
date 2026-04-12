@@ -67,7 +67,33 @@ The user provides a query after `/vault-search`. Determine the search mode:
 - Treat the entire query as a content search
 - Grep for the full phrase first; if zero results, grep for each word individually and intersect
 
-### Step 3 — Search both folders in parallel
+### Step 3 — Try FTS search (fast path)
+
+Before falling back to Grep, try the vault index:
+
+```bash
+python3 -c '
+import sys, os, json, glob
+sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from obsidian_utils import load_config
+from vault_index import ensure_index, search_vault
+c = load_config()
+db = ensure_index(c["vault_path"], [c.get("sessions_folder", "claude-sessions"), c.get("insights_folder", "claude-insights")])
+results = search_vault(
+    db,
+    sys.argv[1],
+    project=sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "None" else None,
+    limit=20,
+)
+print(json.dumps(results))
+' "$QUERY" "$PROJECT"
+```
+
+If the output is a non-empty JSON array: parse and present results (path, title, type, date, excerpt) using the format in Step 6. Skip Steps 4 and 5 below.
+
+If the output is `[]` or the command fails: print a note that the vault index returned no results, then fall through to Step 4. If the command failed because the DB does not exist, also suggest running `/vault-reindex` to build the index.
+
+### Step 4 — Search both folders in parallel
 
 Use the Grep tool (never Bash grep) for all searching. Launch searches across both `SESSIONS_DIR` and `INSIGHTS_DIR` in parallel.
 
@@ -89,7 +115,7 @@ Run two parallel Grep calls:
 
 If zero results and query has multiple words, retry by grepping each word separately and intersecting the file lists.
 
-### Step 4 — Extract metadata from matches
+### Step 5 — Extract metadata from matches
 
 For each matched file (up to 20 files), use Read to read the first 40 lines. Extract from frontmatter:
 
@@ -104,7 +130,7 @@ If there are more than 20 matched files, sort by filename (which contains the da
 
 **Performance note:** If there are 10 or fewer matches, read all files in parallel. If there are 11-20, read in two parallel batches.
 
-### Step 5 — Sort and present results
+### Step 6 — Sort and present results
 
 Sort results by date descending (most recent first). Present in this format:
 
@@ -131,8 +157,9 @@ After the list, tell the user:
 
 > Pick a number to load the full note, or refine your search.
 
-### Step 6 — Handle user selection
+### Step 7 — Handle user selection
 
 If the user picks a number, read the full content of that file using the Read tool and present it in the conversation.
 
 If the user provides a new query, go back to Step 2.
+

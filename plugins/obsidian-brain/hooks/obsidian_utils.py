@@ -1041,6 +1041,15 @@ def scrub_secrets(text: str) -> str:
     return text
 
 
+def escape_wikilinks(text: str) -> str:
+    """Escape ``[[`` so Obsidian does not parse bash conditionals as wikilinks.
+
+    Bash ``[[ $VAR == pattern ]]`` in conversation excerpts triggers
+    Obsidian's wikilink parser, creating spurious outgoing links.
+    """
+    return text.replace("[[", r"\[\[")
+
+
 # ---------------------------------------------------------------------------
 # Vault operations
 # ---------------------------------------------------------------------------
@@ -2103,7 +2112,7 @@ def build_raw_fallback(
         sections.append("## Tool Usage")
         for tu in tool_uses[:80]:
             name = tu.get("name", "")
-            detail = scrub_secrets(tu.get("detail", ""))
+            detail = escape_wikilinks(scrub_secrets(tu.get("detail", "")))
             if name and detail:
                 sections.append(f"- **{name}**: {detail}")
             elif name:
@@ -2130,14 +2139,14 @@ def build_raw_fallback(
         turn = 0
         while turn < max_turns and (u_idx < len(user_msgs) or (assistant_msgs and a_idx < len(assistant_msgs))):
             if u_idx < len(user_msgs):
-                snippet = scrub_secrets(user_msgs[u_idx][:1200].replace("\n", " "))
+                snippet = escape_wikilinks(scrub_secrets(user_msgs[u_idx][:1200].replace("\n", " ")))
                 # Skip system noise (task notifications, command loading, etc.)
                 if not snippet.startswith("<task-notification>") and not snippet.startswith("Base directory for this skill:") and not snippet.startswith("<local-command"):
                     sections.append(f"**User:** {snippet}")
                     turn += 1
                 u_idx += 1
             if assistant_msgs and a_idx < len(assistant_msgs):
-                snippet = scrub_secrets(assistant_msgs[a_idx][:1200].replace("\n", " "))
+                snippet = escape_wikilinks(scrub_secrets(assistant_msgs[a_idx][:1200].replace("\n", " ")))
                 sections.append(f"**Assistant:** {snippet}")
                 a_idx += 1
                 turn += 1

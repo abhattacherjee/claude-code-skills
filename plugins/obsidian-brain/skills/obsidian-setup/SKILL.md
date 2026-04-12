@@ -504,6 +504,26 @@ echo "test" > "$TESTFILE" && test -f "$TESTFILE" && rm "$TESTFILE" && echo "OK" 
 
 If FAIL, warn that vault writes are not working and ask the user to check permissions.
 
+### Step 8.5 — Build vault index
+
+Build (or rebuild) the SQLite FTS5 index for fast vault search and context-driven insight loading:
+
+```bash
+python3 -c '
+import sys, os, json, glob
+sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from vault_index import rebuild_index
+counts = rebuild_index(sys.argv[1], [sys.argv[2], sys.argv[3]])
+print(json.dumps(counts))
+' "$VAULT_PATH" "$SESSIONS_FOLDER" "$INSIGHTS_FOLDER"
+```
+
+Parse the JSON output. If successful, store `N = counts["inserted"]` for the success message.
+
+If the command fails (non-zero exit), warn but do not block setup:
+
+> ⚠️ Could not build vault index. Run `/vault-reindex` manually after setup.
+
 ### Step 9 — Configure claudeception nudge (idempotent)
 
 Check if the claudeception-to-compress nudge is already configured **globally** (in `~/.claude/`, not the project `.claude/`):
@@ -544,6 +564,7 @@ This is a soft nudge — a non-blocking suggestion, not automatic execution.
 > - Config: preserved (unchanged)
 > - New dashboards: installed (existing dashboards preserved)
 > - Claudeception nudge: configured
+> - Vault index: N notes indexed (run `/vault-reindex` to rebuild) — _or omit this line if Step 8.5 failed_
 >
 > Re-run `/obsidian-setup` anytime to pick up new features.
 
@@ -556,6 +577,7 @@ This is a soft nudge — a non-blocking suggestion, not automatic execution.
 > - Folders created: `claude-sessions/`, `claude-insights/`, `claude-dashboards/`
 > - Dashboards installed: `sessions-overview.md`, `project-index.md`, `weekly-review.md`, `learning-velocity.md`, `decision-timeline.md`, `open-items.md`
 > - Claudeception nudge: configured (run `/compress` reminder after knowledge extraction)
+> - Vault index: N notes indexed (run `/vault-reindex` to rebuild) — _or omit this line if Step 8.5 failed_
 >
 > **Next step — install the Dataview plugin in Obsidian:**
 > 1. Open Obsidian Settings > Community Plugins > Browse

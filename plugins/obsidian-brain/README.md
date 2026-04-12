@@ -30,7 +30,7 @@ CC Session Lifecycle
     +-- SessionEnd ---> Auto-logs session to vault
 ```
 
-All data flows are **one-directional filesystem writes** — no MCP server, no REST API, no Obsidian plugins required (except Dataview for dashboards). Works even when Obsidian isn't running.
+All data flows are **one-directional filesystem writes** — no MCP server, no REST API, no Obsidian plugins required (except Dataview for dashboards). A local SQLite + FTS5 index enables fast full-text search as the vault scales. Works even when Obsidian isn't running.
 
 ## Installation
 
@@ -80,6 +80,7 @@ Run `/obsidian-setup` after installation. It will:
 | `/vault-ask` | Ask questions and get synthesized answers grounded in vault history |
 | `/check-items` | Cross-project sweep for completed open items — auto-checks off matches after user confirmation |
 | `/vault-doctor` | Audit and repair the vault — detects stale `source_session` backlinks and other health issues (dry-run by default) |
+| `/vault-reindex` | Rebuild the SQLite + FTS5 search index from scratch — use after bulk edits in Obsidian or to recover from a corrupt index |
 
 ### Usage Examples
 
@@ -290,6 +291,7 @@ Replace `/Users/you` with your actual home directory (run `echo $HOME` to find i
 - **Integration pattern:** Direct filesystem writes (no MCP, no REST API, no Obsidian plugins needed)
 - **Hook scripts:** Pure Python (stdlib only), deterministic behavior
 - **Summarization:** Best-effort at SessionEnd, deferred to `/recall` for reliable upgrade
+- **Vault index:** SQLite + FTS5 full-text search database (`~/.claude/obsidian-brain-vault.db`) for fast search and context-driven insight ranking. Lazy mtime sync keeps the index current without rebuilding on every access. Powers `/vault-search`, `/vault-ask`, and smart insight ranking in `/recall`.
 - **Complements** existing CC memory system — runs alongside, not replacing
 
 ## License

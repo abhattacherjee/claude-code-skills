@@ -1,5 +1,5 @@
 {
   "name": "obsidian-brain",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, enables project-scoped context resume, and provides fast cross-project search via tags and metadata."
 }
