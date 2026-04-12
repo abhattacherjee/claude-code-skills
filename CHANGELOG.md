@@ -5,6 +5,38 @@ Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
 
+## [3.1.0] - 2026-04-12
+
+### Added
+
+- sync obsidian-brain v2.0.1 — wikilink escaping + revert-merge fix
+
+### Skill Inventory (7 skills)
+
+- `changelog-keeper` v1.1.1 — Keeps CHANGELOG.md up to date by generating categorized entries from git commit history
+- `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
+- `context-shield` v1.3.0 — Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count
+- `conversation-search` v1.1.0 — Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries
+- `figma-ui-designer` v3.2.0 — Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code
+- `skill-authoring` v2.6.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
+- `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
+
+### Plugin Inventory (13 plugins)
+
+- `context-bar` v1.0.0 — Color-coded context window usage bar for Claude Code statusline and /context-bar command
+- `context-shield` v1.3.0 — Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.
+- `custom-statusline` v1.3.0 — 4-tier adaptive statusline with icons for folder, git branch, and context usage
+- `figma-ui-designer` v3.1.0 — Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP
+- `git-flow` v2.0.0 — Git Flow branching workflow with slash commands and diagnostic tools
+- `obsidian-brain` v2.0.1 — Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, enables project-scoped context resume, and provides fast cross-project search via tags and metadata.
+- `product-video-creation` v2.0.0 — Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.
+- `skill-authoring` v2.3.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
+- `skill-publishing` v4.0.0 — Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos
+- `smart-screen-recorder` v4.3.0 — AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.
+- `spec-creator` v2.3.0 — Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).
+- `spec-review` v2.1.0 — Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.
+- `statusline-creator` v1.0.0 — Creates and customizes Claude Code statusline scripts from composable items
+
 ## [3.0.0] - 2026-04-12
 
 ### Added
