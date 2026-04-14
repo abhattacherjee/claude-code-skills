@@ -24,6 +24,25 @@ import sys
 import tempfile
 from pathlib import Path
 
+# --- Section-parsing regexes (used by collect_vault_corpus, build_context_brief) ---
+# Each captures the body between a ## heading and the next ## heading (or EOF).
+
+_RE_SUMMARY = re.compile(
+    r"^## Summary\n(.+?)(?=\n^## |\Z)", re.MULTILINE | re.DOTALL
+)
+_RE_DECISIONS = re.compile(
+    r"^## Key Decisions\n(.+?)(?=\n^## |\Z)", re.MULTILINE | re.DOTALL
+)
+_RE_ERRORS = re.compile(
+    r"^## Errors Encountered\n(.+?)(?=\n^## |\Z)", re.MULTILINE | re.DOTALL
+)
+_RE_OPEN_ITEMS = re.compile(
+    r"^## Open Questions / Next Steps\n(.+?)(?=\n^## |\Z)", re.MULTILINE | re.DOTALL
+)
+_RE_RAW_CONVERSATION = re.compile(
+    r"^## Conversation \(raw\)\n(.+?)(?=\n^## |\Z)", re.MULTILINE | re.DOTALL
+)
+
 # --- Secure working directory ---
 # All temp/cache files use ~/.claude/obsidian-brain/ (0o700) instead of /tmp.
 # This prevents symlink attacks and cache poisoning on multi-user systems.
@@ -65,6 +84,24 @@ def _safe_mtime(path: str) -> float:
         return -1.0
 
 
+def _glob_project_jsonls(safe_project: str, suffix: str = "*.jsonl") -> list[str]:
+    """Glob ~/.claude/projects/*<project>/<suffix>, with underscore-to-hyphen fallback.
+
+    Claude Code normalizes underscores to hyphens in project directory names,
+    so a project at ``personal_ws/`` gets stored as ``personal-ws/``.
+    """
+    import glob as _glob
+    pattern = os.path.expanduser(
+        f"~/.claude/projects/*{safe_project}/{suffix}"
+    )
+    matches = _glob.glob(pattern)
+    if not matches and "_" in safe_project:
+        alt = safe_project.replace("_", "-")
+        pattern = os.path.expanduser(f"~/.claude/projects/*{alt}/{suffix}")
+        matches = _glob.glob(pattern)
+    return matches
+
+
 def _slow_path_newest_sid() -> str:
     """Determine the current session id by scanning JSONL files directly.
 
@@ -72,11 +109,10 @@ def _slow_path_newest_sid() -> str:
     cache. Used by health checks that must not be fooled by stale cache
     entries. Returns 'unknown' if no JSONLs are found for the current cwd.
     """
-    project = os.path.basename(os.getcwd())
     import glob as _glob
+    project = os.path.basename(os.getcwd())
     safe_project = _glob.escape(project)
-    pattern = os.path.expanduser(f"~/.claude/projects/*{safe_project}/*.jsonl")
-    matches = _glob.glob(pattern)
+    matches = _glob_project_jsonls(safe_project)
     entries = [(_safe_mtime(p), p) for p in matches]
     viable = [(m, p) for m, p in entries if m >= 0]
     if not viable:
@@ -115,12 +151,10 @@ def _get_session_id_fast() -> str:
     happens whenever downstream hook code calls a function that triggers
     this, before CC has flushed the new session's JSONL to disk).
     """
+    import glob as _glob
     project = os.path.basename(os.getcwd())
     bootstrap = f"{_bootstrap_prefix()}{project}"
-
-    import glob as _glob
     safe_project = _glob.escape(project)
-    pattern = os.path.expanduser(f"~/.claude/projects/*{safe_project}/*.jsonl")
 
     # Fast path: bootstrap file
     try:
@@ -128,16 +162,15 @@ def _get_session_id_fast() -> str:
             cached_sid = f.read().strip()
         if cached_sid:
             safe_cached = _glob.escape(cached_sid)
-            cached_pattern = os.path.expanduser(
-                f"~/.claude/projects/*{safe_project}/{safe_cached}.jsonl"
+            cached_matches = _glob_project_jsonls(
+                safe_project, f"{safe_cached}.jsonl"
             )
-            cached_matches = _glob.glob(cached_pattern)
             if cached_matches:
                 # Determine the newest JSONL deterministically: order by
                 # (mtime, path). Ties broken by path string so results are
                 # reproducible across filesystems that report 1-second mtime
                 # resolution.
-                all_matches = _glob.glob(pattern)
+                all_matches = _glob_project_jsonls(safe_project)
                 if all_matches:
                     # Determine the newest JSONL deterministically via (mtime, path).
                     # _safe_mtime returns -1.0 for files that disappear between glob
@@ -183,7 +216,7 @@ def _get_session_id_fast() -> str:
     # hook's downstream code calls a function that triggers this).
     # Use _safe_mtime so a JSONL deleted or rotated between glob and
     # stat cannot crash the caller (e.g. load_config).
-    matches = _glob.glob(pattern)
+    matches = _glob_project_jsonls(safe_project)
     entries = [(_safe_mtime(p), p) for p in matches]
     viable = [(m, p) for m, p in entries if m >= 0]
     if not viable:
@@ -415,7 +448,7 @@ def get_session_context(vault_path: str | None = None, sessions_folder: str | No
     if cached is not None:
         return cached
 
-    project = os.path.basename(os.getcwd()).lower().replace(' ', '-')
+    project = os.path.basename(os.getcwd()).lower().replace(' ', '-').replace('_', '-')
     if sid == "unknown":
         # Don't cache "unknown" — would pollute cache shared across projects
         return {"session_id": "unknown", "hash": "", "project": project, "session_note_name": ""}
@@ -706,7 +739,7 @@ def extract_session_metadata(messages: list[dict], cwd: str) -> dict:
     errors, duration_minutes, commits.
     """
     meta: dict = {
-        "project": Path(cwd).name if cwd else "unknown",
+        "project": Path(cwd).name.lower().replace(" ", "-").replace("_", "-") if cwd else "unknown",
         "project_path": cwd or "",
         "git_branch": "",
         "files_touched": [],
@@ -1674,6 +1707,266 @@ def build_context_brief(
     ]
 
     return "\n".join(output_parts)
+
+
+# ---------------------------------------------------------------------------
+# Vault corpus collection (for /emerge pattern discovery)
+# ---------------------------------------------------------------------------
+
+
+def _parse_section_bullets(text: str | None) -> list[str]:
+    """Extract bullet items from a markdown section body.
+
+    Returns empty list for None, empty, or 'None.' content.
+    """
+    if not text:
+        return []
+    stripped = text.strip()
+    if stripped.lower() in ("none.", "none", "n/a", ""):
+        return []
+    items = []
+    for line in stripped.split("\n"):
+        line = line.strip()
+        if line.startswith("- "):
+            items.append(line[2:].strip())
+    return items
+
+
+def collect_vault_corpus(
+    vault_path: str,
+    sessions_folder: str,
+    insights_folder: str,
+    days: int = 7,
+) -> str:
+    """Scan vault session and insight notes, date-filter, extract structured data.
+
+    Returns JSON string with keys: date_range, note_count, notes[].
+    Each note has: file, type, date, project, tags, summary, decisions,
+    errors, open_items.
+
+    Security: path containment via resolve() + is_relative_to().
+    Note: scrub_secrets() is NOT called — content is already scrubbed at write time.
+    """
+    vault_root = Path(vault_path).resolve()
+    cutoff = datetime.date.today() - datetime.timedelta(days=days)
+    end_date = datetime.date.today()
+
+    # Cap limits
+    _MAX_SUMMARY_CHARS = 500
+    _MAX_LIST_ITEMS = 10
+
+    notes_out: list[dict] = []
+
+    # Scan both folders
+    folders = [
+        (sessions_folder, "claude-session"),
+        (insights_folder, "claude-insight"),
+    ]
+
+    for folder_name, default_type in folders:
+        folder = vault_root / folder_name
+        if not folder.is_dir():
+            continue
+
+        for md_file in folder.iterdir():
+            if md_file.suffix != ".md":
+                continue
+
+            # Path containment: reject symlinks pointing outside vault
+            resolved = md_file.resolve()
+            if not resolved.is_relative_to(vault_root):
+                continue
+
+            meta = read_note_metadata(str(md_file))
+            if not meta:
+                continue
+
+            # Date filtering — skip notes without parseable date
+            date_str = meta.get("date", "")
+            if not date_str:
+                continue
+            try:
+                note_date = datetime.date.fromisoformat(date_str)
+            except (ValueError, TypeError):
+                continue
+            if note_date < cutoff:
+                continue
+
+            # Read full note content for section parsing
+            try:
+                content = md_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+
+            # Parse summary — with unsummarized fallback
+            summary = ""
+            m = _RE_SUMMARY.search(content)
+            if m:
+                raw_summary = m.group(1).strip()
+                if "AI summary unavailable" in raw_summary:
+                    # Fall back to raw conversation section
+                    m_raw = _RE_RAW_CONVERSATION.search(content)
+                    if m_raw:
+                        summary = m_raw.group(1).strip()[:_MAX_SUMMARY_CHARS]
+                else:
+                    summary = raw_summary[:_MAX_SUMMARY_CHARS]
+
+            # Parse structured sections
+            m_dec = _RE_DECISIONS.search(content)
+            decisions = _parse_section_bullets(m_dec.group(1) if m_dec else None)[
+                :_MAX_LIST_ITEMS
+            ]
+
+            m_err = _RE_ERRORS.search(content)
+            errors = _parse_section_bullets(m_err.group(1) if m_err else None)[
+                :_MAX_LIST_ITEMS
+            ]
+
+            m_open = _RE_OPEN_ITEMS.search(content)
+            open_items = _parse_section_bullets(m_open.group(1) if m_open else None)[
+                :_MAX_LIST_ITEMS
+            ]
+
+            tags = meta.get("tags", [])
+            if isinstance(tags, str):
+                tags = [tags]
+            tags = tags[:_MAX_LIST_ITEMS]
+
+            note_type = meta.get("type", default_type)
+
+            notes_out.append(
+                {
+                    "file": md_file.name,
+                    "type": note_type,
+                    "date": date_str,
+                    "project": meta.get("project", ""),
+                    "tags": tags,
+                    "summary": summary,
+                    "decisions": decisions,
+                    "errors": errors,
+                    "open_items": open_items,
+                }
+            )
+
+    result = {
+        "date_range": f"{cutoff.isoformat()} to {end_date.isoformat()}",
+        "note_count": len(notes_out),
+        "notes": notes_out,
+    }
+    return json.dumps(result, indent=2)
+
+
+def upgrade_and_collect_corpus(
+    vault_path: str,
+    sessions_folder: str,
+    insights_folder: str,
+    days: int,
+    output_path: str,
+) -> str:
+    """Upgrade unsummarized notes then collect corpus in a single pass.
+
+    1. Scan sessions folder for notes with ``status: auto-logged`` within
+       the date window and attempt ``upgrade_unsummarized_note()`` on each.
+    2. Call ``collect_vault_corpus()`` to build the full corpus (including
+       freshly upgraded notes).
+    3. Atomically write corpus JSON to *output_path*.
+    4. Return status line: ``OK:<total>:<upgraded>:<failed>`` or
+       ``EMPTY:0:0:0``.
+    """
+    vault_root = Path(vault_path).resolve()
+    cutoff = datetime.date.today() - datetime.timedelta(days=days)
+
+    upgraded = 0
+    failed = 0
+
+    # --- Phase 1: upgrade unsummarized notes ---
+    sessions_dir = vault_root / sessions_folder
+    if sessions_dir.is_dir():
+        for md_file in sessions_dir.iterdir():
+            if md_file.suffix != ".md":
+                continue
+
+            # Path containment
+            resolved = md_file.resolve()
+            if not resolved.is_relative_to(vault_root):
+                continue
+
+            meta = read_note_metadata(str(md_file))
+            if not meta:
+                continue
+
+            # Date filter
+            date_str = meta.get("date", "")
+            if not date_str:
+                continue
+            try:
+                note_date = datetime.date.fromisoformat(date_str)
+            except (ValueError, TypeError):
+                continue
+            if note_date < cutoff:
+                continue
+
+            # Only upgrade auto-logged notes
+            if meta.get("status") != "auto-logged":
+                continue
+
+            try:
+                result = upgrade_unsummarized_note(
+                    note_path=str(md_file),
+                    vault_path=vault_path,
+                    sessions_folder=sessions_folder,
+                    project=meta.get("project", ""),
+                )
+                if result and not result.startswith("Failed"):
+                    upgraded += 1
+                    # Bust metadata cache for this note
+                    session_id = meta.get("session_id", "")
+                    if session_id:
+                        cache_invalidate(session_id)
+                else:
+                    failed += 1
+            except Exception as exc:
+                failed += 1
+                print(f"[obsidian-brain] upgrade failed for {md_file.name}: {exc}", file=sys.stderr)
+
+    # --- Phase 2: collect corpus (now includes freshly upgraded notes) ---
+    corpus_json = collect_vault_corpus(
+        vault_path, sessions_folder, insights_folder, days
+    )
+    corpus = json.loads(corpus_json)
+
+    total = corpus.get("note_count", 0)
+    if total == 0:
+        return "EMPTY:0:0:0"
+
+    # Add stats to corpus
+    corpus["stats"] = {
+        "total_notes": total,
+        "upgraded": upgraded,
+        "upgrade_failures": failed,
+        "window_days": days,
+    }
+
+    # --- Phase 3: atomic write to output_path ---
+    out = Path(output_path)
+    os.makedirs(str(out.parent), exist_ok=True)
+
+    fd, tmp = tempfile.mkstemp(
+        dir=str(out.parent), suffix=".tmp", prefix=".corpus-"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(corpus, f, indent=2)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, str(out))
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+    return f"OK:{total}:{upgraded}:{failed}"
 
 
 # ---------------------------------------------------------------------------

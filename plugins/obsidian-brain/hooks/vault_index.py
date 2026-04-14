@@ -6,6 +6,8 @@ sync, and layered ranking for context-relevant note discovery.
 DB location: ~/.claude/obsidian-brain-vault.db (outside vault, alongside config).
 """
 
+from __future__ import annotations
+
 import os
 import re
 import sqlite3

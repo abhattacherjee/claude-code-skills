@@ -24,6 +24,8 @@ CC Session Lifecycle
     |-- /recall ------> Loads project context from vault
     |-- /vault-search > Searches across all sessions & insights
     |-- /standup -----> Generates daily/weekly project summaries
+    |-- /standup deep > Evidence-based open-item consolidation
+    |-- /emerge ------> Cross-project pattern discovery
     |-- /link --------> Cross-references notes with wikilinks
     |-- /retro -------> Session retrospective & process improvements
     |-- /vault-ask ---> Synthesized answers from vault knowledge
@@ -75,6 +77,8 @@ Run `/obsidian-setup` after installation. It will:
 | `/error-log` | Capture error + root cause + fix for future reference |
 | `/vault-import` | Backfill historical sessions (requires `/conversation-search` and `/context-shield`) |
 | `/standup` | Generate daily/weekly summary across projects |
+| `/standup deep` | Evidence-based open-item consolidation — dedup, classify (COMPLETED/REDUNDANT/STALE/ACTIVE) using git log, GitHub releases, changelogs, and FTS5 search |
+| `/emerge` | Cross-project pattern discovery — scans vault notes within a time window and surfaces technical patterns, process patterns, knowledge gaps, and unnamed habits |
 | `/link` | Cross-reference related notes with bidirectional wikilinks |
 | `/retro` | Session retrospective — what worked, what didn't, process improvements |
 | `/vault-ask` | Ask questions and get synthesized answers grounded in vault history |
@@ -110,6 +114,16 @@ Run `/obsidian-setup` after installation. It will:
 
 # Weekly summary
 /standup this week
+
+# Deep analysis — consolidate open items with evidence
+/standup deep this week
+
+# Discover patterns across all projects (last 30 days)
+/emerge
+
+# Discover patterns for a specific window
+/emerge 7d
+/emerge 90d
 
 # Auto-suggest note connections
 /link

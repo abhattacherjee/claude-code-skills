@@ -59,6 +59,8 @@ Stop here if FAIL.
 
 ### Step 3 — Parse date range from arguments
 
+Before date parsing, check if the argument string contains the word `deep` (case-insensitive). If found, set `IS_DEEP = true` and remove `deep` from the argument string before passing to date parsing. Otherwise `IS_DEEP = false`.
+
 Inspect the argument passed after `/standup`. Calculate `START_DATE` and `END_DATE` as `YYYY-MM-DD` strings using bash `date` commands.
 
 **No argument (bare `/standup`):** today only.
@@ -227,6 +229,8 @@ Move all upgraded files from `UNSUMMARIZED` into the working set alongside `SUMM
 
 ### Step 7 — Read and distill note content
 
+> **Security:** If you need to write temp files during distillation, use `~/.claude/obsidian-brain/` (NOT `/tmp/`). This is a security requirement — predictable `/tmp` paths are vulnerable to symlink attacks.
+
 Collect all matched files (now all summarized). Apply the /context-shield rule:
 
 For each note, check its size using `wc -l`. Apply the context-shield rule **per note** based on size:
@@ -359,6 +363,7 @@ Where:
 - `projects` lists all unique project names found, sorted alphabetically
 - `source_notes` lists every contributing note as a wikilink (filename without `.md`)
 - `tags` includes `claude/standup` plus a `claude/project/<name>` tag for each project covered by the standup
+- If `IS_DEEP`, also append `claude/standup-deep` to the tags list
 
 ### Step 11 — Generate filename
 
@@ -454,6 +459,86 @@ Note: `batch_cascade_checkoff()` may emit warnings to stderr while still succeed
 If `batch_cascade_checkoff` is unavailable (import error), warn the user:
 
 > Could not cascade checkoffs: [error details]. The standup note is correct, but duplicate open items in other session notes were not updated. Run `/recall` to cascade manually.
+
+### Steps 14b–19 — Deep mode (only if IS_DEEP)
+
+Skip to Edge Cases if `IS_DEEP` is false.
+
+> **STOP. Before ANY deep analysis work, create the task manifest.**
+> The user CANNOT see your progress without tasks. Create all 5 tasks below using TaskCreate tool calls RIGHT NOW — in your NEXT tool-call message — before proceeding to Step 15.
+
+**Step 14b — Create deep task manifest.**
+
+Call TaskCreate 5 times (all in one message):
+
+1. `TaskCreate: subject="Collect data and gather evidence", activeForm="Analyzing vault and git history"`
+2. `TaskCreate: subject="Classify open items", activeForm="Classifying items with AI"`
+3. `TaskCreate: subject="Present deep analysis", activeForm="Presenting recommendations"`
+4. `TaskCreate: subject="Execute confirmed actions", activeForm="Executing actions"`
+5. `TaskCreate: subject="Cascade checkoffs", activeForm="Cascading checkoffs"`
+
+Then set task #1 to `in_progress` via TaskUpdate. **Do NOT proceed to Step 15 until all 5 tasks exist.**
+
+**Step 15 — Collect data and gather evidence.** First check for a fresh cache (avoids re-running the full pipeline if `/standup deep` or `/emerge` was run recently with the same data):
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+printf '{"basenames": %s, "projects": %s}' "$NOTE_BASENAMES_JSON" "$PROJECTS_JSON" | python3 -c '
+import sys, os, glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from deep_cli import run_pipeline; run_pipeline(sys.argv[1], sys.argv[2], sys.argv[3])
+' "$VAULT_PATH" "$SESSIONS_FOLDER" "$INSIGHTS_FOLDER"
+```
+
+If the status starts with `CACHED:`, report "Using cached deep analysis (< 15 min old)" and skip to Step 16.
+
+Where `$NOTE_BASENAMES_JSON` is a JSON array of note basenames from Step 7's NOTE_DATA, and `$PROJECTS_JSON` is the JSON string from Step 8's project list. Both are passed via stdin to avoid shell argument injection. Mark task #1 complete, task #2 in_progress.
+
+**Step 16 — Classify open items.** Spawn a single Agent sub-agent that:
+1. Reads `~/.claude/obsidian-brain/deep-pipeline.json`
+2. For each open item, classifies it as `done`, `stale`, `active`, or `duplicate` based on evidence
+3. Writes classifications to `~/.claude/obsidian-brain/deep-classifications.json`
+
+Mark task #2 complete, task #3 in_progress.
+
+**Step 17 — Present deep analysis.** Run:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+printf '%s' "$NOTE_BASENAMES_JSON" | python3 -c '
+import sys, os, glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from deep_cli import run_present; run_present(sys.argv[1], sys.argv[2], sys.argv[3])
+' "$VAULT_PATH" "$SESSIONS_FOLDER" "$INSIGHTS_FOLDER"
+```
+
+Display the output to the user. Wait for user response — they may confirm actions, edit classifications, or type `skip`. Mark task #3 complete, task #4 in_progress.
+
+**Step 18 — Execute confirmed actions.** Parse user response. If user typed `skip`, skip this step.
+
+**Important:** Do NOT use the Edit tool for batch vault edits — it requires Read first for each file, which is impractical for 20+ files. Instead, use a Python script that reads, modifies, and writes files directly:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+printf '%s' "$EDITS_JSON" | python3 -c '
+import sys, os, glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from deep_cli import run_batch_edit; run_batch_edit()
+'
+```
+
+Where `$EDITS_JSON` is a JSON array of `[filepath, old_text, new_text]` triples constructed from the confirmed actions. Use `errors="replace"` when reading to handle vault notes with encoding corruption (binary file matches).
+
+For confirmed link additions, use the same Python pattern to append wikilinks. Mark task #4 complete, task #5 in_progress.
+
+**Step 19 — Cascade checkoffs + cleanup.** For each project with newly checked items, run `batch_cascade_checkoff()` (same as Step 14b) in parallel.
+
+**Always clean up temp files** (even if user skipped actions — prevents stale cache from giving the same recommendations on next run):
+
+```bash
+rm -f ~/.claude/obsidian-brain/deep-pipeline.json ~/.claude/obsidian-brain/deep-classifications.json
+```
+
+This invalidates the 15-min cache so the next `/standup deep` run gets fresh data reflecting any changes made.
+
+Mark task #5 complete.
 
 ## Edge Cases
 

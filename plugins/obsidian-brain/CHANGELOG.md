@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-04-13
+
+### Added
+- `/emerge` skill — cross-project pattern discovery across vault notes within configurable time window (7d/30d/90d/this week). Python-first pipeline with single AI sub-agent for synthesis. Surfaces technical patterns, process patterns, knowledge gaps, cross-project connections, and unnamed habits.
+- `/standup deep` mode — evidence-based open-item consolidation. Collects all open items across projects, gathers completion evidence from git log, GitHub releases, changelogs, and FTS5 vault search, classifies items as COMPLETED/REDUNDANT/STALE/ACTIVE via AI sub-agent, suggests link/merge opportunities, detects orphaned notes, and cascades checkoffs vault-wide.
+- `encoding-corruption` vault-doctor check — detects and repairs vault notes with invalid UTF-8 bytes that cause grep binary file handling
+- `collect_vault_corpus()` and `upgrade_and_collect_corpus()` in obsidian_utils.py — single-pass vault scan for pattern analysis with unsummarized note upgrade
+- `deep_analysis_pipeline()` and `build_deep_presentation()` in open_item_dedup.py — similarity pass, item dedup, evidence gathering via subprocess (git/gh), orphan detection
+- `emerge_cli.py` and `deep_cli.py` — extracted CLI modules for skill orchestration
+- 15-minute result caching for `/emerge` and `/standup deep` to avoid redundant runs
+- Acted-on item tracking (24h TTL) to prevent re-recommending previously consolidated items
+- Module-level compiled section-parsing regexes shared across vault functions
+- SNIP_05 test: glob import validation for SKILL.md snippets
+- `project-name-normalization` vault-doctor check — detects and auto-fixes underscored project names in frontmatter
+- `_glob_project_jsonls()` helper — centralizes `~/.claude/projects/` globbing with underscore-to-hyphen fallback
+
+### Fixed
+- Python 3.9 compatibility: add `from __future__ import annotations` to `vault_index.py` and `obsidian_context_snapshot.py`
+- Fix underscore-to-hyphen project path matching across session ID resolution functions
+- Fix ambiguous hash instructions in 4 skills to prevent 3-char hash bug
+- Normalize project names (underscore → hyphen) in session context and vault-doctor comparisons
+- Atomic writes with path containment for all batch vault edit operations
+- `errors='replace'` on all vault file reads to handle encoding corruption gracefully
+
 ## [2.0.1] - 2026-04-12
 
 ### Fixed

@@ -214,7 +214,7 @@ Generate the filename using the same convention as other session notes:
 
 1. **Date:** `YYYY-MM-DD` (session date)
 2. **Slug:** Title lowercased, spaces to hyphens, non-alphanumeric (except hyphens) removed, truncated to 50 chars
-3. **Hash:** 4-character hex hash from the session_id (first 4 hex chars of `echo "<session_id>" | md5`)
+3. **Hash:** 4-character hex hash from the session_id: `echo -n "<session_id>" | md5 | cut -c1-4` (macOS) or `echo -n "<session_id>" | md5sum | cut -c1-4` (Linux). Do NOT use `tail -c 4` — it counts the trailing newline as a byte and returns only 3 visible characters.
 
 Final filename: `YYYY-MM-DD-<slug>-<hash>.md`
 

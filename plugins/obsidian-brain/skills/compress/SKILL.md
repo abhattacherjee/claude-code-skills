@@ -345,7 +345,7 @@ Construct the filename from these parts:
 
 1. **Date:** `YYYY-MM-DD` (today)
 2. **Slug:** The note title, lowercased, spaces replaced with hyphens, non-alphanumeric characters (except hyphens) removed, truncated to 50 characters
-3. **Hash:** 4-character hex hash derived from the current timestamp (use the last 4 hex characters of `date +%s | md5` or equivalent)
+3. **Hash:** 4-character hex hash derived from the current timestamp: `date +%s | md5 | cut -c29-32` (macOS) or `date +%s | md5sum | cut -c1-4` (Linux). Do NOT use `tail -c 4` — it counts the trailing newline as a byte and returns only 3 visible characters.
 
 Final filename: `YYYY-MM-DD-<slug>-<hash>.md`
 
