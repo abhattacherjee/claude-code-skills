@@ -526,6 +526,44 @@ def test_jsonl_dir_for_project_deterministic_same_mtime_tiebreak(tmp_path, monke
     assert result1 == result2, f"non-deterministic: {result1} vs {result2}"
 
 
+def test_jsonl_dir_for_project_underscore_to_hyphen_fallback(tmp_path, monkeypatch):
+    """Project with underscores matches CC dir with hyphens."""
+    import vault_doctor_checks.source_sessions as check
+
+    cc_dir = tmp_path / ".claude" / "projects" / "-Users-foo-my-project"
+    cc_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    result = check._jsonl_dir_for_project("my_project")
+    assert result is not None, "Expected hyphen fallback to match"
+    assert str(result).endswith("-Users-foo-my-project")
+
+
+def test_list_session_notes_matches_across_underscore_hyphen(tmp_path):
+    """_list_session_notes matches session notes regardless of _ vs - in project name."""
+    import vault_doctor_checks.source_sessions as check
+
+    sessions_dir = tmp_path / "claude-sessions"
+    sessions_dir.mkdir()
+    # Session note has project: personal-ws (hyphen)
+    note = sessions_dir / "2026-04-13-test-session.md"
+    note.write_text(
+        "---\n"
+        "type: claude-session\n"
+        "date: 2026-04-13\n"
+        "project: personal-ws\n"
+        "session_id: abc123\n"
+        "---\n\n# Test\n",
+        encoding="utf-8",
+    )
+
+    # Query with underscore variant — should still match
+    result = check._list_session_notes(sessions_dir, "personal_ws")
+    assert "abc123" in result, (
+        f"Expected session note to match despite _ vs - difference, got keys: {list(result.keys())}"
+    )
+
+
 def test_apply_rejects_path_traversal_in_project_name(doctor_vault, tmp_path):
     """An issue with a malicious project name cannot write outside backup_root."""
     import vault_doctor_checks.source_sessions as check

@@ -1443,6 +1443,89 @@ def test_check_hook_status_no_session_files(tmp_path, monkeypatch):
     assert status["current_sid"] == "unknown"
 
 
+def test_slow_path_underscore_to_hyphen_fallback(tmp_path, monkeypatch):
+    """_slow_path_newest_sid matches when cwd has underscores but CC dir has hyphens."""
+    import obsidian_utils
+
+    # cwd basename has underscores
+    proj_dir = tmp_path / "personal_ws"
+    proj_dir.mkdir()
+    monkeypatch.chdir(proj_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # Claude Code normalizes underscores to hyphens in project dir names
+    cc_projects = tmp_path / ".claude" / "projects" / "-Users-foo-personal-ws"
+    cc_projects.mkdir(parents=True)
+    jsonl = cc_projects / "abc123.jsonl"
+    jsonl.write_text("{}", encoding="utf-8")
+
+    sid = obsidian_utils._slow_path_newest_sid()
+    assert sid == "abc123", f"Expected 'abc123' but got '{sid}' — hyphen fallback failed"
+
+
+def test_fast_path_underscore_to_hyphen_fallback(tmp_path, monkeypatch):
+    """_get_session_id_fast matches when cwd has underscores but CC dir has hyphens."""
+    import obsidian_utils
+
+    proj_dir = tmp_path / "my_project"
+    proj_dir.mkdir()
+    monkeypatch.chdir(proj_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # CC dir uses hyphens
+    cc_projects = tmp_path / ".claude" / "projects" / "-Users-foo-my-project"
+    cc_projects.mkdir(parents=True)
+    jsonl = cc_projects / "sess-fast-123.jsonl"
+    jsonl.write_text("{}", encoding="utf-8")
+
+    # Bootstrap file points to the correct sid
+    bootstrap_prefix = str(tmp_path / ".obsidian-brain-sid-")
+    monkeypatch.setattr(obsidian_utils, "_BOOTSTRAP_PREFIX", bootstrap_prefix)
+    bootstrap = tmp_path / ".obsidian-brain-sid-my_project"
+    bootstrap.write_text("sess-fast-123", encoding="utf-8")
+
+    sid = obsidian_utils._get_session_id_fast()
+    assert sid == "sess-fast-123", f"Expected 'sess-fast-123' but got '{sid}'"
+
+
+def test_get_session_context_normalizes_underscores(tmp_path, monkeypatch):
+    """get_session_context normalizes underscores to hyphens in project name."""
+    import obsidian_utils
+
+    proj_dir = tmp_path / "personal_ws"
+    proj_dir.mkdir()
+    monkeypatch.chdir(proj_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # Stub _get_session_id_fast to return unknown (avoids bootstrap setup)
+    monkeypatch.setattr(obsidian_utils, "_get_session_id_fast", lambda: "unknown")
+
+    ctx = obsidian_utils.get_session_context()
+    assert ctx["project"] == "personal-ws", (
+        f"Expected 'personal-ws' but got '{ctx['project']}' — underscores not normalized"
+    )
+
+
+def test_extract_session_metadata_normalizes_underscores():
+    """extract_session_metadata normalizes underscores to hyphens in project name."""
+    import obsidian_utils
+
+    meta = obsidian_utils.extract_session_metadata([], "/Users/foo/personal_ws")
+    assert meta["project"] == "personal-ws", (
+        f"Expected 'personal-ws' but got '{meta['project']}' — underscores not normalized"
+    )
+
+
+def test_extract_session_metadata_normalizes_case_and_spaces():
+    """extract_session_metadata lowercases and normalizes spaces like get_session_context."""
+    import obsidian_utils
+
+    meta = obsidian_utils.extract_session_metadata([], "/Users/foo/My Project")
+    assert meta["project"] == "my-project", (
+        f"Expected 'my-project' but got '{meta['project']}' — case/space normalization failed"
+    )
+
+
 def test_check_hook_status_missing_bootstrap(tmp_path, monkeypatch):
     """check_hook_status returns ok=False when bootstrap file is absent."""
     import obsidian_utils

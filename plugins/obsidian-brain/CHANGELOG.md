@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-04-14
+
+### Changed
+- **vault-index**: FTS5 search now uses AND-mode queries (both terms must appear) instead of OR-mode, with automatic OR fallback when AND returns zero results
+- **vault-index**: BM25 column weighting — title matches rank 10x, tag matches 5x over body matches
+- **vault-index**: New Python reranker scores results by term proximity (0.35), BM25 (0.25), note type (0.15), recency (0.15), and term density (0.10)
+- **vault-index**: `notes` table now stores body text for reranker proximity scoring (auto-migrated on first run)
+
 ## [2.1.0] - 2026-04-13
 
 ### Added

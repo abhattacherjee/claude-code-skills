@@ -141,4 +141,4 @@ These skills follow the **Agent Skills** standard — a `SKILL.md` file with YAM
 [MIT](LICENSE)
 
 ---
-*Last synced: 2026-04-13*
+*Last synced: 2026-04-14*

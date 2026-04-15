@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -30,7 +31,8 @@ CREATE TABLE IF NOT EXISTS notes (
     tags            TEXT,
     status          TEXT,
     mtime           REAL NOT NULL,
-    size            INTEGER
+    size            INTEGER,
+    body            TEXT DEFAULT ''
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -84,6 +86,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         if stmt:
             cur.execute(stmt)
     conn.commit()
+
+
+def _needs_body_migration(conn: sqlite3.Connection) -> bool:
+    """Return True if the notes table is missing the body column."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
+    return "body" not in cols
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +198,8 @@ def _upsert_note(conn: sqlite3.Connection, rel_path: str, parsed: dict, mtime: f
 
     conn.execute(
         "INSERT INTO notes (path, type, date, project, title, source_session, "
-        "source_note, tags, status, mtime, size) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "source_note, tags, status, mtime, size, body) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             rel_path,
             parsed.get("type", "unknown"),
@@ -204,6 +212,7 @@ def _upsert_note(conn: sqlite3.Connection, rel_path: str, parsed: dict, mtime: f
             parsed.get("status"),
             mtime,
             size,
+            parsed.get("body", ""),
         ),
     )
 
@@ -301,6 +310,21 @@ def ensure_index(vault_path: str, folders: list[str], db_path: str | None = None
         conn = _connect(db_path)
         try:
             _init_schema(conn)
+            if _needs_body_migration(conn):
+                print(f"[vault-index] Missing body column; rebuilding {db_path}",
+                      file=sys.stderr)
+                conn.close()
+                for suffix in ("", "-wal", "-shm"):
+                    try:
+                        os.remove(db_path + suffix)
+                    except OSError as exc:
+                        if suffix == "":
+                            print(f"[vault-index] Failed to remove {db_path}: {exc}",
+                                  file=sys.stderr)
+                conn = _connect(db_path)
+                _init_schema(conn)
+                if _needs_body_migration(conn):
+                    raise sqlite3.DatabaseError("body column missing after rebuild")
             _sync(conn, vault_path, folders)
         finally:
             conn.close()
@@ -396,15 +420,8 @@ def index_note(db_path: str, note_path: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_fts_query(query: str) -> str:
-    """Sanitize user input for FTS5 MATCH.
-
-    Replaces hyphens with spaces (FTS5 unicode61 tokenizer treats hyphens
-    as token separators, so "maintain-catalog" inside quotes becomes
-    "maintain" NOT "catalog"). Then wraps each word in quotes and joins
-    with OR.
-    """
-    # Replace hyphens with spaces before tokenization to avoid FTS5 NOT operator
+def _sanitize_fts_query_or(query: str) -> str:
+    """Build an OR-mode FTS5 query for fallback."""
     query = query.replace("-", " ")
     words = re.findall(r"[a-zA-Z0-9_/]+", query)
     if not words:
@@ -412,16 +429,180 @@ def _sanitize_fts_query(query: str) -> str:
     return " OR ".join(f'"{w}"' for w in words)
 
 
+def _extract_query_terms(query: str) -> list[str]:
+    """Extract individual search terms from a query string."""
+    query = query.replace("-", " ")
+    stripped = re.sub(r'"[^"]*"', " ", query)
+    terms = re.findall(r"[a-zA-Z0-9_/]+", stripped)
+    phrases = re.findall(r'"([^"]*)"', query)
+    for phrase in phrases:
+        terms.extend(re.findall(r"[a-zA-Z0-9_/]+", phrase))
+    return [t.lower() for t in terms if len(t) > 1]
+
+
+def _sanitize_fts_query(query: str) -> str:
+    """Sanitize user input for FTS5 MATCH using AND-mode (implicit AND).
+
+    Replaces hyphens with spaces (FTS5 unicode61 tokenizer treats hyphens
+    as token separators, so "maintain-catalog" inside quotes becomes
+    "maintain" NOT "catalog"). Quoted phrases are preserved as-is.
+    Remaining words are each quoted individually and space-joined so
+    FTS5 applies implicit AND — all terms must appear.
+    """
+    query = query.replace("-", " ")
+    parts: list[str] = []
+    remaining = query
+    while '"' in remaining:
+        start = remaining.index('"')
+        end = remaining.index('"', start + 1) if '"' in remaining[start + 1:] else -1
+        if end == -1:
+            break
+        phrase = remaining[start:end + 1]
+        parts.append(phrase)
+        remaining = remaining[:start] + remaining[end + 1:]
+    words = re.findall(r"[a-zA-Z0-9_/]+", remaining)
+    parts.extend(f'"{w}"' for w in words)
+    # Filter empty phrases (e.g. '""') that could confuse FTS5
+    parts = [p for p in parts if p != '""']
+    if not parts:
+        return ""
+    # Phrase order may differ from input (phrases first, then words);
+    # FTS5 implicit AND is commutative so order doesn't affect results.
+    return " ".join(parts)
+
+
+def _compute_proximity(body_lower: str, query_terms: list[str]) -> float:
+    """Compute proximity score between query terms in text.
+
+    Single-term: 1.0. Multi-term: 1.0 / (1.0 + min_distance / 200).
+    """
+    # Deduplicate terms so "sentry sentry" is treated as single-term
+    unique_terms = list(dict.fromkeys(t.lower() for t in query_terms))
+    if len(unique_terms) <= 1:
+        return 1.0
+
+    positions: dict[str, list[int]] = {}
+    for term in unique_terms:
+        term_lower = term.lower()
+        pos_list: list[int] = []
+        start = 0
+        while True:
+            idx = body_lower.find(term_lower, start)
+            if idx == -1:
+                break
+            pos_list.append(idx)
+            start = idx + 1
+        if pos_list:
+            positions[term_lower] = pos_list
+
+    if len(positions) < 2:
+        return 0.0
+
+    min_dist = float("inf")
+    terms_with_pos = list(positions.keys())
+    for i in range(len(terms_with_pos)):
+        for j in range(i + 1, len(terms_with_pos)):
+            for p1 in positions[terms_with_pos[i]]:
+                for p2 in positions[terms_with_pos[j]]:
+                    dist = abs(p1 - p2)
+                    if dist < min_dist:
+                        min_dist = dist
+
+    if min_dist == float("inf"):
+        return 0.0
+
+    return 1.0 / (1.0 + min_dist / 200)
+
+
+def rerank_results(
+    fts_results: list[dict],
+    query_terms: list[str],
+    limit: int = 15,
+) -> list[dict]:
+    """Rerank FTS5 results using proximity, recency, type, and density signals.
+
+    Weights: proximity 0.35, bm25 0.25, type 0.15, recency 0.15, density 0.10.
+    """
+    if not fts_results:
+        return []
+
+    ranks = [r.get("rank", 0.0) for r in fts_results]
+    # FTS5 bm25() returns negative values; most-negative = best match.
+    # Map so that the best (most-negative) score normalises to 1.0.
+    best_rank = min(ranks)   # most negative = best FTS5 match
+    worst_rank = max(ranks)  # least negative = worst FTS5 match
+    rank_range = worst_rank - best_rank if best_rank != worst_rank else 1.0
+
+    today = date.today()
+    type_scores = {
+        "claude-insight": 1.0,
+        "claude-decision": 1.0,
+        "claude-error-fix": 0.9,
+        "claude-session": 0.5,
+        "claude-retro": 0.4,
+        "claude-standup": 0.3,
+    }
+
+    scored: list[tuple[float, dict]] = []
+    for r in fts_results:
+        body = r.get("body", "") or ""
+        full_text = f"{r.get('title', '')} {r.get('tags', '')} {body}".lower()
+
+        proximity = _compute_proximity(body.lower(), query_terms)
+
+        bm25_norm = (worst_rank - r.get("rank", worst_rank)) / rank_range
+
+        type_score = type_scores.get(r.get("type", ""), 0.5)
+
+        try:
+            note_date = date.fromisoformat(r.get("date", "") or "")
+            days_old = max((today - note_date).days, 0)
+        except (ValueError, TypeError):
+            days_old = 365
+        recency = 0.5 ** (days_old / 30)
+
+        if query_terms:
+            matched = sum(
+                1 for t in query_terms
+                if re.search(r'\b' + re.escape(t) + r'\b', full_text)
+            )
+            density = matched / len(query_terms)
+        else:
+            density = 1.0
+
+        final = (
+            0.35 * proximity
+            + 0.25 * bm25_norm
+            + 0.15 * type_score
+            + 0.15 * recency
+            + 0.10 * density
+        )
+
+        r_copy = dict(r)
+        r_copy["rerank_score"] = round(final, 4)
+        scored.append((final, r_copy))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in scored[:limit]]
+
+
 def search_vault(
     db_path: str,
     query: str,
     project: str | None = None,
     note_type: str | None = None,
-    limit: int = 20,
+    limit: int = 15,
 ) -> list[dict]:
     """Full-text search over the vault index.
 
-    Returns list of dicts with note metadata + rank.
+    Returns up to ``limit`` results (default 15) as a list of dicts
+    containing note metadata plus the initial FTS ``rank`` and reranked
+    ``rerank_score``. The note ``body`` is used internally for reranking
+    but is removed before results are returned.
+
+    Candidates are retrieved with BM25 column weighting (title=10x,
+    tags=5x), then reranked for context relevance. Falls back to OR-mode
+    if the AND query returns no results.
     """
     if not os.path.isfile(db_path):
         return []
@@ -430,6 +611,8 @@ def search_vault(
     if not sanitized:
         return []
 
+    query_terms = _extract_query_terms(query)
+
     try:
         conn = _connect(db_path)
     except sqlite3.Error as exc:
@@ -437,29 +620,49 @@ def search_vault(
               file=sys.stderr)
         return []
 
+    candidate_limit = min(limit * 3, 50)
+
     try:
+        filter_sql = ""
+        filter_params: list = []
+        if project:
+            filter_sql += "AND n.project = ? "
+            filter_params.append(project)
+        if note_type:
+            filter_sql += "AND n.type = ? "
+            filter_params.append(note_type)
+
         sql = (
             "SELECT n.path, n.type, n.date, n.project, n.title, n.tags, n.status, "
-            "n.source_session, n.source_note, n.size, "
-            "rank "
+            "n.source_session, n.source_note, n.size, n.body, "
+            "bm25(notes_fts, 10.0, 1.0, 5.0) AS rank "
             "FROM notes_fts f "
             "JOIN notes n ON n.rowid = f.rowid "
             "WHERE notes_fts MATCH ? "
+            + filter_sql
+            + "ORDER BY rank LIMIT ?"
         )
-        params: list = [sanitized]
-
-        if project:
-            sql += "AND n.project = ? "
-            params.append(project)
-        if note_type:
-            sql += "AND n.type = ? "
-            params.append(note_type)
-
-        sql += "ORDER BY f.rank LIMIT ?"
-        params.append(limit)
+        params: list = [sanitized] + filter_params + [candidate_limit]
 
         rows = conn.execute(sql, params).fetchall()
-        return [dict(row) for row in rows]
+        candidates = [dict(row) for row in rows]
+
+        # OR fallback when AND returns nothing
+        if not candidates:
+            or_query = _sanitize_fts_query_or(query)
+            if or_query:
+                print(f"[vault-index] AND query returned 0 results; falling back to OR",
+                      file=sys.stderr)
+                or_params: list = [or_query] + filter_params + [candidate_limit]
+                rows = conn.execute(sql, or_params).fetchall()
+                candidates = [dict(row) for row in rows]
+
+        results = rerank_results(candidates, query_terms, limit)
+        # Strip body — callers don't need it
+        for r in results:
+            r.pop("body", None)
+        return results
+
     except sqlite3.Error as exc:
         print(f"[vault-index] search_vault query failed: {exc}",
               file=sys.stderr)
@@ -590,7 +793,9 @@ def query_related_notes(
         if len(results) < limit and session_summary:
             keywords = extract_keywords(session_summary)
             if keywords:
-                fts_query = _sanitize_fts_query(" ".join(keywords))
+                # Layer 3 uses OR-mode: keyword discovery benefits from
+                # recall over precision (5-8 keywords rarely all co-occur).
+                fts_query = _sanitize_fts_query_or(" ".join(keywords))
                 if fts_query:
                     remaining = limit - len(results)
                     sql = (
