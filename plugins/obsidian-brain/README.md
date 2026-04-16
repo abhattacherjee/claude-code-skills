@@ -85,6 +85,7 @@ Run `/obsidian-setup` after installation. It will:
 | `/check-items` | Cross-project sweep for completed open items — auto-checks off matches after user confirmation |
 | `/vault-doctor` | Audit and repair the vault — detects stale `source_session` backlinks and other health issues (dry-run by default) |
 | `/vault-reindex` | Rebuild the SQLite + FTS5 search index from scratch — use after bulk edits in Obsidian or to recover from a corrupt index |
+| `/vault-stats` | Vault health diagnostics and usage analytics — signal coverage, access patterns, importance distribution, top accessed notes. Saves report to vault for trend tracking. |
 
 ### Usage Examples
 

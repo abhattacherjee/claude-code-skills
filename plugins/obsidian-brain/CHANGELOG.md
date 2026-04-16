@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-04-16
+
+### Added
+- `/vault-stats` skill — vault health diagnostics and usage analytics showing signal coverage, access patterns, importance distribution, and top accessed notes; saves report to vault as `claude-stats` note for trend tracking
+- **vault-index**: ACT-R access tracking — `access_log` table records every note read with context type (recall, search, ask, related) for activation-based ranking
+- **vault-index**: `batch_activations()` computes ACT-R base-level activation (`ln(Σ t_i^(-0.5))`) for combined recency+frequency scoring
+- **vault-index**: `importance` column on `notes` table — 1-10 write-time score extracted from Haiku/sub-agent summarization output
+- **vault-index**: `detect_task_context()` — heuristic detection of debugging/standup/search/general from git branch and caller skill
+- **vault-index**: Context-adaptive type scores — error-fix notes rank higher when debugging, session notes rank higher for standup
+
+### Changed
+- **vault-index**: Reranker upgraded from 5 to 7 signals — adds activation (0.20 weight) and importance (0.10 weight), rebalances existing signals
+- **recall**: Sub-agent summarization prompt now includes importance scoring (1-10)
+
 ## [2.2.0] - 2026-04-14
 
 ### Changed

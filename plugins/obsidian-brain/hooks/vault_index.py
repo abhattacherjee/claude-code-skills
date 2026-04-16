@@ -8,10 +8,14 @@ DB location: ~/.claude/obsidian-brain-vault.db (outside vault, alongside config)
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import sqlite3
+import subprocess
 import sys
+import time
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -32,7 +36,8 @@ CREATE TABLE IF NOT EXISTS notes (
     status          TEXT,
     mtime           REAL NOT NULL,
     size            INTEGER,
-    body            TEXT DEFAULT ''
+    body            TEXT DEFAULT '',
+    importance      INTEGER DEFAULT 5
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -40,6 +45,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     body,
     tags,
     content=''
+);
+
+CREATE TABLE IF NOT EXISTS access_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_path       TEXT NOT NULL,
+    timestamp       REAL NOT NULL,
+    context_type    TEXT NOT NULL,
+    project         TEXT
 );
 """
 
@@ -92,6 +105,29 @@ def _needs_body_migration(conn: sqlite3.Connection) -> bool:
     """Return True if the notes table is missing the body column."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
     return "body" not in cols
+
+
+def _ensure_access_log_indexes(conn: sqlite3.Connection) -> None:
+    """Create indexes on access_log if they don't exist."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_access_note ON access_log (note_path)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_access_time ON access_log (timestamp)"
+    )
+    conn.commit()
+
+
+def _needs_importance_migration(conn: sqlite3.Connection) -> bool:
+    """Return True if the notes table is missing the importance column."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
+    return "importance" not in cols
+
+
+def _add_importance_column(conn: sqlite3.Connection) -> None:
+    """Add importance column to existing notes table."""
+    conn.execute("ALTER TABLE notes ADD COLUMN importance INTEGER DEFAULT 5")
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -180,10 +216,11 @@ def _upsert_note(conn: sqlite3.Connection, rel_path: str, parsed: dict, mtime: f
     For contentless FTS5 (content=''), deletes require passing the old
     column values via the special 'delete' command, not DELETE FROM.
     """
-    row = conn.execute("SELECT rowid, title, tags FROM notes WHERE path = ?", (rel_path,)).fetchone()
+    row = conn.execute("SELECT rowid, title, tags, importance FROM notes WHERE path = ?", (rel_path,)).fetchone()
+    existing_importance = None
     if row:
+        existing_importance = row["importance"]
         # Contentless FTS5 delete: must pass old values
-        old_rowid = row["rowid"]
         # Read old body from the FTS shadow tables isn't possible with contentless,
         # so we need to read it from the note file or accept that we can't do
         # precise deletes. Instead, drop and recreate the entire FTS table entry
@@ -198,8 +235,8 @@ def _upsert_note(conn: sqlite3.Connection, rel_path: str, parsed: dict, mtime: f
 
     conn.execute(
         "INSERT INTO notes (path, type, date, project, title, source_session, "
-        "source_note, tags, status, mtime, size, body) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "source_note, tags, status, mtime, size, body, importance) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             rel_path,
             parsed.get("type", "unknown"),
@@ -213,6 +250,7 @@ def _upsert_note(conn: sqlite3.Connection, rel_path: str, parsed: dict, mtime: f
             mtime,
             size,
             parsed.get("body", ""),
+            existing_importance if existing_importance is not None else 5,
         ),
     )
 
@@ -256,11 +294,13 @@ def _sync(conn: sqlite3.Connection, vault_path: str, folders: list[str]) -> dict
         for row in conn.execute("SELECT path, mtime FROM notes").fetchall()
     }
 
-    # Delete removed files
+    # Delete removed files (only if they belong to a scanned folder)
+    scanned_roots = [str(vault / f) for f in folders]
     for abs_path_str in list(indexed.keys()):
         if abs_path_str not in disk_files:
-            _delete_note(conn, abs_path_str)
-            stats["deleted"] += 1
+            if any(abs_path_str.startswith(root) for root in scanned_roots):
+                _delete_note(conn, abs_path_str)
+                stats["deleted"] += 1
 
     # Insert/update files
     for abs_path_str, abs_path in disk_files.items():
@@ -310,6 +350,9 @@ def ensure_index(vault_path: str, folders: list[str], db_path: str | None = None
         conn = _connect(db_path)
         try:
             _init_schema(conn)
+            _ensure_access_log_indexes(conn)
+            if _needs_importance_migration(conn):
+                _add_importance_column(conn)
             if _needs_body_migration(conn):
                 print(f"[vault-index] Missing body column; rebuilding {db_path}",
                       file=sys.stderr)
@@ -323,6 +366,9 @@ def ensure_index(vault_path: str, folders: list[str], db_path: str | None = None
                                   file=sys.stderr)
                 conn = _connect(db_path)
                 _init_schema(conn)
+                _ensure_access_log_indexes(conn)
+                if _needs_importance_migration(conn):
+                    _add_importance_column(conn)
                 if _needs_body_migration(conn):
                     raise sqlite3.DatabaseError("body column missing after rebuild")
             _sync(conn, vault_path, folders)
@@ -340,6 +386,9 @@ def ensure_index(vault_path: str, folders: list[str], db_path: str | None = None
         conn = _connect(db_path)
         try:
             _init_schema(conn)
+            _ensure_access_log_indexes(conn)
+            if _needs_importance_migration(conn):
+                _add_importance_column(conn)
             _sync(conn, vault_path, folders)
         finally:
             conn.close()
@@ -351,6 +400,69 @@ def ensure_index(vault_path: str, folders: list[str], db_path: str | None = None
         pass
 
     return db_path
+
+
+def log_access(db_path: str, note_path: str, context_type: str, project: str | None = None) -> None:
+    """Insert one access-log row. Logs a warning to stderr if the database is unavailable."""
+    try:
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        try:
+            conn.execute(
+                "INSERT INTO access_log (note_path, timestamp, context_type, project) "
+                "VALUES (?, ?, ?, ?)",
+                (note_path, time.time(), context_type, project),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[vault-index] log_access failed for {note_path!r}: {exc}", file=sys.stderr)
+
+
+def batch_activations(
+    db_path: str, note_paths: list[str], decay: float = 0.5
+) -> dict[str, float]:
+    """Compute ACT-R base-level activation for each note path.
+
+    Returns {path: activation} with 0.0 for notes with no access history.
+    Formula: ln(Σ t_i^(-decay)) where t_i = seconds since access.
+    """
+    if not note_paths:
+        return {}
+
+    result: dict[str, float] = {p: 0.0 for p in note_paths}
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        try:
+            now = time.time()
+            placeholders = ",".join("?" for _ in note_paths)
+            rows = conn.execute(
+                f"SELECT note_path, timestamp FROM access_log "
+                f"WHERE note_path IN ({placeholders})",
+                note_paths,
+            ).fetchall()
+
+            # Group timestamps by note_path
+            accesses: dict[str, list[float]] = defaultdict(list)
+            for row in rows:
+                accesses[row[0]].append(row[1])
+
+            for path, timestamps in accesses.items():
+                summation = 0.0
+                for ts in timestamps:
+                    dt = max(now - ts, 0.001)  # clamp to 1ms minimum
+                    summation += dt ** (-decay)
+                if summation > 0.0:
+                    result[path] = math.log(summation)
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[vault-index] batch_activations failed ({len(note_paths)} paths): {exc}",
+              file=sys.stderr)
+        return result
+
+    return result
 
 
 def rebuild_index(vault_path: str, folders: list[str], db_path: str | None = None) -> dict:
@@ -413,6 +525,89 @@ def index_note(db_path: str, note_path: str) -> bool:
             conn.close()
     except sqlite3.Error:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Task-context detection
+# ---------------------------------------------------------------------------
+
+
+_cached_git_branch: str | None = None
+_cached_git_branch_set: bool = False
+
+
+def _get_git_branch() -> str | None:
+    """Return the current git branch name, or None on failure. Cached per-process."""
+    global _cached_git_branch, _cached_git_branch_set
+    if _cached_git_branch_set:
+        return _cached_git_branch
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+            _cached_git_branch = branch
+            _cached_git_branch_set = True
+            return branch
+    except FileNotFoundError:
+        _cached_git_branch_set = True
+        return None
+    except Exception as exc:
+        print(f"[vault-index] git branch detection failed: {exc}", file=sys.stderr)
+        _cached_git_branch_set = True
+        return None
+
+
+def detect_task_context(caller_skill: str | None = None) -> str:
+    """Detect the current task context from git branch and caller skill.
+
+    Returns one of: 'debugging', 'standup', 'emerge', 'search', 'general'.
+    Branch-based detection (fix/bug/hotfix) takes precedence over caller.
+    """
+    branch = _get_git_branch()
+    if branch and re.match(r"^(?:refs/heads/)?(?:fix|bug|hotfix)(?:/|$)", branch.lower()):
+        return "debugging"
+
+    if caller_skill in ("standup", "emerge"):
+        return caller_skill
+    if caller_skill in ("vault-ask", "vault-search"):
+        return "search"
+
+    return "general"
+
+
+_TYPE_SCORES_BY_CONTEXT = {
+    "debugging": {
+        "claude-error-fix": 1.0, "claude-session": 0.8, "claude-insight": 0.6,
+        "claude-decision": 0.5, "claude-retro": 0.3, "claude-standup": 0.3,
+    },
+    "standup": {
+        "claude-session": 1.0, "claude-decision": 0.8, "claude-insight": 0.7,
+        "claude-retro": 0.6, "claude-error-fix": 0.5, "claude-standup": 0.3,
+    },
+    "search": {
+        "claude-insight": 1.0, "claude-decision": 0.9, "claude-error-fix": 0.8,
+        "claude-session": 0.5, "claude-retro": 0.4, "claude-standup": 0.3,
+    },
+    "emerge": {
+        "claude-insight": 1.0, "claude-decision": 0.9, "claude-error-fix": 0.8,
+        "claude-session": 0.5, "claude-retro": 0.4, "claude-standup": 0.3,
+    },
+    "general": {
+        "claude-insight": 1.0, "claude-decision": 1.0, "claude-error-fix": 0.9,
+        "claude-session": 0.5, "claude-retro": 0.4, "claude-standup": 0.3,
+    },
+}
+
+
+def get_type_scores(context: str) -> dict[str, float]:
+    """Return type score mapping for the given task context.
+
+    Falls back to 'general' for unknown contexts.
+    """
+    return _TYPE_SCORES_BY_CONTEXT.get(context, _TYPE_SCORES_BY_CONTEXT["general"])
 
 
 # ---------------------------------------------------------------------------
@@ -518,10 +713,22 @@ def rerank_results(
     fts_results: list[dict],
     query_terms: list[str],
     limit: int = 15,
+    db_path: str | None = None,
+    task_context: str | None = None,
 ) -> list[dict]:
-    """Rerank FTS5 results using proximity, recency, type, and density signals.
+    """Rerank FTS5 results using 7 signals for context-relevant ordering.
 
-    Weights: proximity 0.35, bm25 0.25, type 0.15, recency 0.15, density 0.10.
+    Signals and weights:
+        proximity  0.25 — how close query terms appear in the note body
+        bm25       0.20 — FTS5 BM25 relevance score (normalized)
+        activation 0.20 — ACT-R base-level activation from access history
+        type       0.10 — note type score adapted to task context
+        recency    0.10 — exponential decay based on note age
+        importance 0.10 — editorial importance (frontmatter, 1-10 scale)
+        density    0.05 — fraction of query terms matched in full text
+
+    When ``db_path`` is None, the activation signal is 0 for all candidates.
+    When ``task_context`` is None, the 'general' type scores are used.
     """
     if not fts_results:
         return []
@@ -534,14 +741,24 @@ def rerank_results(
     rank_range = worst_rank - best_rank if best_rank != worst_rank else 1.0
 
     today = date.today()
-    type_scores = {
-        "claude-insight": 1.0,
-        "claude-decision": 1.0,
-        "claude-error-fix": 0.9,
-        "claude-session": 0.5,
-        "claude-retro": 0.4,
-        "claude-standup": 0.3,
-    }
+    type_scores = get_type_scores(task_context or "general")
+
+    # --- Activation signal (batch lookup) ---
+    note_paths = [r.get("path", "") for r in fts_results]
+    if db_path:
+        raw_activations = batch_activations(db_path, note_paths)
+    else:
+        raw_activations = {p: 0.0 for p in note_paths}
+
+    # Normalize activations to [0, 1] — non-zero values (including negatives) get mapped
+    nonzero_acts = [v for v in raw_activations.values() if v != 0.0]
+    if nonzero_acts:
+        act_min = min(nonzero_acts)
+        act_max = max(nonzero_acts)
+        act_range = act_max - act_min
+    else:
+        act_min = 0.0
+        act_range = 1.0
 
     scored: list[tuple[float, dict]] = []
     for r in fts_results:
@@ -570,12 +787,34 @@ def rerank_results(
         else:
             density = 1.0
 
+        # Activation (normalized)
+        raw_act = raw_activations.get(r.get("path", ""), 0.0)
+        if raw_act == 0.0:
+            activation_norm = 0.0
+        elif act_range == 0.0:
+            activation_norm = 1.0  # all accessed notes share same score
+        else:
+            # Reserve 0.0 for "no history"; accessed notes map to (0, 1]
+            activation_norm = 0.01 + ((raw_act - act_min) / act_range) * 0.99
+
+        # Importance (0-1 scale from frontmatter 1-10)
+        raw_importance = r.get("importance", 5)
+        if raw_importance is None:
+            raw_importance = 5
+        try:
+            raw_importance = max(1, min(10, int(raw_importance)))
+        except (TypeError, ValueError):
+            raw_importance = 5
+        importance_norm = raw_importance / 10.0
+
         final = (
-            0.35 * proximity
-            + 0.25 * bm25_norm
-            + 0.15 * type_score
-            + 0.15 * recency
-            + 0.10 * density
+            0.25 * proximity
+            + 0.20 * bm25_norm
+            + 0.20 * activation_norm
+            + 0.10 * type_score
+            + 0.10 * recency
+            + 0.10 * importance_norm
+            + 0.05 * density
         )
 
         r_copy = dict(r)
@@ -592,6 +831,7 @@ def search_vault(
     project: str | None = None,
     note_type: str | None = None,
     limit: int = 15,
+    caller: str | None = None,
 ) -> list[dict]:
     """Full-text search over the vault index.
 
@@ -601,8 +841,11 @@ def search_vault(
     but is removed before results are returned.
 
     Candidates are retrieved with BM25 column weighting (title=10x,
-    tags=5x), then reranked for context relevance. Falls back to OR-mode
-    if the AND query returns no results.
+    tags=5x), then reranked with a 7-signal scorer for context relevance.
+    Falls back to OR-mode if the AND query returns no results.
+
+    The optional ``caller`` parameter (e.g. 'vault-search', 'standup')
+    drives task-context detection for context-adaptive type scoring.
     """
     if not os.path.isfile(db_path):
         return []
@@ -634,7 +877,7 @@ def search_vault(
 
         sql = (
             "SELECT n.path, n.type, n.date, n.project, n.title, n.tags, n.status, "
-            "n.source_session, n.source_note, n.size, n.body, "
+            "n.source_session, n.source_note, n.size, n.body, n.importance, "
             "bm25(notes_fts, 10.0, 1.0, 5.0) AS rank "
             "FROM notes_fts f "
             "JOIN notes n ON n.rowid = f.rowid "
@@ -657,7 +900,14 @@ def search_vault(
                 rows = conn.execute(sql, or_params).fetchall()
                 candidates = [dict(row) for row in rows]
 
-        results = rerank_results(candidates, query_terms, limit)
+        task_context = detect_task_context(caller_skill=caller) if caller else None
+        results = rerank_results(
+            candidates, query_terms, limit,
+            db_path=db_path, task_context=task_context,
+        )
+        # Log access for returned results
+        for r in results:
+            log_access(db_path, r["path"], "search", project=r.get("project"))
         # Strip body — callers don't need it
         for r in results:
             r.pop("body", None)
@@ -821,6 +1071,9 @@ def query_related_notes(
                         print(f"[vault-index] Layer 3 (FTS) query failed: {exc}",
                               file=sys.stderr)
 
+        # Log access for returned results
+        for r in results[:limit]:
+            log_access(db_path, r["path"], "related", project)
         return results[:limit]
     finally:
         conn.close()
