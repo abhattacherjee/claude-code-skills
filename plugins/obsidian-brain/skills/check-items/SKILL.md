@@ -13,6 +13,11 @@ Scans all session notes across all projects for unchecked `- [ ]` items in `## O
 
 ## Procedure
 
+**Scope:** Only `claude-session` notes are scanned for open items. Snapshot
+notes (`claude-snapshot`) are excluded — their "Key context" bullets often
+look like action items and would produce false-positive proposals. This
+filter is enforced by `collect_open_items` in `hooks/open_item_dedup.py`.
+
 Follow these steps exactly. Do not skip steps or reorder them.
 
 ### Step 1 — Load config

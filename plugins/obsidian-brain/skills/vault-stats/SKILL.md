@@ -144,6 +144,34 @@ If `access_log_entries == 0`, append after the tables:
 
 > Access tracking is active. Run `/vault-search` and `/recall` to start building history.
 
+### Snapshots section
+
+If the JSON payload has a `vault_wide.snapshots` object with
+`total_snapshots > 0`, render a `## Snapshots` section after the
+Importance Distribution table:
+
+```
+## Snapshots
+Total: {total_snapshots} (compact: {by_trigger.compact}, clear: {by_trigger.clear}, auto: {by_trigger.auto})
+Sessions with snapshots: {sessions_with_snapshots} (max {max_snapshots_per_session} per session)
+Summarization: {summarized_fraction formatted as integer %}
+Integrity: {orphaned_snapshots} orphan(s), {broken_backlinks} broken backlink(s)
+```
+
+If `read_errors > 0`, append on a new line before the auto-fix suggestion:
+
+```
+⚠ {read_errors} snapshot file(s) unreadable — check stderr for paths.
+```
+
+If `orphaned_snapshots > 0` or `broken_backlinks > 0`, append on a new line:
+
+```
+Run `/vault-doctor` to auto-fix.
+```
+
+If `total_snapshots == 0`, omit the section entirely.
+
 ### Step 4 — Save vault note
 
 Generate filename:

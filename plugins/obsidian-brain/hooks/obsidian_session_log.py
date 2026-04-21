@@ -8,10 +8,13 @@ slow subprocess calls like `claude -p` get killed when the process tree exits).
 Always exits 0.
 """
 
+from __future__ import annotations
+
 import datetime
 import json
 import os
 import sys
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Import shared utilities
@@ -25,6 +28,7 @@ from obsidian_utils import (  # noqa: E402
     extract_session_metadata,
     extract_tool_uses,
     extract_user_messages,
+    find_snapshots_for_session,
     is_resumed_session,
     load_config,
     make_filename,
@@ -86,6 +90,12 @@ def _build_note(
     ]
     if resumed:
         fm_lines.append("resumed: true")
+    # Snapshot back-reference: append only if the caller discovered siblings.
+    snapshots = metadata.get("snapshots") or []
+    if snapshots:
+        fm_lines.append("snapshots:")
+        for s in snapshots:
+            fm_lines.append(f'  - "{s}"')
     fm_lines.extend([
         "tags:",
         *[f"  - {t}" for t in tags],
@@ -169,22 +179,81 @@ def _run() -> None:
         user_msgs = extract_user_messages(messages)
         assistant_msgs = extract_assistant_messages(messages)
 
-        # 5. Skip check
+        # 4a. Discover sibling snapshots EARLY — their presence overrides
+        # every threshold skip. Runs once; reused by both skip checks below.
+        # Scan today AND yesterday so a session that spans midnight still
+        # finds snapshots written with the previous day's date prefix (Copilot
+        # PR #43 finding). The glob is keyed by date in find_snapshots_for_session;
+        # a single-day lookup would silently miss cross-midnight snapshots
+        # and both drop the threshold bypass and the back-reference list.
+        today = datetime.date.today()
+        candidate_dates = [
+            today.isoformat(),
+            (today - datetime.timedelta(days=1)).isoformat(),
+        ]
+        sessions_dir = Path(vault_path) / sessions_folder
+        # Use Path(cwd).name to handle trailing-slash cwd; then slugify to match
+        # what extract_session_metadata() + make_filename() do canonically.
+        early_project = slugify(Path(cwd).name) if cwd else ""
+        snapshots: list[str] = []
+        if early_project:
+            seen: set[str] = set()
+            for d in candidate_dates:
+                for link in find_snapshots_for_session(
+                    sessions_dir, session_id, d, early_project
+                ):
+                    if link not in seen:
+                        seen.add(link)
+                        snapshots.append(link)
+
+        # 5. Skip check (message count only)
         if should_skip_session(user_msgs, 0, min_messages=min_messages, min_duration=min_duration):
-            # Duration not yet known; check message count only (duration=0 bypasses duration check)
-            print(f"[obsidian-brain] too few user messages ({len(user_msgs)}), skipping", file=sys.stderr)
-            return
+            if not snapshots:
+                print(f"[obsidian-brain] too few user messages ({len(user_msgs)}), skipping",
+                      file=sys.stderr)
+                return
+            print(
+                f"[obsidian-brain] below message threshold but {len(snapshots)} snapshot(s) "
+                "exist — writing session note anyway as anchor",
+                file=sys.stderr,
+            )
 
         # 6. Extract metadata
         metadata = extract_session_metadata(messages, cwd)
         metadata["vault_path"] = vault_path
         metadata["sessions_folder"] = sessions_folder
 
-        # Re-check with actual duration
+        # 6a. Canonical snapshot discovery using the parsed metadata's project.
+        # Re-run because early_project (basename of cwd) may differ from
+        # metadata["project"] for non-standard repo layouts. Union the
+        # results — session_id already filters to this session's snapshots,
+        # so any hit from either glob is a real back-reference. This also
+        # preserves the early bypass when the canonical project diverges.
+        canonical_project = metadata.get("project", "")
+        if canonical_project and canonical_project != early_project:
+            canonical_hits: list[str] = []
+            for d in candidate_dates:
+                canonical_hits.extend(
+                    find_snapshots_for_session(
+                        sessions_dir, session_id, d, canonical_project
+                    )
+                )
+            # Merge, de-dupe, preserve chronological order (sorted wikilinks).
+            snapshots = sorted(set(snapshots) | set(canonical_hits))
+        metadata["snapshots"] = snapshots
+
+        # Re-check with actual duration — BUT if snapshots exist, bypass
+        # thresholds so the session note always anchors the snapshots.
         if should_skip_session(user_msgs, metadata["duration_minutes"],
                                min_messages=min_messages, min_duration=min_duration):
-            print(f"[obsidian-brain] session below thresholds, skipping", file=sys.stderr)
-            return
+            if not snapshots:
+                print("[obsidian-brain] session below thresholds, skipping", file=sys.stderr)
+                return
+            print(
+                f"[obsidian-brain] below thresholds but {len(snapshots)} snapshot(s) exist — "
+                "writing session note anyway as anchor",
+                file=sys.stderr,
+            )
 
         # 7. Detect resumed session
         resumed = is_resumed_session(vault_path, sessions_folder, session_id)

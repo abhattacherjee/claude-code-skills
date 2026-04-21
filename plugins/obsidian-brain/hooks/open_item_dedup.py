@@ -64,6 +64,11 @@ def collect_open_items(
 ) -> list[tuple[str, int, str]]:
     """Collect unchecked open items from recent session notes for a project.
 
+    Filters to `type: claude-session` notes; notes without a `type:` field
+    are treated as sessions (legacy). Snapshot notes (`claude-snapshot`) are
+    excluded — their "Key context" bullets often look like action items and
+    would produce false-positive proposals.
+
     Returns [(file_path, line_number, item_text)] from the most recent
     max_sessions session notes matching the project. Single-pass per file,
     early termination, no stat() calls.
@@ -79,7 +84,7 @@ def collect_open_items(
     matched = 0
 
     for fname in all_files:
-        if not fname.endswith('.md') or fname.endswith('-snapshot.md'):
+        if not fname.endswith('.md'):
             continue
 
         fpath = os.path.join(sessions_dir, fname)
@@ -98,17 +103,23 @@ def collect_open_items(
             print(f"[obsidian-brain] encoding error in {fname}: {exc}", file=sys.stderr)
             continue
 
-        # Check frontmatter for project match (first 20 lines)
-        # Strip quotes to handle both `project: foo` and `project: "foo"`
+        # Check frontmatter for project match and type (first 20 lines).
+        # Strip quotes to handle both `project: foo` and `project: "foo"`.
+        # Notes without a `type:` field are treated as claude-session (legacy).
         project_match = False
+        is_session = True  # default for notes with no type field (legacy)
+        type_field_seen = False
         for line in lines[:20]:
             stripped = line.strip()
             if stripped.startswith('project:'):
                 val = stripped.split(':', 1)[1].strip().strip('"').strip("'")
                 if val == project:
                     project_match = True
-                    break
-        if not project_match:
+            elif stripped.startswith('type:'):
+                type_field_seen = True
+                tval = stripped.split(':', 1)[1].strip().strip('"').strip("'")
+                is_session = (tval == 'claude-session')
+        if not project_match or (type_field_seen and not is_session):
             continue
 
         matched += 1

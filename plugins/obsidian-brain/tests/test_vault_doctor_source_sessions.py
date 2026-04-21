@@ -113,7 +113,7 @@ def test_scan_flags_insight_stamped_to_wrong_session(doctor_vault, monkeypatch):
     )
 
     issues = check.scan(
-        str(v), "claude-sessions", "claude-insights", days=7, project="proj1"
+        str(v), "claude-sessions", "claude-insights", days=60, project="proj1"
     )
     assert len(issues) == 1
     iss = issues[0]
@@ -148,7 +148,7 @@ def test_scan_ignores_correct_insight(doctor_vault, monkeypatch):
         a_start + 1800,
     )
 
-    issues = check.scan(str(v), "claude-sessions", "claude-insights", days=7, project="proj1")
+    issues = check.scan(str(v), "claude-sessions", "claude-insights", days=60, project="proj1")
     assert issues == []
 
 
@@ -175,7 +175,7 @@ def test_scan_honors_days_window(doctor_vault, monkeypatch):
     )
 
     issues = check.scan(str(v), "claude-sessions", "claude-insights", days=7, project="proj1")
-    assert issues == []  # outside 7-day window
+    assert issues == []  # outside 7-day window — this test specifically validates that boundary
 
 
 def test_scan_marks_unresolved_when_no_window_matches(doctor_vault, monkeypatch):
@@ -203,7 +203,7 @@ def test_scan_marks_unresolved_when_no_window_matches(doctor_vault, monkeypatch)
         gap_mtime,
     )
 
-    issues = check.scan(str(v), "claude-sessions", "claude-insights", days=7, project="proj1")
+    issues = check.scan(str(v), "claude-sessions", "claude-insights", days=60, project="proj1")
     assert len(issues) == 1, f"expected exactly 1 unresolved issue, got {len(issues)}"
     iss = issues[0]
     assert iss.extra.get("unresolved") is True
@@ -256,7 +256,7 @@ def test_apply_rewrites_only_source_session_fields(doctor_vault, tmp_path, monke
     original_body = original_text.split("---\n", 2)[-1]
 
     issues = check.scan(
-        str(v), "claude-sessions", "claude-insights", days=7, project="proj1"
+        str(v), "claude-sessions", "claude-insights", days=60, project="proj1"
     )
     assert len(issues) == 1, f"expected 1 issue, got {len(issues)}"
 
@@ -384,7 +384,7 @@ def test_scan_latest_start_wins_on_boundary_tie(doctor_vault, monkeypatch):
     )
 
     issues = check.scan(
-        str(v), "claude-sessions", "claude-insights", days=7, project="proj1"
+        str(v), "claude-sessions", "claude-insights", days=60, project="proj1"
     )
     assert len(issues) == 1
     # Latest first_ts wins: sid-b (started at 14:00) beats sid-a (started at 10:00)
@@ -481,7 +481,7 @@ def test_apply_preserves_note_mtime(doctor_vault, tmp_path, monkeypatch):
     )
 
     issues = check.scan(
-        str(v), "claude-sessions", "claude-insights", days=7, project="proj1"
+        str(v), "claude-sessions", "claude-insights", days=60, project="proj1"
     )
     assert len(issues) == 1
 
@@ -499,7 +499,7 @@ def test_apply_preserves_note_mtime(doctor_vault, tmp_path, monkeypatch):
     # And a re-scan with the patched note should find nothing (proves the
     # self-reinforcing bug is not reintroduced)
     rescan_issues = check.scan(
-        str(v), "claude-sessions", "claude-insights", days=7, project="proj1"
+        str(v), "claude-sessions", "claude-insights", days=60, project="proj1"
     )
     assert rescan_issues == [], f"re-scan should be clean, got: {rescan_issues}"
 

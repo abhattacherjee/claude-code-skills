@@ -12,6 +12,12 @@ _HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
 if _HOOKS_DIR not in sys.path:
     sys.path.insert(0, os.path.abspath(_HOOKS_DIR))
 
+# Add repo root to sys.path so tests can use the `hooks.<module>` package form
+# (in addition to the bare `obsidian_utils` form used by older tests).
+_REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_REPO_ROOT))
+
 
 @pytest.fixture
 def tmp_vault(tmp_path):

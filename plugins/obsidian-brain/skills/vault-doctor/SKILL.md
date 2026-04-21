@@ -2,7 +2,7 @@
 name: vault-doctor
 description: "Diagnostic and repair skill for the Obsidian vault. Runs a battery of checks against vault notes and offers to fix detected issues. Dry-run by default — requires 'fix' to write. Use when: (1) /vault-doctor command to scan for vault health issues, (2) /vault-doctor fix to apply repairs, (3) /vault-doctor --check <name> for a specific check, (4) user reports stale backlinks or wants to audit vault integrity."
 metadata:
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # vault-doctor — Audit and Repair the Obsidian Vault
@@ -16,6 +16,8 @@ Audit and repair the Obsidian vault. Ships with one check initially (`source-ses
 - `/vault-doctor` — run all checks, report only (dry-run)
 - `/vault-doctor fix` — run all checks, apply after per-project confirmation
 - `/vault-doctor --check source-sessions` — run one specific check
+- `/vault-doctor --check snapshot-integrity` — snapshot orphans, broken backlinks, stale/missing session snapshot lists, status/summary mismatches
+- `/vault-doctor --check snapshot-migration` — migrate pre-spec snapshots (legacy filenames, missing status/backlink fields, missing session snapshot lists). Runs 4 ordered sub-checks; idempotent.
 - `/vault-doctor --days 14` — override default window (default: 7 days)
 - `/vault-doctor --project obsidian-brain` — limit to one project
 - `/vault-doctor fix --check source-sessions --days 7` — combine flags

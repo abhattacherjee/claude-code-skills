@@ -302,10 +302,11 @@ def test_batch_cascade_checkoff_empty(tmp_vault):
 
 def test_collect_open_items_skips_snapshot_files(tmp_vault):
     sessions_dir = tmp_vault / "claude-sessions"
-    # A snapshot file should be skipped even if it contains matching content
-    snapshot_note = sessions_dir / "2026-04-10-proj-snapshot.md"
+    # Snapshot notes (type: claude-snapshot) are excluded via frontmatter type
+    # filter, regardless of filename suffix.
+    snapshot_note = sessions_dir / "2026-04-10-proj-snapshot-140000.md"
     snapshot_note.write_text(
-        "---\ntype: claude-session\nproject: myproject\n---\n\n"
+        "---\ntype: claude-snapshot\nproject: myproject\n---\n\n"
         "## Open Questions / Next Steps\n- [ ] Snapshot item\n",
         encoding="utf-8",
     )

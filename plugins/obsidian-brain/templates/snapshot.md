@@ -8,6 +8,8 @@ tags:
   - claude/snapshot
   - claude/project/{{project}}
   - claude/auto
+status: auto-logged
+source_session_note: "[[{{parent_stem}}]]"
 ---
 
 # Context Snapshot -- {{trigger_label}}
@@ -20,3 +22,6 @@ tags:
 
 ## Uncommitted work
 {{uncommitted_work}}
+
+## Last messages (raw)
+{{last_messages}}

@@ -79,7 +79,7 @@ def test_end_to_end_scan_apply_verify(tmp_path):
 
     # --- 1. Dry-run → exit 1, file untouched ---
     r = subprocess.run(
-        [sys.executable, str(script), "--check", "source-sessions", "--days", "7",
+        [sys.executable, str(script), "--check", "source-sessions", "--days", "60",
          "--project", "proj1", "--json"],
         capture_output=True, text=True, env=env,
     )
@@ -92,7 +92,7 @@ def test_end_to_end_scan_apply_verify(tmp_path):
 
     # --- 2. Apply with --yes (non-interactive) ---
     r = subprocess.run(
-        [sys.executable, str(script), "--check", "source-sessions", "--days", "7",
+        [sys.executable, str(script), "--check", "source-sessions", "--days", "60",
          "--project", "proj1", "--apply", "--yes"],
         capture_output=True, text=True, env=env,
     )
@@ -118,7 +118,7 @@ def test_end_to_end_scan_apply_verify(tmp_path):
 
     # --- 4. Re-scan → exit 0 (clean) ---
     r = subprocess.run(
-        [sys.executable, str(script), "--check", "source-sessions", "--days", "7",
+        [sys.executable, str(script), "--check", "source-sessions", "--days", "60",
          "--project", "proj1", "--json"],
         capture_output=True, text=True, env=env,
     )

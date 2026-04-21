@@ -18,10 +18,17 @@ from obsidian_utils import (
 )
 
 
-def run_corpus(days: int = 30) -> None:
+def run_corpus(days: int = 30, include_snapshots: bool = False) -> None:
     """Upgrade unsummarized notes and collect vault corpus for /emerge.
 
     Prints KEY=VALUE lines for SKILL.md to parse.  Exits non-zero on error.
+
+    Args:
+        days: lookback window in days.
+        include_snapshots: when True, snapshot notes are included in the
+            corpus (pass ``--include-snapshots`` from the skill).  Default is
+            False — snapshots are excluded because their transient "key context"
+            bullets dilute cross-session pattern synthesis.
     """
     c = load_config()
     if not c.get("vault_path"):
@@ -29,14 +36,18 @@ def run_corpus(days: int = 30) -> None:
         sys.exit(1)
 
     out = os.path.expanduser("~/.claude/obsidian-brain/emerge-corpus.json")
+    exclude_types: tuple[str, ...] = () if include_snapshots else ("claude-snapshot",)
 
-    # Cache check: reuse if < 15 min old and same window
+    # Cache check: reuse if < 15 min old, same window, and same include_snapshots setting
     if os.path.isfile(out) and (time.time() - os.path.getmtime(out)) < 900:
         try:
             with open(out) as f:
                 cached = json.load(f)
-            if cached.get("stats", {}).get("window_days") == days:
-                s = cached["stats"]
+            s = cached.get("stats", {})
+            if (
+                s.get("window_days") == days
+                and s.get("include_snapshots") == include_snapshots
+            ):
                 print("VAULT=" + c["vault_path"])
                 print("INS=" + c.get("insights_folder", "claude-insights"))
                 print("STATUS=CACHED:" + str(s["total_notes"]) + ":0:0")
@@ -50,25 +61,53 @@ def run_corpus(days: int = 30) -> None:
         c.get("insights_folder", "claude-insights"),
         days,
         out,
+        exclude_types=exclude_types,
     )
+
+    # Patch include_snapshots into stats so cache key round-trips correctly.
+    # We do this after upgrade_and_collect_corpus writes the file because
+    # that function doesn't know about include_snapshots at the stats level —
+    # the cleanest minimal change is a post-write patch here.
+    if os.path.isfile(out):
+        try:
+            with open(out) as f:
+                corpus = json.load(f)
+            corpus.setdefault("stats", {})["include_snapshots"] = include_snapshots
+            import tempfile
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(corpus, f, indent=2)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, out)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[obsidian-brain] stats patch failed: {exc}", file=sys.stderr)
+
     print("VAULT=" + c["vault_path"])
     print("INS=" + c.get("insights_folder", "claude-insights"))
     print("STATUS=" + status)
 
 
-def run_recollect(days: int = 30) -> None:
+def run_recollect(days: int = 30, include_snapshots: bool = False) -> None:
     """Re-collect corpus after fallback upgrades (no upgrade pass).
 
     Prints REFRESHED:<count> for SKILL.md to parse.
+
+    Args:
+        days: lookback window in days.
+        include_snapshots: when True, snapshot notes are included in the
+            corpus.  Must match the value used in the preceding run_corpus()
+            call so the corpus stays consistent.
     """
     import tempfile
 
     c = load_config()
+    exclude_types: tuple[str, ...] = () if include_snapshots else ("claude-snapshot",)
     corpus_json = collect_vault_corpus(
         c["vault_path"],
         c.get("sessions_folder", "claude-sessions"),
         c.get("insights_folder", "claude-insights"),
         days,
+        exclude_types=exclude_types,
     )
     out = os.path.expanduser("~/.claude/obsidian-brain/emerge-corpus.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)

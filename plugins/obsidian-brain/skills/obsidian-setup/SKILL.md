@@ -2,7 +2,7 @@
 name: obsidian-setup
 description: "First-run configuration and upgrade for the Obsidian Brain plugin. Sets up vault path, creates folders, copies dashboard templates, configures hookify nudges, and writes config. Idempotent — safe to re-run to pick up new features without overwriting existing config or dashboards. Use when: (1) first time installing obsidian-brain, (2) changing vault path, (3) /obsidian-setup command, (4) upgrading to a new version."
 metadata:
-  version: 1.3.0
+  version: 1.4.0
 ---
 
 # Obsidian Brain Setup
@@ -16,6 +16,8 @@ Configure the obsidian-brain plugin for first use. This skill validates prerequi
 Follow these steps exactly. Do not skip steps or reorder them.
 
 ### Step 1 — Check for existing installation
+
+**Argument handling:** If the user ran `/obsidian-setup --deps`, skip the existing-config detection and jump directly to Step 8.7 (Performance Dependencies). `--deps` re-triggers the dependency prompt regardless of the `optional_deps_prompted` flag in config. After Step 8.7 completes, skip to Step 10 (success message).
 
 Check for existing config:
 
@@ -56,6 +58,8 @@ If **upgrade**: store `MODE=upgrade`. Store `VAULT_PATH` from the existing confi
 - Step 6 (Install dashboards): only write dashboard files that do NOT already exist (`test -f` before each write)
 - Step 7 (Write config): SKIP entirely — preserve existing config
 - Step 8 (Verify vault access): runs normally
+- Step 8.5 (Build vault index): runs normally (idempotent ensure_index call)
+- Step 8.7 (Performance Dependencies): runs normally — has its own idempotency check via `optional_deps_prompted`/`optional_deps_declined` config fields; users with declined deps are NOT re-prompted unless they explicitly run `/obsidian-setup --deps`
 - Step 9 (Configure claudeception nudge): runs normally (has its own idempotency check)
 - Step 10 (Print success message): show upgrade-specific message
 
@@ -493,6 +497,13 @@ After writing the config file, restrict permissions so only the current user can
 chmod 600 ~/.claude/obsidian-brain-config.json
 ```
 
+After writing the config, inspect the final `snapshot_on_clear` and `snapshot_on_compact` values. If either is `False` (for instance, when migrating from an older config), warn the user:
+
+> ⚠ `snapshot_on_clear` is False — /clear will not preserve pre-clear context.
+> Recommended: True. (This is on by default; only change if you have a specific reason.)
+
+Both flags ship `true` by default, so the warning only fires when a prior config, manual edit, or migration set them `false`. Ask the user whether to flip them back to `true` via `/vault-config` before continuing.
+
 ### Step 8 — Verify vault access
 
 Run:
@@ -523,6 +534,134 @@ Parse the JSON output. If successful, store `N = counts["inserted"]` for the suc
 If the command fails (non-zero exit), warn but do not block setup:
 
 > ⚠️ Could not build vault index. Run `/vault-reindex` manually after setup.
+
+### Step 8.7 — Performance Dependencies (optional)
+
+Phase 2 theme clustering can use `numpy` (vectorized TF-IDF) and `scipy` (agglomerative batch clustering) for ~4-5x speedups on large vaults. They are strictly optional — every feature works on pure-Python stdlib fallbacks.
+
+**Idempotent detection.** Load the current config + installed status:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys, os, json
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from obsidian_utils import check_optional_deps, load_config
+cfg = load_config()
+status = check_optional_deps()
+print("NUMPY=" + ("1" if status["numpy"] else "0"))
+print("SCIPY=" + ("1" if status["scipy"] else "0"))
+print("PROMPTED=" + ("1" if cfg.get("optional_deps_prompted") else "0"))
+print("DECLINED=" + ",".join(cfg.get("optional_deps_declined", [])))
+'
+```
+
+Parse each line as `KEY=VALUE`.
+
+**Decision tree:**
+
+1. If `NUMPY=1` and `SCIPY=1` → both installed; skip the prompt entirely. Log one line `[setup] numpy + scipy available — theme clustering will use fast paths.` and continue to Step 9.
+2. If `PROMPTED=1` AND every missing package appears in `DECLINED` AND this run was NOT invoked with `--deps` → user already declined; skip the prompt silently. Continue to Step 9.
+3. Otherwise → show the prompt below.
+
+**Prompt the user** using AskUserQuestion:
+
+> Optional performance dependencies for Phase 2 theme clustering:
+>
+>   numpy: [installed / not installed]
+>   scipy: [installed / not installed]
+>
+> These accelerate batch clustering and TF-IDF math (numpy ~5x, scipy ~4x). Without them, everything still works via pure-Python stdlib fallbacks — daily use is unaffected; only bulk /consolidate runs are slower at very large vault sizes.
+>
+> 1. **Install missing packages** (runs `python3 -m pip install --user <missing>`)
+> 2. **Skip** — remember my choice (won't ask again; re-trigger anytime with `/obsidian-setup --deps`)
+> 3. **Not now** — ask again next time
+
+**Apply the choice:**
+
+- **Install:** run `python3 -m pip install --user` for every missing package. Report success/failure for each. After install, update config:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 -c '
+import sys, os, json, tempfile
+import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from pathlib import Path
+
+cfg_path = Path.home() / ".claude" / "obsidian-brain-config.json"
+try:
+    cfg = json.loads(cfg_path.read_text())
+except FileNotFoundError:
+    cfg = {}
+cfg["optional_deps_prompted"] = True
+declined = set(cfg.get("optional_deps_declined", []))
+for pkg in ("numpy", "scipy"):
+    try:
+        __import__(pkg)
+        declined.discard(pkg)
+    except ImportError:
+        pass
+cfg["optional_deps_declined"] = sorted(declined)
+fd, tmp_path = tempfile.mkstemp(prefix=".obsidian-brain-config-", suffix=".json.tmp", dir=os.path.dirname(cfg_path))
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, cfg_path)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
+print("OK")
+'
+```
+
+If pip itself is missing or the install fails (restricted environments, e.g. Homebrew-managed Python), print the failure and continue — all features still work.
+
+- **Skip:** write both flags with every missing package added to `optional_deps_declined`:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+python3 - <<'PY'
+import json, os, tempfile
+from pathlib import Path
+cfg_path = Path.home() / ".claude" / "obsidian-brain-config.json"
+try:
+    cfg = json.loads(cfg_path.read_text())
+except FileNotFoundError:
+    cfg = {}
+cfg["optional_deps_prompted"] = True
+missing = []
+for pkg in ("numpy", "scipy"):
+    try:
+        __import__(pkg)
+    except ImportError:
+        missing.append(pkg)
+declined = sorted(set(cfg.get("optional_deps_declined", [])) | set(missing))
+cfg["optional_deps_declined"] = declined
+fd, tmp_path = tempfile.mkstemp(prefix=".obsidian-brain-config-", suffix=".json.tmp", dir=os.path.dirname(cfg_path))
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, cfg_path)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
+print("OK")
+PY
+```
+
+- **Not now:** write neither flag. The next `/obsidian-setup` run will re-prompt.
 
 ### Step 9 — Configure claudeception nudge (idempotent)
 

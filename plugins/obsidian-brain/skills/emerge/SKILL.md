@@ -22,28 +22,34 @@ TaskCreate: subject="Present results", activeForm="Presenting results"
 Track task IDs. Set task #1 to `in_progress`.
 
 ### Step 1 — Parse args + upgrade + collect corpus
-Parse DAYS: no arg=30, `Nd`/`N days`=N, `this week`=days since Monday.
+
+**Optional flags:**
+- `--include-snapshots` — include `claude-snapshot` notes in the corpus.
+  By default snapshots are excluded; their transient "Key context" bullets
+  dilute cross-session pattern synthesis.
+
+Parse args: strip `--include-snapshots` first (set `INCLUDE_SNAPSHOTS=1` or `0`), then parse remaining arg as DAYS: no arg=30, `Nd`/`N days`=N, `this week`=days since Monday.
 
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
 import sys, os, glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-from emerge_cli import run_corpus; run_corpus(int(sys.argv[1]) if len(sys.argv) > 1 else 30)
-' "$DAYS"
+from emerge_cli import run_corpus; run_corpus(int(sys.argv[1]) if len(sys.argv) > 1 else 30, include_snapshots=(sys.argv[2] == "1") if len(sys.argv) > 2 else False)
+' "$DAYS" "$INCLUDE_SNAPSHOTS"
 ```
 
 If STATUS starts with `CACHED:`, report "Using cached corpus (< 15 min old, same window)" and skip to Step 2.
 
 Parse STATUS (`OK:<total>:<upgraded>:<failed>` or `EMPTY:0:0:0`). EMPTY -> tell user to widen window, stop. Report upgrades. If `failed > 0` -> Step 1f, else Step 2. Mark task #1 `completed`.
 ### Step 1f — Sub-agent fallback (skip if no failures)
-Spawn parallel sub-agents for failed notes using /recall Path C Wave 2-3 pattern (read note, write summary to temp, write back via `upgrade_note_with_summary`). Re-collect:
+Spawn parallel sub-agents for failed notes (read note, write summary to temp, write back via `upgrade_note_with_summary`) — mirrors `/recall` Phase 2 fallback. Re-collect:
 
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
 import sys, os, glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-from emerge_cli import run_recollect; run_recollect(int(sys.argv[1]) if len(sys.argv) > 1 else 30)
-' "$DAYS"
+from emerge_cli import run_recollect; run_recollect(int(sys.argv[1]) if len(sys.argv) > 1 else 30, include_snapshots=(sys.argv[2] == "1") if len(sys.argv) > 2 else False)
+' "$DAYS" "$INCLUDE_SNAPSHOTS"
 ```
 
 ### Step 2 — Pattern synthesis

@@ -1767,3 +1767,272 @@ def test_get_session_id_fast_slow_path_returns_without_writing(tmp_path, monkeyp
     assert not bootstrap.exists(), (
         "slow path should be read-only and not create the bootstrap file"
     )
+
+
+# ===========================================================================
+# Section: upgrade_batch — concurrent wrapper around upgrade_unsummarized_note
+# ===========================================================================
+
+
+class TestUpgradeBatch:
+    """Tests for upgrade_batch() — GH #69.
+
+    `upgrade_unsummarized_note` is monkeypatched with fast fakes so none of
+    these tests touch the filesystem, load a vault config, or shell out to
+    `claude -p`. That isolation also means the `vault_path`/`sessions_folder`
+    args are inert placeholder strings.
+    """
+
+    def test_upgrade_batch_empty_list_returns_empty(self, monkeypatch):
+        """Empty input: return [] immediately and never invoke the wrapped fn."""
+        calls = []
+
+        def fake_impl(*args, **kwargs):
+            calls.append(args)
+            return "ok"
+
+        monkeypatch.setattr(obsidian_utils, "upgrade_unsummarized_note", fake_impl)
+
+        result = obsidian_utils.upgrade_batch(
+            [], "/vault", "sessions", "proj",
+        )
+        assert result == []
+        assert calls == []
+
+    def test_upgrade_batch_n1(self, monkeypatch):
+        """Single path: single (path, status) tuple returned."""
+        def fake_impl(note_path, *args, **kwargs):
+            return f"Summarized: {os.path.basename(note_path)}"
+
+        monkeypatch.setattr(obsidian_utils, "upgrade_unsummarized_note", fake_impl)
+
+        result = obsidian_utils.upgrade_batch(
+            ["/vault/sessions/one.md"], "/vault", "sessions", "proj",
+        )
+        assert result == [("/vault/sessions/one.md", "Summarized: one.md")]
+
+    def test_upgrade_batch_n5_preserves_input_order(self, monkeypatch):
+        """5 paths with variable sleeps: return order matches input, not completion order."""
+        import time as _time
+
+        # Force inverted completion order: last input completes first.
+        sleeps = {
+            "a.md": 0.15,
+            "b.md": 0.12,
+            "c.md": 0.09,
+            "d.md": 0.06,
+            "e.md": 0.03,
+        }
+
+        def fake_impl(note_path, *args, **kwargs):
+            _time.sleep(sleeps[os.path.basename(note_path)])
+            return f"done:{os.path.basename(note_path)}"
+
+        monkeypatch.setattr(obsidian_utils, "upgrade_unsummarized_note", fake_impl)
+
+        paths = [f"/vault/sessions/{name}" for name in ("a.md", "b.md", "c.md", "d.md", "e.md")]
+        result = obsidian_utils.upgrade_batch(paths, "/vault", "sessions", "proj")
+
+        assert len(result) == 5
+        assert [p for p, _ in result] == paths, "input order must be preserved"
+        assert [status for _, status in result] == [
+            "done:a.md", "done:b.md", "done:c.md", "done:d.md", "done:e.md",
+        ]
+
+    def test_upgrade_batch_n10_runs_in_parallel(self, monkeypatch):
+        """N=10 workers must all enter fake_impl concurrently.
+
+        Concurrency is verified via threading.Barrier rather than wall-time
+        bounds to avoid CI flakes; the Barrier times out with
+        BrokenBarrierError if the executor serializes.
+        """
+        import threading
+
+        N = 10
+        barrier = threading.Barrier(N, timeout=5.0)  # generous margin for CI
+
+        def fake_impl(note_path, *args, **kwargs):
+            barrier.wait()  # raises BrokenBarrierError if < N threads ever gather
+            return f"Upgraded {os.path.basename(note_path)} (source: JSONL)"
+
+        monkeypatch.setattr(obsidian_utils, "upgrade_unsummarized_note", fake_impl)
+        paths = [f"/vault/sessions/note{i}.md" for i in range(N)]
+        results = obsidian_utils.upgrade_batch(
+            paths, "/vault", "sessions", "proj", max_workers=N,
+        )
+        assert len(results) == N
+        assert all(s.startswith("Upgraded ") for _, s in results)
+
+    def test_upgrade_batch_captures_exceptions_per_note(self, monkeypatch):
+        """One raising impl does not kill the batch; failure becomes a status string."""
+        def fake_impl(note_path, *args, **kwargs):
+            if os.path.basename(note_path) == "three.md":
+                raise RuntimeError("boom")
+            return f"ok:{os.path.basename(note_path)}"
+
+        monkeypatch.setattr(obsidian_utils, "upgrade_unsummarized_note", fake_impl)
+
+        paths = [f"/vault/sessions/{n}" for n in
+                 ("one.md", "two.md", "three.md", "four.md", "five.md")]
+        result = obsidian_utils.upgrade_batch(paths, "/vault", "sessions", "proj")
+
+        assert len(result) == 5
+        assert [p for p, _ in result] == paths
+        assert result[0][1] == "ok:one.md"
+        assert result[1][1] == "ok:two.md"
+        assert result[2] == ("/vault/sessions/three.md", "Failed: RuntimeError: boom")
+        assert result[3][1] == "ok:four.md"
+        assert result[4][1] == "ok:five.md"
+
+    def test_upgrade_batch_max_workers_caps_at_input_size(self, monkeypatch):
+        """N=3 < max_workers=10: min() guard still yields real parallelism.
+
+        Concurrency is verified via threading.Barrier rather than wall-time
+        bounds to avoid CI flakes; all 3 threads must gather at the barrier
+        simultaneously or BrokenBarrierError fails the test.
+        """
+        import threading
+
+        N = 3
+        barrier = threading.Barrier(N, timeout=5.0)
+
+        def fake_impl(note_path, *args, **kwargs):
+            barrier.wait()
+            return f"Upgraded {os.path.basename(note_path)} (source: JSONL)"
+
+        monkeypatch.setattr(obsidian_utils, "upgrade_unsummarized_note", fake_impl)
+        paths = [f"/vault/sessions/a{i}.md" for i in range(N)]
+        results = obsidian_utils.upgrade_batch(
+            paths, "/vault", "sessions", "proj", max_workers=10,
+        )
+        assert len(results) == N
+        assert all(s.startswith("Upgraded ") for _, s in results)
+
+    def test_upgrade_batch_forwards_model_and_timeout(self, monkeypatch):
+        received = {}
+
+        def fake_impl(note_path, vault_path, sessions_folder, project,
+                      summary_model, summary_timeout):
+            received["model"] = summary_model
+            received["timeout"] = summary_timeout
+            return f"ok:{os.path.basename(note_path)}"
+
+        monkeypatch.setattr(obsidian_utils, "upgrade_unsummarized_note", fake_impl)
+        results = obsidian_utils.upgrade_batch(
+            ["/vault/sessions/a.md"],
+            "/vault",
+            "sessions",
+            "proj",
+            summary_model="claude-3-5-haiku",
+            summary_timeout=30,
+        )
+        assert results == [("/vault/sessions/a.md", "ok:a.md")]
+        assert received == {"model": "claude-3-5-haiku", "timeout": 30}
+
+    def test_upgrade_batch_rejects_invalid_max_workers(self, monkeypatch):
+        monkeypatch.setattr(
+            obsidian_utils, "upgrade_unsummarized_note",
+            lambda *a, **k: "Upgraded test.md (source: ...)",
+        )
+        for bad in (0, -1, -100):
+            with pytest.raises(ValueError, match="max_workers must be >= 1"):
+                obsidian_utils.upgrade_batch(
+                    ["/vault/sessions/a.md"], "/vault", "sessions", "proj",
+                    max_workers=bad,
+                )
+
+    def test_upgrade_batch_skill_md_json_round_trip(self, monkeypatch):
+        """Pins the exact expression used in skills/recall/SKILL.md Phase 1.
+
+        If the tuple contract ever changes (e.g. to list[dict]), this test
+        fails BEFORE production /recall breaks.
+        """
+        import json
+
+        monkeypatch.setattr(
+            obsidian_utils, "upgrade_unsummarized_note",
+            lambda note_path, *a, **k: f"Upgraded {os.path.basename(note_path)} (source: JSONL)",
+        )
+        paths = [
+            "/vault/sessions/a.md",
+            "/vault/sessions/b.md",
+            "/vault/sessions/c.md",
+        ]
+        results = obsidian_utils.upgrade_batch(paths, "/vault", "sessions", "proj")
+
+        # This is the exact expression from skills/recall/SKILL.md line ~117
+        serialized = json.dumps([{"path": p, "status": s} for p, s in results])
+        parsed = json.loads(serialized)
+        assert parsed == [
+            {"path": "/vault/sessions/a.md", "status": "Upgraded a.md (source: JSONL)"},
+            {"path": "/vault/sessions/b.md", "status": "Upgraded b.md (source: JSONL)"},
+            {"path": "/vault/sessions/c.md", "status": "Upgraded c.md (source: JSONL)"},
+        ]
+
+    def test_upgrade_batch_real_integration_catches_signature_drift(
+        self, monkeypatch, tmp_path
+    ):
+        """Drive the real upgrade_unsummarized_note through upgrade_batch.
+
+        Monkeypatches only generate_summary (the claude -p shell-out) and
+        find_transcript_jsonl (forced to None so the raw-note fallback
+        runs deterministically). The rest of the pipeline runs for real.
+        If upgrade_unsummarized_note ever gains a required positional
+        parameter that upgrade_batch doesn't forward, this test fails —
+        unit tests using *args/**kwargs fakes would silently pass.
+        """
+        vault = tmp_path / "vault"
+        sessions_dir = vault / "sessions"
+        sessions_dir.mkdir(parents=True)
+
+        note_path = sessions_dir / "2026-04-20-integration-test-abcd.md"
+        note_path.write_text(
+            "---\n"
+            "type: claude-session\n"
+            "date: 2026-04-20\n"
+            "session_id: integration-test-session-id-0000-0000-000000000000\n"
+            "project: test-project\n"
+            "status: auto-logged\n"
+            "tags:\n"
+            "  - claude/session\n"
+            "  - claude/project/test-project\n"
+            "---\n\n"
+            "# Session: test-project\n\n"
+            "## Conversation (raw)\n"
+            "**User:** hello\n"
+            "**Assistant:** hi there\n"
+        )
+
+        def fake_generate_summary(*args, **kwargs):
+            return (
+                "## Summary\nDid a thing.\n\n"
+                "## Key Decisions\n- None noted.\n\n"
+                "## Changes Made\n- None noted.\n\n"
+                "## Errors Encountered\n- None.\n\n"
+                "## Open Questions / Next Steps\n- [ ] None.\n\n"
+                "IMPORTANCE: 5\n"
+            )
+
+        monkeypatch.setattr(
+            obsidian_utils, "generate_summary", fake_generate_summary
+        )
+        # Force raw-note fallback so we don't accidentally pick up a JSONL
+        # from the developer's running CC environment.
+        monkeypatch.setattr(
+            obsidian_utils, "find_transcript_jsonl", lambda session_id: None
+        )
+
+        results = obsidian_utils.upgrade_batch(
+            [str(note_path)], str(vault), "sessions", "test-project",
+        )
+
+        assert len(results) == 1
+        path_result, status = results[0]
+        assert path_result == str(note_path)
+        assert status.startswith("Upgraded "), f"expected success, got: {status}"
+
+        # Verify the note was actually rewritten with a summary
+        updated = note_path.read_text()
+        assert "status: summarized" in updated
+        assert "## Summary" in updated
+        assert "Did a thing." in updated

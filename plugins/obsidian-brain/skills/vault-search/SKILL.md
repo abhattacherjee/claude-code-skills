@@ -120,8 +120,10 @@ If zero results and query has multiple words, retry by grepping each word separa
 For each matched file (up to 20 files), use Read to read the first 40 lines. Extract from frontmatter:
 
 - **date** — the `date:` field
-- **type** — the `type:` field (e.g. `claude-session`, `claude-insight`, `claude-decision`, `claude-error-fix`)
+- **type** — the `type:` field (e.g. `claude-session`, `claude-insight`, `claude-decision`, `claude-error-fix`, `claude-snapshot`)
 - **project** — the `project:` field
+- **session_id** — the `session_id:` field (used below to attach snapshots to session hits)
+- **source_session_note** — the `source_session_note:` wikilink on snapshots (the parent session stem, enclosed in `[[...]]`)
 - **title** — the first `# ` heading, or the filename without extension
 
 Also extract a **snippet**: the first 200 characters of content after the frontmatter closing `---`.
@@ -129,6 +131,25 @@ Also extract a **snippet**: the first 200 characters of content after the frontm
 If there are more than 20 matched files, sort by filename (which contains the date in YYYY-MM-DD format) descending and take only the 20 most recent.
 
 **Performance note:** If there are 10 or fewer matches, read all files in parallel. If there are 11-20, read in two parallel batches.
+
+### Step 5b — Augment session hits with snapshot data
+
+For each result whose `type` is `claude-session`, query its snapshots once via the shared Python helper `fetch_snapshot_summaries()`:
+
+```bash
+python3 -c '
+import sys, os, json, glob
+sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from pathlib import Path
+from obsidian_utils import fetch_snapshot_summaries
+snaps = fetch_snapshot_summaries(Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4])
+print(json.dumps([{"hhmmss": s["hhmmss"], "trigger": s["trigger"]} for s in snaps]))
+' "$SESSIONS_DIR" "$SESSION_ID" "$DATE" "$PROJECT"
+```
+
+If the returned JSON array is non-empty, remember the snapshot count `N` and each snapshot's `hhmmss` + `trigger` for that result. If batching many sessions, run these queries in parallel (same pattern as Step 5's metadata reads).
+
+For results whose `type` is `claude-snapshot`, remember the `source_session_note` wikilink stem (strip `[[...]]`) as the parent pointer.
 
 ### Step 6 — Sort and present results
 
@@ -149,9 +170,18 @@ Use these icons for type labels:
 - `claude-insight` → insight
 - `claude-decision` → decision
 - `claude-error-fix` → error-fix
+- `claude-snapshot` → snapshot
 - anything else → note
 
 Truncate snippets at 200 characters, ending with `...` if truncated.
+
+**Snapshot markers on session hits:** If Step 5b found `N >= 1` snapshots for a session result, append `· 📸 N` to the type-label block — e.g. `(session · 📸 2, 2026-04-18)`. Under the snippet, list each snapshot as a nested bullet:
+
+```
+   ↳ 📸 <hhmmss> (<trigger>)
+```
+
+**Parent pointer on snapshot hits:** For a `claude-snapshot` result, append `→ [[<parent-stem>]]` after the date — e.g. `(snapshot, 2026-04-18 → [[2026-04-18-demo-aa]])`. Only include the marker when `source_session_note` is set.
 
 After the list, tell the user:
 
@@ -160,6 +190,8 @@ After the list, tell the user:
 ### Step 7 — Handle user selection
 
 If the user picks a number, read the full content of that file using the Read tool and present it in the conversation.
+
+**Session-depth loading applies to snapshot picks too.** If the user picks a snapshot result, load the parent session body AND all its snapshot summaries (re-use `fetch_snapshot_summaries()`), not just the snapshot file alone — so the answer reflects the full session arc, not the mid-session fragment. Resolve the parent via the `source_session_note` stem captured in Step 5.
 
 If the user provides a new query, go back to Step 2.
 

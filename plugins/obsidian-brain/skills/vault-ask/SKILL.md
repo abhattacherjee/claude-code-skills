@@ -160,10 +160,25 @@ Read the top 5–10 files from `RANKED_FILES`. Apply the following size-based st
 - **Files over ~100 lines:** Use the `/context-shield` skill (parallel, one sub-agent per file). Each sub-agent reads the file in isolation and returns a distilled summary relevant to the question.
 
 For each file, extract:
-- Note type (session, insight, decision, error-fix)
+- Note type (session, insight, decision, error-fix, snapshot)
 - Date
 - Key content relevant to the question — decisions made, patterns observed, errors and fixes
 - Exact filename (without path) for use as a wikilink citation
+
+**Snapshot-aware reading.** If a ranked file has `type: claude-snapshot`, also resolve its parent session via the `source_session_note` frontmatter wikilink and include the parent session body in the synthesis pool — the snapshot alone only captures a mid-session fragment. If a ranked file has `type: claude-session` and has associated snapshots, fetch those snapshot summaries via the shared helper and include them alongside the session body:
+
+```bash
+python3 -c '
+import sys, os, json, glob
+sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
+from pathlib import Path
+from obsidian_utils import fetch_snapshot_summaries
+snaps = fetch_snapshot_summaries(Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4])
+print(json.dumps([{"hhmmss": s["hhmmss"], "trigger": s["trigger"], "summary": s["summary"]} for s in snaps]))
+' "$SESSIONS_DIR" "$SESSION_ID" "$DATE" "$PROJECT"
+```
+
+The goal is that an answer synthesized from a session hit reflects the full session arc (pre-compact + post-compact), not only the tail transcript.
 
 Store all extracted content as `NOTE_SUMMARIES`.
 
@@ -187,6 +202,9 @@ Using `NOTE_SUMMARIES`, synthesize a comprehensive answer to the user's question
    - [[note-filename-1]] — <what this note contributed to the answer>
    - [[note-filename-2]] — <what this note contributed to the answer>
    ```
+
+5. **Cite snapshot parents.** When a snapshot note contributes to the answer, cite BOTH the snapshot and its parent session so the user can navigate up:
+   > "Mid-session you sketched the API shape ([[2026-04-18-demo-aa-snapshot-140000]]; parent: [[2026-04-18-demo-aa]])."
 
 If the notes contain contradictory information (e.g. a decision was changed later), surface that explicitly:
 > "You initially chose X ([[older-note]]), but later switched to Y ([[newer-note]])."

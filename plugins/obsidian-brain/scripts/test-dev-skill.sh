@@ -64,6 +64,20 @@ case "$cmd" in
             echo "  skills/$skill_name/ -> cache"
         done
 
+        # Copy runtime scripts (whitelist — scripts/ is heterogeneous;
+        # see feedback_plugin_sync_scripts_heterogeneous.md memory).
+        # These are dispatched by skills at runtime and must reflect the
+        # repo state, not the released cache.
+        if [[ -f "$REPO_ROOT/scripts/vault_doctor.py" ]]; then
+            cp "$REPO_ROOT/scripts/vault_doctor.py" "$CACHE_DIR/scripts/"
+            echo "  scripts/vault_doctor.py -> cache"
+        fi
+        if [[ -d "$REPO_ROOT/scripts/vault_doctor_checks" ]]; then
+            mkdir -p "$CACHE_DIR/scripts/vault_doctor_checks"
+            cp "$REPO_ROOT/scripts/vault_doctor_checks/"*.py "$CACHE_DIR/scripts/vault_doctor_checks/"
+            echo "  scripts/vault_doctor_checks/*.py -> cache"
+        fi
+
         trap - ERR
 
         # Run security tests against installed cache

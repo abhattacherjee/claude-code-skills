@@ -2,7 +2,7 @@
 name: recall
 description: "Loads historical context from the Obsidian vault for the current project. Summarizes any unsummarized session notes, then presents a context brief with recent sessions, open items, and curated insights. Also auto-detects open items completed in the most recent loaded session and offers to check them off. Use when: (1) /recall command, (2) /recall <project-name>, (3) resuming work on a project and wanting prior context."
 metadata:
-  version: 1.4.0
+  version: 1.5.0
 ---
 
 # Recall — Load Project Context from Obsidian Vault
@@ -92,40 +92,58 @@ Update task #1 to completed. Update task #2 subject to `Summarize N unsummarized
 
 Update task #2 subject to `No unsummarized notes found` and set to `completed`. Skip to Step 3.
 
-#### Path B: N=1 (single note — Python pipeline)
+#### Path B: N>=1 (parallel Haiku pipelines with sub-agent fallback)
 
-Create a sub-task for the note:
+**Task management threshold:** If N <= 5, create a sub-task per note. If N > 5, skip per-note sub-tasks — use a single progress update on task #2 instead. This saves ~15-20s of parent round-trip overhead at large N.
+
+##### Phase 1 — Parallel Haiku upgrades (single batch call)
+
+If N <= 5, create a sub-task for each note:
 
 ```
-TaskCreate: subject="Haiku pipeline: <basename>", activeForm="Summarizing <basename> via Haiku"
+TaskCreate: subject="Upgrade: <basename>", activeForm="Upgrading <basename> via Haiku"
 ```
 
-Run the upgrade pipeline in Python:
+**Single Bash tool call** — `upgrade_batch()` fans out N Haiku invocations in parallel inside one Python process via `concurrent.futures.ThreadPoolExecutor`. This sidesteps the Claude Code harness's serialization of parallel Bash tool calls for subprocess-blocking work:
 
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-python3 -c '
-import sys, os
+printf '%s' "$UNSUMMARIZED_PATHS_JSON" | python3 -c '
+import sys, os, json
 import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-from obsidian_utils import upgrade_unsummarized_note
-status = upgrade_unsummarized_note(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
-print(status)
-' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
+from obsidian_utils import upgrade_batch
+paths = json.loads(sys.stdin.read())
+results = upgrade_batch(paths, sys.argv[1], sys.argv[2], sys.argv[3])
+print(json.dumps([{"path": p, "status": s} for p, s in results]))
+' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
 ```
 
-If the status starts with "Failed:", use the sub-agent fallback:
+Parse the returned JSON array. For each entry:
+- `status` starts with `Upgraded ` → mark as succeeded
+- anything else (including `Failed: ...`, empty, or unexpected prefix) → add to the Phase 2 fallback list
 
-1. Update the sub-task subject to `Sub-agent fallback: <basename>`.
-2. Spawn a single sub-agent that writes its summary to a temp file:
+If N <= 5: update each sub-task accordingly (succeeded or `Failed: <basename>`).
+If N > 5: update task #2 subject to `Upgrade N notes: M succeeded, F pending fallback`.
 
-   ```
-   Agent({
-     description: "Summarize session note <basename>",
-     prompt: "Read the session note at <NOTE_PATH>. Produce a structured summary with these exact markdown sections:\n\n## Summary\n1-3 sentence overview of what was accomplished.\n\n## Key Decisions\n- Bullet list of important technical decisions. Write \"None noted.\" if none.\n\n## Changes Made\n- Bullet list of files modified/created with brief description. Write \"None noted.\" if none.\n\n## Errors Encountered\n- Bullet list of errors and how resolved. Write \"None.\" if none.\n\n## Open Questions / Next Steps\n- [ ] Checkbox list of unresolved items. Write \"None.\" if none.\n\nWrite the summary to ~/.claude/obsidian-brain/summary-<basename>.md using the Write tool. After the summary sections, add a final line:\nIMPORTANCE: N\nwhere N is 1-10. 1-3: trivial (config, interrupted). 4-6: standard work. 7-8: key decisions or error resolutions. 9-10: major releases or security audits.\n\nReturn ONLY the single line: WRITTEN:~/.claude/obsidian-brain/summary-<basename>.md"
-   })
-   ```
+> **Why a single Bash call, not N parallel calls?** The Claude Code harness serializes parallel Bash tool calls through a limited shell pool when each subprocess blocks on I/O (e.g., `claude -p --model haiku` taking 5-30s). Dispatching 10 Bash calls in one message still executes them one at a time — wall time ≈ Σ per-call. Pushing fan-out into a single Python process with `ThreadPoolExecutor` gives true concurrency (the GIL releases during subprocess waits), so wall time ≈ max per-call. See `claude-insights/2026-04-21-recall-parallel-bash-dispatch-runs-sequentially-fbee-error.md` and GH #69.
 
-3. If the sub-agent returns `WRITTEN:<path>`, write back via Python reading the temp file:
+##### Phase 2 — Sub-agent fallback (only for failed notes)
+
+If no failures, skip this phase entirely.
+
+For each failed note, spawn a sub-agent. If multiple notes failed, spawn all sub-agents in a **single message turn**:
+
+```
+Agent({
+  description: "Summarize session note <basename>",
+  prompt: "Read the session note at <NOTE_PATH>. Produce a structured summary with these exact markdown sections:\n\n## Summary\n1-3 sentence overview of what was accomplished.\n\n## Key Decisions\n- Bullet list of important technical decisions. Write \"None noted.\" if none.\n\n## Changes Made\n- Bullet list of files modified/created with brief description. Write \"None noted.\" if none.\n\n## Errors Encountered\n- Bullet list of errors and how resolved. Write \"None.\" if none.\n\n## Open Questions / Next Steps\n- [ ] Checkbox list of unresolved items. Write \"None.\" if none.\n\nWrite the summary to ~/.claude/obsidian-brain/summary-<basename>.md using the Write tool. After the summary sections, add a final line:\nIMPORTANCE: N\nwhere N is 1-10. 1-3: trivial (config, interrupted). 4-6: standard work. 7-8: key decisions or error resolutions. 9-10: major releases or security audits.\n\nReturn ONLY the single line: WRITTEN:~/.claude/obsidian-brain/summary-<basename>.md"
+})
+```
+
+When sub-agents return, for each:
+
+1. If the sub-agent returned `WRITTEN:<path>`, extract the path after `WRITTEN:` and replace the leading `~` with `$HOME` to get an absolute path. Store this as `SUMMARY_TEMP_PATH`. Verify the file exists: `test -f "$SUMMARY_TEMP_PATH" && echo "EXISTS" || echo "MISSING"`.
+2. If EXISTS, apply it via Python:
 
    ```bash
    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -133,130 +151,35 @@ If the status starts with "Failed:", use the sub-agent fallback:
    import sys, os
    import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
    from obsidian_utils import upgrade_note_with_summary
-   with open(sys.argv[5], "r") as f:
+   with open(os.path.expanduser(sys.argv[6]), "r") as f:
        summary = f.read()
-   status = upgrade_note_with_summary(sys.argv[1], summary, sys.argv[2], sys.argv[3], sys.argv[4])
+   status = upgrade_note_with_summary(sys.argv[1], summary, sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
    print(status)
-   ' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "~/.claude/obsidian-brain/summary-<basename>.md"
+   ' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "sub-agent" "$SUMMARY_TEMP_PATH"
    ```
 
-   Then clean up: `rm -f ~/.claude/obsidian-brain/summary-<basename>.md`
+   If the write-back status starts with `Failed:`, count this note as permanently failed — do NOT count it as upgraded. If N <= 5, update the per-note sub-task to `Permanently failed: <basename>`.
 
-Mark the sub-task and task #2 as completed. Report the result.
+   If the write-back succeeds, and N <= 5, update the per-note sub-task to `Fallback succeeded: <basename>`.
 
-#### Path C: N>=2 (batch — sub-agent-first, three waves)
+3. If MISSING or sub-agent didn't return `WRITTEN:` → note stays unsummarized for next `/recall`. If N <= 5, update the per-note sub-task to `Permanently failed: <basename>`.
 
-**Task management threshold:** If N <= 5, create per-note sub-tasks for each wave (prep, summarize, write-back). If N > 5, skip per-note sub-tasks — use a single progress update on task #2 per wave instead (e.g. `Summarize 10 notes: Wave 1 prep complete`). This saves ~15-20s of parent round-trip overhead at large N.
-
-##### Wave 1 — Prep (parallel Bash calls)
-
-If N <= 5, create a prep sub-task for each note:
-
-```
-TaskCreate: subject="Prep: <basename>", activeForm="Prepping <basename>"
-```
-
-For each unsummarized note, run a parallel Bash call:
+**Always** clean up temp files from Phase 2 after all write-backs complete, regardless of outcome. Use the actual `SUMMARY_TEMP_PATH` values collected from each sub-agent's `WRITTEN:` response (not placeholder names):
 
 ```bash
-cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-python3 -c '
-import sys, os
-import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-from obsidian_utils import prepare_summary_input
-result = prepare_summary_input(sys.argv[1])
-print(result)
-' "$NOTE_PATH"
+rm -f "$SUMMARY_TEMP_PATH_1" "$SUMMARY_TEMP_PATH_2" ...
 ```
 
-Launch all N Bash calls in a single message turn so they run in parallel.
+If N > 5: update task #2 subject to reflect final Phase 2 results (e.g. `Upgrade N notes: M Haiku + F fallback succeeded, K failed`).
 
-When all return:
-- If N <= 5: update each prep sub-task to completed (include result in subject: e.g. `Prep: ...2322.md (RAW_OK)`).
-- If N > 5: update task #2 subject to `Summarize N notes: Wave 1 prep complete`.
+##### Completion
 
-Parse each result:
-- `RAW_OK:<note_path>` → sub-agent will read the raw note path
-- `JSONL_PREPPED:<temp_path>:<note_path>` → sub-agent will read the temp file path; track `<note_path>` for Wave 3
-- `NO_CONTENT:<note_path>` → skip this note, report to user
+Mark task #2 as completed. Report results:
+- How many upgraded via Haiku pipeline (Phase 1 successes)
+- How many upgraded via sub-agent fallback (Phase 2 write-back successes)
+- How many permanently failed (notes where both Phase 1 Haiku AND Phase 2 sub-agent fallback failed or were skipped — these stay unsummarized for next `/recall`)
 
-##### Wave 2 — Summarize and write to temp files (parallel sub-agents)
-
-If N <= 5, create a summarize sub-task for each note (excluding NO_CONTENT):
-
-```
-TaskCreate: subject="Summarize: <basename>", activeForm="Summarizing <basename>"
-```
-
-Spawn all sub-agents in a **single message turn** so they run in parallel. Each sub-agent writes its summary to a temp file instead of returning it — this keeps summary text out of the parent context (~800 tokens saved per note):
-
-```
-Agent({
-  description: "Summarize session note <basename>",
-  prompt: "Read the file at <READ_PATH>. Produce a structured summary with these exact markdown sections:\n\n## Summary\n1-3 sentence overview of what was accomplished.\n\n## Key Decisions\n- Bullet list of important technical decisions. Write \"None noted.\" if none.\n\n## Changes Made\n- Bullet list of files modified/created with brief description. Write \"None noted.\" if none.\n\n## Errors Encountered\n- Bullet list of errors and how resolved. Write \"None.\" if none.\n\n## Open Questions / Next Steps\n- [ ] Checkbox list of unresolved items. Write \"None.\" if none.\n\nWrite the summary to the file ~/.claude/obsidian-brain/summary-<basename>.md using the Write tool. After the summary sections, add a final line:\nIMPORTANCE: N\nwhere N is 1-10. 1-3: trivial (config, interrupted). 4-6: standard work. 7-8: key decisions or error resolutions. 9-10: major releases or security audits.\n\nReturn ONLY the single line: WRITTEN:~/.claude/obsidian-brain/summary-<basename>.md"
-})
-```
-
-Where `<READ_PATH>` is:
-- For `RAW_OK` notes: the raw note path
-- For `JSONL_PREPPED` notes: the temp file path (e.g. `~/.claude/obsidian-brain/prep-{session_id}.md`)
-
-And `<basename>` is the note filename without extension (e.g. `2026-04-09-obsidian-brain-2322`).
-
-When all sub-agents return, check each result:
-- If the sub-agent returned `WRITTEN:<path>`, mark it as succeeded.
-- If the sub-agent returned an error, empty output, or anything else, mark it as failed. Exclude this note from Wave 3 — it stays unsummarized for the next `/recall`. Report the failure to the user.
-
-If N <= 5: update each summarize sub-task to completed (or `Failed: <basename>`).
-If N > 5: update task #2 subject to `Summarize N notes: Wave 2 complete (M succeeded, F failed)`.
-
-##### Wave 3 — Write back from temp files (parallel Bash calls)
-
-If N <= 5, create a write-back sub-task for each note that got a `WRITTEN:` status:
-
-```
-TaskCreate: subject="Write back: <basename>", activeForm="Writing <basename>"
-```
-
-For each successful note, call Python to read the temp summary file and apply it — no heredoc needed, summary stays off parent context:
-
-```bash
-cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-python3 -c '
-import sys, os
-import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-from obsidian_utils import upgrade_note_with_summary
-with open(sys.argv[6], "r") as f:
-    summary = f.read()
-status = upgrade_note_with_summary(sys.argv[1], summary, sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
-print(status)
-' "$NOTE_PATH" "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT" "sub-agent" "~/.claude/obsidian-brain/summary-<basename>.md"
-```
-
-**Important:** `$NOTE_PATH` is always the **original vault note path** (not the temp file), even for JSONL_PREPPED notes.
-
-Launch all write-back Bash calls in a single message turn.
-
-When all return, parse each result:
-- If the status does NOT start with "Failed:", mark as succeeded.
-- If the status starts with "Failed:", mark as failed. Count it in the failure tally.
-
-If N <= 5: update each write-back sub-task accordingly.
-If N > 5: update task #2 subject to `Summarize N notes: Wave 3 complete (M written, F failed)`.
-
-##### Cleanup
-
-Clean up all temp files created in Waves 1 and 2 (specific paths only — avoids racing with concurrent `/recall` invocations):
-
-```bash
-rm -f ~/.claude/obsidian-brain/prep-<session_id_1>.md ~/.claude/obsidian-brain/prep-<session_id_2>.md ~/.claude/obsidian-brain/summary-<basename_1>.md ~/.claude/obsidian-brain/summary-<basename_2>.md ...
-```
-
-Mark task #2 as completed. Report results: how many upgraded, how many skipped (NO_CONTENT), how many failed.
-
-If any sub-agents returned empty or invalid summaries, report those notes as still unsummarized — they will be retried on the next `/recall`.
-
-For `NO_CONTENT` notes, inform the user: "Note `<basename>` has no session_id or conversation content. Manually edit it in Obsidian to add a summary, or delete it if it's empty."
+For failed notes: "Note `<basename>` could not be summarized. It will be retried on the next `/recall`."
 
 ### Step 3 — Build context brief (Python)
 
@@ -283,7 +206,7 @@ If the command fails (non-zero exit code), print the error and stop — do not f
 **Parse the output.** Split on section labels:
 
 1. Extract `<<<OB_CONTEXT_BRIEF>>>` — everything between this delimiter and `<<<OB_LOAD_MANIFEST>>>`. This is the brief to display.
-2. Extract `<<<OB_LOAD_MANIFEST>>>` — parse `full_session_title`, `full_session_date`, `full_session_path`, `summary_session_title`, `summary_session_date`, `insight_count`.
+2. Extract `<<<OB_LOAD_MANIFEST>>>` — parse `full_session_title`, `full_session_date`, `full_session_path`, `summary_session_title`, `summary_session_date`, `insight_count`, `snapshot_count` (optional), and all `snapshot:` lines (there may be zero or more, each followed by optional 2-space-indented `key_context` bullets).
 3. Extract `<<<OB_MOST_RECENT_SESSION_PATH>>>` — the full path for checkoff edits.
 4. Extract `<<<OB_OPEN_ITEM_CANDIDATES>>>` — either `NO_CANDIDATES`, `NO_ITEMS`, or a JSON array.
 
@@ -294,6 +217,8 @@ Update task #3 to `completed`. Update task #4 to `in_progress`.
 > **Here's what I found from your Obsidian vault for `$PROJECT`:**
 
 Then output the `CONTEXT_BRIEF` section. For the session history table, paraphrase each session's Title column into a concise one-line summary (under ~80 characters) that captures the key accomplishment. Keep all other columns (date, duration, branch) verbatim.
+
+Snapshots appear in the brief as nested indented rows beneath their parent session (rows starting with `↳ HH:MM:SS`). Render them verbatim — do not paraphrase snapshot titles (they're already one-line summaries). Display the `snapshot:` lines from LOAD_MANIFEST as bullet points under the most-recent session in the "Loaded into this conversation" output.
 
 If unsummarized notes were upgraded in Step 2, also mention:
 

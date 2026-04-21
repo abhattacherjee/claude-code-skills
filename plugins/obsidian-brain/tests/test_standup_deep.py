@@ -552,6 +552,7 @@ class TestPipelineErrorHandling:
                 vault_path=str(tmp_vault),
                 sessions_folder="claude-sessions",
                 insights_folder="claude-insights",
+                db_path=str(tmp_vault / "test.db"),
             )
 
         assert result.startswith("ERROR:vault index failed:")
@@ -844,14 +845,16 @@ class TestFtsScopingPerProject:
             {"date": _today(), "project": "proj-b", "type": "claude-session", "status": "summarized"},
             "# B\n\n## Summary\nDone.\n\n## Open Questions / Next Steps\n- [ ] Fix beta bug")
 
-        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"])
+        db_path = str(tmp_vault / "test.db")
+        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"], db_path=db_path)
         output = tmp_vault / "deep.json"
         with patch.object(open_item_dedup, '_resolve_project_paths', return_value={}):
             open_item_dedup.deep_analysis_pipeline(
                 [f"{_today()}-proj-a-0001", f"{_today()}-proj-b-0001"],
                 '["proj-a", "proj-b"]',
                 str(output),
-                str(tmp_vault), "claude-sessions", "claude-insights")
+                str(tmp_vault), "claude-sessions", "claude-insights",
+                db_path=db_path)
 
         data = json.loads(output.read_text())
         evidence = data.get("evidence", {})
@@ -874,14 +877,16 @@ class TestPipelineDirCreation:
         _write_note(sess / f"{bn}.md",
             {"date": _today(), "project": "p", "type": "claude-session", "status": "summarized"},
             "# T\n\n## Summary\nDone.")
-        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"])
+        db_path = str(tmp_vault / "test.db")
+        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"], db_path=db_path)
 
         # Output to a non-existent subdirectory
         output = tmp_vault / "nonexistent" / "subdir" / "deep.json"
         with patch.object(open_item_dedup, '_resolve_project_paths', return_value={}):
             status = open_item_dedup.deep_analysis_pipeline(
                 [bn], '["p"]', str(output),
-                str(tmp_vault), "claude-sessions", "claude-insights")
+                str(tmp_vault), "claude-sessions", "claude-insights",
+                db_path=db_path)
         assert status.startswith("OK:")
         assert output.exists()
 
@@ -899,13 +904,15 @@ class TestRepresentativeKey:
         _write_note(sess / f"{bn}.md",
             {"date": _today(), "project": "p", "type": "claude-session", "status": "summarized"},
             "# T\n\n## Summary\nDone.\n\n## Open Questions / Next Steps\n- [ ] Fix the important bug")
-        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"])
+        db_path = str(tmp_vault / "test.db")
+        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"], db_path=db_path)
 
         output = tmp_vault / "deep.json"
         with patch.object(open_item_dedup, '_resolve_project_paths', return_value={}):
             open_item_dedup.deep_analysis_pipeline(
                 [bn], '["p"]', str(output),
-                str(tmp_vault), "claude-sessions", "claude-insights")
+                str(tmp_vault), "claude-sessions", "claude-insights",
+                db_path=db_path)
 
         data = json.loads(output.read_text())
         for group in data["items"]["groups"]:
@@ -928,12 +935,14 @@ class TestEncodingCorruption:
         )
         note_path.write_bytes(content.encode("utf-8") + b"\xff\xfe\x00\x80binary garbage")
 
-        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"])
+        db_path = str(tmp_vault / "test.db")
+        vault_index.ensure_index(str(tmp_vault), ["claude-sessions", "claude-insights"], db_path=db_path)
         output = tmp_vault / "deep.json"
         with patch.object(open_item_dedup, '_resolve_project_paths', return_value={}):
             status = open_item_dedup.deep_analysis_pipeline(
                 [bn], '["p"]', str(output),
-                str(tmp_vault), "claude-sessions", "claude-insights")
+                str(tmp_vault), "claude-sessions", "claude-insights",
+                db_path=db_path)
         assert status.startswith("OK:")
         data = json.loads(output.read_text())
         # Should have collected the open item despite encoding corruption
