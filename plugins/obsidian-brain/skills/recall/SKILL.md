@@ -228,41 +228,124 @@ If unsummarized notes were upgraded in Step 2, also mention:
 
 Parse the `OPEN_ITEM_CANDIDATES` section from the Step 3 Python output.
 
-1. **Skip if no candidates.** If the value is `NO_ITEMS` or `NO_CANDIDATES`, skip to Step 5 silently.
+1. **Skip if no candidates.** If the value is `NO_ITEMS` or `NO_CANDIDATES`, skip the rest of Step 4's checkoff sub-steps and proceed directly to the "Show load manifest" block at the end of Step 4 silently.
 
 2. **Parse candidates.** The JSON array contains objects with `file`, `line`, `text`, `evidence`, `confidence`, `has_completion_phrase`.
 
-3. **Present candidates to user.** Print:
+3. **Present candidates to user.** Branch by N (number of candidates):
 
-```
-I noticed these open items may now be done:
+   **N ≤ 4 — native multi-select picker:**
 
-1. [x] <item text>
-     From: <basename of source file>
-     Evidence: "<short snippet from evidence showing the match>"
+   Call `AskUserQuestion` with `multiSelect: true`. Build one `option` per candidate:
 
-2. [x] <item text>
-     ...
+   - `label`: first ~40 characters of the candidate's `text` field, ellipsized with `…` if truncated. No paraphrase — take a prefix of the verbatim text.
+   - `description`: `<basename(file)>:<line> — "<full verbatim candidate.text>" — Evidence: <short evidence snippet>`
 
-Confirm checkoff? (e.g. `1` or `1,2` or `all` or `none`)
-```
+   Example shape:
 
-4. **Wait for user response.** Parse the response:
-   - `none` or empty → skip checkoff entirely, proceed to Step 5
+   ```
+   AskUserQuestion({
+     questions: [{
+       question: "Which open items should I check off?",
+       header: "Checkoff",
+       multiSelect: true,
+       options: [
+         {
+           label: "File #69: Investigate /recall parallel subpro…",
+           description: "2026-04-20-obsidian-brain-7769.md:42 — \"File #69: Investigate /recall parallel subprocess dispatch sequentiality in Claude Code harness\" — Evidence: \"...shipped v2.4.0 ...completing issue #69...\""
+         },
+         ...
+       ]
+     }]
+   })
+   ```
+
+   Record the user's selected options. Empty selection → treat as `none`.
+
+   **N > 4 — verbatim text fallback:**
+
+   Print:
+
+   ```
+   I noticed these open items may now be done:
+
+   1. <basename(file)>:<line>
+      - [ ] <verbatim candidate.text>
+      Evidence: "<short evidence snippet>"
+
+   2. ...
+
+   Confirm checkoff? (e.g. `1` or `1,2` or `all` or `none`)
+   ```
+
+   The `- [ ] <verbatim candidate.text>` line MUST be shown in a code block using the exact `candidate.text` content (no paraphrase, no ellipsis). Step 5's match rule then compares this text against the file line after normalizing the file side (strip leading whitespace, `- [ ] ` prefix, and trailing whitespace/newline) — so the presented text is what matches after normalization, not byte-for-byte against raw file bytes.
+
+4. **Wait for user response** (N > 4 branch only — the N ≤ 4 branch returns from `AskUserQuestion`). Parse the response:
+   - `none` or empty → skip the remaining checkoff sub-steps (5–7) and proceed directly to the "Show load manifest" block at the end of Step 4
    - `all` → check off all candidates
    - Comma-separated numbers (e.g. `1,3`) → check off only those
 
-5. **For each confirmed checkoff, edit the source file.** Use Read to load the full source file. Find the exact line containing `- [ ] <item text>`. Replace it with `- [x] <item text>`. Use the Edit tool with `replace_all: false` and provide enough context to ensure uniqueness. If the line is ambiguous, skip and warn:
+   **N ≤ 4 branch:** if the user's `AskUserQuestion` selection is empty, treat it the same way — skip sub-steps 5–7 and proceed to the "Show load manifest" block at the end of Step 4.
 
-```
-⚠️  Could not check off item "<item text>" — line is not unique in <file>. Edit manually in Obsidian.
-```
+5. **For each confirmed checkoff, Read-verify then Edit.** Maintain a `successfully_edited` list (starts empty), a `skipped_drift` counter (starts 0), and a `skipped_other` counter (starts 0).
+
+   **5-pre. Within-batch dedup:** if the confirmed candidate list contains two entries with the same `(file, line)`, keep only the first and drop the rest automatically — they are scan duplicates, not drift. Do not emit per-duplicate warnings or treat them as skips. If any duplicates were removed, print this one-line informational message: `De-duplicated K within-batch candidate(s).`
+
+   For each confirmed candidate:
+
+   a. **Read** the source file at `offset = max(1, candidate.line - 3), limit = 7` (±3 lines context, clamped at file start). This also satisfies the Edit tool's "must Read before Edit" requirement.
+
+   a'. **If Read fails** (file missing, permission denied, or the read region returns empty content): skip this candidate, increment `skipped_other`, and emit:
+
+   ```
+   ⚠️  Skipped checkoff "<candidate.text>" — cannot read <basename(file)>:<line>
+   (<error class from Read tool>). File may have been moved, deleted, or
+   permissions changed. Edit manually in Obsidian.
+   ```
+
+   Do NOT append to `successfully_edited`. Continue with next candidate.
+
+   b. **Match check.** Scan the read region for any line that, after stripping leading whitespace, the `- [ ] ` prefix, AND trailing whitespace/newline, equals `candidate.text` byte-for-byte. The candidate text was already normalized by `open_item_dedup.collect_open_items` via `line.strip()` (leading+trailing whitespace removed) followed by `[6:]` (prefix removed), so both sides of the comparison end up as the same fully-stripped item text. The bullet prefix is exactly `- [ ] ` (hyphen, space, open-bracket, space, close-bracket, single trailing space) — `open_item_dedup.collect_open_items` emits only this form, so `- [ ]` with other spacing or `*`/`+` bullets will correctly fail to match and trigger the drift-skip branch.
+
+   c. **If match found:** use `Edit` with `replace_all: false` to update the already-matched raw line in place, preserving any leading whitespace/indentation and changing only its checkbox marker from `[ ]` to `[x]`. Do not reconstruct the line from `candidate.text` — use the raw line as seen in the Read output. Include enough surrounding text in the Edit call to ensure uniqueness. Append `candidate.text` to `successfully_edited`.
+
+   d. **If no match found in the read region:** skip this candidate, increment `skipped_drift`, and emit:
+
+   ```
+   ⚠️  Skipped checkoff at <basename(file)>:<line>
+       expected: - [ ] <candidate.text>
+       found:    <RAW_LINE>
+   File changed since /recall Step 3. Edit manually in Obsidian.
+   ```
+
+   `<RAW_LINE>` is the raw text (verbatim, leading whitespace preserved) of the line at buffer index `min(3, candidate.line - 1)` in the read region. Use the literal substitute `(line is past EOF)` if the read region is shorter than expected, or `(line is no longer a checkbox)` if the line's content (after stripping leading whitespace) does not start with `- [`. The buffer-index formula follows from Read's clamp `offset = max(1, candidate.line - 3)` — when `candidate.line ≥ 4`, the target line sits at buffer index 3; when `candidate.line ∈ {1,2,3}`, it sits at buffer index `candidate.line - 1`. Do NOT append to `successfully_edited`.
+
+   e. **If the Edit call itself fails** (string not found, ambiguous match, or file-modified-since-read): skip, increment `skipped_other`, and emit the Edit tool's error message verbatim:
+
+   ```
+   ⚠️  Could not check off "<candidate.text>" in <basename(file)>:<line> —
+   Edit failed: <verbatim Edit error message>. The line may have been edited
+   externally since /recall started, or the same text appears multiple times.
+   Edit manually in Obsidian.
+   ```
+
+   Do NOT append to `successfully_edited`.
+
+   Continue with remaining confirmed candidates regardless of any individual skip.
 
 6. **Confirm checkoffs to user.** Print:
 
-```
-✅ Checked off N item(s) across <list of files>.
-```
+   ```
+   ✅ Checked off N item(s) across <list of files>.
+   ```
+
+   If `skipped_drift > 0` or `skipped_other > 0`, append:
+
+   ```
+   ⚠️  Skipped M item(s) total (drift: <skipped_drift>, other: <skipped_other>) — see warnings above.
+   ```
+
+   Where `N = len(successfully_edited)` and `M = skipped_drift + skipped_other`.
 
 7. **Cascade check-offs to duplicate items in older notes.** Run:
 
@@ -278,7 +361,7 @@ Confirm checkoff? (e.g. `1` or `1,2` or `all` or `none`)
     ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
     ```
 
-    Construct `$CHECKED_ITEMS_JSON` as a JSON array of the confirmed item texts (passed via stdin to avoid shell quoting issues). Report the cascade summary.
+    Construct `$CHECKED_ITEMS_JSON` as a JSON array of the `successfully_edited` item texts (the ones where the Read-verify matched AND the Edit succeeded — NOT the originally-confirmed set). Items skipped due to drift or non-unique matches are excluded so we don't cascade a closed state the primary-edit step could not confirm. Pass via stdin to avoid shell quoting issues. Report the cascade summary.
 
 **Show load manifest** (same step — saves one parent round):
 

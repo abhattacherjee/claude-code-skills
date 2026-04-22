@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-04-22
+
+### Fixed
+- `/recall` Step 4 could silently close still-open items when Claude's paraphrased candidate presentation didn't match the candidate's actual text. Approval now lands on the verbatim text that will be matched on disk, and each candidate's source line is Read-verified before any Edit. Closes #47.
+
+### Changed
+- `/recall` Step 4 now uses Claude Code's native `AskUserQuestion` multi-select picker when ≤4 checkoff candidates are surfaced. At >4 candidates, the text prompt still applies but now shows each candidate's verbatim `- [ ] <text>` line and `file:line` anchor so users can verify before confirming. Items skipped due to source drift are excluded from the cascade step. (See #47.)
+
 ## [2.4.0] - 2026-04-21
 
 ### Added
