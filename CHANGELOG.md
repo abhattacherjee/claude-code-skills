@@ -5,6 +5,20 @@ Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
 
+## [3.7.0] - 2026-04-26
+
+### Changes
+
+- Sync obsidian-brain v2.4.2 (8 fixes since v2.4.1):
+  - #105 cwd-gone session-id resolution
+  - #101+#86+#110 source-session basename stability
+  - #93 (+8 follow-ups) vault-doctor immutable capture-time signals
+  - #81 vault-doctor duplicate session_id collision detection
+  - #50 E2E snapshot to /recall integration tests
+  - #68 vault-doctor snapshot_migration cross-midnight backlink
+  - #45 /compress rank-gap delta guard
+  - #78 /recall N=1 picker
+
 ## [3.6.0] - 2026-04-22
 
 ### Changes

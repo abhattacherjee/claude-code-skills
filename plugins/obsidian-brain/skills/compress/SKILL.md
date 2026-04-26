@@ -73,9 +73,12 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 python3 -c '
 import sys, os, json
 import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-from vault_index import ensure_index, search_vault
-from obsidian_utils import load_config
 try:
+    from vault_index import ensure_index, search_vault
+    from obsidian_utils import load_config
+    # Pure predicate: top rank must pass absolute-strength gate AND |top|-|#2| delta gate.
+    # MIN_RANK_DELTA tuned against scripts/compress_rank_gap_corpus.json (issue #45).
+    from compress_guard import is_high_confidence_match
     c = load_config()
     vp = c["vault_path"]
     folders = [c.get("sessions_folder", "claude-sessions"), c.get("insights_folder", "claude-insights")]
@@ -84,17 +87,14 @@ try:
     results += search_vault(db, sys.argv[1], note_type="claude-decision", limit=3)
     # Sort combined results by rank (most negative = best match)
     results.sort(key=lambda r: r["rank"])
-    # Apply high-confidence threshold: top result must have rank <= -5.0
-    # AND must be significantly ahead of #2 (at least 1.5x better rank)
-    if results:
+    if is_high_confidence_match(results):
         top = results[0]
-        rank_gap_ok = len(results) < 2 or abs(top["rank"]) > abs(results[1]["rank"]) * 1.5
-        if top["rank"] <= -5.0 and rank_gap_ok:
-            print(json.dumps({"match": True, "path": top["path"], "title": top["title"], "date": top["date"], "tags": top["tags"], "rank": top["rank"]}))
-        else:
-            print(json.dumps({"match": False}))
+        print(json.dumps({"match": True, "path": top["path"], "title": top["title"], "date": top["date"], "tags": top["tags"], "rank": top["rank"]}))
     else:
         print(json.dumps({"match": False}))
+except ImportError as e:
+    print(f"Warning: plugin hooks are out of date or missing ({e}) — run /dev-test install", file=sys.stderr)
+    print(json.dumps({"match": False}))
 except Exception as e:
     print(f"Warning: could not search vault index: {e}", file=sys.stderr)
     print(json.dumps({"match": False}))
@@ -290,6 +290,7 @@ Present the full note to the user including frontmatter:
 ---
 type: claude-insight
 date: YYYY-MM-DD
+created_at: <ISO-8601-UTC>
 source_session: <current-session-id>
 source_session_note: "[[<session-note-filename>]]"
 project: <project-name>
@@ -307,6 +308,11 @@ tags:
 
 Where:
 - `YYYY-MM-DD` is today's date
+- `<ISO-8601-UTC>` is the current UTC timestamp at second precision. Get it via:
+  ```bash
+  python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat(timespec="seconds"))'
+  ```
+  Example: `2026-04-24T18:42:11+00:00`
 - `<current-session-id>` and `<session-note-filename>` are derived together. Get session context via the shared helper:
 
   ```bash

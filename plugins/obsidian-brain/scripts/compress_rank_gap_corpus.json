@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "created": "2026-04-23",
+  "description": "Tuning corpus for /compress Step 3.5 rank-gap guard (issue #45). Seeded with the original repro case and a wide-gap synthetic; expanded by scripts/tune_compress_rank_gap.py consumers and via replay mining (see spec tuning protocol).",
+  "queries": [
+    {
+      "id": "replay-pr43-snapshot",
+      "query": "PR 43 snapshot dev-test smoke results",
+      "source": "replay",
+      "expected_match": true,
+      "note": "Original issue #45 repro case — top -29.46, runner-up -24.71, delta 4.75. Threshold >= 4.75 fails to fix the bug."
+    },
+    {
+      "id": "synthetic-single-strong",
+      "query": "snapshot summary integration PR 43",
+      "source": "synthetic",
+      "expected_match": true,
+      "note": "Narrow query with a single strong match. Serves as sanity check that the strength gate alone (no runner-up) still admits obvious matches."
+    },
+    {
+      "id": "replay-compress-rank-gap-false-negative",
+      "query": "compress rank gap false negative same topic peers",
+      "source": "replay",
+      "expected_match": true,
+      "note": "Replays the /compress invocation that surfaced the issue #45 bug. Vault has exactly one dedicated insight note on this topic (2026-04-18-compress-rank-gap-rejects-same-topic-peers-0cef.md). Wide gap expected."
+    },
+    {
+      "id": "replay-hook-simulation-precompact",
+      "query": "hook simulation pattern precompact sessionend pipe JSON",
+      "source": "replay",
+      "expected_match": true,
+      "note": "Replays /compress on hook simulation pattern. One dedicated note exists (2026-04-18-hook-simulation-pattern-precompact-sessionend-from-r-1f4b.md). Unique topic with expected wide gap."
+    },
+    {
+      "id": "replay-recall-optimization-parallel-haiku",
+      "query": "recall optimization sprint parallel Haiku session performance",
+      "source": "replay",
+      "expected_match": true,
+      "note": "Replays /compress on recall optimization. One primary insight note (2026-04-10-recall-optimization-sprint-243s-to-80s-67-reduct-d75c.md). Strong unique match expected."
+    },
+    {
+      "id": "replay-novel-unique-topic",
+      "query": "some novel unique topic xyz123",
+      "source": "replay",
+      "expected_match": false,
+      "note": "Extracted verbatim from a session /compress invocation. String xyz123 has zero vault matches; any FTS5 result is unrelated noise. Expected: no high-confidence match."
+    },
+    {
+      "id": "synthetic-wide-gap",
+      "query": "SessionEnd hook atomic write temp rename vault note",
+      "source": "synthetic",
+      "expected_match": true,
+      "note": "Wide-gap synthetic. Targets the obsidian-brain atomic-write pattern; one dominant note covers it. Large delta expected (single strong hit)."
+    },
+    {
+      "id": "synthetic-narrow-gap-multi-match",
+      "query": "obsidian-brain security audit path containment hardening vulnerabilities",
+      "source": "synthetic",
+      "expected_match": true,
+      "note": "Narrow-gap multi-match synthetic. Security hardening topic has ~14 notes; top 2 should be close in rank. Tests whether the guard correctly allows the strongest match through despite multiple nearby results."
+    },
+    {
+      "id": "synthetic-three-close-results",
+      "query": "vault search FTS5 sqlite index recall ranking score",
+      "source": "synthetic",
+      "expected_match": true,
+      "note": "Three-close-results synthetic. FTS5/vault-index topic has ~43 notes; top 3 results likely cluster closely. Tests the guard at the three-peer boundary."
+    },
+    {
+      "id": "synthetic-off-topic-outrank",
+      "query": "fix the code check it",
+      "source": "synthetic",
+      "expected_match": false,
+      "note": "Off-topic outrank synthetic. Generic phrase designed to surface unrelated or low-rank results. No genuine match expected; strength gate or delta gate should reject."
+    }
+  ]
+}

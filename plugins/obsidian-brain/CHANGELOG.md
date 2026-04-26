@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-04-26
+
+### Added
+- E2E integration test for snapshot → summarize → /recall pipeline (`tests/test_snapshot_e2e.py`). Closes #50.
+- **`created_at:` ISO-8601 frontmatter** is now written by `error-log`,
+  `decide`, `retro`, and `compress` (new-note flow) for sub-day-precision
+  capture-time matching by vault-doctor. Net-additive — older notes continue
+  to fall back to `date:` (day precision).
+- `_first_seen_date(sid)` marker (atomic, idempotent JSON at `~/.claude/obsidian-brain/sessions/<sid>.json`) consulted by both `get_session_context()` and SessionEnd to keep insight wikilinks and on-disk filenames in lockstep ([#101](https://github.com/abhattacherjee/obsidian-brain/issues/101) Fix A)
+- `_resolve_session_note_by_hash()` shared helper with type+project filter and collision detection ([#101](https://github.com/abhattacherjee/obsidian-brain/issues/101) Fix C)
+- `tests/test_get_session_context.py` — comprehensive coverage of markers, peek helpers, resolver, and the project-slug invariant
+
+### Fixed
+- **Issue #105:** `_get_session_id_fast()` no longer raises `FileNotFoundError`
+  when the cwd is deleted mid-session (e.g. via `gh pr merge --delete-branch`
+  from inside a worktree). Insight savers (`/retro`, `/compress`, `/decide`,
+  `/error-log`) now resolve the active session's SID via a recent-bootstrap
+  best-effort fallback instead of stamping `source_session: unknown`.
+- Source-session basename divergence between `get_session_context()` and SessionEnd that broke insight wikilinks across cross-midnight, worktree, and resumed sessions ([#101](https://github.com/abhattacherjee/obsidian-brain/issues/101))
+- Snapshot/session hash collision in the resolver could pick a snapshot when an insight saver intended to link to a session ([#101](https://github.com/abhattacherjee/obsidian-brain/issues/101) Fix C)
+- `is_resumed_session` now returns True only when a session-type note for the current project (matched by `project_path` against `cwd`) exists for this session_id's hash — eliminating false positives from cross-project hash collisions and snapshot-only matches ([#86](https://github.com/abhattacherjee/obsidian-brain/issues/86), subsumed by [#101](https://github.com/abhattacherjee/obsidian-brain/issues/101))
+- **vault-doctor source-sessions silently corrupted backlinks** when a note's
+  mtime drifted past the originating session's JSONL window (any later edit
+  by `/check-items`, `/link`, `/compress`, sync clients, or another vault-doctor
+  check). The check now uses an immutable signal chain
+  (`created_at` → `date` → filename prefix → mtime) for capture-time matching,
+  and trusts an existing `source_session` whose JSONL window overlaps the
+  note's calendar day. Issue payloads surface `capture_signal` and
+  `capture_confidence` so operators can spot heuristic falls. Closes #93.
+- **vault-doctor source-sessions further hardening** (issue #93 follow-ups
+  surfaced via dev-test verification):
+  - Snapshot notes are now filtered out of the session-note SID index.
+    PreCompact snapshots inherit the parent session's UUID; without the
+    filter they could clobber the parent in the index, causing T5c's
+    basename-only repairs to propose snapshot basenames as 'correct'.
+  - Notes whose `source_session` UUID has a real JSONL but no session
+    note are no longer routed to the date-window matcher. The UUID is
+    authoritative; the missing session note is tracked separately
+    (issue #98).
+  - Day-precision signals (`date`, `filename`) now use a day-overlap
+    matcher (greatest overlap with the UTC calendar day) instead of a
+    noon-UTC point match. Morning-only and evening-only sessions are
+    no longer silently excluded from candidacy.
+- **vault-doctor source-sessions multi-session-day convergence**: when a
+  worktree-launched insight records `project: <main>` but its source
+  session has `project: <main>--<worktree-slug>`, the UUID lookup
+  previously failed and the matcher converged every flagged note onto
+  whatever session's window contained noon-UTC. Now uses cross-project
+  UUID indexing (Phase 1b looks up UUIDs across all projects, not just
+  the note's declared project), basename-only repair when UUID resolves
+  but the stored basename is stale, capped confidence (≤ 0.6) on
+  date-only signals, and convergence-guard tagging when ≥2 flags in a
+  project target the same proposed session (confidence further capped to
+  ≤ 0.4).
+- `/compress` Step 3.5 rank-gap guard no longer rejects legitimate same-topic peer matches. Replaced the 1.5× ratio test with a delta-score test (`|top.rank| - |#2.rank| > MIN_RANK_DELTA`) that scales with rank magnitude, so multi-phase PRs and iterative features no longer silently duplicate instead of prompting for an update. `MIN_RANK_DELTA` tuned empirically against `scripts/compress_rank_gap_corpus.json`; chosen value lives in `hooks/compress_guard.py`. Closes #45.
+- `/recall` Step 4 N=1 checkoff branch no longer hits `AskUserQuestion` `minItems=2` validation errors. Single candidates now route to the verbatim text fallback; the `2 ≤ N ≤ 4` picker branch gains an explicit "Skip all — don't check off anything" sentinel option so deferral is a visible selectable choice. Closes #78.
+- `vault-doctor` `snapshot-migration` §3 (`snapshot-missing-backlink`) now resolves the parent session note via the `session_id` index built in the same scan, instead of composing a filename from `(snapshot.date, project, sha256(session_id)[:4])`. The old date-heuristic wrote wrong `source_session_note` wikilinks for cross-midnight sessions (PreCompact on day N, SessionEnd on day N+1). Orphan snapshots now emit `unresolved=True` with no speculative wikilink. Closes #68.
+- `vault-doctor` `sessions_by_id` in both `snapshot_migration.py` and `snapshot_integrity.py` no longer silently relies on an arbitrary filesystem-order-dependent winner when two session notes share a `session_id`. Colliding sids are tracked in a `_sid_collisions` set at build time, and the four consumers (migration §3 / §4 and integrity §1 / §4) now treat those collisions as ambiguous: the §1/§3 emission paths surface unresolved `"ambiguous parent — multiple session notes share session_id=<sid>; resolve by deduping the colliding session notes in the sessions folder"` Issues, while the §4 fix-proposal loops skip proposing a confidently-wrong backlink or snapshots-list fix. Collision detection is project-blind so `--project=foo` can't silently filter out a cross-project collider and resurrect arbitrary-winner selection inside the filtered scan; emission indices remain project-filtered. `snapshot_integrity.py` also gains an empty-`session_id` pre-guard with a specific reason (parity with `snapshot_migration.py` §3). Surfaced during PR #80 review as a pre-existing weakness made consequential by the #68 fix. Closes #81.
+- **Project-name divergence across worktrees**: session notes and insights
+  written from a worktree previously recorded the worktree's basename as
+  their `project:` field (e.g., `obsidian-brain--issue-81-...`), causing
+  vault-doctor's source-sessions check to mis-resolve UUID lookups when
+  the same insight referenced a session run in a different worktree.
+  All vault notes now record the canonical main-repo basename (e.g.,
+  `obsidian-brain`), derived via `git rev-parse --git-common-dir`. CC's
+  internal path-encoded JSONL/bootstrap lookups are unaffected. Existing
+  notes with worktree-derived project names continue to work via the
+  UUID-first cross-project fallback in source-sessions.
+- **PR #97 reviewer findings (issue #93)**: 8 follow-up fixes applied:
+  C1+I6 surface `convergence_warning` and `convergence_count` at the
+  top level of the JSON payload (not under `extra.*`) and document the
+  `[CONVERGED <N> flags]` rendering in vault-doctor SKILL.md;
+  C2 cap `mtime`-signal proposed confidence at 0.3 (below the 0.4
+  convergence floor) so an mtime-only proposal is never auto-applied;
+  C3 emit an unresolved diagnostic Issue (with `missing_session_note`
+  and `jsonl_path`) when the source UUID has a real JSONL but no vault
+  session note, instead of silently skipping; C4 `canonical_project_name`
+  returns `"unknown"` when `os.getcwd()` raises (deleted-cwd safety so
+  hooks honor their must-exit-0 contract); C5 log a stderr warning when
+  `_list_all_session_notes` skips a `.md` file with malformed
+  frontmatter (parity with `_list_session_notes`); I4 Phase 1b now falls
+  back to `_find_jsonl_anywhere` when `_jsonl_dir_for_project` misses
+  on worktree-suffixed project names, preventing date-matcher false
+  positives; I7 tighten the UUID-trust regression test to assert the
+  C3 unresolved-Issue contract unconditionally.
+
 ## [2.4.1] - 2026-04-22
 
 ### Fixed

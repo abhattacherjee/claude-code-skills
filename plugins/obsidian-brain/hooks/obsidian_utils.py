@@ -50,6 +50,314 @@ _RE_RAW_CONVERSATION = re.compile(
     r"^## Conversation \(raw\)\n(.+?)(?=\n^## |\Z)", re.MULTILINE | re.DOTALL
 )
 
+# Session IDs are CC UUIDs (or test fixtures). Restrict to safe filename chars
+# so the marker path never escapes ~/.claude/obsidian-brain/sessions/.
+_SID_FILENAME_SAFE = re.compile(r"\A[A-Za-z0-9._-]{1,128}\Z")
+
+
+def _first_seen_date(sid: str) -> str:
+    """Return the canonical first-seen calendar date for a session_id.
+
+    Atomic, idempotent, lazy: marker is written on first call and read
+    verbatim on subsequent calls — every subsequent call (across days,
+    worktrees, processes) returns the same date. If the marker becomes
+    corrupt or unreadable (e.g., truncated by an external process), the
+    function self-heals by rewriting it with today's date — note that
+    this resets the lockstep guarantee for that session_id.
+
+    Silent-failure paths (all log to stderr): unsafe sid shape, mkdir
+    failure, marker write failure — fall back to today's date and lockstep
+    is voided for that call. Used by get_session_context() and SessionEnd
+    so that source_session_note wikilinks and on-disk filenames stay in
+    lockstep even when sessions cross midnight.
+
+    Marker location: ~/.claude/obsidian-brain/sessions/<sid>.json (0o600).
+    """
+    if not _SID_FILENAME_SAFE.fullmatch(sid):
+        print(
+            f"[obsidian-brain] _first_seen_date: refusing unsafe sid shape; "
+            f"falling back to today's date",
+            file=sys.stderr,
+        )
+        return datetime.date.today().isoformat()
+
+    marker_dir = Path.home() / ".claude" / "obsidian-brain" / "sessions"
+    try:
+        marker_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if marker_dir.stat().st_mode & 0o077:
+            os.chmod(marker_dir, 0o700)
+    except OSError as exc:
+        print(f"[obsidian-brain] _first_seen_date: cannot create marker dir: {exc}",
+              file=sys.stderr)
+        return datetime.date.today().isoformat()  # graceful fallback
+
+    marker = marker_dir / f"{sid}.json"
+    try:
+        date = json.loads(marker.read_text(encoding="utf-8"))["first_seen_date"]
+        # Self-heal mode if a previous bug or manual edit left it permissive.
+        try:
+            if marker.stat().st_mode & 0o077:
+                os.chmod(marker, 0o600)
+        except OSError:
+            pass  # mode-tightening is best-effort; readback already succeeded
+        return date
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError):
+        pass  # fall through and (re)write
+
+    today = datetime.date.today().isoformat()
+    payload = {
+        "first_seen_date": today,
+        "first_seen_iso": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{sid}.", suffix=".json.tmp", dir=str(marker_dir)
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, marker)  # atomic on POSIX
+        tmp_path = None  # rename succeeded; nothing to clean up
+    except OSError as exc:
+        print(f"[obsidian-brain] _first_seen_date: marker write failed: {exc}",
+              file=sys.stderr)
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError as cleanup_exc:
+                print(
+                    f"[obsidian-brain] _first_seen_date: failed to clean up temp file "
+                    f"{tmp_path}: {cleanup_exc}",
+                    file=sys.stderr,
+                )
+    return today
+
+
+def _peek_frontmatter_field(path: Path, field: str) -> str | None:
+    """Return the unquoted YAML scalar for ``field:`` from a vault note's
+    frontmatter, or None. Reads at most 30 lines to keep the cost negligible
+    even when called on hash-collision (which is rare).
+
+    Stops at the closing ``---`` marker. Quote-stripping handles the common
+    cases ``"value"`` and ``'value'``; unquoted scalars are returned verbatim.
+    Empty values (``field:`` with no scalar) are normalized to None for clean
+    truthy-checks at call sites.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            in_frontmatter = False
+            for i, line in enumerate(fh):
+                if i >= 30:
+                    break
+                stripped = line.strip()
+                if stripped == "---":
+                    if not in_frontmatter:
+                        in_frontmatter = True
+                        continue
+                    break  # closing marker
+                if not in_frontmatter:
+                    continue
+                if stripped.startswith(f"{field}:"):
+                    value = stripped[len(field) + 1:].strip()
+                    if (value.startswith('"') and value.endswith('"')) or \
+                       (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1]
+                    if not value:
+                        print(
+                            f"[obsidian-brain] _peek_frontmatter_field: {path.name} has empty "
+                            f"{field!r} field — possible mid-write or corruption",
+                            file=sys.stderr,
+                        )
+                        return None
+                    return value
+    except (OSError, UnicodeDecodeError) as exc:
+        print(
+            f"[obsidian-brain] _peek_frontmatter_field: cannot read {path.name} "
+            f"for field={field!r}: {exc}; this file will be excluded from filtering",
+            file=sys.stderr,
+        )
+        return None
+    return None
+
+
+def _peek_frontmatter_type(path: Path) -> str | None:
+    return _peek_frontmatter_field(path, "type")
+
+
+def _peek_frontmatter_project_path(path: Path) -> str | None:
+    return _peek_frontmatter_field(path, "project_path")
+
+
+def _resolve_session_note_by_hash(
+    sessions_dir: Path | str,
+    h: str,
+    cwd: str | None = None,
+) -> tuple[str | None, list[str]]:
+    """Resolve ``*-{h}.md`` to a session-type note matching this project.
+
+    Replaces first-match-wins glob discipline with a type+project filter
+    that handles the three known collision modes:
+      1. session_id sharing with snapshot notes (#101 Fix C)
+      2. cross-project 4-char hash collision (#101 Fix C)
+      3. genuine same-session_id duplicates (subsumes #86)
+
+    Returns ``(basename_without_ext, collisions)``:
+      - basename_without_ext: file stem (no ``.md``) when resolved
+      - collisions: list of full filenames *with* ``.md`` so stderr
+        warnings are unambiguous when shown to the operator
+
+      - exactly one session-type match              → (basename, [])
+      - 2+ session matches but exactly one cwd match → (basename, [other names])
+      - 0 session-type matches                       → (None, [])
+      - 2+ matches and ambiguous after cwd filter    → (None, [all session names])
+
+    Caller pattern: warn on non-empty ``collisions`` and fall back to a
+    composed name (via ``make_filename(_first_seen_date(sid), project, sid)``)
+    when ``basename is None``.
+    """
+    sessions_dir = Path(sessions_dir)
+    if not sessions_dir.is_dir():
+        print(
+            f"[obsidian-brain] _resolve_session_note_by_hash: sessions_dir "
+            f"{sessions_dir} does not exist or is not readable; treating as no-match",
+            file=sys.stderr,
+        )
+        return None, []
+
+    try:
+        matches = sorted(sessions_dir.glob(f"*-{h}.md"))
+    except OSError as exc:
+        # Permission errors / transient I/O on the sessions dir must not crash
+        # SessionEnd. Fall back to (None, []) so callers compose a fresh name.
+        print(
+            f"[obsidian-brain] _resolve_session_note_by_hash: glob failed on "
+            f"{sessions_dir}: {exc}",
+            file=sys.stderr,
+        )
+        return None, []
+    # Treat type=None as claude-session for backward-compat with legacy notes
+    # that pre-date the explicit type frontmatter field — matches the same
+    # convention used by collect_open_items() in hooks/open_item_dedup.py.
+    session_matches = [m for m in matches
+                       if (_peek_frontmatter_type(m) or "claude-session") == "claude-session"]
+    if not session_matches:
+        return None, []
+
+    # Apply cwd filter when provided — covers single-match cross-project collision
+    if cwd:
+        cwd_matches = [m for m in session_matches
+                       if _peek_frontmatter_project_path(m) == cwd]
+        if len(cwd_matches) == 1:
+            others = [m.name for m in session_matches if m != cwd_matches[0]]
+            return cwd_matches[0].stem, others
+        if len(cwd_matches) == 0:
+            # No cwd match — surface ALL the cross-project matches as collisions
+            # so caller can warn, then fall back to composed name.
+            return None, [m.name for m in session_matches]
+        # Multiple cwd matches — fall through to ambiguous return below
+
+    # No cwd OR multiple cwd matches — leniently return single-match basename
+    if len(session_matches) == 1:
+        return session_matches[0].stem, []
+    return None, [m.name for m in session_matches]
+
+
+def _safe_getcwd() -> str:
+    """Return os.getcwd() or empty string if cwd is deleted/unmounted.
+
+    Hook paths must not crash on cwd-gone (issue #105 territory) — callers
+    that pass this to _resolve_session_note_by_hash get the (None, []) /
+    (None, [...]) lenient fallback when cwd resolution fails.
+    """
+    try:
+        return os.getcwd()
+    except (OSError, FileNotFoundError):
+        return ""
+
+
+def _resolve_project_basename() -> str | None:
+    """Project basename for CC-path lookups (~/.claude/projects/, sid-* bootstraps).
+
+    Resolution order:
+      1. os.getcwd() — normal case
+      2. CLAUDE_PROJECT_DIR env var — when cwd is gone (worktree deleted
+         mid-session via `gh pr merge --delete-branch`); see issue #105
+      3. None — caller should treat as 'cannot determine project' and
+         fall through to project-agnostic fallbacks
+
+    Never raises. Preserves a lazy fallback order: consult CLAUDE_PROJECT_DIR
+    only after cwd resolution fails.
+
+    Falsy basenames (empty string from cwd='/' or env var with trailing slash)
+    are normalized to None so callers fall through to safer fallback layers
+    instead of triggering an unscoped cross-project glob (which would
+    silently mis-attribute the active session).
+    """
+    try:
+        cwd_base = os.path.basename(os.getcwd())
+        return cwd_base if cwd_base else None
+    except OSError:
+        env = os.environ.get("CLAUDE_PROJECT_DIR")
+        if not env:
+            return None
+        env_base = os.path.basename(env.rstrip("/"))
+        return env_base if env_base else None
+
+
+def _recent_bootstrap_sid(window_seconds: int = 600) -> str | None:
+    """Final-fallback session-id resolver for issue #105 (cwd-gone scenario).
+
+    Scans ~/.claude/obsidian-brain/sid-* for files with mtime within the recency
+    window (default 10 min — covers any normal SessionStart-to-/retro interaction
+    window). Returns the SID iff exactly ONE recent file is found. Strict by
+    design: zero or 2+ matches return None to prevent silent mis-attribution
+    across projects (the same bug class as issue #101).
+
+    NOTE: bootstrap files are written exactly once by SessionStart and immutable
+    thereafter — so mtime IS capture time for them. This is the opposite of the
+    `technical_mtime_not_capture_time` warning, which applies to vault notes
+    edited by /check-items, /link, etc.
+
+    Reads the bootstrap dir via os.path.expanduser at call time (not the
+    module-level _SECURE_DIR constant) so HOME-redirecting test fixtures work.
+    """
+    import time
+    bdir = os.path.expanduser("~/.claude/obsidian-brain")
+    cutoff = time.time() - window_seconds
+    try:
+        entries = os.listdir(bdir)
+    except OSError:
+        return None
+
+    candidates: list[str] = []
+    for name in entries:
+        if not name.startswith("sid-") or name.endswith(".tmp"):
+            continue
+        path = os.path.join(bdir, name)
+        if _safe_mtime(path) < cutoff:
+            continue
+        try:
+            with open(path, "r") as f:
+                content = f.read().strip()
+        except OSError:
+            continue
+        if not content:
+            continue
+        # Validate SID format before trusting the file content. Without this,
+        # a corrupted or attacker-controlled bootstrap file could propagate
+        # path-traversal-style strings (e.g., "../foo") into cache_get/cache_set
+        # path composition. _SID_FILENAME_SAFE is [A-Za-z0-9._-]{1,128}.
+        if not _SID_FILENAME_SAFE.fullmatch(content):
+            continue
+        candidates.append(content)
+        if len(candidates) > 1:
+            return None  # short-circuit — strict exactly-one
+
+    return candidates[0] if len(candidates) == 1 else None
+
+
 # --- Secure working directory ---
 # All temp/cache files use ~/.claude/obsidian-brain/ (0o700) instead of /tmp.
 # This prevents symlink attacks and cache poisoning on multi-user systems.
@@ -91,6 +399,106 @@ def _safe_mtime(path: str) -> float:
         return -1.0
 
 
+# Module-level flag for SF7 one-shot warning. Avoids spamming stderr on every
+# canonical_project_name() call when git is unavailable for the whole process.
+_git_fallback_warned: bool = False
+
+
+def _git_canonical_project_name_with_reason(
+    cwd: str | None = None,
+) -> tuple[str | None, str]:
+    """Return (canonical_name_or_None, reason).
+
+    reason is one of:
+      - "ok" — name resolved successfully
+      - "not-a-repo" — git ran but cwd is not inside a git work-tree (returncode != 0).
+        This is a NORMAL operating condition; callers should NOT warn.
+      - "git-unavailable" — git binary missing or subprocess raised OSError.
+        Genuine error; callers SHOULD warn.
+      - "empty-output" — git ran clean but returned no path. Should not happen.
+      - "resolve-failed" — relative-path resolve raised OSError.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=cwd or None,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return (None, "git-unavailable")
+    if result.returncode != 0:
+        return (None, "not-a-repo")
+    common_dir = result.stdout.strip()
+    if not common_dir:
+        return (None, "empty-output")
+    common_dir_path = Path(common_dir)
+    if not common_dir_path.is_absolute():
+        base = Path(cwd) if cwd else Path.cwd()
+        try:
+            common_dir_path = (base / common_dir).resolve()
+        except OSError:
+            return (None, "resolve-failed")
+    name = common_dir_path.parent.name
+    if not name:
+        return (None, "empty-output")
+    return (name, "ok")
+
+
+def _git_canonical_project_name(cwd: str | None = None) -> str | None:
+    """Return the main-repo basename via `git rev-parse --git-common-dir`.
+
+    For a worktree, `--git-common-dir` returns the path to the SHARED .git
+    of the main repo (e.g., `/path/main-repo/.git`). The parent's basename
+    is the canonical project name across all worktrees.
+
+    Returns None if not in a git repository or git is unavailable. Caller
+    should fall back to cwd basename in that case.
+    """
+    name, _reason = _git_canonical_project_name_with_reason(cwd)
+    return name
+
+
+def canonical_project_name(cwd: str | None = None) -> str:
+    """Return the canonical (main-repo) project name for cwd.
+
+    Worktrees of the same repo all return the same canonical name. This
+    is what should be written to vault-note frontmatter `project:` fields
+    so cross-worktree work groups under one logical project.
+
+    Falls back to cwd basename if not in a git repo. Returns 'unknown' when
+    the working directory cannot be determined (e.g., the directory was
+    deleted mid-session via `gh pr merge --delete-branch`); hooks must exit
+    0, so raising would violate the contract. Result is lowercased and
+    underscores/spaces normalized to hyphens.
+
+    Emits a one-shot stderr warning per process ONLY when git is genuinely
+    unavailable or errors out (binary missing, empty output, resolve failure).
+    Does NOT warn for the normal "cwd is not in a git repo" case — that's a
+    common, expected operating condition and warning would be noise (review
+    Copilot R2).
+    """
+    name, reason = _git_canonical_project_name_with_reason(cwd)
+    if name is None:
+        if reason in ("git-unavailable", "empty-output", "resolve-failed"):
+            global _git_fallback_warned
+            if not _git_fallback_warned:
+                _git_fallback_warned = True
+                print(
+                    f"[obsidian_utils] canonical_project_name: git error "
+                    f"({reason}), using cwd basename — verify project: "
+                    f"frontmatter writes",
+                    file=sys.stderr,
+                )
+        try:
+            base = cwd if cwd else os.getcwd()
+        except (OSError, FileNotFoundError):
+            return "unknown"
+        name = os.path.basename(base)
+    return name.lower().replace(" ", "-").replace("_", "-")
+
+
 def _glob_project_jsonls(safe_project: str, suffix: str = "*.jsonl") -> list[str]:
     """Glob ~/.claude/projects/*<project>/<suffix>, with underscore-to-hyphen fallback.
 
@@ -109,15 +517,15 @@ def _glob_project_jsonls(safe_project: str, suffix: str = "*.jsonl") -> list[str
     return matches
 
 
-def _slow_path_newest_sid() -> str:
-    """Determine the current session id by scanning JSONL files directly.
+def _try_slow_jsonl_glob(project: str) -> str:
+    """Slow path: glob all JSONLs under ~/.claude/projects/*<project>/, return
+    SID of the newest. Used by both _resolve_session_id (when bootstrap is
+    skipped or empty) and as the existing health-check entry point.
 
-    Bootstrap-independent — does NOT read, write, or trust the bootstrap
-    cache. Used by health checks that must not be fooled by stale cache
-    entries. Returns 'unknown' if no JSONLs are found for the current cwd.
+    Returns 'unknown' if no JSONLs match. Bootstrap-blind by contract — never
+    reads or trusts the sid-<project> bootstrap file.
     """
     import glob as _glob
-    project = os.path.basename(os.getcwd())
     safe_project = _glob.escape(project)
     matches = _glob_project_jsonls(safe_project)
     entries = [(_safe_mtime(p), p) for p in matches]
@@ -128,8 +536,22 @@ def _slow_path_newest_sid() -> str:
     return os.path.splitext(os.path.basename(newest))[0]
 
 
-def _get_session_id_fast() -> str:
-    """Derive session ID, using bootstrap file for speed on repeat calls.
+def _slow_path_newest_sid() -> str:
+    """Determine the current session id by scanning JSONL files directly.
+
+    Bootstrap-independent — does NOT read, write, or trust ANY bootstrap
+    file (neither the per-project sid-<project> cache nor the cross-project
+    recent-bootstrap directory scan). Used by health checks (e.g.,
+    check_hook_status) that must not be fooled by stale bootstraps.
+
+    Returns 'unknown' if no JSONLs are found for the current cwd.
+    """
+    return _resolve_session_id(allow_bootstrap=False)
+
+
+def _try_bootstrap_fast_path(project: str) -> str | None:
+    """Bootstrap fast path: read sid-<project>, validate against JSONL existence
+    and newest-mtime tiebreaker. Returns cached SID on hit, None on miss/stale.
 
     Validation strategy:
       1. Read bootstrap file (~0.1 ms)
@@ -139,97 +561,97 @@ def _get_session_id_fast() -> str:
          reproducible on filesystems with 1-second mtime resolution.
       4. If the newest JSONL's basename equals the cached sid, trust the
          cache. If the cached JSONL shares the newest mtime (same-second
-         race), also trust the cache — the SessionStart hook has already
-         authoritatively written the current sid and same-mtime ties
-         effectively mean "these happened simultaneously."
-      5. Otherwise fall through to the slow path (full glob + deterministic
-         max) which is the authoritative answer.
+         race), also trust the cache.
+      5. Otherwise return None (let caller fall through to slow path).
 
-    Comparing basenames rather than mtime values directly is important
-    because the active session's JSONL is appended throughout the session,
-    so its mtime increases continuously. A naive mtime comparison would
-    invalidate the bootstrap on every call after a few seconds, defeating
-    the optimization.
-
-    The slow path is strictly READ-ONLY — it never writes the bootstrap
-    file. The SessionStart hook is the sole authoritative writer of the
-    bootstrap. Writing from the slow path would clobber the hook's correct
-    write if the slow path ran during the hook's own invocation (which
-    happens whenever downstream hook code calls a function that triggers
-    this, before CC has flushed the new session's JSONL to disk).
+    READ-ONLY — never writes the bootstrap file. SessionStart hook is the sole
+    authoritative writer.
     """
     import glob as _glob
-    project = os.path.basename(os.getcwd())
     bootstrap = f"{_bootstrap_prefix()}{project}"
     safe_project = _glob.escape(project)
 
-    # Fast path: bootstrap file
     try:
         with open(bootstrap, 'r') as f:
             cached_sid = f.read().strip()
-        if cached_sid:
-            safe_cached = _glob.escape(cached_sid)
-            cached_matches = _glob_project_jsonls(
-                safe_project, f"{safe_cached}.jsonl"
-            )
-            if cached_matches:
-                # Determine the newest JSONL deterministically: order by
-                # (mtime, path). Ties broken by path string so results are
-                # reproducible across filesystems that report 1-second mtime
-                # resolution.
-                all_matches = _glob_project_jsonls(safe_project)
-                if all_matches:
-                    # Determine the newest JSONL deterministically via (mtime, path).
-                    # _safe_mtime returns -1.0 for files that disappear between glob
-                    # and stat, so transient races never crash the caller.
-                    entries = [(_safe_mtime(p), p) for p in all_matches]
-                    viable = [(m, p) for m, p in entries if m >= 0]
-                    if viable:
-                        newest_mtime, newest_path = max(viable)
-                        newest_sid = os.path.splitext(os.path.basename(newest_path))[0]
-                        if newest_sid == cached_sid:
-                            return cached_sid
-                        # Tie-breaker: if ANY cached JSONL matches the newest
-                        # mtime (across all worktree/project-dir matches), trust
-                        # the cache. When multiple project-dir variants exist
-                        # (e.g. worktrees), the cached sid's JSONL may appear in
-                        # several of them; comparing only cached_matches[0]
-                        # could miss the tie and cause an unnecessary
-                        # fall-through. This handles the same-second race where
-                        # the previous session's JSONL and the current
-                        # session's JSONL report identical mtimes on
-                        # coarse-resolution filesystems, and the SessionStart
-                        # hook has already authoritatively written the current
-                        # sid.
-                        cached_mtimes = [_safe_mtime(p) for p in cached_matches]
-                        cached_newest = max(
-                            (m for m in cached_mtimes if m >= 0), default=-1.0
-                        )
-                        if cached_newest == newest_mtime:
-                            return cached_sid
-                        # Otherwise a different session is strictly newer; fall through.
-                    else:
-                        return cached_sid  # no viable JSONLs; trust cache
-                else:
-                    return cached_sid  # no other JSONLs; trust cache
     except OSError:
-        pass
+        return None
+    if not cached_sid:
+        return None
+    # Validate SID format before trusting the bootstrap file content. Without
+    # this, a corrupted or attacker-controlled sid-<project> file with content
+    # like "../../../tmp/foo" could propagate path-traversal strings into
+    # cache_get/cache_set composition. Mirrors the validation in
+    # _recent_bootstrap_sid() and _first_seen_date().
+    if not _SID_FILENAME_SAFE.fullmatch(cached_sid):
+        return None
 
-    # Slow path: full glob + mtime sort with deterministic tiebreaker.
-    # This path is READ-ONLY — never writes the bootstrap file. The
-    # SessionStart hook is the sole authoritative writer. Writing here
-    # would clobber the hook's correct write if the slow path ran
-    # during the hook's own invocation (which happens whenever the
-    # hook's downstream code calls a function that triggers this).
-    # Use _safe_mtime so a JSONL deleted or rotated between glob and
-    # stat cannot crash the caller (e.g. load_config).
-    matches = _glob_project_jsonls(safe_project)
-    entries = [(_safe_mtime(p), p) for p in matches]
+    safe_cached = _glob.escape(cached_sid)
+    cached_matches = _glob_project_jsonls(safe_project, f"{safe_cached}.jsonl")
+    if not cached_matches:
+        return None
+
+    all_matches = _glob_project_jsonls(safe_project)
+    if not all_matches:
+        return cached_sid  # no other JSONLs; trust cache
+
+    entries = [(_safe_mtime(p), p) for p in all_matches]
     viable = [(m, p) for m, p in entries if m >= 0]
     if not viable:
-        return "unknown"
-    _, newest = max(viable)
-    return os.path.splitext(os.path.basename(newest))[0]
+        return cached_sid  # no viable JSONLs; trust cache
+
+    newest_mtime, newest_path = max(viable)
+    newest_sid = os.path.splitext(os.path.basename(newest_path))[0]
+    if newest_sid == cached_sid:
+        return cached_sid
+
+    # Tie-breaker: same-second race across worktrees → trust cache
+    cached_mtimes = [_safe_mtime(p) for p in cached_matches]
+    cached_newest = max((m for m in cached_mtimes if m >= 0), default=-1.0)
+    if cached_newest == newest_mtime:
+        return cached_sid
+
+    return None  # different session is strictly newer — fall through
+
+
+def _resolve_session_id(allow_bootstrap: bool = True) -> str:
+    """Single source of truth for current-session SID resolution. Never raises.
+
+    Resolution layers (each failure → next):
+      1. Project basename via _resolve_project_basename (cwd → env → None)
+      2. Bootstrap fast path (skipped if allow_bootstrap=False)
+      3. Slow-path JSONL glob
+      4. Recent-bootstrap best-effort scan (skipped if allow_bootstrap=False)
+         — issue #105 fallback for cwd-gone
+      5. 'unknown' sentinel
+
+    The `allow_bootstrap` flag gates BOTH bootstrap-reading layers (2 and 4),
+    so callers that need a bootstrap-blind result (e.g., health checks via
+    _slow_path_newest_sid) get a JSONL-only resolution.
+    """
+    project = _resolve_project_basename()
+    if project is not None:
+        if allow_bootstrap:
+            sid = _try_bootstrap_fast_path(project)
+            if sid:
+                return sid
+        sid = _try_slow_jsonl_glob(project)
+        if sid != "unknown":
+            return sid
+    if allow_bootstrap:
+        sid = _recent_bootstrap_sid()
+        if sid:
+            return sid
+    return "unknown"
+
+
+def _get_session_id_fast() -> str:
+    """Derive session ID, using bootstrap file for speed on repeat calls.
+
+    See _try_bootstrap_fast_path for the validation strategy and
+    _resolve_session_id for the full layered fallback chain (issue #105).
+    """
+    return _resolve_session_id(allow_bootstrap=True)
 
 
 def cache_get(session_id: str, key: str):
@@ -418,6 +840,9 @@ def check_hook_status() -> dict:
     "ok" is False only when the bootstrap file is missing entirely or no
     session files can be found.
     """
+    # Cwd-based project name (NOT canonical) — used for CC's path-encoded
+    # JSONL/bootstrap directory lookups. Frontmatter project is canonical;
+    # see canonical_project_name().
     project = os.path.basename(os.getcwd())
     bootstrap = f"{_bootstrap_prefix()}{project}"
 
@@ -473,7 +898,7 @@ def get_session_context(vault_path: str | None = None, sessions_folder: str | No
     """Get session ID, hash, project, and session note name. Cached.
 
     Returns {session_id, hash, project, session_note_name} or
-    {session_id: 'unknown', hash: '', project: <cwd basename>, session_note_name: ''}.
+    {session_id: 'unknown', hash: '', project: <canonical-project>, session_note_name: ''}.
     """
     sid = _get_session_id_fast()
     # Include args in cache key so different call signatures don't collide
@@ -482,7 +907,7 @@ def get_session_context(vault_path: str | None = None, sessions_folder: str | No
     if cached is not None:
         return cached
 
-    project = os.path.basename(os.getcwd()).lower().replace(' ', '-').replace('_', '-')
+    project = canonical_project_name()
     if sid == "unknown":
         # Don't cache "unknown" — would pollute cache shared across projects
         return {"session_id": "unknown", "hash": "", "project": project, "session_note_name": ""}
@@ -491,17 +916,33 @@ def get_session_context(vault_path: str | None = None, sessions_folder: str | No
 
     session_note_name = ""
     if vault_path and sessions_folder:
-        sessions_dir = os.path.join(vault_path, sessions_folder)
-        if os.path.isdir(sessions_dir):
-            for fname in os.listdir(sessions_dir):
-                if fname.endswith(f'-{h}.md'):
-                    session_note_name = fname[:-3]  # strip .md
-                    break
+        sessions_dir = Path(vault_path) / sessions_folder
+        resolved, collisions = _resolve_session_note_by_hash(
+            sessions_dir, h, cwd=_safe_getcwd()
+        )
+        # WARN fires once per (session, vault, folder) — cache_set below
+        # persists the result to ~/.claude/obsidian-brain/cache-<sid>.json,
+        # suppressing repeats across this hook process and any subsequent
+        # skill invocations within the same session until SessionEnd cleans
+        # up the cache. Don't spam stderr.
+        if collisions:
+            print(
+                f"[obsidian-brain] WARN: hash {h} matches {len(collisions) + (1 if resolved else 0)} "
+                f"session note(s); chose {resolved or '<none — fell back to composed name>'} "
+                f"(others: {collisions})",
+                file=sys.stderr,
+            )
+        if resolved:
+            session_note_name = resolved
 
-    # If not found, construct expected name
+    # If not found, compose the canonical basename. Both _first_seen_date()
+    # and make_filename() are also called by SessionEnd, so insight wikilinks
+    # and session-note filenames stay in lockstep across cross-midnight,
+    # worktree, and resumed-session conditions. (#101 Fix A + Fix B.)
     if not session_note_name:
-        from datetime import date
-        session_note_name = f"{date.today().isoformat()}-{project}-{h}"
+        session_note_name = make_filename(
+            _first_seen_date(sid), slugify(project), sid
+        )[:-3]
 
     ctx = {"session_id": sid, "hash": h, "project": project, "session_note_name": session_note_name}
     cache_set(sid, cache_key, ctx)
@@ -960,7 +1401,7 @@ def extract_session_metadata(messages: list[dict], cwd: str) -> dict:
     errors, duration_minutes, commits.
     """
     meta: dict = {
-        "project": Path(cwd).name.lower().replace(" ", "-").replace("_", "-") if cwd else "unknown",
+        "project": canonical_project_name(cwd) if cwd else "unknown",
         "project_path": cwd or "",
         "git_branch": "",
         "files_touched": [],
@@ -2499,7 +2940,12 @@ def extract_tool_uses(messages: list[dict]) -> list[dict]:
 
 
 def get_project_name(cwd: str) -> str:
-    """Return the basename of the working directory as the project name."""
+    """Return the basename of the working directory as the project name.
+
+    Used for CC's path-encoded bootstrap/JSONL lookups; for vault frontmatter
+    use ``canonical_project_name()`` instead so worktrees of the same repo
+    share one logical project value.
+    """
     return Path(cwd).name if cwd else "unknown"
 
 
@@ -2886,16 +3332,36 @@ def build_raw_fallback(
 
 
 def is_resumed_session(
-    vault_path: str, sessions_folder: str, session_id: str
+    vault_path: str, sessions_folder: str, session_id: str,
+    cwd: str | None = None,
 ) -> bool:
-    """Check if a note with the same session_id hash already exists in the vault."""
+    """Return True iff a session-type note matching this session_id's hash
+    exists for the current project. Snapshot-type notes are intentionally
+    ignored (#101 Fix C), and cross-project hash collisions are skipped via
+    project_path filtering. Subsumes #86.
+
+    ``cwd`` overrides ``os.getcwd()`` for the project_path filter. SessionEnd
+    callers should pass ``hook_input["cwd"]`` (the authoritative project
+    path from Claude Code) so that hook processes that have chdir'd
+    elsewhere still classify the session against the right project.
+    Falls back to ``_safe_getcwd()`` when ``cwd`` is None.
+    """
     sessions_dir = Path(vault_path) / sessions_folder
     if not sessions_dir.exists():
         return False
     h = hashlib.sha256(session_id.encode()).hexdigest()[:4]
-    for _ in sessions_dir.glob(f"*-{h}.md"):
-        return True
-    return False
+    effective_cwd = cwd if cwd is not None else _safe_getcwd()
+    resolved, collisions = _resolve_session_note_by_hash(
+        sessions_dir, h, cwd=effective_cwd
+    )
+    if collisions:
+        # Caller contract is bool-only; warn so the operator can investigate.
+        print(
+            f"[obsidian-brain] WARN: is_resumed_session: hash {h} collides "
+            f"across {len(collisions) + (1 if resolved else 0)} session note(s)",
+            file=sys.stderr,
+        )
+    return resolved is not None
 
 
 def upgrade_note_with_summary(

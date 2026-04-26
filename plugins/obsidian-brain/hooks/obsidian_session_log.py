@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import obsidian_utils  # noqa: E402  — used for _first_seen_date qualified call
 from obsidian_utils import (  # noqa: E402
     build_raw_fallback,
     extract_assistant_messages,
@@ -256,12 +257,18 @@ def _run() -> None:
             )
 
         # 7. Detect resumed session
-        resumed = is_resumed_session(vault_path, sessions_folder, session_id)
+        # Pass the authoritative cwd from hook_input so the project_path filter
+        # uses Claude Code's truth-of-record rather than os.getcwd(), which can
+        # drift if anything chdir'd inside the hook process.
+        resumed = is_resumed_session(vault_path, sessions_folder, session_id, cwd=cwd)
         if resumed:
             print(f"[obsidian-brain] resumed session detected", file=sys.stderr)
 
         # 8. Build filename
-        date_str = datetime.date.today().isoformat()
+        # Use _first_seen_date so insights saved during the session and the
+        # session note written here resolve to the same basename even when
+        # the session crosses midnight or is resumed across calendar days.
+        date_str = obsidian_utils._first_seen_date(session_id)
         project_slug = slugify(metadata.get("project", "session"))
         filename = make_filename(date_str, project_slug, session_id)
 
