@@ -54,12 +54,14 @@ def test_cli_dry_run_reports_issues(tmp_path):
     claude_home = tmp_path / ".claude" / "projects" / "-x-proj1"
     claude_home.mkdir(parents=True)
 
-    b_start = calendar.timegm(time.strptime("2026-04-10 14:00", "%Y-%m-%d %H:%M"))
+    # Session B widened to include 2026-04-10 midday (12:00) so the new
+    # date-based capture_time matches it. (issue #93)
+    b_start = calendar.timegm(time.strptime("2026-04-10 10:00", "%Y-%m-%d %H:%M"))
     (claude_home / "sid-b.jsonl").write_text(
-        json.dumps({"type": "user", "timestamp": "2026-04-10T14:00:00Z"}) + "\n",
+        json.dumps({"type": "user", "timestamp": "2026-04-10T10:00:00Z"}) + "\n",
         encoding="utf-8",
     )
-    os.utime(claude_home / "sid-b.jsonl", (b_start + 3600, b_start + 3600))
+    os.utime(claude_home / "sid-b.jsonl", (b_start + 4 * 3600, b_start + 4 * 3600))
 
     (vault / "claude-sessions" / "2026-04-10-proj1-bbbb.md").write_text(
         "---\ntype: claude-session\ndate: 2026-04-10\nsession_id: sid-b\nproject: proj1\nstatus: summarized\n---\n# s\n",
@@ -106,12 +108,14 @@ def test_cli_apply_with_yes(tmp_path):
     claude_home = tmp_path / ".claude" / "projects" / "-x-proj1"
     claude_home.mkdir(parents=True)
 
-    b_start = calendar.timegm(time.strptime("2026-04-10 14:00", "%Y-%m-%d %H:%M"))
+    # Session B widened to include 2026-04-10 midday (12:00) so the new
+    # date-based capture_time matches it. (issue #93)
+    b_start = calendar.timegm(time.strptime("2026-04-10 10:00", "%Y-%m-%d %H:%M"))
     (claude_home / "sid-b.jsonl").write_text(
-        json.dumps({"type": "user", "timestamp": "2026-04-10T14:00:00Z"}) + "\n",
+        json.dumps({"type": "user", "timestamp": "2026-04-10T10:00:00Z"}) + "\n",
         encoding="utf-8",
     )
-    os.utime(claude_home / "sid-b.jsonl", (b_start + 3600, b_start + 3600))
+    os.utime(claude_home / "sid-b.jsonl", (b_start + 4 * 3600, b_start + 4 * 3600))
 
     (vault / "claude-sessions" / "2026-04-10-proj1-bbbb.md").write_text(
         "---\ntype: claude-session\ndate: 2026-04-10\nsession_id: sid-b\nproject: proj1\nstatus: summarized\n---\n# s\n",

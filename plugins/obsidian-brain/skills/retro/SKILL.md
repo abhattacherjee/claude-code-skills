@@ -121,6 +121,7 @@ Present the full note to the user including frontmatter:
 ---
 type: claude-retro
 date: YYYY-MM-DD
+created_at: <ISO-8601-UTC>
 source_session: <current-session-id>
 source_session_note: "[[<session-note-filename>]]"
 project: <project-name>
@@ -146,6 +147,11 @@ tags:
 
 Where:
 - `YYYY-MM-DD` is today's date
+- `<ISO-8601-UTC>` is the current UTC timestamp at second precision. Get it via:
+  ```bash
+  python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat(timespec="seconds"))'
+  ```
+  Example: `2026-04-24T18:42:11+00:00`
 - `<current-session-id>` and `<session-note-filename>` are derived from Step 5
 - `<project-name>` is derived from the current working directory name (basename of the git repo root or cwd)
 - The `source_session_note` field creates an Obsidian backlink from the retro to its source session

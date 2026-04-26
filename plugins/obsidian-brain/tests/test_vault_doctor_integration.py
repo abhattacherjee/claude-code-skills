@@ -23,7 +23,9 @@ def test_end_to_end_scan_apply_verify(tmp_path):
 
     # Two sessions on different days
     a_start = calendar.timegm(time.strptime("2026-04-09 10:00", "%Y-%m-%d %H:%M"))
-    b_start = calendar.timegm(time.strptime("2026-04-10 14:00", "%Y-%m-%d %H:%M"))
+    # Session B widened to include 2026-04-10 midday (12:00) so the new
+    # date-based capture_time matches it. (issue #93)
+    b_start = calendar.timegm(time.strptime("2026-04-10 10:00", "%Y-%m-%d %H:%M"))
 
     (cc_projects / "sid-a.jsonl").write_text(
         json.dumps({"type": "user", "timestamp": "2026-04-09T10:00:00Z"}) + "\n",
@@ -31,10 +33,10 @@ def test_end_to_end_scan_apply_verify(tmp_path):
     )
     os.utime(cc_projects / "sid-a.jsonl", (a_start + 3600, a_start + 3600))
     (cc_projects / "sid-b.jsonl").write_text(
-        json.dumps({"type": "user", "timestamp": "2026-04-10T14:00:00Z"}) + "\n",
+        json.dumps({"type": "user", "timestamp": "2026-04-10T10:00:00Z"}) + "\n",
         encoding="utf-8",
     )
-    os.utime(cc_projects / "sid-b.jsonl", (b_start + 3600, b_start + 3600))
+    os.utime(cc_projects / "sid-b.jsonl", (b_start + 4 * 3600, b_start + 4 * 3600))
 
     # Session notes
     (vault / "claude-sessions" / "2026-04-09-proj1-aaaa.md").write_text(
@@ -124,3 +126,103 @@ def test_end_to_end_scan_apply_verify(tmp_path):
     )
     assert r.returncode == 0, f"re-scan exit: expected 0 (clean), got {r.returncode}: {r.stderr}"
     assert json.loads(r.stdout)["total_issues"] == 0
+
+
+def test_json_payload_has_top_level_signal_and_convergence_keys(tmp_path):
+    """Two stale insights converging on a single proposed sid must emit
+    convergence_warning=True and convergence_count>=2 at the top level of
+    each issue dict — alongside capture_signal and capture_confidence
+    (review C1, I6).
+    """
+    vault = tmp_path / "vault"
+    (vault / "claude-sessions").mkdir(parents=True)
+    (vault / "claude-insights").mkdir(parents=True)
+
+    home = tmp_path
+    cc_projects = home / ".claude" / "projects" / "-Users-foo-convproj"
+    cc_projects.mkdir(parents=True)
+
+    # Session A: 2026-04-09 10:00 -> 11:00 (referenced by stale insights)
+    a_start = calendar.timegm(time.strptime("2026-04-09 10:00", "%Y-%m-%d %H:%M"))
+    a_end = a_start + 3600
+    (cc_projects / "sid-a.jsonl").write_text(
+        json.dumps({"type": "user", "timestamp": "2026-04-09T10:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(cc_projects / "sid-a.jsonl", (a_end, a_end))
+
+    # Session B: 2026-04-10 10:00 -> 14:00 (the only candidate the date matcher
+    # can converge onto for both 2026-04-10 insights — they all collapse here)
+    b_start = calendar.timegm(time.strptime("2026-04-10 10:00", "%Y-%m-%d %H:%M"))
+    b_end = b_start + 4 * 3600
+    (cc_projects / "sid-b.jsonl").write_text(
+        json.dumps({"type": "user", "timestamp": "2026-04-10T10:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(cc_projects / "sid-b.jsonl", (b_end, b_end))
+
+    (vault / "claude-sessions" / "2026-04-09-convproj-aaaa.md").write_text(
+        "---\ntype: claude-session\ndate: 2026-04-09\nsession_id: sid-a\n"
+        "project: convproj\nstatus: summarized\n---\n# s\n",
+        encoding="utf-8",
+    )
+    (vault / "claude-sessions" / "2026-04-10-convproj-bbbb.md").write_text(
+        "---\ntype: claude-session\ndate: 2026-04-10\nsession_id: sid-b\n"
+        "project: convproj\nstatus: summarized\n---\n# s\n",
+        encoding="utf-8",
+    )
+
+    # Two stale insights on 2026-04-10 both pointing at sid-a — both will
+    # converge onto sid-b via the date-overlap matcher.
+    for slug in ("conv-one", "conv-two"):
+        insight = vault / "claude-insights" / f"2026-04-10-{slug}.md"
+        insight.write_text(
+            '---\n'
+            'type: claude-insight\n'
+            'date: 2026-04-10\n'
+            'source_session: sid-a\n'
+            'source_session_note: "[[2026-04-09-convproj-aaaa]]"\n'
+            'project: convproj\n'
+            'tags:\n'
+            '  - claude/insight\n'
+            '  - claude/project/convproj\n'
+            '---\n'
+            '\n'
+            '# body\n',
+            encoding="utf-8",
+        )
+        os.utime(insight, (b_start + 1800, b_start + 1800))
+
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["OBSIDIAN_BRAIN_VAULT"] = str(vault)
+    env["OBSIDIAN_BRAIN_SESSIONS_FOLDER"] = "claude-sessions"
+    env["OBSIDIAN_BRAIN_INSIGHTS_FOLDER"] = "claude-insights"
+
+    script = Path(__file__).parent.parent / "scripts" / "vault_doctor.py"
+    r = subprocess.run(
+        [sys.executable, str(script), "--check", "source-sessions", "--days", "60",
+         "--project", "convproj", "--json"],
+        capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 1, f"expected 1 (issues found), got {r.returncode}: {r.stderr}"
+    payload = json.loads(r.stdout)
+    issues = payload["issues"]
+    assert len(issues) >= 2, f"expected >=2 issues, got {len(issues)}: {issues}"
+
+    # Every issue must have all four keys at the TOP level (not under extra).
+    for issue in issues:
+        assert "capture_signal" in issue, f"missing capture_signal: {issue}"
+        assert "capture_confidence" in issue, f"missing capture_confidence: {issue}"
+        assert "convergence_warning" in issue, f"missing convergence_warning: {issue}"
+        assert "convergence_count" in issue, f"missing convergence_count: {issue}"
+
+    converged = [i for i in issues if i["convergence_warning"] is True]
+    assert len(converged) >= 2, (
+        f"expected >=2 issues with convergence_warning=True, got {len(converged)}: "
+        f"{[(i['note_path'], i['convergence_warning']) for i in issues]}"
+    )
+    for issue in converged:
+        assert issue["convergence_count"] >= 2, (
+            f"convergence_count must be >=2 when warned: {issue}"
+        )

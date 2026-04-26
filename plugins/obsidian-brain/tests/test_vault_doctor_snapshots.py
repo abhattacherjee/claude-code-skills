@@ -574,3 +574,262 @@ def test_stale_apply_handles_unquoted_yaml_list_items(tmp_path):
     assert stale_stem not in fm
     # Live entry preserved
     assert "2026-04-18-demo-uu-snapshot-100000" in fm
+
+
+# ----- Issue #81 regression tests: duplicate-sid collision handling -----
+
+
+def test_snapshot_broken_backlink_ambiguous_when_duplicate_session_ids(tmp_path):
+    """Snapshots with duplicate candidate sessions for the same
+    ``session_id`` must be treated as unresolved rather than as having
+    a confidently broken backlink.
+
+    When multiple session notes share the same ``session_id``, the
+    checker cannot reliably determine which note a
+    ``source_session_note`` should reference. In that ambiguous case,
+    the snapshot is classified as a snapshot-orphan (unresolved), and
+    no ``snapshot-broken-backlink`` issue is emitted.
+    """
+    vault = tmp_path
+    sess = vault / "claude-sessions"; sess.mkdir()
+    sid = "11111111-2222-3333-4444-555555555555"
+    # Two sessions sharing the same session_id on different dates.
+    (sess / "2026-04-15-demo-first.md").write_text(
+        f"---\ntype: claude-session\ndate: 2026-04-15\nsession_id: {sid}\n"
+        "project: demo\nstatus: summarized\n---\n\n# S1\n",
+        encoding="utf-8",
+    )
+    (sess / "2026-04-18-demo-second.md").write_text(
+        f"---\ntype: claude-session\ndate: 2026-04-18\nsession_id: {sid}\n"
+        "project: demo\nstatus: summarized\n---\n\n# S2\n",
+        encoding="utf-8",
+    )
+    # Snapshot with source_session_note pointing at "something-that-could-match-either".
+    snap = sess / "2026-04-18-demo-snap-120000.md"
+    snap.write_text(
+        f"---\ntype: claude-snapshot\ndate: 2026-04-18\nsession_id: {sid}\n"
+        f'project: demo\ntrigger: compact\nstatus: summarized\n'
+        f'source_session_note: "[[something-that-could-match-either]]"\n---\n\n# Snap\n\n'
+        "## Summary\nbody\n",
+        encoding="utf-8",
+    )
+    issues = snapshot_integrity.scan(
+        str(vault), "claude-sessions", "claude-insights", 30,
+    )
+    # Filter to issues for THIS snapshot (ignore session-list issues etc.)
+    snap_issues = [i for i in issues if i.note_path == str(snap)]
+    assert len(snap_issues) == 1, (
+        f"expected exactly one issue for the colliding snapshot, got {snap_issues}"
+    )
+    issue = snap_issues[0]
+    assert issue.check == "snapshot-orphan", (
+        f"colliding-sid snapshot must route to snapshot-orphan, got check={issue.check!r}"
+    )
+    assert issue.extra.get("unresolved") is True, (
+        f"ambiguous parent must be unresolved, got extra={issue.extra}"
+    )
+    assert "ambiguous" in issue.reason, (
+        f"reason must contain 'ambiguous', got: {issue.reason!r}"
+    )
+    assert sid in issue.reason, (
+        f"reason must contain the full sid {sid!r} for grep, got: {issue.reason!r}"
+    )
+    # Absolutely no snapshot-broken-backlink for this snapshot (would suggest
+    # a confidently-wrong parent).
+    broken = [i for i in issues
+              if i.check == "snapshot-broken-backlink" and i.note_path == str(snap)]
+    assert broken == [], (
+        f"colliding sid must NOT produce snapshot-broken-backlink, got: {broken}"
+    )
+    # Forward-consistency loop iterates sessions_by_id.items() and can
+    # emit session-snapshot-list-missing / session-snapshot-list-stale
+    # against either of the colliding session notes. Colliding sids
+    # must be excluded from that loop so neither session note receives
+    # a list-consistency issue triggered by this snapshot.
+    sess_paths = {
+        str(sess / "2026-04-15-demo-first.md"),
+        str(sess / "2026-04-18-demo-second.md"),
+    }
+    forward = [
+        i for i in issues
+        if i.check in ("session-snapshot-list-missing", "session-snapshot-list-stale")
+        and i.note_path in sess_paths
+    ]
+    assert forward == [], (
+        f"colliding-sid sessions must be skipped in forward-consistency loop, got: {forward}"
+    )
+
+
+# ----- Issue #81 follow-ups from PR #85 review -----
+
+
+def test_snapshot_broken_backlink_cross_project_collision_detected_with_project_filter(tmp_path):
+    """Issue #81 second-order: --project=foo must NOT silently disarm
+    collision detection when colliding sessions span projects. The
+    cross-project scenario is exactly the class vault-doctor is meant
+    to catch (project-rename migrations, re-imports), and without
+    project-blind collision detection the broken-backlink path would
+    emit a confident wrong fix inside the filtered scan.
+    """
+    vault = tmp_path
+    sess = vault / "claude-sessions"; sess.mkdir()
+    sid = "cross-proj-aaaa-bbbb-cccc-dddddddddddd"
+    (sess / "2026-04-15-demo-collide.md").write_text(
+        f"---\ntype: claude-session\ndate: 2026-04-15\nsession_id: {sid}\n"
+        "project: demo\nstatus: summarized\n---\n\n# Demo\n",
+        encoding="utf-8",
+    )
+    (sess / "2026-04-18-other-collide.md").write_text(
+        f"---\ntype: claude-session\ndate: 2026-04-18\nsession_id: {sid}\n"
+        "project: other\nstatus: summarized\n---\n\n# Other\n",
+        encoding="utf-8",
+    )
+    snap = sess / "2026-04-18-demo-snap-120000.md"
+    snap.write_text(
+        f"---\ntype: claude-snapshot\ndate: 2026-04-18\nsession_id: {sid}\n"
+        f'project: demo\ntrigger: compact\nstatus: summarized\n'
+        f'source_session_note: "[[2026-04-15-demo-collide]]"\n---\n\n# Snap\n\n'
+        "## Summary\nbody\n",
+        encoding="utf-8",
+    )
+    issues = snapshot_integrity.scan(
+        str(vault), "claude-sessions", "claude-insights", 30, project="demo",
+    )
+    snap_issues = [i for i in issues if i.note_path == str(snap)]
+    assert len(snap_issues) == 1, (
+        f"expected exactly one issue for the cross-project colliding snapshot, got {snap_issues}"
+    )
+    issue = snap_issues[0]
+    assert issue.check == "snapshot-orphan", (
+        f"cross-project collision must route to snapshot-orphan, got check={issue.check!r}"
+    )
+    assert issue.extra.get("unresolved") is True
+    assert "ambiguous" in issue.reason
+    assert sid in issue.reason
+    broken = [i for i in issues
+              if i.check == "snapshot-broken-backlink" and i.note_path == str(snap)]
+    assert broken == [], (
+        f"cross-project colliding sid must NOT produce snapshot-broken-backlink, got: {broken}"
+    )
+
+
+def test_snapshot_broken_backlink_three_way_sid_collision(tmp_path):
+    """Issue #81: three session notes sharing one sid all route the
+    snapshot to ambiguous orphan (refactor guard — ensures the filter
+    is triggered on the nth duplicate, not only the second).
+    """
+    vault = tmp_path
+    sess = vault / "claude-sessions"; sess.mkdir()
+    sid = "three-way-aaaa-bbbb-cccc-dddddddddddd"
+    for n, date in enumerate(("2026-04-15", "2026-04-16", "2026-04-17"), start=1):
+        (sess / f"{date}-demo-s{n}.md").write_text(
+            f"---\ntype: claude-session\ndate: {date}\nsession_id: {sid}\n"
+            f"project: demo\nstatus: summarized\n---\n\n# S{n}\n",
+            encoding="utf-8",
+        )
+    snap = sess / "2026-04-18-demo-snap-120000.md"
+    snap.write_text(
+        f"---\ntype: claude-snapshot\ndate: 2026-04-18\nsession_id: {sid}\n"
+        f'project: demo\ntrigger: compact\nstatus: summarized\n'
+        f'source_session_note: "[[2026-04-15-demo-s1]]"\n---\n\n# Snap\n\n'
+        "## Summary\nbody\n",
+        encoding="utf-8",
+    )
+    issues = snapshot_integrity.scan(
+        str(vault), "claude-sessions", "claude-insights", 30,
+    )
+    snap_issues = [i for i in issues if i.note_path == str(snap)]
+    assert len(snap_issues) == 1
+    assert snap_issues[0].check == "snapshot-orphan"
+    assert snap_issues[0].extra.get("unresolved") is True
+    assert "ambiguous" in snap_issues[0].reason
+    assert sid in snap_issues[0].reason
+
+
+def test_snapshot_broken_backlink_mixed_collision_and_unique_sids(tmp_path):
+    """Issue #81: collision filter is per-sid — a scan with one
+    colliding and one unique sid must ambiguate the colliding snapshot
+    while still resolving the unique snapshot normally (no
+    snapshot-broken-backlink if its wikilink matches the unique parent).
+    """
+    vault = tmp_path
+    sess = vault / "claude-sessions"; sess.mkdir()
+    sid_collide = "mix-collide-aaaa-bbbb-cccc-dddddddddddd"
+    sid_unique = "mix-unique-1111-2222-3333-444444444444"
+    (sess / "2026-04-15-demo-dup1.md").write_text(
+        f"---\ntype: claude-session\ndate: 2026-04-15\nsession_id: {sid_collide}\n"
+        "project: demo\nstatus: summarized\n---\n\n# Dup1\n",
+        encoding="utf-8",
+    )
+    (sess / "2026-04-16-demo-dup2.md").write_text(
+        f"---\ntype: claude-session\ndate: 2026-04-16\nsession_id: {sid_collide}\n"
+        "project: demo\nstatus: summarized\n---\n\n# Dup2\n",
+        encoding="utf-8",
+    )
+    unique_stem = "2026-04-17-demo-unique"
+    (sess / f"{unique_stem}.md").write_text(
+        f"---\ntype: claude-session\ndate: 2026-04-17\nsession_id: {sid_unique}\n"
+        "project: demo\nstatus: summarized\n---\n\n# Unique\n",
+        encoding="utf-8",
+    )
+    snap_c = sess / "2026-04-18-demo-collide-snap-120000.md"
+    snap_c.write_text(
+        f"---\ntype: claude-snapshot\ndate: 2026-04-18\nsession_id: {sid_collide}\n"
+        f'project: demo\ntrigger: compact\nstatus: summarized\n'
+        f'source_session_note: "[[2026-04-15-demo-dup1]]"\n---\n\n# SnapC\n\n'
+        "## Summary\nbody\n",
+        encoding="utf-8",
+    )
+    snap_u = sess / "2026-04-18-demo-unique-snap-120000.md"
+    snap_u.write_text(
+        f"---\ntype: claude-snapshot\ndate: 2026-04-18\nsession_id: {sid_unique}\n"
+        f'project: demo\ntrigger: compact\nstatus: summarized\n'
+        f'source_session_note: "[[{unique_stem}]]"\n---\n\n# SnapU\n\n'
+        "## Summary\nbody\n",
+        encoding="utf-8",
+    )
+    issues = snapshot_integrity.scan(
+        str(vault), "claude-sessions", "claude-insights", 30,
+    )
+    # Colliding snapshot → ambiguous orphan, no broken-backlink
+    snap_c_issues = [i for i in issues if i.note_path == str(snap_c)]
+    assert len(snap_c_issues) == 1
+    assert snap_c_issues[0].check == "snapshot-orphan"
+    assert snap_c_issues[0].extra.get("unresolved") is True
+    assert "ambiguous" in snap_c_issues[0].reason
+    # Unique snapshot → no issues (wikilink matches parent stem)
+    snap_u_issues = [i for i in issues if i.note_path == str(snap_u)]
+    assert snap_u_issues == [], (
+        f"unique-sid snapshot with correct backlink must produce no issues, got: {snap_u_issues}"
+    )
+
+
+def test_snapshot_orphan_empty_session_id_emits_specific_reason(tmp_path):
+    """Parity with snapshot_migration.py §3: a snapshot with no
+    session_id in frontmatter must get a specific reason, not the
+    generic 'no session note matches this session_id' (which would
+    interpolate an empty sid and confuse operators).
+    """
+    vault = tmp_path
+    sess = vault / "claude-sessions"; sess.mkdir()
+    snap = sess / "2026-04-18-demo-snap-120000.md"
+    snap.write_text(
+        "---\ntype: claude-snapshot\ndate: 2026-04-18\n"
+        "project: demo\ntrigger: compact\nstatus: auto-logged\n---\n\n# Snap\n",
+        encoding="utf-8",
+    )
+    issues = snapshot_integrity.scan(
+        str(vault), "claude-sessions", "claude-insights", 30,
+    )
+    snap_issues = [i for i in issues if i.note_path == str(snap)]
+    # Expect exactly one snapshot-orphan with the specific empty-sid reason.
+    orphans = [i for i in snap_issues if i.check == "snapshot-orphan"]
+    assert len(orphans) == 1, f"expected one snapshot-orphan, got {orphans}"
+    assert orphans[0].extra.get("unresolved") is True
+    assert "no session_id" in orphans[0].reason, (
+        f"reason must explicitly name the missing field, got: {orphans[0].reason!r}"
+    )
+    # The generic missing-parent reason must NOT be used (would interpolate empty sid).
+    assert "no session note on disk matches" not in orphans[0].reason, (
+        f"empty-sid must get specific reason, not the generic missing-parent reason, got: {orphans[0].reason!r}"
+    )

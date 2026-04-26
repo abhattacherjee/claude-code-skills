@@ -15,7 +15,6 @@ filenames still resolve after migration.
 from __future__ import annotations
 
 import datetime
-import hashlib
 import os
 import re
 import shutil
@@ -73,15 +72,6 @@ def _hhmmss_from_mtime(p: Path) -> str:
     return datetime.datetime.fromtimestamp(ts).strftime("%H%M%S")
 
 
-def _short_session_hash(session_id: str) -> str:
-    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:4] if session_id else "e3b0"
-
-
-def _slugify(text: str) -> str:
-    """Minimal inline copy; avoids import cycles with hooks/ module."""
-    return re.sub(r"[^a-zA-Z0-9]+", "-", text.strip()).strip("-").lower() or "project"
-
-
 def scan(vault_path, sessions_folder, insights_folder, days, project=None):
     sess_dir = Path(vault_path) / sessions_folder
     if not sess_dir.is_dir():
@@ -91,6 +81,21 @@ def scan(vault_path, sessions_folder, insights_folder, days, project=None):
 
     all_md = [p for p in sess_dir.iterdir() if p.suffix == ".md"]
     sessions_by_id: dict[str, Path] = {}
+    # Issue #81: track sids that appear on more than one session note. A
+    # filesystem-order-dependent ``sessions_by_id`` winner silently picks
+    # an arbitrary parent and downstream §3/§4 consumers would emit
+    # confidently-wrong fixes. Consumers guard on this set to route
+    # colliding sids to unresolved "ambiguous" Issues instead.
+    #
+    # Collision detection is PROJECT-BLIND: two session notes sharing a
+    # sid across different projects (re-imports, project-rename
+    # migrations) would otherwise have one collider filtered out by
+    # ``--project=foo`` and resurrect an arbitrary winner inside the
+    # filtered scan. ``_all_sids_seen`` therefore indexes every session
+    # note regardless of project; emission indices
+    # (``sessions_by_id`` / ``snapshots``) remain project-filtered.
+    _sid_collisions: set[str] = set()
+    _all_sids_seen: set[str] = set()
     snapshots: list[tuple[Path, dict, str]] = []
 
     # Stash the resolved vault root on each legacy-filename issue so
@@ -103,12 +108,22 @@ def scan(vault_path, sessions_folder, insights_folder, days, project=None):
         fm = _parse_fm(text)
         if not fm:
             continue
+        type_ = fm.get("type", "")
+        sid = fm.get("session_id", "") if type_ == "claude-session" else ""
+        # Project-blind collision detection (see block comment above).
+        if sid:
+            if sid in _all_sids_seen:
+                _sid_collisions.add(sid)
+            else:
+                _all_sids_seen.add(sid)
+        # Project-filtered emission indices.
         if project and fm.get("project", "").lower() != project.lower():
             continue
-        type_ = fm.get("type", "")
         if type_ == "claude-session":
-            sid = fm.get("session_id", "")
-            if sid:
+            # First-writer-wins: the winner is retained as the
+            # (unreliable) lookup target; consumers short-circuit via
+            # ``_sid_collisions`` before trusting it.
+            if sid and sid not in sessions_by_id:
                 sessions_by_id[sid] = p
         elif type_ == "claude-snapshot":
             snapshots.append((p, fm, text))
@@ -159,32 +174,73 @@ def scan(vault_path, sessions_folder, insights_folder, days, project=None):
         if "source_session_note" in fm and fm["source_session_note"]:
             continue
         sid = fm.get("session_id", "")
-        date = fm.get("date", "")
         proj = fm.get("project", "")
-        if not sid or not date or not proj:
+        if not sid or not proj:
+            missing = []
+            if not sid:
+                missing.append("session_id")
+            if not proj:
+                missing.append("project")
             issues.append(Issue(
                 check="snapshot-missing-backlink",
                 note_path=str(p),
                 project=proj,
                 current_source="(no source_session_note)",
                 proposed_source="",
-                reason="cannot compute parent stem (missing session_id/date/project)",
+                reason=f"cannot resolve parent (missing frontmatter: {', '.join(missing)})",
                 confidence=0.0,
                 extra={"unresolved": True},
             ))
             continue
-        parent_stem = f"{date}-{_slugify(proj)}-{_short_session_hash(sid)}"
-        parent_exists = (sess_dir / f"{parent_stem}.md").exists()
+        # Issue #81: if two session notes share this sid, we cannot name
+        # the authoritative parent. Emit an unresolved "ambiguous" Issue
+        # and skip the arbitrary winner lookup. The sid is included in the
+        # reason verbatim so operators can grep their vault for the
+        # offending session notes.
+        if sid in _sid_collisions:
+            issues.append(Issue(
+                check="snapshot-missing-backlink",
+                note_path=str(p),
+                project=proj,
+                current_source="(no source_session_note)",
+                proposed_source="",
+                reason=(
+                    f"ambiguous parent — multiple session notes share "
+                    f"session_id={sid!r}; resolve by deduping the colliding "
+                    f"session notes in the sessions folder"
+                ),
+                confidence=0.0,
+                extra={"unresolved": True},
+            ))
+            continue
+        parent_path = sessions_by_id.get(sid)
+        if parent_path is None:
+            # Orphan — no session note with matching session_id in the
+            # sessions folder (sessions_by_id is built from sess_dir only,
+            # non-recursive). Let a future snapshot-orphan check own this
+            # case; do NOT fabricate a wikilink from (date, slug,
+            # sid_hash) — that is exactly the bug #68 fixed.
+            issues.append(Issue(
+                check="snapshot-missing-backlink",
+                note_path=str(p),
+                project=proj,
+                current_source="(no source_session_note)",
+                proposed_source="",
+                reason=f"parent session not found — no session note with session_id={sid!r} in sessions folder",
+                confidence=0.0,
+                extra={"unresolved": True},
+            ))
+            continue
+        parent_stem = parent_path.stem
         issues.append(Issue(
             check="snapshot-missing-backlink",
             note_path=str(p),
             project=proj,
             current_source="(no source_session_note)",
             proposed_source=f'source_session_note: "[[{parent_stem}]]"',
-            reason=("parent session found" if parent_exists else
-                    "parent session not found — will warn only"),
-            confidence=0.95 if parent_exists else 0.3,
-            extra={"unresolved": not parent_exists, "parent_stem": parent_stem},
+            reason="parent session resolved via session_id index",
+            confidence=0.95,
+            extra={"unresolved": False, "parent_stem": parent_stem},
         ))
 
     # 4. session-missing-snapshots-list
@@ -194,6 +250,11 @@ def scan(vault_path, sessions_folder, insights_folder, days, project=None):
         if sid:
             snaps_by_sid.setdefault(sid, []).append(p.stem)
     for sid, stems in snaps_by_sid.items():
+        # Issue #81: colliding sids have no authoritative parent, so we
+        # cannot propose a snapshots: list against one of the two session
+        # notes without a 50/50 chance of being wrong.
+        if sid in _sid_collisions:
+            continue
         if sid not in sessions_by_id:
             continue
         sess_path = sessions_by_id[sid]

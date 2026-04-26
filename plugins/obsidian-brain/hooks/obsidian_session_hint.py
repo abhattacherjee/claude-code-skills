@@ -117,6 +117,9 @@ def _run() -> None:
     cwd = hook_input.get("cwd", os.getcwd())
 
     # 2. Derive project name (needed for bootstrap before vault config).
+    # Cwd-based project name (NOT canonical) — used for CC's path-encoded
+    # JSONL/bootstrap directory lookups. Frontmatter project is canonical;
+    # see canonical_project_name().
     project = get_project_name(cwd)
 
     # 2a. Refresh the bootstrap file with the authoritative session_id from stdin.
