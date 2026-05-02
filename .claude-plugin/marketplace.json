@@ -33,12 +33,6 @@
       "version": "3.1.0"
     },
     {
-      "name": "git-flow",
-      "source": "./plugins/git-flow",
-      "description": "Git Flow branching workflow with slash commands and diagnostic tools",
-      "version": "2.0.0"
-    },
-    {
       "name": "obsidian-brain",
       "source": "./plugins/obsidian-brain",
       "description": "Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, enables project-scoped context resume, and provides fast cross-project search via tags and metadata.",
