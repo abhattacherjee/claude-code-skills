@@ -255,10 +255,11 @@ def _run() -> None:
     # collisions between multiple /compact invocations in the same day).
     filename = make_filename(date_str, project_slug, session_id, suffix=f"-snapshot-{hhmmss}")
 
-    if write_vault_note(vault_path, sessions_folder, filename, content):
+    result = write_vault_note(vault_path, sessions_folder, filename, content)
+    if result is None:
         print(f"[obsidian-brain] snapshot written: {filename}", file=sys.stderr)
     else:
-        print("[obsidian-brain] failed to write snapshot", file=sys.stderr)
+        print(f"[obsidian-brain] failed to write snapshot: {result}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -284,7 +284,7 @@ class TestWriteVaultNote:
         result = obsidian_utils.write_vault_note(
             str(tmp_vault), "claude-sessions", "test-note.md", content
         )
-        assert result is True
+        assert result is None, f"expected None on success, got {result!r}"
         written = (tmp_vault / "claude-sessions" / "test-note.md").read_text(encoding="utf-8")
         assert written == content
 
@@ -294,7 +294,7 @@ class TestWriteVaultNote:
         result = obsidian_utils.write_vault_note(
             str(tmp_vault), "new-folder/sub-folder", "note.md", content
         )
-        assert result is True
+        assert result is None, f"expected None on success, got {result!r}"
         assert (tmp_vault / "new-folder" / "sub-folder" / "note.md").exists()
 
     def test_write_vault_note_permissions(self, tmp_vault):
@@ -305,6 +305,44 @@ class TestWriteVaultNote:
         note_path = tmp_vault / "claude-sessions" / "perm-test.md"
         mode = oct(note_path.stat().st_mode & 0o777)
         assert mode == oct(0o600)
+
+    def test_write_vault_note_returns_none_on_success(self, tmp_vault):
+        """F2 contract: successful write returns None (not True)."""
+        result = obsidian_utils.write_vault_note(
+            str(tmp_vault), "claude-sessions", "f2-success.md", "# F2\n"
+        )
+        assert result is None, f"expected None on success, got {result!r}"
+
+    def test_write_vault_note_returns_error_string_on_failure(self, tmp_vault):
+        """F2 contract: path-traversal failure returns a non-empty error string (not False)."""
+        result = obsidian_utils.write_vault_note(
+            str(tmp_vault), "../../etc", "evil.md", "payload"
+        )
+        assert isinstance(result, str), (
+            f"expected str error on failure, got {type(result).__name__}: {result!r}"
+        )
+        assert result, "error string must be non-empty"
+
+    def test_write_vault_note_error_string_contains_details(self, tmp_vault):
+        """F2 contract: error string for write failure includes the destination path."""
+        # Make the sessions dir read-only so the write itself fails.
+        sessions_dir = tmp_vault / "f2-fail-folder"
+        sessions_dir.mkdir(parents=True)
+        sessions_dir.chmod(0o500)
+        try:
+            result = obsidian_utils.write_vault_note(
+                str(tmp_vault), "f2-fail-folder", "note.md", "content"
+            )
+            assert isinstance(result, str), (
+                f"expected str error on write failure, got {type(result).__name__}: {result!r}"
+            )
+            assert result, "error string must be non-empty"
+            # Verify the error string contains diagnostic details (folder or filename)
+            assert "f2-fail-folder" in result or "note.md" in result, (
+                f"error string must contain destination path details, got: {result!r}"
+            )
+        finally:
+            sessions_dir.chmod(0o700)
 
 
 # ===========================================================================

@@ -35,7 +35,7 @@ python3 hooks/obsidian_context_snapshot.py
 ### Key files
 
 - `hooks/obsidian_utils.py` — Shared utility module (~655 lines) used by all three hooks. Contains transcript parsing, metadata extraction, summarization (shells out to `claude -p --model haiku`), and atomic vault writes.
-- `hooks/obsidian_session_log.py` — SessionEnd: writes raw session note immediately, then attempts AI summarization (15s timeout, best-effort).
+- `hooks/obsidian_session_log.py` — SessionEnd: writes raw session note immediately (AI summarization deferred to `/recall`), and appends a structured outcome line to `~/.claude/obsidian-brain-hook.log` for every exit path.
 - `hooks/obsidian_session_hint.py` — SessionStart: injects last-session context hint for the current project.
 - `hooks/obsidian_context_snapshot.py` — PreCompact: saves context snapshot before compression.
 - `templates/` — Markdown templates for each note type (session, insight, decision, error-fix, snapshot, imported-session).
@@ -43,7 +43,9 @@ python3 hooks/obsidian_context_snapshot.py
 
 ### Data flow
 
-Sessions are logged with a **write-first pattern**: the raw note (with conversation excerpts, tool usage, metadata) is always saved to the vault immediately. AI summarization is attempted as a best-effort upgrade. Unsummarized notes get upgraded later when `/recall` is invoked.
+Sessions are logged with a **write-first pattern**: the raw note (with conversation excerpts, tool usage, metadata) is always saved to the vault immediately. AI summarization is deferred entirely: notes are written in raw form and upgraded by `/recall` on demand.
+
+Structured outcome telemetry is appended to `~/.claude/obsidian-brain-hook.log` for every SessionEnd exit path (success, all skip reasons, write failure, exception) and every SessionStart bootstrap event. The log uses one line per event with grep-friendly `key=value` fields, rotates at 100 KB to `obsidian-brain-hook.log.1`, and is the primary diagnostic surface for sessions that did not produce a vault note. Inspect with `awk '/SessionEnd/ {print $5}' ~/.claude/obsidian-brain-hook.log | sort | uniq -c` for a SessionEnd outcome distribution.
 
 ### Configuration
 

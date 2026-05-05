@@ -22,6 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from obsidian_utils import (  # noqa: E402
     _bootstrap_prefix,
     _ensure_secure_dir,
+    _HOOK_LOG_MAX_BYTES,
+    _HOOK_LOG_NAME,
+    _sanitize_log_field,
     find_latest_session,
     get_project_name,
     load_config,
@@ -31,9 +34,6 @@ from obsidian_utils import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Bootstrap-file + audit-log helpers
 # ---------------------------------------------------------------------------
-
-_HOOK_LOG_NAME = "obsidian-brain-hook.log"
-_HOOK_LOG_MAX_BYTES = 100 * 1024  # 100 KB
 
 
 def _write_bootstrap_atomic(project: str, session_id: str) -> bool:
@@ -79,16 +79,22 @@ def _append_hook_log(project: str, session_id: str, bootstrap_updated: bool) -> 
         try:
             if os.path.getsize(log_path) > _HOOK_LOG_MAX_BYTES:
                 os.replace(log_path, log_path + ".1")
-        except OSError:
+        except FileNotFoundError:
             pass  # no existing log; nothing to rotate
+        # Other OSError (permission, etc.) propagates to outer except → stderr warning
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-        short_sid = (session_id or "unknown")[:8]
+        short_sid = _sanitize_log_field((session_id or "unknown")[:8]).replace(" ", "_")
+        safe_project = _sanitize_log_field(project, "unknown").replace(" ", "_")
         line = (
-            f"{timestamp} SessionStart project={project} sid={short_sid} "
+            f"{timestamp} SessionStart project={safe_project} sid={short_sid} "
             f"bootstrap_updated={'true' if bootstrap_updated else 'false'}\n"
         )
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line)
+        try:
+            os.chmod(log_path, 0o600)
+        except OSError:
+            pass  # best-effort; chmod failure is not fatal for telemetry
     except OSError as exc:
         print(f"[obsidian-brain] hook log append failed: {exc}", file=sys.stderr)
 
@@ -138,6 +144,15 @@ def _run() -> None:
         return
 
     sessions_folder = config.get("sessions_folder", "claude-sessions")
+
+    # 3a. Invoke orphan-session reaper (best-effort, non-fatal)
+    if config.get("reaper_enabled", True):
+        try:
+            import obsidian_session_reaper as _reaper_mod
+            _reaper_mod._reap_orphaned_sessions(project, vault_path, sessions_folder, config)
+        except Exception as exc:
+            # Reaper is best-effort; never break SessionStart
+            print(f"[obsidian-brain] reaper failed: {exc}", file=sys.stderr)
 
     # 4. Find latest session note for this project
     latest = find_latest_session(vault_path, sessions_folder, project)

@@ -95,6 +95,43 @@ class TestBuildNote:
         assert "# Session: x" in result
 
 
+def test_build_note_reconstructed_adds_frontmatter_flag():
+    from obsidian_session_log import _build_note
+    metadata = {"project": "obsidian-brain", "duration_minutes": 30}
+    body = "Some body content."
+    note = _build_note("d2cc7e46-9778-41be-bebb-8fb22a491204",
+                       metadata, body, resumed=False, reconstructed=True)
+    assert "reconstructed: true" in note
+
+
+def test_build_note_reconstructed_adds_tag():
+    from obsidian_session_log import _build_note
+    metadata = {"project": "obsidian-brain", "duration_minutes": 30}
+    note = _build_note("d2cc7e46-9778-41be-bebb-8fb22a491204",
+                       metadata, "body", resumed=False, reconstructed=True)
+    assert "claude/reconstructed" in note
+
+
+def test_build_note_reconstructed_adds_banner():
+    from obsidian_session_log import _build_note
+    metadata = {"project": "obsidian-brain", "duration_minutes": 30}
+    note = _build_note("d2cc7e46-9778-41be-bebb-8fb22a491204",
+                       metadata, "body", resumed=False, reconstructed=True)
+    assert "Reconstructed by SessionStart reaper" in note
+    assert "SIGKILL" in note or "did not fire" in note
+
+
+def test_build_note_default_no_reconstructed_signals():
+    """reconstructed=False (default) must not add any reaper signals."""
+    from obsidian_session_log import _build_note
+    metadata = {"project": "obsidian-brain", "duration_minutes": 30}
+    note = _build_note("d2cc7e46-9778-41be-bebb-8fb22a491204",
+                       metadata, "body", resumed=False)
+    assert "reconstructed: true" not in note
+    assert "claude/reconstructed" not in note
+    assert "Reconstructed by SessionStart reaper" not in note
+
+
 def test_cleanup_session_cache_removes_file(tmp_path, monkeypatch):
     """_cleanup_session_cache removes /tmp/.obsidian-brain-cache-<sid>.json for the ended session."""
     import obsidian_utils

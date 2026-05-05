@@ -7,7 +7,7 @@
     {
       "name": "obsidian-brain",
       "source": "./",
-      "version": "2.4.1",
+      "version": "2.4.3",
       "description": "Persistent brain for Claude Code sessions using Obsidian."
     }
   ]

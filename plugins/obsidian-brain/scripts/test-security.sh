@@ -93,7 +93,7 @@ import sys, os, tempfile; sys.path.insert(0, '$HOOKS_DIR')
 from obsidian_utils import write_vault_note
 with tempfile.TemporaryDirectory() as vault:
     result = write_vault_note(vault, '../../etc', 'evil.md', 'payload')
-    assert result is False, 'traversal was NOT blocked'
+    assert result is not None, 'traversal was NOT blocked (expected non-None error string)'
 "
 
 run_test "H1: write_vault_note allows normal subfolders" \
@@ -102,7 +102,7 @@ import sys, os, tempfile; sys.path.insert(0, '$HOOKS_DIR')
 from obsidian_utils import write_vault_note
 with tempfile.TemporaryDirectory() as vault:
     result = write_vault_note(vault, 'claude-sessions', 'test.md', '---\ntest\n---\n')
-    assert result is True, 'normal write was blocked'
+    assert result is None, 'normal write was blocked (expected None on success)'
     assert os.path.exists(os.path.join(vault, 'claude-sessions', 'test.md'))
 "
 
