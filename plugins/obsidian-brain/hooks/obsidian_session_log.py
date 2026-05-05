@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import obsidian_utils  # noqa: E402  — used for _first_seen_date qualified call
 from obsidian_utils import (  # noqa: E402
+    _append_sessionend_log,
     build_raw_fallback,
     extract_assistant_messages,
     extract_session_metadata,
@@ -38,6 +39,45 @@ from obsidian_utils import (  # noqa: E402
     slugify,
     write_vault_note,
 )
+
+
+# ---------------------------------------------------------------------------
+# SessionEnd outcome enum (telemetry — issue #100 Phase 1)
+# ---------------------------------------------------------------------------
+
+
+class _Outcome:
+    """String constants for SessionEnd hook outcomes written to the rotated audit log."""
+    OK = "OK"  # Reserved for Phase 3 (#125) — reaper writes "Reaped OK" for reconstructed sessions
+    OK_RAW_NOTE_ONLY = "OK_RAW_NOTE_ONLY"
+    SKIPPED_BELOW_THRESHOLD = "SKIPPED_BELOW_THRESHOLD"
+    SKIPPED_NO_TRANSCRIPT = "SKIPPED_NO_TRANSCRIPT"
+    SKIPPED_NO_VAULT = "SKIPPED_NO_VAULT"
+    SKIPPED_AUTO_LOG_OFF = "SKIPPED_AUTO_LOG_OFF"
+    SKIPPED_INVALID_INPUT = "SKIPPED_INVALID_INPUT"
+    SKIPPED_TRANSCRIPT_OUTSIDE_PROJECTS = "SKIPPED_TRANSCRIPT_OUTSIDE_PROJECTS"
+    WRITE_FAILED = "WRITE_FAILED"
+    EXCEPTION = "EXCEPTION"
+
+
+# Updated by _run() as soon as hook_input is parsed; read by main()'s
+# exception handler so EXCEPTION telemetry can carry real project/sid
+# context instead of just "unknown".
+_LAST_PROJECT: str = "unknown"
+_LAST_SESSION_ID: str = "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Telemetry helpers
+# ---------------------------------------------------------------------------
+
+
+def _project_slug_for_log(cwd: str) -> str:
+    """Derive a project slug for telemetry from the hook's cwd field.
+
+    Returns 'unknown' when cwd is empty rather than slugify's default 'session'.
+    """
+    return slugify(Path(cwd).name) if cwd else "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +108,7 @@ def _build_note(
     metadata: dict,
     body: str,
     resumed: bool = False,
+    reconstructed: bool = False,
 ) -> str:
     """Construct full markdown note with YAML frontmatter."""
     date_str = datetime.date.today().isoformat()
@@ -78,6 +119,8 @@ def _build_note(
         f"claude/project/{slugify(project)}",
         "claude/auto",
     ]
+    if reconstructed:
+        tags.append("claude/reconstructed")
 
     fm_lines = [
         "---",
@@ -91,6 +134,8 @@ def _build_note(
     ]
     if resumed:
         fm_lines.append("resumed: true")
+    if reconstructed:
+        fm_lines.append("reconstructed: true")
     # Snapshot back-reference: append only if the caller discovered siblings.
     snapshots = metadata.get("snapshots") or []
     if snapshots:
@@ -103,6 +148,21 @@ def _build_note(
         "status: auto-logged",
         "---",
     ])
+
+    if reconstructed:
+        # Use the real transcript path threaded from the reaper call site;
+        # fall back to a generic hint if not set (e.g. future callers).
+        transcript_path = (
+            metadata.get("transcript_path")
+            or f"~/.claude/projects/<see session_id frontmatter>/{session_id[:8]}....jsonl"
+        )
+        banner = (
+            "> **Reconstructed by SessionStart reaper.** The SessionEnd hook did not fire "
+            "for this session (likely SIGKILL, harness crash, or process termination "
+            f"before hook dispatch). Original JSONL: `{transcript_path}`. "
+            "AI summarization deferred to `/recall`.\n\n"
+        )
+        body = banner + body
 
     title = f"# Session: {project}"
     if metadata.get("git_branch"):
@@ -121,10 +181,28 @@ def main() -> None:
         _run()
     except Exception as exc:
         print(f"[obsidian-brain] session-log unexpected error: {exc}", file=sys.stderr)
+        # _run() may have updated _LAST_PROJECT / _LAST_SESSION_ID before raising;
+        # use those for telemetry context rather than literal "unknown".
+        try:
+            _append_sessionend_log(
+                project=_LAST_PROJECT,
+                session_id=_LAST_SESSION_ID,
+                outcome=_Outcome.EXCEPTION,
+                detail=repr(exc)[:200],
+            )
+        except Exception:
+            # Logging itself failed — nothing else to do; we still exit 0.
+            pass
     sys.exit(0)
 
 
 def _run() -> None:
+    global _LAST_PROJECT, _LAST_SESSION_ID
+    # Reset so a stale value from a prior invocation in the same process does
+    # not bleed into this run's EXCEPTION telemetry.
+    _LAST_PROJECT = "unknown"
+    _LAST_SESSION_ID = "unknown"
+
     # 1. Read hook input from stdin
     try:
         raw = sys.stdin.read(1_000_000)
@@ -133,15 +211,31 @@ def _run() -> None:
         print(f"[obsidian-brain] invalid stdin JSON: {exc}", file=sys.stderr)
         hook_input = {}
 
+    # JSON can legally return non-dict (list, string, number); coerce to {}
+    # so downstream .get() calls don't AttributeError. Treated as
+    # SKIPPED_INVALID_INPUT below via the empty-input branch.
+    if not isinstance(hook_input, dict):
+        hook_input = {}
+
     # Extract session_id up front so the finally block can always clean up,
     # regardless of which early-return path below we take.
     session_id = hook_input.get("session_id", "")
+    if session_id:
+        _LAST_SESSION_ID = session_id
 
     try:
         if not hook_input:
+            _append_sessionend_log(
+                project="unknown",
+                session_id=session_id,
+                outcome=_Outcome.SKIPPED_INVALID_INPUT,
+                detail="empty or unparseable stdin",
+            )
             return
 
         cwd = hook_input.get("cwd", "")
+        if cwd:
+            _LAST_PROJECT = _project_slug_for_log(cwd)
         transcript_path = hook_input.get("transcript_path", "")
 
         # Validate transcript_path stays inside ~/.claude/projects/
@@ -149,21 +243,46 @@ def _run() -> None:
             allowed_root = os.path.realpath(os.path.expanduser("~/.claude/projects"))
             if not os.path.realpath(transcript_path).startswith(allowed_root + os.sep):
                 print("[obsidian-brain] transcript_path outside ~/.claude/projects, skipping", file=sys.stderr)
+                _append_sessionend_log(
+                    project=_project_slug_for_log(cwd),
+                    session_id=session_id,
+                    outcome=_Outcome.SKIPPED_TRANSCRIPT_OUTSIDE_PROJECTS,
+                    detail=os.path.realpath(transcript_path),
+                )
                 return
 
         if not session_id or not transcript_path:
             print("[obsidian-brain] missing session_id or transcript_path, skipping", file=sys.stderr)
+            _append_sessionend_log(
+                project=_project_slug_for_log(cwd),
+                session_id=session_id,
+                outcome=_Outcome.SKIPPED_INVALID_INPUT,
+                detail=(
+                    "missing session_id" if not session_id
+                    else "missing transcript_path"
+                ),
+            )
             return
 
         # 2. Load config
         config = load_config()
         if not config.get("auto_log_enabled", True):
             print("[obsidian-brain] auto_log_enabled is False, skipping", file=sys.stderr)
+            _append_sessionend_log(
+                project=_project_slug_for_log(cwd),
+                session_id=session_id,
+                outcome=_Outcome.SKIPPED_AUTO_LOG_OFF,
+            )
             return
 
         vault_path = config.get("vault_path", "")
         if not vault_path:
             print("[obsidian-brain] no vault_path configured, skipping", file=sys.stderr)
+            _append_sessionend_log(
+                project=_project_slug_for_log(cwd),
+                session_id=session_id,
+                outcome=_Outcome.SKIPPED_NO_VAULT,
+            )
             return
 
         sessions_folder = config.get("sessions_folder", "claude-sessions")
@@ -174,6 +293,12 @@ def _run() -> None:
         messages = read_transcript(transcript_path)
         if not messages:
             print("[obsidian-brain] empty transcript, skipping", file=sys.stderr)
+            _append_sessionend_log(
+                project=_project_slug_for_log(cwd),
+                session_id=session_id,
+                outcome=_Outcome.SKIPPED_NO_TRANSCRIPT,
+                detail=transcript_path,
+            )
             return
 
         # 4. Extract user and assistant messages
@@ -212,6 +337,14 @@ def _run() -> None:
             if not snapshots:
                 print(f"[obsidian-brain] too few user messages ({len(user_msgs)}), skipping",
                       file=sys.stderr)
+                _append_sessionend_log(
+                    project=_project_slug_for_log(cwd),
+                    session_id=session_id,
+                    outcome=_Outcome.SKIPPED_BELOW_THRESHOLD,
+                    msgs=len(user_msgs),
+                    dur_min=0.0,
+                    detail="message-count check",
+                )
                 return
             print(
                 f"[obsidian-brain] below message threshold but {len(snapshots)} snapshot(s) "
@@ -245,10 +378,22 @@ def _run() -> None:
 
         # Re-check with actual duration — BUT if snapshots exist, bypass
         # thresholds so the session note always anchors the snapshots.
-        if should_skip_session(user_msgs, metadata["duration_minutes"],
-                               min_messages=min_messages, min_duration=min_duration):
+        # Cached: also drives detail="snapshot-bypass" on the OK_RAW_NOTE_ONLY log line below.
+        was_threshold_skipped = should_skip_session(
+            user_msgs, metadata["duration_minutes"],
+            min_messages=min_messages, min_duration=min_duration,
+        )
+        if was_threshold_skipped:
             if not snapshots:
                 print("[obsidian-brain] session below thresholds, skipping", file=sys.stderr)
+                _append_sessionend_log(
+                    project=metadata.get("project") or _project_slug_for_log(cwd),
+                    session_id=session_id,
+                    outcome=_Outcome.SKIPPED_BELOW_THRESHOLD,
+                    msgs=len(user_msgs),
+                    dur_min=float(metadata.get("duration_minutes", 0.0)),
+                    detail="duration check",
+                )
                 return
             print(
                 f"[obsidian-brain] below thresholds but {len(snapshots)} snapshot(s) exist — "
@@ -276,10 +421,27 @@ def _run() -> None:
         tool_uses = extract_tool_uses(messages)
         raw_body = build_raw_fallback(user_msgs, metadata, assistant_msgs=assistant_msgs, tool_uses=tool_uses, config=config)
         raw_content = _build_note(session_id, metadata, raw_body, resumed=resumed)
-        if not write_vault_note(vault_path, sessions_folder, filename, raw_content):
-            print("[obsidian-brain] failed to write raw note, aborting", file=sys.stderr)
+        write_err = write_vault_note(vault_path, sessions_folder, filename, raw_content)
+        if write_err is not None:
+            print(f"[obsidian-brain] failed to write raw note: {write_err}", file=sys.stderr)
+            _append_sessionend_log(
+                project=metadata.get("project") or _project_slug_for_log(cwd),
+                session_id=session_id,
+                outcome=_Outcome.WRITE_FAILED,
+                msgs=len(user_msgs),
+                dur_min=float(metadata.get("duration_minutes", 0.0)),
+                detail=f"{write_err}; target={Path(vault_path) / sessions_folder / filename}",
+            )
             return
         print("[obsidian-brain] raw note written (summarization deferred to /recall)", file=sys.stderr)
+        _append_sessionend_log(
+            project=metadata.get("project") or _project_slug_for_log(cwd),
+            session_id=session_id,
+            outcome=_Outcome.OK_RAW_NOTE_ONLY,
+            msgs=len(user_msgs),
+            dur_min=float(metadata.get("duration_minutes", 0.0)),
+            detail="snapshot-bypass" if (was_threshold_skipped and snapshots) else "",
+        )
     finally:
         # Run cache cleanup regardless of how _run() exits so /tmp does not
         # accumulate stale cache files on any SessionEnd outcome — including

@@ -222,3 +222,47 @@ def test_append_hook_log_handles_oserror(monkeypatch, tmp_path, capsys):
     mod._append_hook_log("projD", "sid-xyz", False)
     err = capsys.readouterr().err
     assert "hook log append failed" in err
+
+
+def test_append_hook_log_chmod_failure_is_silent(monkeypatch, tmp_path):
+    """chmod failure on the log file is swallowed (lines 96-97 in obsidian_session_hint.py)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mod = _import_hook_module()
+
+    # Patch os.chmod to always raise for the log file
+    real_chmod = os.chmod
+    def noisy_chmod(path, mode, **kwargs):
+        raise OSError("chmod not permitted (simulated)")
+    monkeypatch.setattr(os, "chmod", noisy_chmod)
+
+    # Should NOT raise — chmod failure is best-effort
+    mod._append_hook_log("projE", "sid-chmodfail", True)
+    log_path = tmp_path / ".claude" / "obsidian-brain-hook.log"
+    assert log_path.exists()
+
+
+def test_write_bootstrap_atomic_tmp_cleanup_on_failure(monkeypatch, tmp_path):
+    """When os.replace fails mid-write, the temp file is cleaned up (lines 67-70)."""
+    secure_dir = str(tmp_path / "secure")
+    monkeypatch.setattr("obsidian_utils._SECURE_DIR", secure_dir)
+    monkeypatch.setattr("obsidian_utils._BOOTSTRAP_PREFIX", os.path.join(secure_dir, "sid-"))
+    mod = _import_hook_module()
+    import obsidian_utils
+    monkeypatch.setattr("obsidian_utils._SECURE_DIR", secure_dir)
+    monkeypatch.setattr("obsidian_utils._BOOTSTRAP_PREFIX", os.path.join(secure_dir, "sid-"))
+    os.makedirs(secure_dir, mode=0o700, exist_ok=True)
+
+    real_replace = os.replace
+
+    def bomb_replace(src, dst):
+        raise OSError("simulated replace failure for tmp cleanup test")
+
+    monkeypatch.setattr(os, "replace", bomb_replace)
+
+    # _write_bootstrap_atomic should return False and leave no temp file behind
+    result = mod._write_bootstrap_atomic("projCleanup", "sid-777")
+    assert result is False
+    # Temp file must have been cleaned up (finally block, lines 67-70)
+    tmp_files = [f for f in Path(secure_dir).iterdir()
+                 if f.name.startswith(".ob-sid-")]
+    assert len(tmp_files) == 0

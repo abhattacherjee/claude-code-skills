@@ -386,6 +386,113 @@ def _bootstrap_prefix() -> str:
     return _BOOTSTRAP_PREFIX
 
 
+# ---------------------------------------------------------------------------
+# SessionEnd telemetry log
+# ---------------------------------------------------------------------------
+
+_HOOK_LOG_NAME = "obsidian-brain-hook.log"
+_HOOK_LOG_MAX_BYTES = 100 * 1024  # 100 KB — same cap as SessionStart log
+
+
+def _sanitize_log_field(value: str, default: str = "") -> str:
+    """Sanitize a log field: strip \\n, \\r, \\t so each event stays on one line."""
+    s = value if value else default
+    return s.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+
+
+def _append_sessionend_log(
+    project: str,
+    session_id: str,
+    outcome: str,
+    msgs: int = 0,
+    dur_min: float = 0.0,
+    detail: str = "",
+) -> None:
+    """Append a one-line SessionEnd outcome record; rotate when oversized.
+
+    Writes to ~/.claude/obsidian-brain-hook.log alongside SessionStart entries
+    and the future Reaped entries (issue #125 reaper).
+
+    Best-effort: catches any exception (OSError from filesystem, TypeError
+    from bad input types, etc.) and prints a stderr warning. Failure to log
+    must not block the SessionEnd hook contract — the hook always exits 0.
+    """
+    log_dir = os.path.join(os.path.expanduser("~"), ".claude")
+    log_path = os.path.join(log_dir, _HOOK_LOG_NAME)
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        try:
+            if os.path.getsize(log_path) > _HOOK_LOG_MAX_BYTES:
+                os.replace(log_path, log_path + ".1")
+        except FileNotFoundError:
+            pass  # no existing log; nothing to rotate
+        # Other errors (permission, etc.) propagate to outer except → stderr warning
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        # Sanitize all fields — \n, \r, or \t in any field would corrupt the
+        # one-line-per-event format.
+        short_sid = _sanitize_log_field((session_id or "unknown")[:8]).replace(" ", "_")
+        safe_project = _sanitize_log_field(project, "unknown").replace(" ", "_")
+        safe_outcome = _sanitize_log_field(outcome, "UNKNOWN").replace(" ", "_")
+        safe_detail = _sanitize_log_field(detail)
+        line = (
+            f"{timestamp} SessionEnd project={safe_project} sid={short_sid} "
+            f"outcome={safe_outcome} msgs={int(msgs)} dur={float(dur_min):.1f} "
+            f"detail={safe_detail}\n"
+        )
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line)
+        try:
+            os.chmod(log_path, 0o600)
+        except OSError:
+            pass  # best-effort; chmod failure is not fatal for telemetry
+    except Exception as exc:
+        print(f"[obsidian-brain] sessionend log append failed: {exc}", file=sys.stderr)
+
+
+def _append_reaper_log(project: str, sid: Optional[str], event: str, detail: str = "") -> None:
+    """Reaper-specific telemetry. Same log file + rotation as SessionEnd
+    telemetry, but uses event= keyword to keep enum spaces distinct.
+
+    Per-jsonl events include sid=<short>; summary events pass sid=None.
+
+    Best-effort: any exception (including mkdir failure) is caught and printed
+    to stderr so the reaper itself is never interrupted by a log write error.
+    """
+    try:
+        log_dir = Path.home() / ".claude"
+        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        log_path = log_dir / _HOOK_LOG_NAME
+
+        # Rotate at 100 KB (mirrors _append_sessionend_log)
+        try:
+            if log_path.exists() and log_path.stat().st_size >= _HOOK_LOG_MAX_BYTES:
+                rotated = log_dir / (_HOOK_LOG_NAME + ".1")
+                os.replace(log_path, rotated)
+        except OSError:
+            pass
+
+        iso = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        safe_project = _sanitize_log_field(project, "unknown").replace(" ", "_")
+        parts = [iso, "Reaper", f"project={safe_project}"]
+        if sid:
+            safe_sid = _sanitize_log_field(sid).replace(" ", "_")
+            parts.append(f"sid={safe_sid}")
+        safe_event = _sanitize_log_field(event, "UNKNOWN").replace(" ", "_")
+        parts.append(f"event={safe_event}")
+        if detail:
+            safe_detail = _sanitize_log_field(detail)
+            parts.append(f"detail={safe_detail}")
+        line = " ".join(parts) + "\n"
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+            os.chmod(log_path, 0o600)
+        except OSError:
+            pass  # best-effort
+    except Exception as exc:
+        print(f"[obsidian-brain] reaper log append failed: {exc}", file=sys.stderr)
+
+
 def _safe_mtime(path: str) -> float:
     """Return file mtime, or -1.0 if the path is missing/unstatable.
 
@@ -1005,7 +1112,7 @@ def read_note_metadata(file_path: str) -> dict | None:
 
 
 def find_snapshots_for_session(
-    sessions_folder_path: Path, session_id: str, date: str, project: str
+    sessions_folder_path: Path, session_id: str, date: str | None, project: str
 ) -> list[str]:
     """Return chronologically-sorted wikilinks of all snapshots whose
     frontmatter session_id and project match the given session. Empty list
@@ -1020,12 +1127,21 @@ def find_snapshots_for_session(
 
     Sorted lexicographically by filename stem; HHMMSS suffix makes this
     chronological for post-spec snapshots. Pre-spec (no HHMMSS) sorts first.
+
+    If `date` is None, discovery is date-agnostic: globs `*-{slug}-*-snapshot*.md`
+    and relies entirely on frontmatter session_id+project filtering. Use this
+    mode for cross-midnight sessions where snapshots may span multiple
+    YYYY-MM-DD prefixes.
     """
     if not sessions_folder_path.is_dir():
         return []
     slug = slugify(project)
     wikilinks: list[str] = []
-    for p in sorted(sessions_folder_path.glob(f"{date}-{slug}-*-snapshot*.md")):
+    if date is None:
+        glob_pattern = f"*-{slug}-*-snapshot*.md"
+    else:
+        glob_pattern = f"{date}-{slug}-*-snapshot*.md"
+    for p in sorted(sessions_folder_path.glob(glob_pattern)):
         try:
             meta = read_note_metadata(str(p))
             if not meta:
@@ -1189,6 +1305,105 @@ def fetch_snapshot_summaries(
             "key_context": key_context,
         })
     return results
+
+
+def gather_session_evidence(
+    vault_path: str,
+    sessions_folder: str,
+    insights_folder: str,
+    session_id: str,
+    project: str,
+) -> dict:
+    """Discover and load all artifacts written during this session.
+
+    Returns a structured bundle of snapshots (from sessions_folder) and
+    insights/decisions/error-fixes (from insights_folder) whose frontmatter
+    `source_session` matches the given session_id.
+
+    Snapshots are returned sorted ascending by stem (YYYY-MM-DD-... prefix),
+    which gives correct chronological order including across-midnight sessions.
+    Pre-spec snapshots (hhmmss == '??????') sort before all post-spec ones.
+    Insights/decisions/error-fixes are returned sorted ascending by filename.
+    File-read failures are captured in `discovery_errors` and never raised.
+
+    Used by /retro to ground retrospective analysis in the full session
+    arc (pre-compact + post-compact) rather than just the active conversation.
+    """
+    bundle: dict = {
+        "session_id": session_id,
+        "snapshots": [],
+        "insights": [],
+        "decisions": [],
+        "error_fixes": [],
+        "discovery_errors": [],
+    }
+    if session_id == "unknown" or not session_id:
+        return bundle
+    sessions_path = Path(vault_path) / sessions_folder
+    if sessions_path.is_dir():
+        # Pass date=None for date-agnostic discovery so cross-midnight sessions
+        # (snapshots written on YYYY-MM-DD and YYYY-MM-(DD+1)) are both found.
+        # Frontmatter session_id+project filters inside find_snapshots_for_session
+        # exclude any cross-project or cross-session decoys the broader glob picks up.
+        for link in find_snapshots_for_session(sessions_path, session_id, None, project):
+            stem = link.strip("[]")
+            snap_path = sessions_path / f"{stem}.md"
+            if not snap_path.exists():
+                continue
+            try:
+                body = snap_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                bundle["discovery_errors"].append(f"{snap_path.name}: {exc}")
+                continue
+            meta = read_note_metadata(str(snap_path)) or {}
+            bundle["snapshots"].append({
+                "path": str(snap_path),
+                "stem": stem,
+                "hhmmss": _extract_hhmmss_from_filename(snap_path.name),
+                "trigger": meta.get("trigger", "auto"),
+                "body": body,
+            })
+        bundle["snapshots"].sort(key=lambda s: (0 if s["hhmmss"] == "??????" else 1, s["stem"]))
+    insights_path = Path(vault_path) / insights_folder
+    if insights_path.is_dir():
+        type_buckets = {
+            "claude-insight": bundle["insights"],
+            "claude-decision": bundle["decisions"],
+            "claude-error-fix": bundle["error_fixes"],
+        }
+        for note_path in sorted(insights_path.glob("*.md")):
+            meta = read_note_metadata(str(note_path))
+            if meta is None:
+                # read_note_metadata returns None on OSError (suppressed) or
+                # if the file has no frontmatter. Probe ourselves so unreadable
+                # files surface in discovery_errors instead of silently being
+                # skipped. No-frontmatter files do not contribute to evidence,
+                # so the additional probe only fires when meta is None.
+                try:
+                    note_path.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    bundle["discovery_errors"].append(f"{note_path.name}: {exc}")
+                continue
+            if meta.get("source_session") != session_id:
+                continue
+            note_type = meta.get("type", "")
+            target = type_buckets.get(note_type)
+            if target is None:
+                continue
+            try:
+                body = note_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                bundle["discovery_errors"].append(f"{note_path.name}: {exc}")
+                continue
+            title_match = re.search(r"^# (.+?)$", body, re.MULTILINE)
+            title = title_match.group(1).strip() if title_match else note_path.stem
+            target.append({
+                "path": str(note_path),
+                "stem": note_path.stem,
+                "title": title,
+                "body": body,
+            })
+    return bundle
 
 
 def match_items_against_evidence(
@@ -1853,10 +2068,14 @@ def escape_wikilinks(text: str) -> str:
 
 def write_vault_note(
     vault_path: str, folder: str, filename: str, content: str
-) -> bool:
+) -> Optional[str]:
     """Atomic write: temp file + chmod 0o600 + rename into vault folder.
 
-    Creates the target folder if it does not exist.  Returns True on success.
+    Creates the target folder if it does not exist.
+
+    Returns:
+        None on success.
+        A non-empty error string on failure (F2 contract — callers check ``if err:``).
     """
     dest_dir = Path(vault_path) / folder
     dest = dest_dir / filename
@@ -1864,17 +2083,16 @@ def write_vault_note(
     # Path traversal check — BEFORE any filesystem side effects
     vault_real = Path(vault_path).resolve()
     if not dest.resolve().is_relative_to(vault_real):
-        print(f"[obsidian-brain] path traversal blocked: {dest}", file=sys.stderr)
-        return False
+        msg = f"path traversal blocked: {dest}"
+        print(f"[obsidian-brain] {msg}", file=sys.stderr)
+        return msg
 
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        print(
-            f"[obsidian-brain] cannot create vault dir {dest_dir}: {exc}",
-            file=sys.stderr,
-        )
-        return False
+        msg = f"cannot create vault dir {dest_dir}: {exc}"
+        print(f"[obsidian-brain] {msg}", file=sys.stderr)
+        return msg
 
     try:
         fd, tmp_path = tempfile.mkstemp(
@@ -1892,11 +2110,12 @@ def write_vault_note(
                 pass
             raise
     except Exception as exc:
-        print(f"[obsidian-brain] write failed for {dest}: {exc}", file=sys.stderr)
-        return False
+        msg = f"write failed for {dest}: {exc}"
+        print(f"[obsidian-brain] {msg}", file=sys.stderr)
+        return msg
 
     print(f"[obsidian-brain] wrote {dest}", file=sys.stderr)
-    return True
+    return None
 
 
 def flip_note_status(path: str, old_status: str, new_status: str) -> bool:

@@ -69,7 +69,10 @@ class TestPathTraversal:
     def test_write_vault_note_blocks_traversal(self, tmp_path):
         from obsidian_utils import write_vault_note
         result = write_vault_note(str(tmp_path), "../../etc", "evil.md", "payload")
-        assert result is False
+        assert isinstance(result, str)
+        assert "traversal" in result.lower() or "outside" in result.lower(), (
+            f"Expected traversal error message, got: {result!r}"
+        )
 
     def test_write_vault_note_allows_normal_subfolder(self, tmp_path):
         from obsidian_utils import write_vault_note
@@ -77,7 +80,7 @@ class TestPathTraversal:
             str(tmp_path), "claude-sessions", "test.md",
             "---\nstatus: summarized\n---\ntest content\n"
         )
-        assert result is True
+        assert result is None
         assert (tmp_path / "claude-sessions" / "test.md").exists()
 
 
@@ -371,12 +374,18 @@ class TestPathTraversalFilename:
     def test_write_vault_note_blocks_filename_traversal(self, tmp_path):
         from obsidian_utils import write_vault_note
         result = write_vault_note(str(tmp_path), "sessions", "../../../etc/passwd", "evil")
-        assert result is False
+        assert isinstance(result, str)
+        assert "traversal" in result.lower() or "outside" in result.lower(), (
+            f"Expected traversal error message, got: {result!r}"
+        )
 
     def test_write_vault_note_blocks_absolute_filename(self, tmp_path):
         from obsidian_utils import write_vault_note
         result = write_vault_note(str(tmp_path), "sessions", "/etc/passwd", "evil")
-        assert result is False
+        assert isinstance(result, str)
+        assert "traversal" in result.lower() or "outside" in result.lower(), (
+            f"Expected traversal error message, got: {result!r}"
+        )
 
     def test_write_vault_note_no_dir_created_on_traversal(self, tmp_path):
         """Traversal check must run BEFORE mkdir to prevent side-effect directory creation."""

@@ -173,12 +173,13 @@ def run_build_note() -> None:
     h = hashlib.md5(today.encode()).hexdigest()[-4:]
     filename = today + "-emerge-patterns-" + h + ".md"
 
-    if write_vault_note(vault, ins, filename, body):
+    result = write_vault_note(vault, ins, filename, body)
+    if result is None:
         print("SAVED:" + os.path.join(vault, ins, filename))
         print("---REPORT---")
         print(analysis)
     else:
-        print("ERROR: write failed", file=sys.stderr)
+        print(f"ERROR: write failed: {result}", file=sys.stderr)
         sys.exit(1)
 
     # Cleanup temp files
