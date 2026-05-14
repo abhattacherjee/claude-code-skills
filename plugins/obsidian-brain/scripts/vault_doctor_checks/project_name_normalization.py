@@ -13,30 +13,21 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 from . import Issue, Result
 
+# Path bootstrap: add hooks/ so we can import the plugin's shared modules
+_HOOKS_DIR = Path(__file__).resolve().parents[2] / "hooks"
+if str(_HOOKS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HOOKS_DIR))
+from obsidian_utils import parse_frontmatter_field  # noqa: E402
+
 NAME = "project-name-normalization"
 DESCRIPTION = "Detect and fix underscored project names in frontmatter (should use hyphens to match Claude Code convention)"
 DEFAULT_WINDOW_DAYS = 9999  # unbounded — scan all notes
-
-_FM_PROJECT_RE = re.compile(r"^project:\s*(.+)$", re.MULTILINE)
-
-
-def _parse_frontmatter_project(content: str) -> str | None:
-    """Extract the project value from YAML frontmatter."""
-    if not content.startswith("---"):
-        return None
-    end = content.find("\n---", 3)
-    if end == -1:
-        return None
-    fm_block = content[: end + 4]
-    m = _FM_PROJECT_RE.search(fm_block)
-    if not m:
-        return None
-    return m.group(1).strip().strip("\"'")
 
 
 def scan(
@@ -60,7 +51,7 @@ def scan(
             except OSError:
                 continue
 
-            note_project = _parse_frontmatter_project(content)
+            note_project = parse_frontmatter_field(content, "project")
             if not note_project:
                 continue
 

@@ -55,6 +55,65 @@ _RE_RAW_CONVERSATION = re.compile(
 _SID_FILENAME_SAFE = re.compile(r"\A[A-Za-z0-9._-]{1,128}\Z")
 
 
+def parse_frontmatter_field(content: str, key: str) -> str | None:
+    """Return the YAML scalar value for ``key``, or None.
+
+    Returns None when:
+      - content is empty
+      - key is absent
+      - key is present but value is empty (after stripping horizontal
+        whitespace and surrounding quotes)
+
+    Only horizontal whitespace (space, tab) is consumed between the colon
+    and the value — never ``\n`` — so an empty ``key:`` line cannot
+    capture the next YAML key's value (issue #94).
+
+    Search region:
+      - If ``content`` starts with ``---`` and a closing ``\n---`` is
+        found, the search region is the frontmatter block up to and
+        including the three dashes of the closing fence (no trailing
+        newline).
+      - If ``content`` starts with ``---`` but no closing ``\n---`` is
+        found, the search region is the full ``content`` (best-effort
+        for callers like ``vault_stats``'s 2 KB head buffer that may
+        truncate before the closing fence).
+      - If ``content`` does not start with ``---``, the search region
+        is the full ``content``.
+
+    Quote stripping uses ``.strip().strip('"').strip("'")`` to match the
+    existing migrated call sites — strictly behaviorally-equivalent reads
+    on the happy path. Empty-value semantics intentionally differ from
+    the old buggy regex (which could cross newlines into the next YAML
+    key); see ``tests/test_frontmatter_field_migration_parity.py`` for
+    the full parity matrix and
+    ``test_empty_type_treated_as_legacy_keep`` for the type-filter
+    behavioral pin.
+
+    Stdlib only.
+    """
+    if not content:
+        return None
+
+    if content.startswith("---"):
+        end = content.find("\n---", 3)
+        if end != -1:
+            search_region = content[: end + 4]
+        else:
+            search_region = content
+    else:
+        search_region = content
+
+    pattern = re.compile(rf"^{re.escape(key)}:[ \t]*(.*)$", re.MULTILINE)
+    m = pattern.search(search_region)
+    if not m:
+        return None
+
+    value = m.group(1).strip().strip('"').strip("'")
+    if not value:
+        return None
+    return value
+
+
 def _first_seen_date(sid: str) -> str:
     """Return the canonical first-seen calendar date for a session_id.
 
@@ -913,6 +972,29 @@ def load_config() -> dict:
 
     cache_set(sid, "config", config)
     return config
+
+
+def get_workspace_roots() -> list[str]:
+    """Return list of absolute workspace-root directories to scan for projects.
+
+    Reads ``workspace_roots`` from ~/.claude/obsidian-brain-config.json if
+    present (list of paths, each tilde-expanded). Falls back to historical
+    defaults [~/dev/claude_workspace, ~/projects] when the key is absent so
+    existing users need no config migration.
+
+    Only directories that exist on disk are included in the returned list.
+    """
+    config = load_config()
+    raw = config.get("workspace_roots")
+    if raw is not None and isinstance(raw, list):
+        roots = [os.path.expanduser(str(p)) for p in raw]
+    else:
+        home = os.path.expanduser("~")
+        roots = [
+            os.path.join(home, "dev", "claude_workspace"),
+            os.path.join(home, "projects"),
+        ]
+    return [r for r in roots if os.path.isdir(r)]
 
 
 def check_optional_deps(packages: tuple[str, ...] = ("numpy", "scipy")) -> dict[str, bool]:
@@ -2199,16 +2281,14 @@ def find_latest_session(
         frontmatter = text[: fm_end + 4]
 
         # Match project field (case-insensitive basename or slug)
-        project_match = re.search(r"^project:\s*(.+)$", frontmatter, re.MULTILINE)
-        if not project_match:
+        fm_project = parse_frontmatter_field(frontmatter, "project")
+        if not fm_project:
             continue
-        fm_project = project_match.group(1).strip().strip('"').strip("'")
         if fm_project.lower() != project.lower() and slugify(fm_project) != slug:
             continue
 
         # Extract date from frontmatter
-        date_match = re.search(r"^date:\s*(.+)$", frontmatter, re.MULTILINE)
-        date_str = date_match.group(1).strip() if date_match else ""
+        date_str = parse_frontmatter_field(frontmatter, "date") or ""
 
         # Extract summary section
         summary = ""
@@ -2276,23 +2356,21 @@ def find_unsummarized_notes(
         frontmatter = content[:fm_end]
 
         # Must be auto-logged
-        status_match = re.search(r'^status:\s*(.+)$', frontmatter, re.MULTILINE)
-        if not status_match or status_match.group(1).strip() != 'auto-logged':
+        status_val = parse_frontmatter_field(frontmatter, "status")
+        if status_val != "auto-logged":
             continue
 
         # Type filter — accept both sessions and snapshots. Legacy notes
-        # without a type field are kept (current permissive behavior).
-        type_match = re.search(r'^type:\s*(.+)$', frontmatter, re.MULTILINE)
-        if type_match:
-            type_val = type_match.group(1).strip().strip('"').strip("'")
-            if type_val not in ("claude-session", "claude-snapshot"):
-                continue
+        # without a `type:` field — and notes with an empty `type:` value —
+        # are kept (current permissive behavior; #94 made these equivalent).
+        type_val = parse_frontmatter_field(frontmatter, "type")
+        if type_val and type_val not in ("claude-session", "claude-snapshot"):
+            continue
 
         # Must match project
-        project_match = re.search(r'^project:\s*(.+)$', frontmatter, re.MULTILINE)
-        if not project_match:
+        fm_project = parse_frontmatter_field(frontmatter, "project")
+        if not fm_project:
             continue
-        fm_project = project_match.group(1).strip().strip('"').strip("'")
         if fm_project.lower() != project.lower() and slugify(fm_project) != slugify(project):
             continue
 

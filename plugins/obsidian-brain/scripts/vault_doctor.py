@@ -181,8 +181,13 @@ def main() -> int:
                     "reason": i.reason,
                     "confidence": i.confidence,
                     "unresolved": i.extra.get("unresolved", False),
+                    "signal_class": i.extra.get("signal_class", ""),
                     "capture_signal": i.extra.get("capture_signal", ""),
                     "capture_confidence": i.extra.get("capture_confidence", 0.0),
+                    # convergence_warning/convergence_count are deprecated as of #106
+                    # (UUID-first matching obsoleted the convergence guard). Kept in the
+                    # payload as hard-coded defaults for downstream schema stability;
+                    # consumers should migrate to signal_class for triage.
                     "convergence_warning": i.extra.get("convergence_warning", False),
                     "convergence_count": i.extra.get("convergence_count", 0),
                 }

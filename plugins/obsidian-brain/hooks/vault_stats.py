@@ -15,6 +15,7 @@ import time
 from collections import Counter
 
 import vault_index
+from obsidian_utils import parse_frontmatter_field
 
 
 # ---------------------------------------------------------------------------
@@ -117,9 +118,9 @@ def _snapshot_stats(conn: sqlite3.Connection) -> dict:
             print(f"[vault-stats] skipping unreadable session note {sp!r}: {exc}",
                   file=sys.stderr)
             continue
-        m = re.search(r"^session_id:\s*(.+)$", head, re.MULTILINE)
-        if m:
-            session_ids.add(m.group(1).strip().strip('"').strip("'"))
+        sid_val = parse_frontmatter_field(head, "session_id")
+        if sid_val:
+            session_ids.add(sid_val)
 
     per_session: Counter = Counter()
     orphaned = 0
@@ -156,8 +157,7 @@ def _snapshot_stats(conn: sqlite3.Connection) -> dict:
             trigger = "auto"
         by_trigger[trigger] += 1
 
-        sid_m = re.search(r"^session_id:\s*(.+)$", head, re.MULTILINE)
-        sid = sid_m.group(1).strip().strip('"').strip("'") if sid_m else ""
+        sid = parse_frontmatter_field(head, "session_id") or ""
         if sid:
             per_session[sid] += 1
             if sid not in session_ids:

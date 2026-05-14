@@ -1,8 +1,8 @@
 ---
 name: recall
-description: "Loads historical context from the Obsidian vault for the current project. Summarizes any unsummarized session notes, then presents a context brief with recent sessions, open items, and curated insights. Also auto-detects open items completed in the most recent loaded session and offers to check them off. Use when: (1) /recall command, (2) /recall <project-name>, (3) resuming work on a project and wanting prior context."
+description: "Pure read-only context resume — summarizes unsummarized notes and surfaces last-session context. Use `/check-items` to triage open items. Use when: (1) /recall command, (2) /recall <project-name>, (3) resuming work on a project and wanting prior context."
 metadata:
-  version: 1.5.0
+  version: 1.6.0
 ---
 
 # Recall — Load Project Context from Obsidian Vault
@@ -52,8 +52,7 @@ Stop here if config is missing.
 ```
 TaskCreate: subject="Find unsummarized notes", activeForm="Searching for unsummarized notes"
 TaskCreate: subject="Summarize unsummarized notes", activeForm="Summarizing notes"
-TaskCreate: subject="Build context brief", activeForm="Building context brief"
-TaskCreate: subject="Present results and detect completed items", activeForm="Presenting results"
+TaskCreate: subject="Present read-only context brief", activeForm="Building and presenting context brief"
 ```
 
 Track the returned task IDs — you will update them as each step completes. Immediately set task #1 to `in_progress` via TaskUpdate.
@@ -98,11 +97,7 @@ Update task #2 subject to `No unsummarized notes found` and set to `completed`. 
 
 ##### Phase 1 — Parallel Haiku upgrades (single batch call)
 
-If N <= 5, create a sub-task for each note:
-
-```
-TaskCreate: subject="Upgrade: <basename>", activeForm="Upgrading <basename> via Haiku"
-```
+If N <= 5, create a sub-task for each note (subject `"Upgrade: <basename>"`, activeForm `"Upgrading <basename> via Haiku"`).
 
 **Single Bash tool call** — `upgrade_batch()` fans out N Haiku invocations in parallel inside one Python process via `concurrent.futures.ThreadPoolExecutor`. This sidesteps the Claude Code harness's serialization of parallel Bash tool calls for subprocess-blocking work:
 
@@ -185,7 +180,7 @@ For failed notes: "Note `<basename>` could not be summarized. It will be retried
 
 Update task #3 to `in_progress`.
 
-Run a single Python call that reads all session and insight files, composes the brief, and detects completed open items — no sub-agent needed:
+Run a single Python call that reads all session and insight files and composes the brief — no sub-agent needed:
 
 ```bash
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -207,10 +202,7 @@ If the command fails (non-zero exit code), print the error and stop — do not f
 
 1. Extract `<<<OB_CONTEXT_BRIEF>>>` — everything between this delimiter and `<<<OB_LOAD_MANIFEST>>>`. This is the brief to display.
 2. Extract `<<<OB_LOAD_MANIFEST>>>` — parse `full_session_title`, `full_session_date`, `full_session_path`, `summary_session_title`, `summary_session_date`, `insight_count`, `snapshot_count` (optional), and all `snapshot:` lines (there may be zero or more, each followed by optional 2-space-indented `key_context` bullets).
-3. Extract `<<<OB_MOST_RECENT_SESSION_PATH>>>` — the full path for checkoff edits.
-4. Extract `<<<OB_OPEN_ITEM_CANDIDATES>>>` — either `NO_CANDIDATES`, `NO_ITEMS`, or a JSON array.
-
-Update task #3 to `completed`. Update task #4 to `in_progress`.
+3. Extract `<<<OB_OPEN_ITEM_CANDIDATES>>>` — either `NO_CANDIDATES`, `NO_ITEMS`, or a JSON array. Count the number of `- [ ]` items across all scanned session notes. Store as `open_items_total`.
 
 **Present the brief immediately** (same turn — saves one parent round):
 
@@ -224,187 +216,17 @@ If unsummarized notes were upgraded in Step 2, also mention:
 
 > _Upgraded N session note(s) with AI summaries._
 
-### Step 4 — Detect completed open items and show load manifest
+### Step 4 — Show read-only context brief footer
 
-Parse the `OPEN_ITEM_CANDIDATES` section from the Step 3 Python output.
+Append to the brief written in Step 3:
 
-1. **Skip if no candidates.** If the value is `NO_ITEMS` or `NO_CANDIDATES`, skip the rest of Step 4's checkoff sub-steps and proceed directly to the "Show load manifest" block at the end of Step 4 silently.
+> _N open items in this project — run `/check-items` to triage._
 
-2. **Parse candidates.** The JSON array contains objects with `file`, `line`, `text`, `evidence`, `confidence`, `has_completion_phrase`.
+Where N is the count of `- [ ]` items found while scanning sessions in Step 3. Use the `open_items_total` value already computed by the Python block in Step 3 (if not present, count by re-scanning the same notes). This step is read-only: do NOT prompt the user about individual items, do NOT compute candidate matches, and do NOT cite any session note.
 
-3. **Present candidates to user.** Branch by N (number of candidates):
+If `N == 0`, omit the footer entirely.
 
-   **2 ≤ N ≤ 3 — native multi-select picker:**
-
-   Call `AskUserQuestion` with `multiSelect: true`. Build one `option` per candidate, then append exactly one sentinel option (described below). `AskUserQuestion` enforces `options: { minItems: 2, maxItems: 4 }`, so this branch covers N ∈ {2, 3} real candidates (plus the sentinel = 3 or 4 total options). N=1 routes to the text fallback below because minItems=2 would be violated; N=4+ routes to the text fallback because N=4 real + 1 sentinel = 5 options, which exceeds maxItems=4.
-
-   Per-candidate option:
-
-   - `label`: first ~40 characters of the candidate's `text` field, ellipsized with `…` if truncated. No paraphrase — take a prefix of the verbatim text.
-   - `description`: `<basename(file)>:<line> — "<full verbatim candidate.text>" — Evidence: <short evidence snippet>`
-
-   Sentinel option (always appended last):
-
-   - `label` (exact string, treat as the sentinel identity key): `Skip all — don't check off anything`
-   - `description`: `Leave all open items as-is`
-
-   The sentinel makes "defer everything" a visible, selectable choice rather than an empty-submit convention. Step 5 will compare each selected option's `label` against the exact sentinel string above and drop any match before Read-verify.
-
-   Example shape (N=2 real candidates + sentinel = 3 options, within the `maxItems: 4` cap):
-
-   ```
-   AskUserQuestion({
-     questions: [{
-       question: "Which open items should I check off?",
-       header: "Checkoff",
-       multiSelect: true,
-       options: [
-         {
-           label: "File #69: Investigate /recall parallel subpro…",
-           description: "2026-04-20-obsidian-brain-7769.md:42 — \"File #69: Investigate /recall parallel subprocess dispatch sequentiality in Claude Code harness\" — Evidence: \"...shipped v2.4.0 ...completing issue #69...\""
-         },
-         {
-           label: "Another item…",
-           description: "..."
-         },
-         {
-           label: "Skip all — don't check off anything",
-           description: "Leave all open items as-is"
-         }
-       ]
-     }]
-   })
-   ```
-
-   Record the user's selected options, then normalize in this exact order:
-
-   1. **Filter out the sentinel** by dropping any selected option whose `label` equals the exact string `Skip all — don't check off anything`.
-   2. **If the filtered list is empty** (whether the pre-filter selection was empty *or* contained only the sentinel), treat as `none` → skip sub-steps 5–7 and proceed to the "Show load manifest" block at the end of Step 4.
-   3. **Otherwise** pass the filtered list (real candidates only) to Step 5.
-
-   **N == 1 or N ≥ 4 — verbatim text fallback:**
-
-   Print one numbered entry per candidate using the template below, with the `<CONFIRM_EXAMPLE>` placeholder replaced per N:
-
-   - N == 1 → `(e.g. `1` or `none`)`
-   - N ≥ 4 → `(e.g. `1` or `1,2` or `all` or `none`)`
-
-   Template (repeat the numbered block for each candidate):
-
-   ```
-   I noticed these open items may now be done:
-
-   1. <basename(file)>:<line>
-      - [ ] <verbatim candidate.text>
-      Evidence: "<short evidence snippet>"
-
-   2. ...
-
-   Confirm checkoff? <CONFIRM_EXAMPLE>
-   ```
-
-   The `- [ ] <verbatim candidate.text>` line MUST be shown in a code block using the exact `candidate.text` content (no paraphrase, no ellipsis). Step 5's match rule then compares this text against the file line after normalizing the file side (strip leading whitespace, `- [ ] ` prefix, and trailing whitespace/newline) — so the presented text is what matches after normalization, not byte-for-byte against raw file bytes.
-
-4. **Wait for user response** (text-fallback branch only — the `2 ≤ N ≤ 3` picker branch already returned a filtered list from the normalization steps above). Parse the response:
-   - `none` or empty → skip the remaining checkoff sub-steps (5–7) and proceed directly to the "Show load manifest" block at the end of Step 4
-   - `all` → check off all candidates
-   - Comma-separated numbers (e.g. `1,3`) → check off the candidates at those 1-indexed positions (for N=1, `1` checks off the single candidate)
-   - **Ambiguous or invalid input** — any index outside `1..N`, non-numeric tokens (e.g. `yes`, `y`), or mixed garbage: re-prompt exactly once with `I didn't understand "<input>". Reply with \`none\`, \`all\`, or a comma-separated list of numbers in 1..<N>.` On the second ambiguous reply, treat as `none` and print `Treating "<input>" as none — no items checked off.` so the fallback surfaces explicitly rather than silently defaulting.
-
-5. **For each confirmed checkoff, Read-verify then Edit.** Maintain a `successfully_edited` list (starts empty), a `skipped_drift` counter (starts 0), and a `skipped_other` counter (starts 0).
-
-   **5-pre-sentinel. Sentinel-leak guard:** before the per-candidate loop, assert that no entry's `text` equals the exact sentinel string `Skip all — don't check off anything`. If one slipped through the Step 4 normalization, abort Step 5 entirely, emit `⚠️  Internal: Skip-all sentinel leaked into checkoff list — deferring all items.`, and proceed to the "Show load manifest" block. This surfaces filter bugs as diagnostic output instead of trying to Read a label-string as a file path.
-
-   **5-pre. Within-batch dedup:** if the confirmed candidate list contains two entries with the same `(file, line)`, keep only the first and drop the rest automatically — they are scan duplicates, not drift. Do not emit per-duplicate warnings or treat them as skips. If any duplicates were removed, print this one-line informational message: `De-duplicated K within-batch candidate(s).`
-
-   For each confirmed candidate:
-
-   a. **Read** the source file at `offset = max(1, candidate.line - 3), limit = 7` (±3 lines context, clamped at file start). This also satisfies the Edit tool's "must Read before Edit" requirement.
-
-   a'. **If Read fails** (file missing, permission denied, or the read region returns empty content): skip this candidate, increment `skipped_other`, and emit:
-
-   ```
-   ⚠️  Skipped checkoff "<candidate.text>" — cannot read <basename(file)>:<line>
-   (<error class from Read tool>). File may have been moved, deleted, or
-   permissions changed. Edit manually in Obsidian.
-   ```
-
-   Do NOT append to `successfully_edited`. Continue with next candidate.
-
-   b. **Match check.** Scan the read region for any line that, after stripping leading whitespace, the `- [ ] ` prefix, AND trailing whitespace/newline, equals `candidate.text` byte-for-byte. The candidate text was already normalized by `open_item_dedup.collect_open_items` via `line.strip()` (leading+trailing whitespace removed) followed by `[6:]` (prefix removed), so both sides of the comparison end up as the same fully-stripped item text. The bullet prefix is exactly `- [ ] ` (hyphen, space, open-bracket, space, close-bracket, single trailing space) — `open_item_dedup.collect_open_items` emits only this form, so `- [ ]` with other spacing or `*`/`+` bullets will correctly fail to match and trigger the drift-skip branch.
-
-   c. **If match found:** use `Edit` with `replace_all: false` to update the already-matched raw line in place, preserving any leading whitespace/indentation and changing only its checkbox marker from `[ ]` to `[x]`. Do not reconstruct the line from `candidate.text` — use the raw line as seen in the Read output. Include enough surrounding text in the Edit call to ensure uniqueness. Append `candidate.text` to `successfully_edited`.
-
-   d. **If no match found in the read region:** skip this candidate, increment `skipped_drift`, and emit:
-
-   ```
-   ⚠️  Skipped checkoff at <basename(file)>:<line>
-       expected: - [ ] <candidate.text>
-       found:    <RAW_LINE>
-   File changed since /recall Step 3. Edit manually in Obsidian.
-   ```
-
-   `<RAW_LINE>` is the raw text (verbatim, leading whitespace preserved) of the line at buffer index `min(3, candidate.line - 1)` in the read region. Use the literal substitute `(line is past EOF)` if the read region is shorter than expected, or `(line is no longer a checkbox)` if the line's content (after stripping leading whitespace) does not start with `- [`. The buffer-index formula follows from Read's clamp `offset = max(1, candidate.line - 3)` — when `candidate.line ≥ 4`, the target line sits at buffer index 3; when `candidate.line ∈ {1,2,3}`, it sits at buffer index `candidate.line - 1`. Do NOT append to `successfully_edited`.
-
-   e. **If the Edit call itself fails** (string not found, ambiguous match, or file-modified-since-read): skip, increment `skipped_other`, and emit the Edit tool's error message verbatim:
-
-   ```
-   ⚠️  Could not check off "<candidate.text>" in <basename(file)>:<line> —
-   Edit failed: <verbatim Edit error message>. The line may have been edited
-   externally since /recall started, or the same text appears multiple times.
-   Edit manually in Obsidian.
-   ```
-
-   Do NOT append to `successfully_edited`.
-
-   Continue with remaining confirmed candidates regardless of any individual skip.
-
-6. **Confirm checkoffs to user.** Print:
-
-   ```
-   ✅ Checked off N item(s) across <list of files>.
-   ```
-
-   If `skipped_drift > 0` or `skipped_other > 0`, append:
-
-   ```
-   ⚠️  Skipped M item(s) total (drift: <skipped_drift>, other: <skipped_other>) — see warnings above.
-   ```
-
-   Where `N = len(successfully_edited)` and `M = skipped_drift + skipped_other`.
-
-7. **Cascade check-offs to duplicate items in older notes.** Run:
-
-    ```bash
-    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    printf '%s' "$CHECKED_ITEMS_JSON" | python3 -c '
-    import sys, json, os
-    import glob; sys.path.insert(0, max(glob.glob(os.path.expanduser("~/.claude/plugins/cache/*/obsidian-brain/*/hooks")), default="hooks"))
-    from open_item_dedup import batch_cascade_checkoff
-    items = json.load(sys.stdin)
-    summary = batch_cascade_checkoff(sys.argv[1], sys.argv[2], sys.argv[3], items)
-    print(summary)
-    ' "$VAULT_PATH" "$SESSIONS_FOLDER" "$PROJECT"
-    ```
-
-    Construct `$CHECKED_ITEMS_JSON` as a JSON array of the `successfully_edited` item texts (the ones where the Read-verify matched AND the Edit succeeded — NOT the originally-confirmed set). Items skipped due to drift or non-unique matches are excluded so we don't cascade a closed state the primary-edit step could not confirm. Pass via stdin to avoid shell quoting issues. Report the cascade summary.
-
-**Show load manifest** (same step — saves one parent round):
-
-Use the `LOAD_MANIFEST` data to show:
-
-> **Loaded into this conversation:**
-> - Full session: *"<full_session_title>"* (<full_session_date>)
-> - Summary only: *"<summary_session_title>"* (<summary_session_date>)
-> - <insight_count> curated insight(s)
->
-> Pick any session from the history table above to load it, or ready to start working?
-
-The session history table from the context brief serves as a menu — if the user picks a session by name or date, use the Read tool to load that specific file from `$VAULT_PATH/$SESSIONS_FOLDER/` and present its full contents.
-
-If the user says they're ready to work, the context is already loaded — proceed.
-
-Update task #4 to `completed`.
+Mark task #3 (the renamed final task) as `completed` and end.
 
 ## Edge Cases
 
@@ -412,3 +234,4 @@ Update task #4 to `completed`.
 - **No insights found:** Omit the "Curated Insights" section. Mention: "No curated insights yet for this project."
 - **Very large vault (50+ sessions):** Only grep, never glob the entire folder. Limit reads to the most recent 5 sessions + all insights.
 - **Config exists but vault path is invalid:** Warn the user and suggest running `/obsidian-setup` again.
+- **Open items exist:** Do not attempt to check them off. Append the footer nudge pointing to `/check-items` instead.

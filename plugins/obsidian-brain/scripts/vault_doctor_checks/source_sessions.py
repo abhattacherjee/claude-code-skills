@@ -1,20 +1,26 @@
-"""vault_doctor check: detect and repair stale source_session backlinks.
+"""vault-doctor source-sessions check: UUID-first stale-attribution detector.
 
-Detection strategy:
-  For each insight-type note with a `source_session` frontmatter field,
-  determine capture-time via an immutable-signal preference chain
-  (`created_at` ISO-8601 → `date` YYYY-MM-DD midday UTC → filename prefix
-  YYYY-MM-DD-... midday UTC → mtime as low-confidence last resort).
-  For each JSONL file under ~/.claude/projects/*<project>/*.jsonl,
-  determine its activity window (first entry timestamp → file mtime).
-  The correct source session is the JSONL whose window contains the
-  note's capture-time. Flag as stale whenever the note's current
-  source_session does not match.
+Detection strategy (spec #106):
+1. Phase 1 — UUID-first: when an insight's source_session UUID resolves to a
+   session note in the cross-project vault, the UUID is authoritative. Compare
+   the stamped basename against the resolved session note's basename:
+   - Match → skip (note is correct).
+   - Diverge AND JSONL window overlaps note day → emit uuid-basename-stale
+     (conf=0.99, auto-applyable basename-only repair).
+   - Diverge AND overlap fails or is inconclusive → emit uuid-day-mismatch
+     WARN (conf=0.0, never auto-applyable).
+   - UUID has JSONL but no session note → emit missing-session-note WARN.
+2. Phase 2 — date-window fallback (only when UUID is empty/unknown/unresolved):
+   - Match by point-in-window or day-overlap → emit date-window-hint (conf=0.5,
+     manual verify only).
+   - No match → emit unresolved WARN (conf=0.0).
+
+apply() refuses to write any Issue whose signal_class != "uuid-basename-stale",
+making `--min-confidence` override-safe.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import glob
 import json
 import os
@@ -595,18 +601,19 @@ def scan(
             else:
                 current_source_display = ""
 
-            # Phase 1b — UUID-first authoritative signal:
+            # Phase 1 — UUID-FIRST (uniform across all capture signals):
             # if current source's UUID resolves to ANY session note in the
             # vault (cross-project, since worktree-launched skills may write
             # `project:` from main-repo cwd while their source session ran
             # in a worktree), check whether the JSONL window overlaps the
             # note's calendar day. If yes, the UUID is correct; only the
-            # basename in source_session_note may need updating.
+            # basename in source_session_note may need updating. If no,
+            # emit a uuid-day-mismatch WARN — never a SID rewrite proposal.
             #
-            # Only applies for day-precision signals (date, filename, mtime).
-            # When created_at provides a precise sub-day timestamp the matcher
-            # has enough resolution; let it run.
-            if current_sid and capture_signal != "created_at":
+            # Issue #106: removed the capture_signal != "created_at" carve-out;
+            # UUID resolution is the primary signal regardless of capture-time
+            # precision.
+            if current_sid and current_sid != "unknown":
                 if global_sid_index is None:
                     global_sid_index = _list_all_session_notes(sessions_dir)
                 if current_sid in global_sid_index:
@@ -634,43 +641,90 @@ def scan(
                         )
                         if fallback_path is not None:
                             window = _jsonl_window(str(fallback_path))
+                    actual_basename = sess["basename"]
+                    # Spec #106 nesting: skip when basename matches; only check
+                    # day-overlap on basename divergence. Inconclusive overlap
+                    # (day_start=None or window=None) does NOT auto-apply at 0.99 —
+                    # downgrade to uuid-day-mismatch WARN so operators verify manually.
+                    if not current_src_basename or current_src_basename == actual_basename:
+                        # UUID resolves AND basename matches (or basename is empty,
+                        # which we don't auto-repair). Skip — note is correct.
+                        continue
+
+                    overlap_ok = False
+                    overlap_known = False
                     if day_start is not None and window is not None:
+                        overlap_known = True
                         day_end = day_start + 86400
                         first_ts, last_ts = window
-                        if first_ts < day_end and last_ts > day_start:
-                            # UUID resolves AND window overlaps note's day → UUID is correct.
-                            # Now check if source_session_note basename is stale.
-                            actual_basename = sess["basename"]
-                            if (
-                                current_src_basename
-                                and current_src_basename != actual_basename
-                            ):
-                                # Basename mismatch (e.g., un-truncated worktree slug
-                                # vs truncated actual filename). Propose basename-only
-                                # repair; UUID stays the same.
-                                issues.append(
-                                    Issue(
-                                        check=NAME,
-                                        note_path=str(note),
-                                        project=note_project,
-                                        current_source=current_source_display,
-                                        proposed_source=f"[[{actual_basename}]]",
-                                        reason=(
-                                            f"source_session UUID {current_sid[:8]} resolves "
-                                            f"correctly but source_session_note basename is "
-                                            f"stale (expected '{actual_basename}', got "
-                                            f"'{current_src_basename}')"
-                                        ),
-                                        confidence=0.99,
-                                        extra={
-                                            "proposed_sid": current_sid,
-                                            "basename_only": True,
-                                            "capture_signal": capture_signal,
-                                            "capture_confidence": capture_conf,
-                                        },
-                                    )
-                                )
-                            continue  # UUID is authoritative either way; skip matcher
+                        overlap_ok = first_ts < day_end and last_ts > day_start
+
+                    if overlap_known and overlap_ok:
+                        # UUID resolves, basename diverges, JSONL window overlaps
+                        # note's day → high-confidence basename-only repair.
+                        issues.append(
+                            Issue(
+                                check=NAME,
+                                note_path=str(note),
+                                project=note_project,
+                                current_source=current_source_display,
+                                proposed_source=f"[[{actual_basename}]]",
+                                reason=(
+                                    f"source_session UUID {current_sid[:8]} resolves "
+                                    f"correctly but source_session_note basename is "
+                                    f"stale (expected '{actual_basename}', got "
+                                    f"'{current_src_basename}')"
+                                ),
+                                confidence=0.99,
+                                extra={
+                                    "proposed_sid": current_sid,
+                                    "basename_only": True,
+                                    "capture_signal": capture_signal,
+                                    "capture_confidence": capture_conf,
+                                    "signal_class": "uuid-basename-stale",
+                                },
+                            )
+                        )
+                        continue
+
+                    # overlap_known=False (inconclusive) OR overlap_known=True
+                    # but overlap_ok=False (window doesn't overlap note day).
+                    # Both cases: emit uuid-day-mismatch WARN; never auto-apply.
+                    if overlap_known:
+                        first_ts, last_ts = window
+                        reason = (
+                            f"source_session UUID {current_sid[:8]} resolves "
+                            f"but JSONL window "
+                            f"{datetime.fromtimestamp(first_ts, timezone.utc).date()}..{datetime.fromtimestamp(last_ts, timezone.utc).date()} "
+                            f"does not overlap note day {datetime.fromtimestamp(day_start, timezone.utc).date()} "
+                            f"— verify manually, never auto-rewrite"
+                        )
+                    else:
+                        reason = (
+                            f"source_session UUID {current_sid[:8]} resolves "
+                            f"and basename '{current_src_basename}' differs from "
+                            f"'{actual_basename}', but day-overlap check is "
+                            f"inconclusive (no note date or no JSONL window) "
+                            f"— verify manually, never auto-rewrite"
+                        )
+                    issues.append(
+                        Issue(
+                            check=NAME,
+                            note_path=str(note),
+                            project=note_project,
+                            current_source=current_source_display,
+                            proposed_source="",
+                            reason=reason,
+                            confidence=0.0,
+                            extra={
+                                "unresolved": True,
+                                "capture_signal": capture_signal,
+                                "capture_confidence": capture_conf,
+                                "signal_class": "uuid-day-mismatch",
+                            },
+                        )
+                    )
+                    continue
                 else:
                     # UUID not in session-note index — but a real JSONL may
                     # still exist (SessionEnd hook missed; see issue #98).
@@ -700,6 +754,7 @@ def scan(
                                     "jsonl_path": str(jsonl_path),
                                     "capture_signal": capture_signal,
                                     "capture_confidence": capture_conf,
+                                    "signal_class": "missing-session-note",
                                 },
                             )
                         )
@@ -748,6 +803,7 @@ def scan(
                                 "unresolved": True,
                                 "capture_signal": capture_signal,
                                 "capture_confidence": capture_conf,
+                                "signal_class": "unresolved",
                             },
                         )
                     )
@@ -756,16 +812,45 @@ def scan(
             if match["sid"] == current_sid:
                 continue  # correct
 
-            # Cap confidence on date-only signals: day-precision matching can still
-            # be ambiguous on multi-session days because multiple windows may overlap
-            # the same UTC calendar day. `created_at` is the only signal precise
-            # enough for high confidence.
-            if capture_signal == "created_at":
-                proposed_conf = 0.95
-            elif capture_signal == "mtime":
-                proposed_conf = 0.3  # below convergence floor; never auto-apply
-            else:
-                proposed_conf = 0.6
+            # Issue #106: date-window matcher only fires when UUID is empty/unresolved.
+            # When it does fire, it's a HINT, never an auto-applyable proposal:
+            #   date / filename → conf=0.5 (date-window-hint); operator content-greps
+            #   mtime → handled below; early-exits as unresolved (no SID proposal)
+            #   corrupt (signal=none, conf=0.0) → filtered before this block; never reaches here
+            if capture_signal == "mtime":
+                # mtime is too imprecise to anchor a hint. Re-emit as unresolved
+                # so it surfaces in the WARN list without proposing a SID.
+                if not current_sid or current_sid == "unknown":
+                    mtime_reason = (
+                        f"note has no source_session UUID and capture_signal=mtime "
+                        f"is too imprecise to anchor a date-window hint (#106)"
+                    )
+                else:
+                    mtime_reason = (
+                        f"current source_session {current_sid[:8]} did not resolve "
+                        f"and capture_signal=mtime is too imprecise to anchor a "
+                        f"date-window hint (#106)"
+                    )
+                if current_sid not in idx:
+                    issues.append(
+                        Issue(
+                            check=NAME,
+                            note_path=str(note),
+                            project=note_project,
+                            current_source=current_source_display,
+                            proposed_source="",
+                            reason=mtime_reason,
+                            confidence=0.0,
+                            extra={
+                                "unresolved": True,
+                                "capture_signal": capture_signal,
+                                "capture_confidence": capture_conf,
+                                "signal_class": "unresolved",
+                            },
+                        )
+                    )
+                continue
+            proposed_conf = 0.5
             # Build reason text matching the matcher actually used (Copilot R4):
             # day-overlap → describe calendar-day match; point-in-window →
             # describe capture_time match. mtime with no date/filename takes
@@ -775,7 +860,8 @@ def scan(
                     f"note calendar day {note_date_for_match}"
                     f" (signal={capture_signal}, conf={capture_conf})"
                     f" overlaps session {match['sid'][:8]} window most, "
-                    f"not current source {current_sid[:8]}"
+                    f"not current source {current_sid[:8] if current_sid else '<empty>'}"
+                    f" — content-grep the JSONL before applying"
                 )
             else:
                 reason = (
@@ -783,7 +869,8 @@ def scan(
                     f"{datetime.fromtimestamp(capture_time, timezone.utc).isoformat(timespec='seconds')}"
                     f" (signal={capture_signal}, conf={capture_conf})"
                     f" matches session {match['sid'][:8]} window, "
-                    f"not current source {current_sid[:8]}"
+                    f"not current source {current_sid[:8] if current_sid else '<empty>'}"
+                    f" — content-grep the JSONL before applying"
                 )
             issues.append(
                 Issue(
@@ -798,48 +885,11 @@ def scan(
                         "proposed_sid": match["sid"],
                         "capture_signal": capture_signal,
                         "capture_confidence": capture_conf,
+                        "signal_class": "date-window-hint",
+                        "unresolved": True,
                     },
                 )
             )
-
-    # Convergence guard: if multiple flags in a project propose the same
-    # target session, the date-window heuristic has structurally collapsed
-    # across a multi-session day. Lower confidence and tag for operator review.
-    #
-    # Restrict the guard to day-precision signals (date/filename/mtime) —
-    # `created_at` matches use point-in-window with sub-day precision, so two
-    # legitimate stale notes from the same session sharing a proposal target
-    # is just normal cluster behavior, not heuristic collapse (Copilot R4-2).
-    from collections import Counter
-    _DAY_PRECISION_SIGNALS = {"date", "filename", "mtime"}
-    targets = Counter(
-        (i.project, i.extra.get("proposed_sid", ""))
-        for i in issues
-        if (
-            i.extra.get("proposed_sid")
-            and not i.extra.get("basename_only")
-            and i.extra.get("capture_signal") in _DAY_PRECISION_SIGNALS
-        )
-    )
-    issues = [
-        dataclasses.replace(
-            i,
-            confidence=min(i.confidence, 0.4),
-            extra={
-                **i.extra,
-                "convergence_warning": True,
-                "convergence_count": targets[(i.project, i.extra.get("proposed_sid", ""))],
-            },
-        )
-        if (
-            not i.extra.get("basename_only")
-            and i.extra.get("proposed_sid")
-            and i.extra.get("capture_signal") in _DAY_PRECISION_SIGNALS
-            and targets[(i.project, i.extra.get("proposed_sid", ""))] >= 2
-        )
-        else i
-        for i in issues
-    ]
 
     return issues
 
@@ -901,6 +951,20 @@ def apply(issues, backup_root) -> list[Result]:
                 )
             )
             continue
+
+        # Issue #106 defense-in-depth: only uuid-basename-stale issues are
+        # auto-applyable. Anything else reaching this point (i.e., not
+        # filtered by the unresolved skip above) is a programming error —
+        # scan() should have marked all non-applyable signal classes
+        # unresolved=True. Raise loudly so operators see it instead of
+        # writing the wrong file.
+        sc = issue.extra.get("signal_class", "")
+        if sc != "uuid-basename-stale":
+            raise RuntimeError(
+                f"apply() refuses signal_class={sc!r} for {issue.note_path}; "
+                f"only uuid-basename-stale is auto-applyable. "
+                f"Edit the note manually after content-grep."
+            )
 
         proposed_sid = issue.extra.get("proposed_sid", "")
         proposed_basename = issue.proposed_source.strip().lstrip("[").rstrip("]")

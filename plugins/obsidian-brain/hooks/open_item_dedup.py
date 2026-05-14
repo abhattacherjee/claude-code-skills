@@ -13,6 +13,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+from pathlib import Path
+
+from obsidian_utils import get_workspace_roots
 
 # --- Module-level compiled regexes (computed once at import) ---
 
@@ -22,11 +26,78 @@ _RE_BRANCH = re.compile(r'(?:feature|release|hotfix)/[\w.-]+')
 _RE_VERSION = re.compile(r'v?\d+\.\d+\.\d+')
 _RE_MARKDOWN = re.compile(r'`([^`]*)`|\*\*([^*]*)\*\*|_([^_]*)_|\[([^\]]*)\]\([^)]*\)')
 
+_CHECKBOX_PREFIX_RE = re.compile(r"^\s*-\s+\[[ xX]\]\s+")
+
 _STOPWORDS = frozenset({
     'the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'or',
     'but', 'is', 'are', 'was', 'were', 'be', 'not', 'this', 'that',
     'with', 'from', 'by', 'at', 'it', 'as', 'if', 'so', 'do', 'no',
 })
+
+# ---------------------------------------------------------------------------
+# Confidence tier rules (spec § Confidence tiers, lines 324-332)
+# ---------------------------------------------------------------------------
+
+CONFIDENCE_TIER_RULES = {
+    "HIGH": {
+        "literal_ref_patterns": [
+            r"\b[0-9a-f]{7,40}\b",
+            r"#\d+",
+            r"\bv\d+\.\d+(?:\.\d+)?\b",
+        ],
+    },
+    "MED": {
+        "inferred_ref_patterns": [
+            r"\bStory\s+\d+(?:\.\d+)*\b",
+            r"\bshipped\b",
+            r"\bcovered by\b",
+            r"#\d+",
+        ],
+    },
+    "LOW": {
+        "fts_only_markers": ["FTS mention", "occurrence", "mentions:", "FTS:"],
+    },
+}
+
+
+def _outer_subagent_timeout() -> int:
+    """Return the outer subprocess.run timeout that wraps check_items_cli.py.
+
+    Must be ≥ the inner SUBAGENT_TIMEOUT_SEC so the outer caller never races
+    the inner cli. When changing this constant, grep the codebase for hardcoded
+    copies of the previous value (e.g. `grep -rn "timeout=70" hooks/`) — the
+    R10 dispatch missed these two outer callers and caused silent fallback.
+    """
+    return int(os.environ.get("CHECK_ITEMS_SUBAGENT_TIMEOUT_SEC", "180"))
+
+
+def assign_tier(evidence_citation, item_text):
+    """Deterministically assign HIGH | MED | LOW from evidence citation shape.
+
+    HIGH requires a literal ref (sha, #N, vX.Y) appearing in BOTH the citation
+    and the item text. MED matches an inferred-ref shape in the citation only.
+    LOW is the default.
+
+    Spec § Confidence tiers (lines 324-332).
+    """
+    if not evidence_citation or not item_text:
+        return "LOW"
+    citation = str(evidence_citation)
+    text = str(item_text)
+
+    for pattern in CONFIDENCE_TIER_RULES["HIGH"]["literal_ref_patterns"]:
+        cit_match = re.search(pattern, citation)
+        if not cit_match:
+            continue
+        ref = cit_match.group(0)
+        if ref in text:
+            return "HIGH"
+
+    for pattern in CONFIDENCE_TIER_RULES["MED"]["inferred_ref_patterns"]:
+        if re.search(pattern, citation):
+            return "MED"
+
+    return "LOW"
 
 _COMPLETION_PHRASES = frozenset({
     'merged', 'shipped', 'fixed', 'released', 'closed', 'removed',
@@ -153,16 +224,27 @@ def find_duplicates(
 
     Returns [(file_path, line_number, item_text, confidence)] where
     confidence is "high" (distinctive token match) or "fuzzy" (token overlap).
+
+    Tier 0: exact text equality after markdown strip + lowercase always yields
+    "high" confidence, regardless of distinctive-token presence. This guarantees
+    character-identical items (including short or stop-word-heavy ones) always
+    cascade correctly.
     Tier 1 short-circuits: if a distinctive token matches, skip Tier 2.
     """
     cleaned = _strip_markdown(candidate_text)
     candidate_distinctive = _extract_distinctive_tokens(cleaned)
     candidate_tokens = _tokenize(cleaned)
+    candidate_normalized = cleaned.strip().lower()
 
     matches: list[tuple[str, int, str, str]] = []
 
     for fpath, line_num, item_text in existing_items:
         item_lower = item_text.lower()
+
+        # Tier 0: exact text equality after markdown strip + lowercase (always high)
+        if _strip_markdown(item_text).strip().lower() == candidate_normalized:
+            matches.append((fpath, line_num, item_text, "high"))
+            continue
 
         # Tier 1: distinctive token match (high confidence, short-circuit)
         tier1_hit = False
@@ -399,11 +481,162 @@ def batch_cascade_checkoff(
     return "\n".join(parts) if parts else "No duplicates found for cascading."
 
 
+def cascade_group_members(
+    groups: list,
+    source_skips: "set[tuple[str, int]] | None" = None,
+) -> str:
+    """Flip checkbox on every member of each group, atomically per file.
+
+    Each group dict must contain a ``members`` list of dicts with at least
+    ``file`` (full path) and ``line`` keys. Members whose ``(file, line)`` is
+    in ``source_skips`` are NOT flipped (caller already primary-flipped them).
+
+    Lines that no longer contain a ``- [ ] `` checkbox at apply-time are
+    skipped with a stderr warning (file may have changed since grouping).
+
+    Returns a compact summary string: ``"Cascaded N member-line(s) across M
+    file(s)."`` or ``"No member lines to cascade."`` for empty input.
+    """
+    if source_skips is None:
+        source_skips = set()
+
+    # Collect all (full_path, line_number) targets, deduplicated
+    targets: dict[tuple[str, int], None] = {}  # ordered dict as ordered set
+    for group in groups or []:
+        for m in group.get("members", []) or []:
+            fpath = m.get("file", "")
+            line_num = m.get("line")
+            if not fpath or line_num is None:
+                continue
+            key = (fpath, line_num)
+            if key in source_skips:
+                continue
+            targets[key] = None
+
+    if not targets:
+        return "No member lines to cascade."
+
+    # Group by file to minimise rewrites
+    files_to_lines: dict[str, list[int]] = {}
+    for fpath, line_num in targets:
+        files_to_lines.setdefault(fpath, []).append(line_num)
+
+    total_flipped = 0
+    files_edited: set[str] = set()
+
+    for fpath, line_nums in files_to_lines.items():
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError as exc:
+            print(
+                f"[obsidian-brain] cascade_group_members: cannot read "
+                f"{os.path.basename(fpath)}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        file_flipped = 0
+        for ln in line_nums:
+            idx = ln - 1  # 0-indexed
+            if 0 <= idx < len(lines) and lines[idx].lstrip().startswith("- [ ] "):
+                lines[idx] = lines[idx].replace("- [ ] ", "- [x] ", 1)
+                file_flipped += 1
+            else:
+                print(
+                    f"[obsidian-brain] cascade_group_members: line {ln} in "
+                    f"{os.path.basename(fpath)} no longer contains expected "
+                    f"checkbox (file may have changed); skipping.",
+                    file=sys.stderr,
+                )
+
+        if file_flipped == 0:
+            continue
+
+        note_dir = os.path.dirname(fpath)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".ob-cascade-", suffix=".md.tmp", dir=note_dir,
+        )
+        try:
+            try:
+                orig_mode = os.stat(fpath).st_mode
+            except OSError:
+                orig_mode = 0o644
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.writelines(lines)
+            os.chmod(tmp_path, orig_mode)
+            os.replace(tmp_path, fpath)
+            files_edited.add(os.path.basename(fpath))
+            total_flipped += file_flipped
+        except OSError as exc:
+            print(
+                f"[obsidian-brain] cascade_group_members: write failed for "
+                f"{os.path.basename(fpath)}: {exc}",
+                file=sys.stderr,
+            )
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    if total_flipped == 0:
+        return "No member lines to cascade."
+    return (
+        f"Cascaded {total_flipped} member-line(s) across {len(files_edited)} file(s)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Deep analysis pipeline
 # ---------------------------------------------------------------------------
 
 _RE_WIKILINK = re.compile(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]')
+
+# Module-level cache for deep_analysis_pipeline evidence gathering.
+# Key shape: see _cache_key() — 6-tuple (basenames, projects_json, vault_path,
+#   sessions_folder, insights_folder, db_path). TTL = 15 minutes.
+# Prevents redundant git/gh subprocess calls when /check-items and /standup
+# deep mode run back-to-back in the same interpreter process.
+# Spec § Open questions / Cache coupling (line 699); Testing test 12 (line 658).
+#
+# Cache entry format: (timestamp: float, status: str, output_json: str)
+# output_json is stored so cache hits can re-write the requested output_path
+# (the cache key does not include output_path, so a hit must replay the write).
+_PIPELINE_EVIDENCE_CACHE: dict[tuple, tuple[float, str, str]] = {}
+_PIPELINE_CACHE_TTL_SEC = 900  # 15 minutes
+
+
+def _evidence_cache_get(key: tuple, now: float) -> tuple[str, str] | None:
+    """Return (status, output_json) if entry exists and is within TTL, else None."""
+    entry = _PIPELINE_EVIDENCE_CACHE.get(key)
+    if entry is None:
+        return None
+    ts, status, output_json = entry
+    if now - ts > _PIPELINE_CACHE_TTL_SEC:
+        del _PIPELINE_EVIDENCE_CACHE[key]
+        return None
+    return (status, output_json)
+
+
+def _evidence_cache_put(key: tuple, result: tuple[str, str], now: float) -> None:
+    """Store (status, output_json) tuple in the module-level cache."""
+    status, output_json = result
+    _PIPELINE_EVIDENCE_CACHE[key] = (now, status, output_json)
+
+
+def _cache_key(basenames, projects_json, vault_path, sessions_folder,
+               insights_folder, db_path):
+    """Stable hashable key for _PIPELINE_EVIDENCE_CACHE.
+
+    Includes every input that materially affects deep_analysis_pipeline output:
+    basenames (sorted to normalize order), projects_json, vault_path,
+    sessions_folder, insights_folder, db_path. A change in any field forces
+    a fresh subprocess burst.
+    """
+    basenames_key = tuple(sorted(basenames)) if basenames else ()
+    return (basenames_key, projects_json, vault_path, sessions_folder,
+            insights_folder, db_path or "")
+
 
 # Note types excluded from orphan detection (they are aggregation notes)
 _ORPHAN_EXCLUDE_TYPES = frozenset({
@@ -414,14 +647,12 @@ _ORPHAN_EXCLUDE_TYPES = frozenset({
 def _resolve_project_paths() -> dict[str, str]:
     """Return dict mapping project name -> repo path for local git repos.
 
-    Scans common directories for directories containing .git.
+    Scans workspace roots from config (or historical defaults) for directories
+    containing .git.  Roots are supplied by get_workspace_roots() which reads
+    ``workspace_roots`` from obsidian-brain-config.json when present.
     """
     result: dict[str, str] = {}
-    home = os.path.expanduser("~")
-    scan_dirs = [
-        os.path.join(home, "dev", "claude_workspace"),
-        os.path.join(home, "projects"),
-    ]
+    scan_dirs = get_workspace_roots()
     for scan_dir in scan_dirs:
         if not os.path.isdir(scan_dir):
             continue
@@ -448,7 +679,37 @@ def deep_analysis_pipeline(
 
     Returns 'OK:<total_items>:<groups>:<projects_with_evidence>'.
     Writes structured JSON to output_path (atomic: tempfile + rename).
+
+    15-minute module-level cache keyed on (projects_json, vault_path,
+    sessions_folder): when /check-items and /standup deep both invoke
+    this in the same process back-to-back, the second call skips all
+    git/gh subprocess calls and returns the cached result string.
+    Cache helpers _evidence_cache_get/_evidence_cache_put expose the
+    cache for targeted unit tests without mocking the full pipeline.
+    Spec § Open questions / Cache coupling (line 699);
+    Testing test 12 (line 658). Refs #87.
     """
+    _ck = _cache_key(basenames, projects_json, vault_path, sessions_folder,
+                     insights_folder, db_path)
+    _now = time.time()
+    _cached = _evidence_cache_get(_ck, _now)
+    if _cached is not None:
+        # Warm-cache hit: skip all subprocess calls; re-write output_path so the
+        # caller always finds a valid file regardless of which path was used on
+        # the previous (cold-cache) call (cache key excludes output_path).
+        _cached_status, _cached_json = _cached
+        try:
+            out_dir = os.path.dirname(output_path) or "."
+            os.makedirs(out_dir, mode=0o700, exist_ok=True)
+            _fd, _tmp = tempfile.mkstemp(prefix=".ob-pipeline-hit-", suffix=".json", dir=out_dir)
+            with os.fdopen(_fd, 'w', encoding='utf-8') as _f:
+                _f.write(_cached_json)
+            os.chmod(_tmp, 0o600)
+            os.replace(_tmp, output_path)
+        except OSError as _exc:
+            print(f"[obsidian-brain] pipeline cache: write failed: {_exc}", file=sys.stderr)
+        return _cached_status
+
     import vault_index
 
     # 1. Warm vault index
@@ -578,14 +839,14 @@ def deep_analysis_pipeline(
 
         proj_evidence: dict[str, object] = {}
 
-        # git log (last 20 commits)
+        # git log (last 40 commits)
         try:
             proc = subprocess.run(
-                ["git", "log", "--oneline", "-20"],
+                ["git", "log", "--oneline", "-40"],
                 cwd=repo_path, capture_output=True, text=True, timeout=10,
             )
             if proc.returncode == 0:
-                proj_evidence["commits"] = proc.stdout.strip().split("\n")[:20]
+                proj_evidence["commits"] = proc.stdout.strip().split("\n")[:40]
             else:
                 print(f"[obsidian-brain] git log failed for {project}: {proc.stderr.strip()[:200]}", file=sys.stderr)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -603,6 +864,46 @@ def deep_analysis_pipeline(
                 print(f"[obsidian-brain] gh release list failed for {project}: {proc.stderr.strip()[:200]}", file=sys.stderr)
         except (OSError, subprocess.TimeoutExpired) as exc:
             print(f"[obsidian-brain] gh release error for {project}: {exc}", file=sys.stderr)
+
+        # gh pr list --state merged
+        try:
+            proc = subprocess.run(
+                ["gh", "pr", "list", "--state", "merged", "--limit", "20",
+                 "--json", "number,title,mergedAt,url"],
+                cwd=repo_path, capture_output=True, text=True, timeout=10,
+            )
+            if proc.returncode == 0:
+                try:
+                    proj_evidence["merged_prs"] = json.loads(proc.stdout)
+                except json.JSONDecodeError as exc:
+                    print(f"[obsidian-brain] gh pr list JSON error for {project}: {exc}", file=sys.stderr)
+                    proj_evidence["merged_prs"] = []
+            else:
+                print(f"[obsidian-brain] gh pr list failed for {project}: {proc.stderr.strip()[:200]}", file=sys.stderr)
+                proj_evidence["merged_prs"] = []
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            print(f"[obsidian-brain] gh pr list error for {project}: {exc}", file=sys.stderr)
+            proj_evidence["merged_prs"] = []
+
+        # gh issue list --state closed
+        try:
+            proc = subprocess.run(
+                ["gh", "issue", "list", "--state", "closed", "--limit", "20",
+                 "--json", "number,title,closedAt,body,url"],
+                cwd=repo_path, capture_output=True, text=True, timeout=10,
+            )
+            if proc.returncode == 0:
+                try:
+                    proj_evidence["closed_issues"] = json.loads(proc.stdout)
+                except json.JSONDecodeError as exc:
+                    print(f"[obsidian-brain] gh issue list JSON error for {project}: {exc}", file=sys.stderr)
+                    proj_evidence["closed_issues"] = []
+            else:
+                print(f"[obsidian-brain] gh issue list failed for {project}: {proc.stderr.strip()[:200]}", file=sys.stderr)
+                proj_evidence["closed_issues"] = []
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            print(f"[obsidian-brain] gh issue list error for {project}: {exc}", file=sys.stderr)
+            proj_evidence["closed_issues"] = []
 
         # CHANGELOG.md excerpt
         changelog_path = os.path.join(repo_path, "CHANGELOG.md")
@@ -663,7 +964,18 @@ def deep_analysis_pipeline(
 
     total = len(all_raw_items)
     groups = len(all_groups)
-    return f"OK:{total}:{groups}:{projects_with_evidence}"
+    _result = f"OK:{total}:{groups}:{projects_with_evidence}"
+    # Cache from in-memory output_data rather than re-reading the file on disk.
+    # Re-reading could yield an empty string on a race or disk error, which
+    # would make later cache hits silently rewrite output_path with empty JSON.
+    try:
+        _output_json_str = json.dumps(output_data, indent=2)
+    except (TypeError, ValueError) as exc:
+        print(f"[obsidian-brain] cache skip: couldn't serialise output_data ({exc})",
+              file=sys.stderr)
+        return _result
+    _evidence_cache_put(_ck, (_result, _output_json_str), _now)
+    return _result
 
 
 def build_deep_presentation(
@@ -850,3 +1162,443 @@ def build_deep_presentation(
     sections.extend(actions)
 
     return "\n".join(sections)
+
+
+def cross_project_dedup(groups_by_project):
+    """
+    Vault-scope dedup that respects project boundaries.
+
+    Input shape: {project_name: [coarse_group_dict, ...]}
+    Output shape: flat list of group dicts, project boundary preserved.
+
+    Distinctive tokens like '#534' are keyed by (project, token) so the same
+    token in two repos does NOT collide. Within-project grouping is already
+    handled by find_duplicates(); this function is a pass-through with the
+    project-scoped collision-avoidance guarantee for vault-wide scans.
+
+    Spec § Pipeline architecture Stage 2a, lines 67-72.
+    """
+    if not groups_by_project:
+        return []
+    flat = []
+    seen_keys = set()
+    for project, groups in groups_by_project.items():
+        for g in groups:
+            key = (project, g.get("group_id") or id(g))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            out = dict(g)
+            out.setdefault("project", project)
+            flat.append(out)
+    return flat
+
+
+def merge_groups_semantically(coarse_groups):
+    """
+    Stage 2b orchestrator: invoke the semantic-merge sub-agent via
+    check_items_cli.run_semantic_merge, validate the response, enforce
+    same-project rule, and apply the merge map by folding absorbed group
+    members into the canonical group.
+
+    Accepts either a list of groups OR a dict {project: [groups]}.
+    Returns the same shape it received.
+
+    On 2 consecutive sub-agent failures, returns coarse_groups unchanged.
+    (Token-only fallback marker added in Task 13.)
+
+    Spec §§ Pipeline architecture Stage 2b (lines 73-86) and Merge-pass rules.
+    """
+    global _LAST_SEMANTIC_MERGE_MODE
+    _LAST_SEMANTIC_MERGE_MODE = "ok"
+
+    return_dict_shape = isinstance(coarse_groups, dict)
+    if return_dict_shape:
+        flat_groups = [g for v in coarse_groups.values() for g in v]
+    else:
+        flat_groups = list(coarse_groups or [])
+
+    if not flat_groups:
+        return coarse_groups
+
+    workdir = _check_items_workdir()
+    _unique = f"{os.getpid()}-{time.time_ns()}"
+    in_path = workdir / f"semantic-merge-{_unique}.in.json"
+    out_path = workdir / f"semantic-merge-{_unique}.out.json"
+    payload = {"groups": [
+        {
+            "group_id": g.get("group_id"),
+            "project": g.get("project"),
+            "representative": g.get("representative", ""),
+            "member_texts": [m.get("text", "") for m in g.get("members", [])],
+        }
+        for g in flat_groups
+    ]}
+    payload_str = json.dumps(payload)
+    _STDIN_CAP_BYTES = 1_000_000
+    if len(payload_str.encode("utf-8")) >= _STDIN_CAP_BYTES:
+        print(
+            f"[check-items] payload {len(payload_str)} bytes >= {_STDIN_CAP_BYTES} cap; "
+            f"skipping semantic-merge sub-agent, using token-only.",
+            file=sys.stderr,
+        )
+        _LAST_SEMANTIC_MERGE_MODE = "token-only (payload too large)"
+        for p in (in_path, out_path):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        if return_dict_shape:
+            return coarse_groups
+        return flat_groups
+
+    in_path.write_text(payload_str, encoding="utf-8")
+    os.chmod(str(in_path), 0o600)
+
+    cli_path = os.path.join(os.path.dirname(__file__), "check_items_cli.py")
+    attempt = 0
+    merge_map = None
+    while attempt < 2:
+        attempt += 1
+        try:
+            cp = subprocess.run(
+                ["python3", cli_path, "semantic_merge", str(out_path)],
+                input=in_path.read_text(),
+                capture_output=True,
+                text=True,
+                timeout=_outer_subagent_timeout(),
+            )
+            if cp.returncode != 0 or not out_path.exists():
+                continue
+            merge_map = json.loads(out_path.read_text())
+            if not isinstance(merge_map, dict) or "merges" not in merge_map:
+                merge_map = None
+                continue
+            break
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as exc:
+            print(f"[check-items] semantic-merge attempt {attempt} failed: {exc}",
+                  file=sys.stderr)
+            continue
+
+    for p in (in_path, out_path):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+    if merge_map is None:
+        _LAST_SEMANTIC_MERGE_MODE = "token-only (semantic pass failed)"
+        if return_dict_shape:
+            return coarse_groups
+        return flat_groups
+
+    groups_by_id = {g.get("group_id"): dict(g) for g in flat_groups}
+
+    for merge in merge_map.get("merges", []):
+        canonical_id = merge.get("canonical_group_id")
+        absorbed_ids = merge.get("absorbed_group_ids", [])
+        canonical = groups_by_id.get(canonical_id)
+        if canonical is None:
+            continue
+        canonical_project = canonical.get("project")
+        for aid in absorbed_ids:
+            absorbed = groups_by_id.get(aid)
+            if absorbed is None:
+                continue
+            if absorbed.get("project") != canonical_project:
+                print(f"[check-items] dropping cross-project merge "
+                      f"{aid} -> {canonical_id}", file=sys.stderr)
+                continue
+            canonical.setdefault("members", []).extend(absorbed.get("members", []))
+            canonical.setdefault("absorbed_reasoning", []).append({
+                "absorbed": aid,
+                "reasoning": merge.get("reasoning", ""),
+            })
+            groups_by_id.pop(aid, None)
+        groups_by_id[canonical_id] = canonical
+
+    surviving = list(groups_by_id.values())
+
+    if return_dict_shape:
+        out = {}
+        for g in surviving:
+            out.setdefault(g.get("project"), []).append(g)
+        return out
+    return surviving
+
+
+def _check_items_workdir():
+    """Return the 0o700 workdir under ~/.claude/obsidian-brain."""
+    p = Path.home() / ".claude" / "obsidian-brain"
+    p.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Semantic merge mode tracker (Task 13)
+# ---------------------------------------------------------------------------
+
+_LAST_SEMANTIC_MERGE_MODE = "ok"
+
+
+def get_last_semantic_merge_mode():
+    """Returns 'ok' on last successful merge, or
+    'token-only (semantic pass failed)' on fallback."""
+    return _LAST_SEMANTIC_MERGE_MODE
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: classify_groups_with_agent orchestrator (Task 16)
+# ---------------------------------------------------------------------------
+
+_VALID_CLASSIFICATIONS = {"DONE", "NEEDS-ACTION", "STALE", "ACTIVE"}
+_REQUIRED_CLASSIFIER_FIELDS = {
+    "group_id", "classification", "confidence",
+    "canonical_text", "evidence_citation", "action_required",
+}
+
+
+def _validate_classifier_response(parsed):
+    """Return True iff parsed is a list of dicts containing all required fields
+    with classification in the valid set."""
+    if not isinstance(parsed, list):
+        return False
+    for item in parsed:
+        if not isinstance(item, dict):
+            return False
+        if not _REQUIRED_CLASSIFIER_FIELDS.issubset(item.keys()):
+            return False
+        if item.get("classification") not in _VALID_CLASSIFICATIONS:
+            return False
+    return True
+
+
+def classify_groups_with_agent(merged_groups, evidence):
+    """
+    Stage 4 orchestrator: invoke the classifier sub-agent via
+    check_items_cli.run_classifier with one retry on schema-validation
+    failure. Returns the parsed list on success.
+
+    On 2 consecutive failures, returns [] and sets
+    `_LAST_CLASSIFIER_MODE = 'heuristic-fallback'`.
+
+    Spec §§ Pipeline architecture Stage 4 + Expected output.
+    """
+    global _LAST_CLASSIFIER_MODE
+    _LAST_CLASSIFIER_MODE = "ok"
+
+    if not merged_groups:
+        return []
+
+    workdir = _check_items_workdir()
+    _unique = f"{os.getpid()}-{time.time_ns()}"
+    in_path = workdir / f"classify-{_unique}.in.json"
+    out_path = workdir / f"classify-{_unique}.out.json"
+
+    payload = {
+        "groups": [
+            {
+                "group_id": g.get("group_id"),
+                "project": g.get("project"),
+                "representative": g.get("representative", ""),
+                "instances": [
+                    {"file": m.get("file"), "line": m.get("line"), "text": m.get("text", "")}
+                    for m in g.get("members", [])
+                ],
+            }
+            for g in merged_groups
+        ],
+        "evidence": evidence or {},
+    }
+    payload_str = json.dumps(payload)
+    _STDIN_CAP_BYTES = 1_000_000
+    if len(payload_str.encode("utf-8")) >= _STDIN_CAP_BYTES:
+        print(
+            f"[check-items] classifier payload {len(payload_str)} bytes >= "
+            f"{_STDIN_CAP_BYTES} cap; falling back to heuristic.",
+            file=sys.stderr,
+        )
+        _LAST_CLASSIFIER_MODE = "heuristic-fallback"
+        for p in (in_path, out_path):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        return []
+
+    in_path.write_text(payload_str, encoding="utf-8")
+    os.chmod(str(in_path), 0o600)
+
+    cli_path = os.path.join(os.path.dirname(__file__), "check_items_cli.py")
+    parsed = None
+    attempt = 0
+    while attempt < 2:
+        attempt += 1
+        try:
+            cp = subprocess.run(
+                ["python3", cli_path, "classifier", str(out_path)],
+                input=in_path.read_text(),
+                capture_output=True,
+                text=True,
+                timeout=_outer_subagent_timeout(),
+            )
+            if cp.returncode != 0 or not out_path.exists():
+                continue
+            candidate = json.loads(out_path.read_text())
+            if not _validate_classifier_response(candidate):
+                continue
+            parsed = candidate
+            break
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as exc:
+            print(f"[check-items] classifier attempt {attempt} failed: {exc}",
+                  file=sys.stderr)
+            continue
+
+    for p in (in_path, out_path):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+    if parsed is None:
+        _LAST_CLASSIFIER_MODE = "heuristic-fallback"
+        return []
+    return parsed
+
+
+_LAST_CLASSIFIER_MODE = "ok"
+
+
+def get_last_classifier_mode():
+    """Returns 'ok' on success or 'heuristic-fallback' if Task 17's
+    heuristic must be invoked."""
+    return _LAST_CLASSIFIER_MODE
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: classify_groups_heuristic (Task 17 — long-term fallback)
+# ---------------------------------------------------------------------------
+
+_DISTINCTIVE_TOKEN_RE = re.compile(
+    r"(#\d+|\b[0-9a-f]{7,40}\b|\bv\d+\.\d+(?:\.\d+)?\b)"
+)
+_COMPLETION_PHRASE_RE = re.compile(
+    r"\b(done|merged|shipped|closed|fixed|complete[d]?|resolved|release[d]?)\b",
+    re.IGNORECASE,
+)
+_HEURISTIC_PROXIMITY_CHARS = 120
+
+
+def classify_groups_heuristic(merged_groups, evidence):
+    """
+    Tightened heuristic classifier (long-term fallback).
+
+    Spec § Interim coexistence Patch 2 + memory feedback_check_items_filter_tightening:
+    DONE requires BOTH a distinctive token AND a completion phrase within
+    +/- 120 chars in the same member text. Otherwise -> ACTIVE.
+
+    NEEDS-ACTION and STALE are not assigned by the heuristic (they need
+    cross-source evidence the sub-agent provides).
+    """
+    out = []
+    for g in merged_groups or []:
+        classification = "ACTIVE"
+        confidence = "LOW"
+        evidence_citation = None
+        canonical_text = g.get("representative", "")
+
+        for m in g.get("members", []) or []:
+            text = m.get("text", "") or ""
+            tok_match = _DISTINCTIVE_TOKEN_RE.search(text)
+            phr_match = _COMPLETION_PHRASE_RE.search(text)
+            if tok_match and phr_match:
+                distance = abs(tok_match.start() - phr_match.start())
+                if distance <= _HEURISTIC_PROXIMITY_CHARS:
+                    classification = "DONE"
+                    confidence = "HIGH" if distance <= 60 else "MED"
+                    evidence_citation = (
+                        f"heuristic: token '{tok_match.group(0)}' "
+                        f"near completion phrase '{phr_match.group(0)}'"
+                    )
+                    break
+
+        out.append({
+            "group_id": g.get("group_id"),
+            "classification": classification,
+            "confidence": confidence,
+            "canonical_text": canonical_text,
+            "evidence_citation": evidence_citation,
+            "action_required": None,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Stage 5: partition_for_review (Task 18)
+# ---------------------------------------------------------------------------
+
+def partition_for_review(classifications, show_all=False):
+    """
+    Partition classifier output into UX-relevant buckets for Stage 5.
+
+    Returns:
+        {
+            "review": [...DONE + NEEDS-ACTION (+ STALE if show_all)...],
+            "dashboard_only": [...ACTIVE (always) + STALE (default-mode)...]
+        }
+
+    ACTIVE entries have evidence_citation forced to None before dashboard
+    write, per spec § Classification semantics line 322.
+    """
+    review = []
+    dashboard_only = []
+    for item in classifications or []:
+        kind = item.get("classification")
+        if kind in ("DONE", "NEEDS-ACTION"):
+            review.append(item)
+        elif kind == "STALE":
+            if show_all:
+                review.append(item)
+            else:
+                dashboard_only.append(item)
+        elif kind == "ACTIVE":
+            scrubbed = dict(item)
+            scrubbed["evidence_citation"] = None
+            dashboard_only.append(scrubbed)
+    return {"review": review, "dashboard_only": dashboard_only}
+
+
+def verify_before_edit(file_path: str, line_number: int, expected_text: str) -> bool:
+    """
+    Re-read target line and compare against expected text BEFORE flipping
+    a checkbox via Edit tool.
+
+    Strips the checkbox prefix (`- [ ]`, `- [x]`, `- [X]`) and surrounding
+    whitespace from the file side before comparing to `expected_text`. The
+    classifier produces bare canonical text without the prefix; this function
+    normalizes the file line to match. Returns False on missing file,
+    out-of-range line, or read error.
+
+    Memory feedback_open_item_checkoff_verify_before_edit: verification
+    is mandatory before Edit-tool dispatch.
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError as exc:
+        print(
+            f"[check-items] verify_before_edit: cannot read {file_path}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    if not 1 <= line_number <= len(lines):
+        print(
+            f"[check-items] verify_before_edit: line {line_number} out of range for"
+            f" {file_path} ({len(lines)} lines)",
+            file=sys.stderr,
+        )
+        return False
+    actual_line = lines[line_number - 1]
+    actual = _CHECKBOX_PREFIX_RE.sub("", actual_line).strip()
+    expected = (expected_text or "").strip()
+    return actual == expected

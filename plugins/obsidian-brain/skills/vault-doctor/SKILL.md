@@ -89,15 +89,22 @@ come from the top-level `capture_signal` and `capture_confidence` fields
 in the JSON payload (not from `extra.*`). `capture_confidence` reports
 how reliable the capture-time *signal* is (created_at=1.0, date=0.9,
 filename=0.85, mtime=0.5); the issue's top-level `confidence` field
-reports the *rewrite-proposal* confidence (created_at=0.95, mtime=0.3,
-otherwise 0.6) that gates `--apply --min-confidence`. The two are
-distinct — render `capture_confidence` here so heuristic-fall cases
-are visible (e.g., `signal=mtime conf=0.5` indicates no immutable
-signal was available — the operator should sample a few flagged
-notes before running `fix`). For
-unresolved issues with no `proposed:` line, render `signal:` after `reason:`.
-When `convergence_warning` is `true` in the issue, prefix the issue line
-with `[CONVERGED <N> flags]` where `N` is `convergence_count`.
+reports the *rewrite-proposal* confidence per the strict 3-band taxonomy:
+0.99 = uuid-basename-stale (auto-applyable basename-only repair);
+0.5 = date-window-hint (operator must content-grep before applying);
+0.0 = unresolved / uuid-day-mismatch / missing-session-note (never auto-apply).
+The two fields are distinct — render `capture_confidence` here so
+heuristic-fall cases are visible (e.g., `signal=mtime conf=0.5` indicates
+no immutable signal was available — the operator should sample a few flagged
+notes before running `fix`). For unresolved issues with no `proposed:` line,
+render `signal:` after `reason:`.
+Render `signal_class` (from the top-level signal_class field) as a prefix tag so operators
+can distinguish: [uuid-basename-stale], [uuid-day-mismatch],
+[missing-session-note], [date-window-hint], [unresolved]. The
+convergence_warning/convergence_count fields are deprecated as of #106
+(UUID-first matching obsoleted the convergence guard) — they remain in the
+JSON payload as hard-coded defaults for output schema stability but should
+not drive rendering.
 
 Example:
 

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-05-14
+
+### Added
+
+- `/check-items` now uses evidence-grounded AI classification (reuses `/standup deep` pipeline). Closes #87.
+- `/check-items` supports `all`, `<project>`, `Nd`, `--show-all`, `--dry-run`, `--no-cache` arguments. Order-independent and combinable.
+- Two-pass deduplication: token-based coarse grouping followed by an AI semantic merge pass that catches near-duplicate items with zero token overlap. Same-project only; audit trail in dashboard report.
+- Cross-project deduplication when scope is `all` — `#534` in two repos no longer collides.
+- Dashboard report written to `claude-dashboards/check-items-<scope>-<date>.md` on every run (always, even on `--dry-run` or user cancel).
+- `NEEDS-ACTION` tier surfaces fixes that are shipped but require external commands (`gh issue close`, token rotations, etc.) as copy-pasteable strings.
+- Classification cache at `~/.claude/obsidian-brain/check-items-classifications.json` with hash / mtime / HEAD / TTL invalidation. Warm-cache runs complete in near-zero time at zero cost; only newly-changed groups are re-classified.
+
+### Changed
+
+- `/recall` no longer surfaces checkoff candidates. Runs as a pure read-only context load with a one-line footer nudge to invoke `/check-items` when there are open items in the project. Closes the 4-6-iteration deferral loop documented in user memory `feedback_recall_deferral_loop.md`.
+- `/check-items` argument parsing is now order-independent.
+
+### Removed
+
+- `/recall` checkoff step — the /recall checkoff step (Steps 4-7.5 in prior SKILL.md versions) is gone. Users with muscle memory for `/recall → "skip" → continue` just get shorter `/recall` output; the new footer nudge makes the migration discoverable.
+
+## [2.4.4] - 2026-05-11
+
+### Changed
+- `vault-doctor source-sessions`: detection refactored around UUID-first contract. The conf=0.4–0.6 wrong-pick class is eliminated. Confidence bands are now strictly `0.99` (uuid-basename-stale, auto-apply), `0.5` (date-window-hint, manual verify), `0.0` (uuid-day-mismatch / missing-session-note / unresolved, WARN). Every emitted Issue carries a `signal_class` tag. In the `--json` output, `signal_class` is exposed as a **top-level** field on each issue (no `extra` wrapper); the internal `Issue` dataclass stores it under `extra` as an implementation detail. The `apply()` path refuses to write unless `signal_class == "uuid-basename-stale"`, regardless of `--min-confidence`. (#106)
+
+### Removed
+- `vault-doctor source-sessions`: removed the `capture_signal != "created_at"` carve-out around Phase 1b — UUID-first now runs uniformly.
+- `vault-doctor source-sessions`: removed the convergence guard (multiple-flag confidence cap). Made moot by UUID-first.
+- `vault-doctor source-sessions`: removed the mtime SID-rewrite path (`proposed_conf=0.3`). Mtime emits as unresolved.
+- `vault-doctor source-sessions`: removed the dedicated `created_at` SID-rewrite confidence (`proposed_conf=0.95`). Created_at signals can still produce a proposal when the UUID is empty/unresolved, but at conf=0.5 as `date-window-hint` (not auto-applyable) rather than the old high-confidence path.
+
+### Fixed
+
+- Fix YAML-frontmatter regex `\s*` cross-newline bug across 8 call sites in
+  `hooks/obsidian_utils.py`, `hooks/vault_stats.py`, and
+  `scripts/vault_doctor_checks/project_name_normalization.py`. An empty
+  `project:` (or `date:`, `status:`, `type:`, `session_id:`) field no longer
+  causes the next YAML key's value to be misread. Adds a shared
+  `parse_frontmatter_field()` helper. (#94)
+
 ## [2.4.3] - 2026-05-05
 
 ### Added
