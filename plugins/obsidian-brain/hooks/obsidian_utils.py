@@ -908,6 +908,7 @@ _DEFAULTS: dict = {
     "sessions_folder": "claude-sessions",
     "insights_folder": "claude-insights",
     "dashboards_folder": "claude-dashboards",
+    "check_items_folder": "claude-check-items",
     "min_messages": 3,
     "min_duration_minutes": 2,
     "summary_model": "haiku",

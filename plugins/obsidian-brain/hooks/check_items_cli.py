@@ -19,7 +19,15 @@ import tempfile
 from pathlib import Path
 
 STDIN_CAP_BYTES = 1_000_000
-SUBAGENT_TIMEOUT_SEC = int(os.environ.get("CHECK_ITEMS_SUBAGENT_TIMEOUT_SEC", "180"))
+SUBAGENT_TIMEOUT_SEC = int(os.environ.get("CHECK_ITEMS_SUBAGENT_TIMEOUT_SEC", "300"))
+
+# Cap groups per classifier sub-agent dispatch. Above this count, run_classifier()
+# splits into sequential chunks of <=N so a single Sonnet call stays well under
+# SUBAGENT_TIMEOUT_SEC. Override via CHECK_ITEMS_CLASSIFIER_CHUNK_SIZE; values <1
+# are clamped to 1.
+CLASSIFIER_CHUNK_SIZE = max(
+    1, int(os.environ.get("CHECK_ITEMS_CLASSIFIER_CHUNK_SIZE", "25"))
+)
 
 
 _FENCE_OPEN_RE = re.compile(r"^\s*```(?:json|JSON)?\s*\n?")
@@ -316,15 +324,255 @@ def _pick_classifier_model(group_count: int) -> str:
     return "haiku" if group_count <= 30 else "sonnet"
 
 
+def _strip_unreleased_section(changelog: str) -> str:
+    """Remove the `## [Unreleased]` section (up to the next `## [x.y.z]` heading
+    or end of text) from a Keep-a-Changelog excerpt. Released sections are
+    completion statements by construction; the Unreleased section is WIP and
+    over-triggers Rule 2 of has_classifiable_evidence.
+
+    Case-insensitive match on `## [Unreleased]` (with optional trailing
+    whitespace). If no Unreleased section is present, returns the input
+    unchanged.
+    """
+    if not changelog:
+        return ""
+    # Match "## [Unreleased]" through the start of the next "## [" version heading
+    # OR end-of-string. DOTALL so '.' spans newlines.
+    pattern = re.compile(
+        r"##\s*\[Unreleased\][^\n]*\n.*?(?=^##\s*\[|\Z)",
+        flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+    )
+    return pattern.sub("", changelog)
+
+
+def _bridge_project_evidence(evidence: dict, project: str) -> dict:
+    """Convert project evidence to the _text-suffixed flat format expected by
+    has_classifiable_evidence().
+
+    The live evidence payload from open_item_dedup.py uses a project-keyed nested
+    structure with bare keys:
+        {project_name: {"commits": [...], "merged_prs": [...], ...}}
+
+    has_classifiable_evidence() expects a flat dict with _text-suffixed keys:
+        {"commits_text": "...", "merged_prs_text": "...", ...}
+
+    This helper bridges both shapes:
+    - If the evidence dict contains the project key AND its value is a dict
+      with bare keys → extract and convert to _text form.
+    - If the evidence dict already has _text-suffixed keys at the top level
+      (test fixtures, simplified payloads) → return as-is.
+    - If neither shape matches → return empty dict (fail-safe: no evidence → synthetic).
+    """
+    # Shape A: project-nested bare keys (production shape from open_item_dedup.py)
+    if project and project in evidence and isinstance(evidence[project], dict):
+        proj = evidence[project]
+        # Convert list/dict values to text by joining stringified items
+        def _to_text(val) -> str:
+            if not val:
+                return ""
+            if isinstance(val, str):
+                return val
+            if isinstance(val, list):
+                parts = []
+                for item in val:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    elif isinstance(item, dict):
+                        # merged_prs / closed_issues: titles encode completion;
+                        # bodies are activity content (discuss problem + adjacent work)
+                        # and would over-trigger Rule 2 of has_classifiable_evidence.
+                        # Include number for traceability but NOT body.
+                        title = item.get("title", "")
+                        number = item.get("number", "")
+                        if title or number:
+                            parts.append(f"#{number} {title}".strip() if number else title)
+                        else:
+                            # Unknown dict shape — fall back to joining values (preserves
+                            # backward-compat for non-{title,body} dicts)
+                            parts.append(" ".join(str(v) for v in item.values() if v))
+                return " ".join(parts)
+            if isinstance(val, dict):
+                # fts_mentions: {text: count} — join all keys
+                return " ".join(str(k) for k in val)
+            return str(val)
+
+        return {
+            "commits_text": _to_text(proj.get("commits")),
+            "merged_prs_text": _to_text(proj.get("merged_prs")),
+            "closed_issues_text": _to_text(proj.get("closed_issues")),
+            "releases_text": _to_text(proj.get("releases")),
+            "changelog_excerpt": _strip_unreleased_section(proj.get("changelog_excerpt") or ""),
+            "fts_mentions_text": _to_text(proj.get("fts_mentions")),
+        }
+
+    # Shape B: already _text-suffixed at top level (test fixtures / simplified payloads)
+    _TEXT_KEYS = {"commits_text", "merged_prs_text", "closed_issues_text",
+                  "releases_text", "changelog_excerpt", "fts_mentions_text"}
+    if _TEXT_KEYS.intersection(evidence.keys()):
+        return evidence
+
+    # Unknown shape or missing project → no evidence (fail-safe).
+    # Before warning, check whether the payload IS a valid shape A for a
+    # different project (multi-project payload, this group's project not
+    # present). Shape A is recognized by any top-level value being a dict
+    # that contains at least one bare evidence key. In that case, the
+    # legitimate answer is "no evidence for this project" — return {} silently.
+    # Only WARN when neither shape A nor shape B is recognizable at all.
+    _BARE_KEYS = {"commits", "merged_prs", "closed_issues", "releases",
+                  "changelog_excerpt", "fts_mentions"}
+    _is_shape_a_payload = any(
+        isinstance(v, dict) and _BARE_KEYS.intersection(v.keys())
+        for v in evidence.values()
+    )
+    if _is_shape_a_payload:
+        # Valid shape A payload, but project not present — no evidence for this group.
+        return {}
+
+    # Genuinely unrecognized shape — warn, as this indicates a format change
+    # that would silently STALE all groups without this diagnostic.
+    if evidence:
+        print(
+            f"[check-items-cli] WARN: _bridge_project_evidence unrecognized shape "
+            f"for project={project!r}; top-level keys={list(evidence.keys())[:10]}",
+            file=sys.stderr,
+        )
+    return {}
+
+
+def _dispatch_classifier_chunk(
+    chunk_groups: list, evidence: dict, model: str, output_path: str,
+    chunk_label: str = "",
+) -> tuple[int, list]:
+    """Dispatch one claude -p classifier call for a single chunk of groups.
+
+    Writes the classifier input as a temp file under the workdir, invokes
+    `claude -p --model {model}` with the CLASSIFIER_PROMPT pointing at that
+    file and at `output_path`, then reads results from `output_path` (or
+    stdout as fallback). The temp input is unlinked even if json.dump,
+    os.chmod, or the subprocess raise.
+
+    `chunk_label` is prepended to diagnostic messages so callers running
+    multiple sequential dispatches can identify the failing chunk. Pass
+    "" (default) for single-call use.
+
+    Returns (rc, sub_results). On success rc == 0 and sub_results is the
+    validated classifier payload. On any failure rc is non-zero and
+    sub_results is [].
+
+    rc semantics: 0 success; 3 subprocess timeout; 4 invalid JSON or
+    wrong payload shape from sub-agent; any other value = passthrough
+    of claude -p's non-zero returncode.
+    """
+    workdir = _safe_workdir()
+    in_tmp = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, dir=str(workdir),
+        suffix=".classin.json", encoding="utf-8",
+    )
+    in_tmp_path = in_tmp.name
+    try:
+        try:
+            sub_payload = {"groups": chunk_groups, "evidence": evidence}
+            json.dump(sub_payload, in_tmp)
+            in_tmp.flush()
+        finally:
+            in_tmp.close()
+        os.chmod(in_tmp_path, 0o600)
+
+        prompt = CLASSIFIER_PROMPT.replace(
+            "<input-json-path>", in_tmp_path
+        ).replace(
+            "<output-json-path>", output_path
+        )
+
+        cmd = ["claude", "-p", "--model", model]
+        try:
+            cp = subprocess.run(
+                cmd, input=prompt, capture_output=True, text=True,
+                timeout=SUBAGENT_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"[check-items-cli] {chunk_label}classifier timeout after "
+                f"{SUBAGENT_TIMEOUT_SEC}s",
+                file=sys.stderr,
+            )
+            return 3, []
+    finally:
+        try:
+            os.unlink(in_tmp_path)
+        except OSError:
+            pass
+
+    if cp.returncode != 0:
+        print(
+            f"[check-items-cli] {chunk_label}classifier failed "
+            f"rc={cp.returncode}: {cp.stderr[:500]}",
+            file=sys.stderr,
+        )
+        return cp.returncode, []
+
+    if Path(output_path).exists():
+        try:
+            parsed = json.loads(Path(output_path).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(
+                f"[check-items-cli] {chunk_label}classifier output invalid "
+                f"JSON: {exc}",
+                file=sys.stderr,
+            )
+            return 4, []
+        if not _validate_classifier_payload(parsed):
+            print(
+                f"[check-items-cli] {chunk_label}classifier file-path output "
+                f"produced invalid shape (expected list of classifier "
+                f"objects, got {type(parsed).__name__})",
+                file=sys.stderr,
+            )
+            return 4, []
+        return 0, parsed
+
+    try:
+        parsed = json.loads(_strip_json_fences(cp.stdout))
+    except json.JSONDecodeError as exc:
+        print(
+            f"[check-items-cli] {chunk_label}classifier output invalid "
+            f"JSON: {exc}",
+            file=sys.stderr,
+        )
+        return 4, []
+    if not _validate_classifier_payload(parsed):
+        print(
+            f"[check-items-cli] {chunk_label}classifier stdout-fallback "
+            f"produced invalid shape (expected list of classifier objects, "
+            f"got {type(parsed).__name__})",
+            file=sys.stderr,
+        )
+        return 4, []
+    return 0, parsed
+
+
 def run_classifier(stdin_json: str, output_path: str) -> int:
     """
-    Stage 4: invoke the classifier sub-agent.
+    Stage 4: invoke the classifier sub-agent, with L2 evidence-presence
+    pre-filter applied to all groups before any claude -p dispatch.
 
-    Reads merged groups + evidence from stdin_json, writes a strict-JSON
-    array of {group_id, classification, confidence, canonical_text,
-    evidence_citation, action_required} to output_path. Returns 0 on
-    success, non-zero on failure.
+    Flow:
+      1. Parse stdin JSON to extract groups + evidence.
+      2. Apply L2 pre-filter (if enabled): items with no evidence go to
+         synthetic_classification(); items with evidence go to the sub-agent.
+      3. If to_classify is non-empty, dispatch claude -p. When
+         len(to_classify) > CLASSIFIER_CHUNK_SIZE, split into sequential
+         chunks of <=CLASSIFIER_CHUNK_SIZE groups so a single call stays
+         well under SUBAGENT_TIMEOUT_SEC.
+      4. Merge sub-agent results + synthetic results in input order.
+      5. Write merged output to output_path (0o600).
+      6. Emit telemetry line to stderr.
+
+    Returns 0 on success, non-zero on failure.
     """
+    import time as _time
+    _wall_start = _time.monotonic()
+
     try:
         payload = json.loads(stdin_json)
     except json.JSONDecodeError as exc:
@@ -333,60 +581,145 @@ def run_classifier(stdin_json: str, output_path: str) -> int:
         return 2
 
     groups = payload.get("groups", [])
-    model = _pick_classifier_model(len(groups))
+    evidence = payload.get("evidence", {})
 
-    workdir = _safe_workdir()
-    in_tmp = tempfile.NamedTemporaryFile(
-        mode="w", delete=False, dir=str(workdir), suffix=".classin.json", encoding="utf-8"
-    )
-    try:
-        json.dump(payload, in_tmp)
-        in_tmp.flush()
-    finally:
-        in_tmp.close()
-    os.chmod(in_tmp.name, 0o600)
-
-    prompt = CLASSIFIER_PROMPT.replace(
-        "<input-json-path>", in_tmp.name
-    ).replace(
-        "<output-json-path>", output_path
-    )
-
-    cmd = ["claude", "-p", "--model", model]
-    try:
-        cp = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, timeout=SUBAGENT_TIMEOUT_SEC
+    # -----------------------------------------------------------------------
+    # Validate group_id presence — a None group_id causes silent key collision
+    # in merged_by_id, so two groups overwrite each other and the ordered list
+    # contains the same record twice.  Fail fast with a clear diagnostic.
+    # -----------------------------------------------------------------------
+    invalid_ids = [i for i, g in enumerate(groups) if g.get("group_id") is None]
+    if invalid_ids:
+        print(
+            f"[check-items-cli] ERROR: {len(invalid_ids)} group(s) have group_id=None "
+            f"(indices {invalid_ids[:10]}); cannot merge — aborting classifier",
+            file=sys.stderr,
         )
-    except subprocess.TimeoutExpired:
-        print(f"[check-items-cli] classifier timeout after {SUBAGENT_TIMEOUT_SEC}s",
-              file=sys.stderr)
-        return 3
-    finally:
-        try:
-            os.unlink(in_tmp.name)
-        except OSError:
-            pass
+        return 5
 
-    if cp.returncode != 0:
-        print(f"[check-items-cli] classifier failed rc={cp.returncode}: {cp.stderr[:500]}",
-              file=sys.stderr)
-        return cp.returncode
+    # -----------------------------------------------------------------------
+    # L2: evidence-presence pre-filter
+    # Groups reaching this function are already L1-miss (partition() in the
+    # SKILL.md orchestration layer handled cache hits before calling the CLI).
+    # -----------------------------------------------------------------------
+    from check_items_prefilter import (
+        has_classifiable_evidence,
+        synthetic_classification,
+        is_prefilter_enabled,
+    )
 
-    if not Path(output_path).exists():
-        try:
-            parsed = json.loads(_strip_json_fences(cp.stdout))
-        except json.JSONDecodeError as exc:
-            print(f"[check-items-cli] classifier output invalid JSON: {exc}", file=sys.stderr)
-            return 4
-        if not _validate_classifier_payload(parsed):
+    synthetic: list = []
+    to_classify: list = list(groups)
+
+    if is_prefilter_enabled() and groups:
+        to_classify = []
+        for g in groups:
+            project = g.get("project", "")
+            bridged_evidence = _bridge_project_evidence(evidence, project)
+            if has_classifiable_evidence(g, bridged_evidence):
+                to_classify.append(g)
+            else:
+                synthetic.append(synthetic_classification(g))
+
+    # -----------------------------------------------------------------------
+    # Sub-agent dispatch — only on groups that have evidence
+    # -----------------------------------------------------------------------
+    sub_results: list = []
+    chunk_count = 0
+
+    if to_classify:
+        if len(to_classify) <= CLASSIFIER_CHUNK_SIZE:
+            model = _pick_classifier_model(len(to_classify))
+            chunk_count = 1
+            rc, chunk_results = _dispatch_classifier_chunk(
+                to_classify, evidence, model, output_path
+            )
+            if rc != 0:
+                return rc
+            sub_results = chunk_results
+        else:
+            chunks = [
+                to_classify[i:i + CLASSIFIER_CHUNK_SIZE]
+                for i in range(0, len(to_classify), CLASSIFIER_CHUNK_SIZE)
+            ]
+            chunk_count = len(chunks)
+            # Per-chunk model picking: the 30-group Haiku/Sonnet threshold was
+            # tuned against single-dispatch payloads. Each chunk here is sized
+            # at <=CLASSIFIER_CHUNK_SIZE, which is below that threshold by
+            # default — so chunks get Haiku regardless of the total payload
+            # size. Lets large vaults stay on the fast/cheap model per call.
             print(
-                "[check-items-cli] classifier stdout-fallback produced invalid shape"
-                f" (expected list of classifier objects, got {type(parsed).__name__})",
+                f"[check-items-cli] classifier: chunking {len(to_classify)} "
+                f"groups into {chunk_count} chunk(s) of <={CLASSIFIER_CHUNK_SIZE}",
                 file=sys.stderr,
             )
-            return 4
-        Path(output_path).write_text(json.dumps(parsed), encoding="utf-8")
-        os.chmod(output_path, 0o600)
+            workdir = _safe_workdir()
+            chunk_outputs: list = []
+            completed_chunks = 0
+            try:
+                for idx, chunk in enumerate(chunks):
+                    out_tmp = tempfile.NamedTemporaryFile(
+                        mode="w", delete=False, dir=str(workdir),
+                        suffix=f".chunk-{idx}.classout.json", encoding="utf-8",
+                    )
+                    chunk_outputs.append(out_tmp.name)
+                    out_tmp.close()
+                    chunk_model = _pick_classifier_model(len(chunk))
+                    label = f"chunk {idx + 1}/{chunk_count} (model={chunk_model}): "
+                    rc, chunk_results = _dispatch_classifier_chunk(
+                        chunk, evidence, chunk_model, out_tmp.name,
+                        chunk_label=label,
+                    )
+                    if rc != 0:
+                        # Discarded earlier-chunk classifications surfaced so
+                        # operators can tell partial chunking from total failure.
+                        print(
+                            f"[check-items-cli] classifier: aborting after "
+                            f"chunk {idx + 1}/{chunk_count} rc={rc} "
+                            f"(completed={completed_chunks}, "
+                            f"discarded_groups={len(sub_results)})",
+                            file=sys.stderr,
+                        )
+                        return rc
+                    sub_results.extend(chunk_results)
+                    completed_chunks += 1
+            finally:
+                for path in chunk_outputs:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+
+    # -----------------------------------------------------------------------
+    # Merge in input order and write final output
+    # -----------------------------------------------------------------------
+    merged_by_id: dict = {}
+    for s in sub_results:
+        merged_by_id[s["group_id"]] = s
+    for s in synthetic:
+        merged_by_id[s["group_id"]] = s
+
+    ordered = [merged_by_id[g["group_id"]] for g in groups if g["group_id"] in merged_by_id]
+
+    Path(output_path).write_text(json.dumps(ordered), encoding="utf-8")
+    os.chmod(output_path, 0o600)
+
+    # -----------------------------------------------------------------------
+    # Telemetry — inner line (CLI sees only L1-miss groups; cache_hit is '-'
+    # by design — the orchestration layer in open_item_dedup.py holds that
+    # count and emits the outer classifier-result line with real cache_hit).
+    # -----------------------------------------------------------------------
+    _wall = int(_time.monotonic() - _wall_start)
+    total = len(groups)
+    prefiltered_count = len(synthetic)
+    subagent_count = len(sub_results)
+    chunks_field = f" chunks={chunk_count}" if chunk_count > 1 else ""
+    print(
+        f"[check-items-cli] classifier: total={total} cache_hit=- "
+        f"prefiltered={prefiltered_count} subagent={subagent_count}"
+        f"{chunks_field} wall={_wall}s",
+        file=sys.stderr,
+    )
 
     return 0
 

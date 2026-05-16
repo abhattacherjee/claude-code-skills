@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-05-16
+
+### Changed
+- `/check-items` reports now write to `<vault>/claude-check-items/`
+  by default instead of `<vault>/claude-dashboards/`. These notes
+  list open items rather than driving Dataview queries, so a
+  dedicated folder keeps them organisationally separate from real
+  dashboards. New config key `check_items_folder` (default
+  `claude-check-items`) — set it to `"claude-dashboards"` in
+  `~/.claude/obsidian-brain-config.json` to keep the legacy
+  location. Existing files in `claude-dashboards/` are not migrated.
+
+### Added
+- L2 evidence-presence pre-filter for `/check-items` Stage 4 (`hooks/check_items_prefilter.py`).
+  Items with no token overlap with the evidence bundle and no `#N`/commit-sha references are
+  classified as ACTIVE or STALE (LOW confidence) without dispatching a `claude -p` sub-agent.
+  Bypass with `CHECK_ITEMS_PREFILTER=off`. (#160)
+- Telemetry line on every Stage 4 run: `[check-items-cli] classifier: total=N cache_hit=- prefiltered=P subagent=S wall=Ws`
+  emitted to stderr for verification and debugging. (#160)
+- `mtime` field threaded through `classify_groups_with_agent` payload so L2 can compute item
+  age (STALE threshold: >90 days since earliest member mtime). (#160)
+
+### Changed
+- `/check-items` L2 prefilter now uses a zone-aware completion-signal
+  heuristic. The previous heuristic over-routed items to the sub-agent
+  on active projects where WIP items shared vocabulary with their own
+  recent commits; the new rule requires either a distinctive-token hit
+  in completion-zone buckets (merged PR titles, closed issue titles,
+  releases, released changelog sections) or a completion verb near a
+  content-token hit in commits/notes. The bridge function also narrows
+  PR/issue evidence to titles only and strips `[Unreleased]` from the
+  changelog excerpt before the prefilter sees it. Empirical replay
+  against the issue-173 reference payload: `prefiltered` jumps from 0
+  to 12 on 21 groups. (#173)
+
+- `/check-items` Stage 4 classifier sub-agent now chunks when more than
+  `CHECK_ITEMS_CLASSIFIER_CHUNK_SIZE` (default 25) groups reach
+  dispatch. Each chunk is sent to `claude -p` sequentially so a single
+  call stays well under `SUBAGENT_TIMEOUT_SEC`. Telemetry adds
+  `chunks=N` when N > 1. Reopens the scope of issue #160 inside this
+  PR rather than deferring. (#173)
+- `/check-items` classifier picks its model per chunk under chunked
+  dispatch instead of inheriting one model decision from the total
+  payload. Each chunk is sized at `<=CLASSIFIER_CHUNK_SIZE` (default
+  25), which is below the haiku/sonnet 30-group threshold, so chunked
+  runs stay on the fast/cheap model regardless of total payload size.
+  Resolves the empirical 58-group / 121 KB timeout from the 2026-05-15
+  reproduction where each Sonnet chunk still exceeded 180s. (#173)
+- `/check-items` `SUBAGENT_TIMEOUT_SEC` default bumped from 180s to
+  300s for cold-start headroom on heavier vaults. Override via
+  `CHECK_ITEMS_SUBAGENT_TIMEOUT_SEC`.
+
+### Fixed
+- Reduced `claude -p` sub-agent invocations for vaults with many open items that lack
+  completion evidence, addressing the timeout root cause reported in issue #160 and
+  closed prematurely by #164 (chunking now ships as the durable fix).
+
 ## [2.5.0] - 2026-05-14
 
 ### Added

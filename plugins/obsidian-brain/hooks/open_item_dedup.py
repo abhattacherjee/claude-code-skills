@@ -63,12 +63,18 @@ CONFIDENCE_TIER_RULES = {
 def _outer_subagent_timeout() -> int:
     """Return the outer subprocess.run timeout that wraps check_items_cli.py.
 
-    Must be ≥ the inner SUBAGENT_TIMEOUT_SEC so the outer caller never races
-    the inner cli. When changing this constant, grep the codebase for hardcoded
-    copies of the previous value (e.g. `grep -rn "timeout=70" hooks/`) — the
-    R10 dispatch missed these two outer callers and caused silent fallback.
+    Must be ≥ inner SUBAGENT_TIMEOUT_SEC * max-expected-chunks so the outer
+    caller never races the inner cli. The inner CLI dispatches sequentially
+    over N chunks of <=CLASSIFIER_CHUNK_SIZE groups each, so a payload of 4
+    chunks at 300s/chunk needs ~1200s of outer headroom.
+
+    Reads CHECK_ITEMS_SUBAGENT_TIMEOUT_SEC; the env var sets the INNER
+    per-chunk timeout. Outer is then `inner * 6` so users only need to tune
+    one knob (and 6 covers up to ~150 classifier-eligible groups under the
+    default CLASSIFIER_CHUNK_SIZE=25 — well above realistic vault sizes).
     """
-    return int(os.environ.get("CHECK_ITEMS_SUBAGENT_TIMEOUT_SEC", "180"))
+    inner = int(os.environ.get("CHECK_ITEMS_SUBAGENT_TIMEOUT_SEC", "300"))
+    return inner * 6
 
 
 def assign_tier(evidence_citation, item_text):
@@ -124,6 +130,24 @@ def _tokenize(text: str) -> set[str]:
     """Lowercase, split, drop stopwords, keep tokens >= 3 chars."""
     words = re.findall(r'[a-z0-9][-a-z0-9/.#]*[a-z0-9]|[a-z0-9]', text.lower())
     return {w for w in words if len(w) >= 3 and w not in _STOPWORDS}
+
+
+def _safe_mtime(path: str) -> float:
+    """Return os.path.getmtime(path), falling back to 0.0 on OSError.
+
+    0.0 (epoch) is the safe-conservative fallback: age = now - 0 is always
+    > 90 days, so L2 classifies the item as STALE rather than silently
+    treating a stat-failure as ACTIVE. A one-line warning is emitted to
+    stderr so the failure is visible in hook logs.
+    """
+    try:
+        return os.path.getmtime(path)
+    except OSError as exc:
+        print(
+            f"[obsidian-brain] mtime unavailable for {path!r}: {exc}; defaulting to 0 (STALE)",
+            file=sys.stderr,
+        )
+        return 0.0
 
 
 def collect_open_items(
@@ -808,6 +832,7 @@ def deep_analysis_pipeline(
                     "file": os.path.basename(fpath),
                     "line": line_num,
                     "text": item_text,
+                    "mtime": _safe_mtime(fpath),
                 }]
                 for df, dl, dt, dc in dupes:
                     # Mark dupe indices as seen
@@ -819,6 +844,7 @@ def deep_analysis_pipeline(
                         "line": dl,
                         "text": dt,
                         "confidence": dc,
+                        "mtime": _safe_mtime(df),
                     })
                 all_groups.append({
                     "project": project,
@@ -1402,7 +1428,13 @@ def classify_groups_with_agent(merged_groups, evidence):
                 "project": g.get("project"),
                 "representative": g.get("representative", ""),
                 "instances": [
-                    {"file": m.get("file"), "line": m.get("line"), "text": m.get("text", "")}
+                    {
+                        "file": m.get("file"),
+                        "line": m.get("line"),
+                        "text": m.get("text", ""),
+                        # Missing mtime → 0 → epoch (1970), which L2 bins as STALE (fail-safe).
+                        "mtime": m.get("mtime", 0),
+                    }
                     for m in g.get("members", [])
                 ],
             }
@@ -1445,6 +1477,17 @@ def classify_groups_with_agent(merged_groups, evidence):
             if cp.returncode != 0 or not out_path.exists():
                 continue
             candidate = json.loads(out_path.read_text())
+            # I4: warn early (pre-validation) so the diagnostic is always
+            # reachable, even though _validate_classifier_response will still
+            # reject the whole response if any non-dict is present.
+            if isinstance(candidate, list):
+                _non_dict = sum(1 for r in candidate if not isinstance(r, dict))
+                if _non_dict:
+                    print(
+                        f"[check-items] WARN: classifier emitted {_non_dict} non-dict"
+                        f" records — dropped",
+                        file=sys.stderr,
+                    )
             if not _validate_classifier_response(candidate):
                 continue
             parsed = candidate
@@ -1463,6 +1506,32 @@ def classify_groups_with_agent(merged_groups, evidence):
     if parsed is None:
         _LAST_CLASSIFIER_MODE = "heuristic-fallback"
         return []
+
+    # Outer telemetry: summary of this classification run.
+    # cache_hit is intentionally NOT emitted here — the orchestration layer
+    # is SKILL.md prose: Step 3 heredoc owns partition()'s `known` list,
+    # Step 6 heredoc owns this function's invocation, and they share state
+    # only via partition.json on disk. Threading len(known) through
+    # classify_groups_with_agent's signature is invasive; dropping it
+    # entirely (emitting '-' from the CLI side) is cleaner than a placeholder.
+    #
+    # All three counts derive from `parsed` (the output). Non-dict records are
+    # detected and warned before _validate_classifier_response() runs (above);
+    # because the validator rejects any list containing a non-dict, `parsed`
+    # here is guaranteed to contain only dicts — the redundant post-validation
+    # drop guard is not needed.
+    _prefiltered_count = sum(
+        1 for r in parsed if isinstance(r, dict) and r.get("prefiltered")
+    )
+    _subagent_count = sum(
+        1 for r in parsed if isinstance(r, dict) and not r.get("prefiltered")
+    )
+    _total_classified = _prefiltered_count + _subagent_count
+    print(
+        f"[check-items] classifier-result: total_classified={_total_classified} "
+        f"prefiltered={_prefiltered_count} subagent={_subagent_count}",
+        file=sys.stderr,
+    )
     return parsed
 
 

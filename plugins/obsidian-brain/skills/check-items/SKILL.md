@@ -629,7 +629,7 @@ rm -f "$_skips_file"
 
 ## Step 9 — Write dashboard report (Stage 8) — ALWAYS
 
-(Implemented in Task 22.) Call `write_check_items_dashboard()` with the scope, classifications, applied count, cascade count, semantic-merge mode, and classifier mode. Path: `<vault>/claude-dashboards/check-items-<scope>-<YYYY-MM-DD>.md`.
+(Implemented in Task 22.) Call `write_check_items_dashboard()` with the scope, classifications, applied count, cascade count, semantic-merge mode, and classifier mode. Path: `<vault>/<check_items_folder>/check-items-<scope>-<YYYY-MM-DD>.md` (folder configurable, default `claude-check-items`).
 
 ## Step 10 — Persist cache updates
 
@@ -740,7 +740,7 @@ PYEOF
   Raw: 225  Groups: 40  Merged: 24
   Mode: semantic+classifier  Cached: 8 reused, 16 fresh
   Result: 3 DONE (auto-checked), 2 NEEDS-ACTION (commands below), 19 ACTIVE (silent)
-  Dashboard: ~/Obsidian/claude-dashboards/check-items-obsidian-brain-2026-05-11.md
+  Report: ~/Obsidian/claude-check-items/check-items-obsidian-brain-2026-05-11.md
   Cascaded: 2 sibling notes
 ```
 

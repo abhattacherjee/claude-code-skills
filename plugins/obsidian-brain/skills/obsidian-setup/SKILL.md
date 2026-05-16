@@ -33,11 +33,13 @@ if vp:
     sess = c.get("sessions_folder", "claude-sessions")
     ins = c.get("insights_folder", "claude-insights")
     dash = c.get("dashboards_folder", "claude-dashboards")
+    chk = c.get("check_items_folder", "claude-check-items")
     print(f"EXISTING")
     print(f"VAULT={vp}")
     print(f"SESS={sess}")
     print(f"INS={ins}")
     print(f"DASH={dash}")
+    print(f"CHK={chk}")
 else:
     print("NO_CONFIG")
 '
@@ -53,7 +55,7 @@ else:
 > - **reconfigure** — start fresh (will overwrite config and dashboards)
 > - **cancel** — exit setup
 
-If **upgrade**: store `MODE=upgrade`. Store `VAULT_PATH` from the existing config's `vault_path` field. Also extract `sessions_folder` (default `claude-sessions`), `insights_folder` (default `claude-insights`), and `dashboards_folder` (default `claude-dashboards`). Skip to Step 5 (Create vault folders — `mkdir -p` is already safe). In upgrade mode:
+If **upgrade**: store `MODE=upgrade`. Store `VAULT_PATH` from the existing config's `vault_path` field. Also extract `sessions_folder` (default `claude-sessions`), `insights_folder` (default `claude-insights`), `dashboards_folder` (default `claude-dashboards`), and `check_items_folder` (default `claude-check-items`). Skip to Step 5 (Create vault folders — `mkdir -p` is already safe). In upgrade mode:
 - Step 5 (Create vault folders): runs normally (`mkdir -p` is idempotent)
 - Step 6 (Install dashboards): only write dashboard files that do NOT already exist (`test -f` before each write)
 - Step 7 (Write config): SKIP entirely — preserve existing config
@@ -478,6 +480,7 @@ Write `~/.claude/obsidian-brain-config.json` with this exact structure:
   "sessions_folder": "claude-sessions",
   "insights_folder": "claude-insights",
   "dashboards_folder": "claude-dashboards",
+  "check_items_folder": "claude-check-items",
   "min_messages": 3,
   "min_duration_minutes": 2,
   "summary_model": "haiku",
