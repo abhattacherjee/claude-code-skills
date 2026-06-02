@@ -1,0 +1,5 @@
+{
+  "name": "adversarial-review",
+  "version": "0.1.0",
+  "description": "Adversarial PR review — Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable."
+}

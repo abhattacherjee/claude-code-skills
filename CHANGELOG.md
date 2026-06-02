@@ -5,6 +5,14 @@ Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
 
+## [Unreleased]
+
+## [3.12.0] - 2026-06-02
+
+### Added
+
+- adversarial-review plugin (v0.1.0) — Claude↔Gemini **symmetric** adversarial PR review: both models discover findings independently in round 1, then cross-examine each other's findings in round 2; only findings the opposing model confirms survive (both-confirm rule). Unconfirmed (single-model) and rejected (with refuter + reason) findings are always surfaced, never silently dropped. PR + local modes; loud degradation to Claude-only when the Gemini adversary is unavailable. Guided Gemini setup with headless-credential detection.
+
 ## [3.11.0] - 2026-06-01
 
 ### Changes

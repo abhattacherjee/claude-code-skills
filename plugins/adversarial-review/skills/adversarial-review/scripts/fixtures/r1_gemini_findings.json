@@ -1,0 +1,34 @@
+{
+  "findings": [
+    {
+      "id": "G-001",
+      "path": "src/auth.py",
+      "line": 78,
+      "severity": "critical",
+      "category": "security",
+      "title": "Hardcoded JWT secret key",
+      "rationale": "The JWT secret is hardcoded as a string literal 'super-secret-key-123' which will be committed to version control and expose the application to token forgery attacks.",
+      "origin": "gemini",
+      "claude_verdict": null,
+      "gemini_verdict": null,
+      "status": null,
+      "killed_by": null,
+      "kill_reason": null
+    },
+    {
+      "id": "G-002",
+      "path": "src/processor.py",
+      "line": 22,
+      "severity": "important",
+      "category": "bug",
+      "title": "Unhandled None return from parse_record()",
+      "rationale": "parse_record() can return None for malformed input (see its docstring), but the caller on line 22 calls .get() on the result without a null check, causing AttributeError at runtime.",
+      "origin": "gemini",
+      "claude_verdict": null,
+      "gemini_verdict": null,
+      "status": null,
+      "killed_by": null,
+      "kill_reason": null
+    }
+  ]
+}

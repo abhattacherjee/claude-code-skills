@@ -3,3 +3,4 @@
 *~
 .claude/settings.local.json
 plugins/obsidian-brain/.coverage
+*.adversarial-review.md
