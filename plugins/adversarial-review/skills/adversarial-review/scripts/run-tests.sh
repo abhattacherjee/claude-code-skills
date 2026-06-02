@@ -10,6 +10,7 @@ FIXTURES_DIR="$SCRIPT_DIR/fixtures"
 SYNTHESIZE="$SCRIPT_DIR/synthesize.py"
 DETECT_MODE="$SCRIPT_DIR/detect-mode.sh"
 GEMINI_REVIEW="$SCRIPT_DIR/gemini-review.sh"
+ENSURE_GEMINI="$SCRIPT_DIR/ensure-gemini.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -28,6 +29,8 @@ Tests:
   - gemini-review.sh: auth/install failure -> exit 3
   - detect-mode.sh: base branch resolution by prefix (pure logic)
   - detect-mode.sh: large-diff cap enforcement
+  - ensure-gemini.sh: GEMINI_INSTALLED=no when gemini not on PATH
+  - ensure-gemini.sh: GEMINI_INSTALLED=yes + GEMINI_AUTHED=yes with stub + API key
 
 Exit codes:
   0  All tests pass
@@ -716,6 +719,95 @@ ERR_EXIT=0
 run_capture ERR_OUT ERR_EXIT python3 "$SYNTHESIZE" \
   --r1 "$WRONG_TYPE_FILE" --r2 "$R2" --r3 "$R3"
 assert_exit_code "synthesize.py r1 wrong type -> exit 1" "1" "$ERR_EXIT"
+
+# ====================================================================
+# SECTION 10: ensure-gemini.sh — detection logic
+# ====================================================================
+section "ensure-gemini.sh — detection logic"
+
+ENSURE_STUB_DIR="$TMP_DIR/ensure-stubs"
+mkdir -p "$ENSURE_STUB_DIR"
+
+# ---- Test A: gemini not on PATH → GEMINI_INSTALLED=no, GEMINI_AUTHED=unknown ----
+# Use a stub dir with NO gemini binary, plus a minimal PATH that still has bash/printf/etc.
+BASH_BIN="$(command -v bash)"
+GREP_BIN="$(command -v grep)"
+PYTHON3_BIN="$(command -v python3)"
+EMPTY_BIN_DIR="$TMP_DIR/no-gemini-bin"
+mkdir -p "$EMPTY_BIN_DIR"
+
+# Build a minimal PATH: script needs bash, printf (builtin), command (builtin), grep
+# Use the real system dirs but WITHOUT any dir that contains a 'gemini' binary.
+# Simplest: strip entries that contain gemini from PATH.
+SAFE_PATH="$(python3 -c "
+import os, subprocess
+path_dirs = os.environ.get('PATH','').split(':')
+# Keep dirs that don't have a 'gemini' executable
+safe = [d for d in path_dirs if not os.path.isfile(os.path.join(d,'gemini')) or not os.access(os.path.join(d,'gemini'), os.X_OK)]
+print(':'.join(safe))
+")"
+
+NO_GEMINI_OUT=""
+NO_GEMINI_EXIT=0
+run_capture NO_GEMINI_OUT NO_GEMINI_EXIT \
+  env PATH="$SAFE_PATH" \
+  bash "$ENSURE_GEMINI" --check
+
+assert_exit_code "ensure-gemini: no gemini -> exit 0" "0" "$NO_GEMINI_EXIT"
+assert_contains "ensure-gemini: no gemini -> GEMINI_INSTALLED=no"      "GEMINI_INSTALLED=no"      "$NO_GEMINI_OUT"
+assert_contains "ensure-gemini: no gemini -> GEMINI_AUTHED=unknown"    "GEMINI_AUTHED=unknown"    "$NO_GEMINI_OUT"
+assert_contains "ensure-gemini: no gemini -> INSTALL_HINT present"     "INSTALL_HINT="            "$NO_GEMINI_OUT"
+assert_contains "ensure-gemini: no gemini -> AUTH_HINT present"        "AUTH_HINT="               "$NO_GEMINI_OUT"
+
+# ---- Test B: stubbed gemini + GEMINI_API_KEY set → GEMINI_INSTALLED=yes, GEMINI_AUTHED=yes ----
+cat >"$ENSURE_STUB_DIR/gemini" <<'STUB'
+#!/usr/bin/env bash
+# Stub gemini binary for ensure-gemini.sh tests
+case "${1:-}" in
+  --version) echo "gemini version 1.2.3" ;;
+  *)         echo "stub gemini" ;;
+esac
+exit 0
+STUB
+chmod +x "$ENSURE_STUB_DIR/gemini"
+
+WITH_GEMINI_OUT=""
+WITH_GEMINI_EXIT=0
+run_capture WITH_GEMINI_OUT WITH_GEMINI_EXIT \
+  env PATH="$ENSURE_STUB_DIR:$PATH" \
+      GEMINI_API_KEY="test-key-abc123" \
+      GOOGLE_API_KEY="" \
+  bash "$ENSURE_GEMINI" --check
+
+assert_exit_code "ensure-gemini: stub gemini + API key -> exit 0"        "0"                    "$WITH_GEMINI_EXIT"
+assert_contains  "ensure-gemini: stub gemini -> GEMINI_INSTALLED=yes"    "GEMINI_INSTALLED=yes" "$WITH_GEMINI_OUT"
+assert_contains  "ensure-gemini: stub gemini + key -> GEMINI_AUTHED=yes" "GEMINI_AUTHED=yes"    "$WITH_GEMINI_OUT"
+assert_contains  "ensure-gemini: stub gemini -> GEMINI_VERSION present"  "GEMINI_VERSION="      "$WITH_GEMINI_OUT"
+
+# ---- Test C: stubbed gemini, no env key, no ~/.gemini creds → GEMINI_AUTHED=no ----
+# Redirect HOME to an empty temp dir so no ~/.gemini/ creds exist
+FAKE_HOME="$TMP_DIR/fake-home"
+mkdir -p "$FAKE_HOME"
+
+NO_AUTH_OUT=""
+NO_AUTH_EXIT=0
+run_capture NO_AUTH_OUT NO_AUTH_EXIT \
+  env PATH="$ENSURE_STUB_DIR:$PATH" \
+      HOME="$FAKE_HOME" \
+      GEMINI_API_KEY="" \
+      GOOGLE_API_KEY="" \
+  bash "$ENSURE_GEMINI" --check
+
+assert_exit_code "ensure-gemini: stub gemini, no auth -> exit 0"          "0"                    "$NO_AUTH_EXIT"
+assert_contains  "ensure-gemini: stub gemini, no auth -> INSTALLED=yes"   "GEMINI_INSTALLED=yes" "$NO_AUTH_OUT"
+assert_contains  "ensure-gemini: stub gemini, no auth -> AUTHED=no"       "GEMINI_AUTHED=no"     "$NO_AUTH_OUT"
+
+# ---- Test D: --help exits 0 ----
+HELP_ENSURE_OUT=""
+HELP_ENSURE_EXIT=0
+run_capture HELP_ENSURE_OUT HELP_ENSURE_EXIT bash "$ENSURE_GEMINI" --help
+assert_exit_code "ensure-gemini: --help exits 0" "0" "$HELP_ENSURE_EXIT"
+assert_contains  "ensure-gemini: --help shows usage" "Usage:" "$HELP_ENSURE_OUT"
 
 # ====================================================================
 # FINAL SUMMARY

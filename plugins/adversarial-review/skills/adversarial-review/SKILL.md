@@ -11,15 +11,7 @@ Runs a bounded 3-round Claude↔Gemini cross-examination on a diff. Only finding
 
 ## Prerequisites
 
-Gemini must be authenticated before the first real run:
-
-```bash
-# Option A — API key
-export GEMINI_API_KEY=your-key
-
-# Option B — Google login
-gemini auth login
-```
+Gemini setup is now **guided automatically** via Step 0 below. When the skill runs, `ensure-gemini.sh` detects whether Gemini is installed and authenticated, then the orchestrator prompts the user to install or authenticate with their consent before proceeding. No manual pre-flight needed; the skill degrades to Claude-only mode only if the user declines or setup fails.
 
 No setup needed for Claude (runs in the current session).
 
@@ -75,6 +67,39 @@ Gemini (R2) runs via `scripts/gemini-review.sh`, not a Claude sub-agent.
 ---
 
 ## Orchestration Workflow
+
+### Step 0 — Ensure the adversary (Gemini) is available
+
+```bash
+SCRIPTS="$(dirname "$0")/scripts"
+eval "$($SCRIPTS/ensure-gemini.sh --check)"
+# Exports: GEMINI_INSTALLED  GEMINI_VERSION  GEMINI_AUTHED
+#          INSTALL_HINT       AUTH_HINT
+```
+
+Parse the `KEY=VALUE` output and follow this decision tree:
+
+**Case A — `GEMINI_INSTALLED=no`:**
+Tell the user Gemini CLI is not installed and show the `INSTALL_HINT`. ASK whether to install it. If the user consents, run:
+```bash
+npm install -g @google/gemini-cli
+```
+After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. If the user declines, or if install fails, proceed in **degraded Claude-only mode** (print the loud banner from the Degradation Behavior section) and continue directly to the detect-mode step.
+
+**Case B — installed but `GEMINI_AUTHED=no`:**
+Tell the user Gemini is installed but unauthenticated and show the `AUTH_HINT`. ASK the user to:
+- set `GEMINI_API_KEY=<key>` (from [Google AI Studio](https://aistudio.google.com/apikey)), OR
+- run `gemini` once in a terminal to complete the interactive Google login.
+
+Once the user confirms they've completed auth (or set the env var in the current shell), re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, proceed in **degraded Claude-only mode**.
+
+**Case C — `GEMINI_AUTHED=unknown` (installed, auth state indeterminate):**
+No user interaction needed. Proceed normally and rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails, which triggers the same degradation backstop.
+
+**Case D — `GEMINI_INSTALLED=yes` and `GEMINI_AUTHED=yes`:**
+Adversary confirmed available. Continue to Step 1 with no user interaction.
+
+> The runtime guard in `gemini-review.sh` (exit 3) remains as the final backstop for transient failures even when Step 0 passes (network errors, expired tokens, etc.).
 
 ### Step 1 — Detect Mode
 
@@ -255,6 +280,7 @@ Both Claude agents (R1) and Gemini (R2) receive the **byte-identical** `DIFF_FIL
 
 ## See Also
 
+- `scripts/ensure-gemini.sh` — Step 0 detection: emits Gemini install/auth status + install/auth hints; never installs or calls the network
 - `scripts/detect-mode.sh` — diff extraction and mode detection
 - `scripts/gemini-review.sh` — R2 Gemini cross-examination
 - `scripts/synthesize.py` — survivor rule application

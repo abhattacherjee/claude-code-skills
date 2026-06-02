@@ -45,7 +45,14 @@ If Gemini is unauthenticated, errors, or returns unparseable JSON after one retr
 
 ## Prerequisites
 
-> **Required before first real run:** the `gemini` CLI must be installed AND authenticated once — either set `GEMINI_API_KEY` in your environment or run `gemini auth login`. Without authentication the skill degrades loudly to Claude-only mode. The `gemini` binary version 0.38.2+ supports `gemini -p "<prompt>" -o json` for headless use.
+The skill now **auto-detects and guides Gemini setup** at the start of every run via `ensure-gemini.sh` + Step 0:
+
+- **Not installed:** the orchestrator tells you what's missing, shows the install command (`npm install -g @google/gemini-cli`), and asks whether to run it. If you decline or install fails, the skill proceeds in Claude-only mode with a loud degradation banner.
+- **Installed but unauthenticated:** the orchestrator shows auth options (set `GEMINI_API_KEY`, or run `gemini` once for interactive Google login) and asks you to complete auth before continuing. Declining → Claude-only mode.
+- **Auth state unknown** (installed, no detectable key/creds): the skill proceeds and relies on the runtime guard in `gemini-review.sh` (exit 3) to catch failures.
+- **Installed and authenticated:** no interaction — continues immediately.
+
+No manual pre-flight is required. The `gemini` binary version 0.38.2+ supports `gemini -p "<prompt>" -o json` for headless use.
 
 ## Contents
 
@@ -63,11 +70,12 @@ If Gemini is unauthenticated, errors, or returns unparseable JSON after one retr
 
 ### Scripts
 
+- `ensure-gemini.sh` — Step 0 detection: emits `KEY=VALUE` status lines (installed, version, authed, install hint, auth hint); never installs or calls the network; used by the orchestrator to guide setup before the pipeline runs.
 - `detect-mode.sh` — resolves PR vs local mode and emits the shared diff artifact both models consume.
 - `gemini-review.sh` — feeds Gemini the diff + R1 findings; extracts JSON from the CLI envelope; retries once on parse failure.
 - `synthesize.py` — applies the survivor rule to R1/R2/R3 outputs, classifying findings into SURVIVORS / UNCONFIRMED / REJECTED.
 - `sink.sh` — delivers the report: posts PR review comments in PR mode; writes terminal report + markdown file in local mode.
-- `run-tests.sh` — script-level tests covering mode detection, diff extraction, Gemini parse/retry/degradation, and the classification partition.
+- `run-tests.sh` — script-level tests covering mode detection, diff extraction, Gemini parse/retry/degradation, the classification partition, and ensure-gemini.sh detection logic.
 
 ## Installation
 
