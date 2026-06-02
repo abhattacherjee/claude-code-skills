@@ -88,47 +88,125 @@ if ! command -v gemini >/dev/null 2>&1; then
   exit 3
 fi
 
-# ---- helper: extract JSON object from potentially wrapped output ----
-# Tries to find a {...} JSON object (possibly multi-line) in the input
-extract_json_object() {
+# ---- helper: extract model answer JSON from gemini CLI raw output ----
+#
+# Handles three shapes of gemini CLI output:
+#
+#  Shape A (old / plain)  — stdout IS the model's JSON (possibly wrapped in prose
+#                           or markdown fences):
+#    {"verdicts":[...], "new_findings":[...]}
+#
+#  Shape B (v0.44.x envelope) — stdout has optional prose prefix lines, then an
+#                              outer JSON envelope whose "response" field is a
+#                              string containing the model's actual answer:
+#    Ripgrep is not available. Falling back to GrepTool.
+#    Skill conflict detected: ...
+#    {"session_id":"...","response":"{\"verdicts\":[...],\"new_findings\":[...]}","stats":{...}}
+#
+# In both shapes the model's answer may itself be:
+#   - bare JSON
+#   - JSON wrapped in ```json ... ``` fences
+#   - JSON surrounded by prose
+#
+# On success: prints the extracted {"verdicts":...,"new_findings":...} JSON and exits 0.
+# On failure: exits 1.
+extract_model_answer() {
   python3 - "$1" <<'PYEOF'
-import sys, re, json
+import sys, json, re
+
+def find_first_json_object(text):
+    """Return the first balanced {...} block that parses as a JSON dict, or None."""
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if start is None:
+                start = i
+            depth += 1
+        elif ch == '}':
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    candidate = text[start:i+1]
+                    try:
+                        obj = json.loads(candidate)
+                        if isinstance(obj, dict):
+                            return obj
+                    except Exception:
+                        pass
+                    # Reset and keep searching
+                    start = None
+    return None
+
+def extract_payload(text):
+    """
+    Extract the model's {verdicts, new_findings} dict from raw text.
+    Returns the dict or None.
+    """
+    # --- Step 1: find the first JSON object anywhere in the text ---
+    # (skips any leading prose lines automatically)
+    outer = find_first_json_object(text)
+    if outer is None:
+        return None
+
+    # --- Step 2: Shape B detection ---
+    # If the outer object has a "response" key whose value is a string,
+    # treat that string as the model's answer (v0.44.x envelope shape).
+    if "response" in outer and isinstance(outer["response"], str):
+        model_text = outer["response"]
+    else:
+        # Shape A: the outer object IS the model's answer
+        # Check if it already has verdicts at the top level
+        if "verdicts" in outer:
+            return outer
+        # Otherwise fall through to search the raw text for an inner object
+        model_text = text
+
+    # --- Step 3: extract payload from model_text ---
+    # The model's answer may be:
+    #  (a) a bare JSON object — try direct parse first
+    try:
+        obj = json.loads(model_text.strip())
+        if isinstance(obj, dict) and "verdicts" in obj:
+            return obj
+    except Exception:
+        pass
+
+    # (b) JSON inside ```json ... ``` fences
+    fence_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', model_text, re.DOTALL)
+    if fence_match:
+        try:
+            obj = json.loads(fence_match.group(1))
+            if isinstance(obj, dict) and "verdicts" in obj:
+                return obj
+        except Exception:
+            pass
+
+    # (c) JSON object embedded in prose — find first balanced {...} with verdicts
+    inner = find_first_json_object(model_text)
+    if inner is not None and "verdicts" in inner:
+        return inner
+
+    return None
 
 text = open(sys.argv[1]).read()
+result = extract_payload(text)
 
-# Try direct parse first
-try:
-    obj = json.loads(text.strip())
-    if isinstance(obj, dict):
-        print(json.dumps(obj))
-        sys.exit(0)
-except Exception:
-    pass
+if result is None:
+    sys.exit(1)
 
-# Find the first complete {...} block (handle nesting)
-depth = 0
-start = None
-for i, ch in enumerate(text):
-    if ch == '{':
-        if start is None:
-            start = i
-        depth += 1
-    elif ch == '}':
-        depth -= 1
-        if depth == 0 and start is not None:
-            candidate = text[start:i+1]
-            try:
-                obj = json.loads(candidate)
-                if isinstance(obj, dict):
-                    print(json.dumps(obj))
-                    sys.exit(0)
-            except Exception:
-                # Reset and keep searching
-                start = None
-                depth = 0
+# Ensure new_findings defaults to [] if absent
+if "new_findings" not in result:
+    result["new_findings"] = []
 
-sys.exit(1)
+print(json.dumps(result))
+sys.exit(0)
 PYEOF
+}
+
+# Keep the old name as an alias so any internal callers still work
+extract_json_object() {
+  extract_model_answer "$1"
 }
 
 # ---- build prompt ----

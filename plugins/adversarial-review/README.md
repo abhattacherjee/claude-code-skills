@@ -48,8 +48,8 @@ If Gemini is unauthenticated, errors, or returns unparseable JSON after one retr
 The skill now **auto-detects and guides Gemini setup** at the start of every run via `ensure-gemini.sh` + Step 0:
 
 - **Not installed:** the orchestrator tells you what's missing, shows the install command (`npm install -g @google/gemini-cli`), and asks whether to run it. If you decline or install fails, the skill proceeds in Claude-only mode with a loud degradation banner.
-- **Installed but unauthenticated:** the orchestrator shows auth options (set `GEMINI_API_KEY`, or run `gemini` once for interactive Google login) and asks you to complete auth before continuing. Declining → Claude-only mode.
-- **Auth state unknown** (installed, no detectable key/creds): the skill proceeds and relies on the runtime guard in `gemini-review.sh` (exit 3) to catch failures.
+- **Installed but unauthenticated:** the orchestrator prompts you to supply a headless-capable credential. **Interactive `gemini` Google login is NOT sufficient** — the skill's headless calls (`gemini -p ... -o json`) require a `GEMINI_API_KEY` or Vertex AI credentials. Recommended: add `GEMINI_API_KEY=<key>` to `~/.gemini/.env` (auto-loaded by all shells, including sub-agent/tool contexts; get a key at [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)). `export GEMINI_API_KEY=<key>` in your shell also works for the current session. Declining → Claude-only mode.
+- **Auth state unknown** (installed, no detectable headless credential): the skill proceeds and relies on the runtime guard in `gemini-review.sh` (exit 3) to catch failures.
 - **Installed and authenticated:** no interaction — continues immediately.
 
 No manual pre-flight is required. The `gemini` binary version 0.38.2+ supports `gemini -p "<prompt>" -o json` for headless use.

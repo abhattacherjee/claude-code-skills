@@ -31,10 +31,15 @@ Output lines (--check):
   AUTH_HINT=<auth options>
 
 GEMINI_AUTHED values:
-  yes      — env GEMINI_API_KEY or GOOGLE_API_KEY is set, OR auth file found
-             under ~/.gemini/ (oauth_creds.json, google_accounts.json, or
-             settings.json containing an auth token/key)
-  no       — gemini is installed but none of the above auth signals found
+  yes      — a headless-capable credential is present: env GEMINI_API_KEY or
+             GOOGLE_API_KEY is set (non-empty), OR a non-empty GEMINI_API_KEY=
+             line exists in ~/.gemini/.env, OR Vertex is configured
+             (GOOGLE_GENAI_USE_VERTEXAI is truthy AND GOOGLE_CLOUD_PROJECT is set).
+             Interactive Google OAuth login (google_accounts.json,
+             oauth_creds.json) is NOT sufficient for headless use and is
+             intentionally not counted here.
+  no       — gemini is installed but none of the headless credential signals
+             found (OAuth-only credentials do not count)
   unknown  — gemini is not installed; auth state cannot be determined
 
 Exit codes:
@@ -75,44 +80,65 @@ if command -v gemini >/dev/null 2>&1; then
   fi
 fi
 
-# ---- detect auth ----
-# heuristic: yes if any of these signals are present:
+# ---- detect auth (headless-only signals) ----
+# Reports GEMINI_AUTHED=yes ONLY when a credential that works for headless
+# programmatic invocations (gemini -p ... -o json -m <model>) is found.
+#
+# Interactive Google OAuth login stored in ~/.gemini/google_accounts.json or
+# oauth_creds.json is NOT sufficient for headless calls and is intentionally
+# excluded — reporting those as "authed" causes the skill to skip the auth
+# setup prompt and then fail at runtime with exit code 41.
+#
+# Headless credential signals (any one → yes):
 #   1. GEMINI_API_KEY env var is set (non-empty)
 #   2. GOOGLE_API_KEY env var is set (non-empty)
-#   3. Auth/creds file exists under ~/.gemini/
-#      Checked files: oauth_creds.json, google_accounts.json
-#      settings.json is checked for presence of key/token patterns
+#   3. ~/.gemini/.env file contains a non-empty GEMINI_API_KEY=<value> line
+#      (the gemini CLI auto-loads this file for all invocations, including
+#      non-login shells and sub-agent/tool contexts — recommended location)
+#   4. Vertex AI: GOOGLE_GENAI_USE_VERTEXAI is truthy AND GOOGLE_CLOUD_PROJECT
+#      is set (Vertex does not require a personal API key)
 
 GEMINI_AUTHED="unknown"
 
 if [ "$GEMINI_INSTALLED" = "yes" ]; then
   GEMINI_AUTHED="no"
 
-  # Signal 1: API key env vars
+  # Signal 1 & 2: API key env vars
   if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
     GEMINI_AUTHED="yes"
   fi
 
-  # Signal 2: OAuth / account credentials files
+  # Signal 3: GEMINI_API_KEY in ~/.gemini/.env (auto-loaded by the gemini CLI)
   if [ "$GEMINI_AUTHED" = "no" ]; then
-    gemini_dir="${HOME}/.gemini"
-    if [ -f "${gemini_dir}/oauth_creds.json" ]; then
-      GEMINI_AUTHED="yes"
-    elif [ -f "${gemini_dir}/google_accounts.json" ]; then
-      GEMINI_AUTHED="yes"
-    elif [ -f "${gemini_dir}/settings.json" ]; then
-      # Heuristic: settings.json containing an auth token, key, or account info
-      if grep -qE '"(api_key|apiKey|token|access_token|refresh_token|account|email)"' \
-           "${gemini_dir}/settings.json" 2>/dev/null; then
+    gemini_env_file="${HOME}/.gemini/.env"
+    if [ -f "$gemini_env_file" ]; then
+      # Match lines of the form GEMINI_API_KEY=<non-empty-value>
+      # (allow optional whitespace around =; ignore comment lines)
+      if grep -qE '^[[:space:]]*GEMINI_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]#]+' \
+           "$gemini_env_file" 2>/dev/null; then
         GEMINI_AUTHED="yes"
       fi
     fi
+  fi
+
+  # Signal 4: Vertex AI (no personal API key needed)
+  if [ "$GEMINI_AUTHED" = "no" ]; then
+    use_vertex="${GOOGLE_GENAI_USE_VERTEXAI:-}"
+    cloud_project="${GOOGLE_CLOUD_PROJECT:-}"
+    # Treat "1", "true", "TRUE", "yes", "YES" as truthy
+    case "$use_vertex" in
+      1|true|TRUE|yes|YES)
+        if [ -n "$cloud_project" ]; then
+          GEMINI_AUTHED="yes"
+        fi
+        ;;
+    esac
   fi
 fi
 
 # ---- hints ----
 INSTALL_HINT="npm install -g @google/gemini-cli   # primary (requires Node >=18); alt: brew install gemini-cli"
-AUTH_HINT="Set GEMINI_API_KEY=<key> (from Google AI Studio at https://aistudio.google.com/apikey), OR run 'gemini' once for interactive Google login, OR set GOOGLE_API_KEY=<key>"
+AUTH_HINT="Headless review needs an API key — interactive Google login is NOT enough. Get a key at https://aistudio.google.com/apikey and either: (a) export GEMINI_API_KEY=<key> in your shell, or (b) add GEMINI_API_KEY=<key> to ~/.gemini/.env (recommended — auto-loaded by all shells including sub-agents). Vertex: set GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_CLOUD_PROJECT=<project>."
 
 # ---- emit status ----
 printf 'GEMINI_INSTALLED=%s\n' "$GEMINI_INSTALLED"

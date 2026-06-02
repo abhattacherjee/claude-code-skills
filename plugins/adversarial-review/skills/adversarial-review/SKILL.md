@@ -11,7 +11,11 @@ Runs a bounded 3-round Claude↔Gemini cross-examination on a diff. Only finding
 
 ## Prerequisites
 
-Gemini setup is now **guided automatically** via Step 0 below. When the skill runs, `ensure-gemini.sh` detects whether Gemini is installed and authenticated, then the orchestrator prompts the user to install or authenticate with their consent before proceeding. No manual pre-flight needed; the skill degrades to Claude-only mode only if the user declines or setup fails.
+Gemini setup is now **guided automatically** via Step 0 below. When the skill runs, `ensure-gemini.sh` detects whether Gemini is installed and has a **headless-capable credential**, then the orchestrator prompts the user to install or authenticate with their consent before proceeding. No manual pre-flight needed; the skill degrades to Claude-only mode only if the user declines or setup fails.
+
+**Important — interactive Google login is NOT sufficient.** The skill's headless calls (`gemini -p ... -o json -m <model>`) require a `GEMINI_API_KEY` (or Vertex AI credentials). Running `gemini` once for interactive "Login with Google" creates OAuth credentials that work only for interactive terminal sessions, not for programmatic use. `ensure-gemini.sh` correctly reports `GEMINI_AUTHED=no` when only OAuth credentials are present.
+
+**Recommended credential location:** add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`. The gemini CLI auto-loads this file for all invocations including non-login shells and sub-agent/tool contexts — no shell profile changes needed.
 
 No setup needed for Claude (runs in the current session).
 
@@ -87,11 +91,14 @@ npm install -g @google/gemini-cli
 After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. If the user declines, or if install fails, proceed in **degraded Claude-only mode** (print the loud banner from the Degradation Behavior section) and continue directly to the detect-mode step.
 
 **Case B — installed but `GEMINI_AUTHED=no`:**
-Tell the user Gemini is installed but unauthenticated and show the `AUTH_HINT`. ASK the user to:
-- set `GEMINI_API_KEY=<key>` (from [Google AI Studio](https://aistudio.google.com/apikey)), OR
-- run `gemini` once in a terminal to complete the interactive Google login.
+Tell the user Gemini is installed but lacks a headless-capable credential, and show the `AUTH_HINT`. **Emphasise that interactive Google login is NOT sufficient** — the skill's headless calls require an API key. ASK the user to:
+- (Recommended) Add `GEMINI_API_KEY=<key>` to `~/.gemini/.env` — the gemini CLI auto-loads this for all shells including sub-agents; get a key at [Google AI Studio](https://aistudio.google.com/apikey), OR
+- `export GEMINI_API_KEY=<key>` in the current shell session, OR
+- Configure Vertex AI: `export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=<project>`.
 
-Once the user confirms they've completed auth (or set the env var in the current shell), re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, proceed in **degraded Claude-only mode**.
+**Do NOT suggest** `gemini` interactive login as an auth path for this skill — it produces OAuth credentials that work only for interactive terminal sessions, not headless `-p`/`-o json` calls.
+
+Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, proceed in **degraded Claude-only mode**.
 
 **Case C — `GEMINI_AUTHED=unknown` (installed, auth state indeterminate):**
 No user interaction needed. Proceed normally and rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails, which triggers the same degradation backstop.
@@ -261,7 +268,8 @@ If `gemini-review.sh` exits with code 3 (unauthenticated, network error, unparse
 ╔══════════════════════════════════════════════════════════╗
 ║  ADVERSARY UNAVAILABLE — single-model review only        ║
 ║  Gemini did not respond. Showing Claude R1 findings.     ║
-║  Re-run after: export GEMINI_API_KEY=... or gemini auth  ║
+║  Re-run after: add GEMINI_API_KEY=<key> to              ║
+║  ~/.gemini/.env  (interactive login is NOT enough)       ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 

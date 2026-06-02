@@ -25,12 +25,15 @@ Run the adversarial-review script test suite.
 Tests:
   - synthesize.py: classification partition (survivors/unconfirmed/rejected)
   - synthesize.py: all outcome types present in fixture
-  - gemini-review.sh: JSON extraction from wrapped/prose envelope
+  - gemini-review.sh: JSON extraction from wrapped/prose/v0.44.x envelope
+  - gemini-review.sh: v0.44.x envelope (prose prefix + response-string) -> success
   - gemini-review.sh: auth/install failure -> exit 3
   - detect-mode.sh: base branch resolution by prefix (pure logic)
   - detect-mode.sh: large-diff cap enforcement
   - ensure-gemini.sh: GEMINI_INSTALLED=no when gemini not on PATH
   - ensure-gemini.sh: GEMINI_INSTALLED=yes + GEMINI_AUTHED=yes with stub + API key
+  - ensure-gemini.sh: OAuth-only creds (no API key) -> GEMINI_AUTHED=no (regression)
+  - ensure-gemini.sh: ~/.gemini/.env with GEMINI_API_KEY -> GEMINI_AUTHED=yes
 
 Exit codes:
   0  All tests pass
@@ -308,73 +311,99 @@ fi
 # ====================================================================
 # SECTION 3: JSON extraction logic — wrapped envelope and prose-only
 # ====================================================================
-section "JSON extraction — wrapped envelope and prose-only"
+section "JSON extraction — wrapped envelope, prose-only, and v0.44.x envelope"
 
-# Replicate the extraction logic from gemini-review.sh extract_json_object
+# Standalone Python extractor that mirrors the logic embedded in
+# gemini-review.sh's extract_model_answer function.
+# Outputs: "ok VERDICTS=<n> NEW_FINDINGS=<n>" on success, nothing on failure.
 EXTRACT_PY_SCRIPT="$TMP_DIR/extract_json.py"
 cat >"$EXTRACT_PY_SCRIPT" <<'PYEOF'
 #!/usr/bin/env python3
-import sys, json
+import sys, json, re
+
+def find_first_json_object(text):
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if start is None:
+                start = i
+            depth += 1
+        elif ch == '}':
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    candidate = text[start:i+1]
+                    try:
+                        obj = json.loads(candidate)
+                        if isinstance(obj, dict):
+                            return obj
+                    except Exception:
+                        pass
+                    start = None
+    return None
+
+def extract_payload(text):
+    outer = find_first_json_object(text)
+    if outer is None:
+        return None
+    # Shape B: v0.44.x envelope — "response" is a string with the model answer
+    if "response" in outer and isinstance(outer["response"], str):
+        model_text = outer["response"]
+    else:
+        if "verdicts" in outer:
+            return outer
+        model_text = text
+
+    # Bare JSON
+    try:
+        obj = json.loads(model_text.strip())
+        if isinstance(obj, dict) and "verdicts" in obj:
+            return obj
+    except Exception:
+        pass
+
+    # Fenced JSON
+    fence_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', model_text, re.DOTALL)
+    if fence_match:
+        try:
+            obj = json.loads(fence_match.group(1))
+            if isinstance(obj, dict) and "verdicts" in obj:
+                return obj
+        except Exception:
+            pass
+
+    # JSON embedded in prose
+    inner = find_first_json_object(model_text)
+    if inner is not None and "verdicts" in inner:
+        return inner
+
+    return None
 
 text = open(sys.argv[1]).read()
+result = extract_payload(text)
 
-# Try direct parse first
-try:
-    obj = json.loads(text.strip())
-    if isinstance(obj, dict):
-        print("DIRECT:" + json.dumps(obj))
-        sys.exit(0)
-except Exception:
-    pass
+if result is None:
+    sys.exit(1)
 
-# Find the first complete {...} block (handle nesting)
-depth = 0
-start = None
-for i, ch in enumerate(text):
-    if ch == '{':
-        if start is None:
-            start = i
-        depth += 1
-    elif ch == '}':
-        depth -= 1
-        if depth == 0 and start is not None:
-            candidate = text[start:i+1]
-            try:
-                obj = json.loads(candidate)
-                if isinstance(obj, dict):
-                    print("EXTRACTED:" + json.dumps(obj))
-                    sys.exit(0)
-            except Exception:
-                start = None
-                depth = 0
+if "new_findings" not in result:
+    result["new_findings"] = []
 
-sys.exit(1)
+nv = len(result["verdicts"])
+nf = len(result["new_findings"])
+print(f"ok VERDICTS={nv} NEW_FINDINGS={nf}")
+sys.exit(0)
 PYEOF
 chmod +x "$EXTRACT_PY_SCRIPT"
 
-# Test 1: wrapped JSON (JSON inside prose) -> should extract successfully
+# Test 1: wrapped JSON (JSON inside markdown fences + prose) -> should extract successfully
 WRAPPED_OUT=""
 WRAPPED_EXIT=0
 run_capture WRAPPED_OUT WRAPPED_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_wrapped.txt"
 
+assert_exit_code "JSON extracted from prose-wrapped envelope (exit 0)" "0" "$WRAPPED_EXIT"
 if [[ "$WRAPPED_EXIT" -eq 0 ]]; then
-  if echo "$WRAPPED_OUT" | grep -q "EXTRACTED:"; then
-    EXTRACTED_JSON="$(echo "$WRAPPED_OUT" | grep "^EXTRACTED:" | sed 's/^EXTRACTED://')"
-    HAS_KEYS="$(echo "$EXTRACTED_JSON" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-print('ok' if 'verdicts' in d and 'new_findings' in d else 'missing-keys')
-" 2>/dev/null || echo "parse-error")"
-    if [[ "$HAS_KEYS" == "ok" ]]; then
-      pass "JSON extracted from prose-wrapped envelope"
-    else
-      fail "JSON extraction from wrapped envelope — missing required keys"
-    fi
-  else
-    fail "JSON extraction — expected EXTRACTED: prefix, got: $WRAPPED_OUT"
-  fi
-else
-  fail "JSON extraction from wrapped envelope — script failed"
+  assert_contains "prose-wrapped envelope has verdicts" "VERDICTS=1" "$WRAPPED_OUT"
 fi
 
 # Test 2: pure prose (no JSON object) -> should fail with exit 1
@@ -384,19 +413,28 @@ run_capture PROSE_OUT PROSE_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gem
 
 assert_exit_code "prose-only input fails extraction (exit 1)" "1" "$PROSE_EXIT"
 
-# Test 3: valid JSON file -> should parse directly
+# Test 3: valid bare JSON file -> should parse directly (exit 0)
 VALID_OUT=""
 VALID_EXIT=0
 run_capture VALID_OUT VALID_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_valid_json.json"
 
+assert_exit_code "valid JSON file extraction succeeds (exit 0)" "0" "$VALID_EXIT"
 if [[ "$VALID_EXIT" -eq 0 ]]; then
-  if echo "$VALID_OUT" | grep -q "DIRECT:"; then
-    pass "valid JSON file parsed directly (no envelope extraction needed)"
-  else
-    fail "valid JSON file — expected DIRECT: prefix, got: $VALID_OUT"
-  fi
-else
-  fail "valid JSON file — extraction failed with exit $VALID_EXIT"
+  assert_contains "valid JSON has expected verdicts" "VERDICTS=2" "$VALID_OUT"
+fi
+
+# Test 4: gemini-cli v0.44.x envelope —
+#   2 prose prefix lines, then outer JSON with "response" string containing the model answer.
+#   Fixture: fixtures/gemini_envelope_v044.txt
+#   Expected: verdicts len=1, new_findings len=0
+V044_OUT=""
+V044_EXIT=0
+run_capture V044_OUT V044_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_v044.txt"
+
+assert_exit_code "v0.44.x envelope: extraction succeeds (exit 0)" "0" "$V044_EXIT"
+if [[ "$V044_EXIT" -eq 0 ]]; then
+  assert_contains "v0.44.x envelope: verdicts=1" "VERDICTS=1"    "$V044_OUT"
+  assert_contains "v0.44.x envelope: new_findings=0" "NEW_FINDINGS=0" "$V044_OUT"
 fi
 
 # ====================================================================
@@ -487,6 +525,34 @@ d=json.load(sys.stdin)
 print('ok' if 'verdicts' in d and 'new_findings' in d else 'missing-keys')
 " 2>/dev/null || echo "parse-error")"
 assert_eq "wrapped gemini output correctly extracted" "ok" "$WRAPPED_KEY_CHECK"
+
+# ---- stub: gemini outputs v0.44.x envelope (prose prefix + outer JSON with response string) ----
+cat >"$STUB_BIN_DIR/gemini" <<'STUB'
+#!/usr/bin/env bash
+# Stub gemini v0.44.x: prose lines printed before outer envelope JSON
+echo "Ripgrep is not available. Falling back to GrepTool."
+echo "Skill conflict detected: stub-skill loaded twice."
+echo '{"session_id":"test-session","response":"{\"verdicts\":[{\"id\":\"claude-001\",\"gemini_verdict\":\"confirm\",\"reason\":\"confirmed by gemini\",\"confidence\":0.9}],\"new_findings\":[]}","stats":{"tokens":42}}'
+STUB
+chmod +x "$STUB_BIN_DIR/gemini"
+
+GEMINI_V044_OUT=""
+GEMINI_V044_EXIT=0
+run_capture GEMINI_V044_OUT GEMINI_V044_EXIT \
+  env PATH="$STUB_BIN_DIR:$PATH" \
+  bash "$GEMINI_REVIEW" \
+  --diff "$FIXTURES_DIR/r1_claude_findings.json" \
+  --findings "$FIXTURES_DIR/r1_claude_findings.json"
+
+assert_exit_code "v0.44.x envelope gemini stub -> exit 0" "0" "$GEMINI_V044_EXIT"
+GEMINI_V044_KEYS="$(echo "$GEMINI_V044_OUT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+v = len(d.get('verdicts', []))
+n = len(d.get('new_findings', []))
+print(f'ok v={v} n={n}' if 'verdicts' in d and 'new_findings' in d else 'missing-keys')
+" 2>/dev/null || echo "parse-error")"
+assert_eq "v0.44.x envelope: verdicts+new_findings extracted" "ok v=1 n=0" "$GEMINI_V044_KEYS"
 
 # ---- stub: gemini outputs pure prose (no JSON) — should exit 3 after retry ----
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
@@ -802,7 +868,58 @@ assert_exit_code "ensure-gemini: stub gemini, no auth -> exit 0"          "0"   
 assert_contains  "ensure-gemini: stub gemini, no auth -> INSTALLED=yes"   "GEMINI_INSTALLED=yes" "$NO_AUTH_OUT"
 assert_contains  "ensure-gemini: stub gemini, no auth -> AUTHED=no"       "GEMINI_AUTHED=no"     "$NO_AUTH_OUT"
 
-# ---- Test D: --help exits 0 ----
+# ---- Test D: OAuth-only creds (no API key) → GEMINI_AUTHED=no (regression test) ----
+# This is the regression test for the bug where interactive-OAuth credentials
+# (google_accounts.json, oauth_creds.json) caused GEMINI_AUTHED=yes even though
+# those credentials are NOT sufficient for headless gemini -p/-o json calls.
+OAUTH_HOME="$TMP_DIR/oauth-home"
+mkdir -p "$OAUTH_HOME/.gemini"
+# Populate the OAuth credential files that were previously causing the false positive
+printf '{"accounts": [{"email": "user@example.com"}]}' > "$OAUTH_HOME/.gemini/google_accounts.json"
+printf '{"token": "ya29.fake-oauth-token", "refresh_token": "1//fake"}' > "$OAUTH_HOME/.gemini/oauth_creds.json"
+# Also add a settings.json with email/account fields (old false-positive trigger)
+printf '{"security":{"auth":{"selectedType":"google-personal"}},"user":{"email":"user@example.com"}}' \
+  > "$OAUTH_HOME/.gemini/settings.json"
+# No .env file; no GEMINI_API_KEY or GOOGLE_API_KEY env vars
+
+OAUTH_AUTHED_OUT=""
+OAUTH_AUTHED_EXIT=0
+run_capture OAUTH_AUTHED_OUT OAUTH_AUTHED_EXIT \
+  env PATH="$ENSURE_STUB_DIR:$PATH" \
+      HOME="$OAUTH_HOME" \
+      GEMINI_API_KEY="" \
+      GOOGLE_API_KEY="" \
+      GOOGLE_GENAI_USE_VERTEXAI="" \
+      GOOGLE_CLOUD_PROJECT="" \
+  bash "$ENSURE_GEMINI" --check
+
+assert_exit_code "ensure-gemini: OAuth-only creds -> exit 0"                  "0"                    "$OAUTH_AUTHED_EXIT"
+assert_contains  "ensure-gemini: OAuth-only creds -> INSTALLED=yes"           "GEMINI_INSTALLED=yes" "$OAUTH_AUTHED_OUT"
+assert_contains  "ensure-gemini: OAuth-only creds -> AUTHED=no (regression)"  "GEMINI_AUTHED=no"     "$OAUTH_AUTHED_OUT"
+
+# ---- Test E: ~/.gemini/.env with GEMINI_API_KEY → GEMINI_AUTHED=yes ----
+# Verifies that the recommended key placement (~/.gemini/.env) is detected.
+ENV_FILE_HOME="$TMP_DIR/env-file-home"
+mkdir -p "$ENV_FILE_HOME/.gemini"
+printf 'GEMINI_API_KEY=AIzaSy_test_key_from_env_file\n' > "$ENV_FILE_HOME/.gemini/.env"
+# No API key env vars; only the .env file
+
+ENV_FILE_OUT=""
+ENV_FILE_EXIT=0
+run_capture ENV_FILE_OUT ENV_FILE_EXIT \
+  env PATH="$ENSURE_STUB_DIR:$PATH" \
+      HOME="$ENV_FILE_HOME" \
+      GEMINI_API_KEY="" \
+      GOOGLE_API_KEY="" \
+      GOOGLE_GENAI_USE_VERTEXAI="" \
+      GOOGLE_CLOUD_PROJECT="" \
+  bash "$ENSURE_GEMINI" --check
+
+assert_exit_code "ensure-gemini: .env key -> exit 0"              "0"                    "$ENV_FILE_EXIT"
+assert_contains  "ensure-gemini: .env key -> INSTALLED=yes"       "GEMINI_INSTALLED=yes" "$ENV_FILE_OUT"
+assert_contains  "ensure-gemini: .env key -> AUTHED=yes"          "GEMINI_AUTHED=yes"    "$ENV_FILE_OUT"
+
+# ---- Test F: --help exits 0 ----
 HELP_ENSURE_OUT=""
 HELP_ENSURE_EXIT=0
 run_capture HELP_ENSURE_OUT HELP_ENSURE_EXIT bash "$ENSURE_GEMINI" --help
