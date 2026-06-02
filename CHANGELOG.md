@@ -5,6 +5,12 @@ Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
 
+## [Unreleased]
+
+### Added
+
+- adversarial-review plugin (v0.1.0) — Claude↔Gemini 3-round adversarial PR review with a both-confirm survivor rule; PR + local modes; loud degradation to Claude-only when the Gemini adversary is unavailable
+
 ## [3.11.0] - 2026-06-01
 
 ### Changes

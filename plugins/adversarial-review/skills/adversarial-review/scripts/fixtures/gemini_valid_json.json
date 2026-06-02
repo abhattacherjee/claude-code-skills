@@ -1,0 +1,1 @@
+{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"Valid SQL injection vector confirmed","confidence":0.95},{"id":"C-002","gemini_verdict":"refute","reason":"Range is intentionally exclusive","confidence":0.80}]}
