@@ -334,7 +334,8 @@ import sys, json, re
 
 MODE = sys.argv[2] if len(sys.argv) > 2 else "judge"
 
-def find_first_json_object(text):
+def iter_json_objects(text):
+    """Yield all balanced top-level {...} blocks that parse as JSON dicts."""
     depth = 0
     start = None
     for i, ch in enumerate(text):
@@ -350,10 +351,20 @@ def find_first_json_object(text):
                     try:
                         obj = json.loads(candidate)
                         if isinstance(obj, dict):
-                            return obj
+                            yield obj
                     except Exception:
                         pass
                     start = None
+
+def find_first_json_object(text):
+    for obj in iter_json_objects(text):
+        return obj
+    return None
+
+def find_first_json_with_keys(text, *keys):
+    for obj in iter_json_objects(text):
+        if any(k in obj for k in keys):
+            return obj
     return None
 
 def has_payload_key(obj):
@@ -362,15 +373,16 @@ def has_payload_key(obj):
     return "verdicts" in obj
 
 def extract_payload(text):
-    outer = find_first_json_object(text)
-    if outer is None:
-        return None
-    # Shape B: v0.44.x envelope
-    if "response" in outer and isinstance(outer["response"], str):
-        model_text = outer["response"]
+    # Step 1: look for an object with "response" key first (v0.44.x envelope)
+    envelope = find_first_json_with_keys(text, "response")
+    if envelope is not None and isinstance(envelope.get("response"), str):
+        model_text = envelope["response"]
     else:
-        if has_payload_key(outer):
-            return outer
+        # Step 2: look for an object with the payload key directly
+        payload_key = "findings" if MODE == "find" else "verdicts"
+        direct = find_first_json_with_keys(text, payload_key)
+        if direct is not None and has_payload_key(direct):
+            return direct
         model_text = text
 
     # Bare JSON
@@ -392,7 +404,8 @@ def extract_payload(text):
             pass
 
     # JSON embedded in prose
-    inner = find_first_json_object(model_text)
+    payload_key = "findings" if MODE == "find" else "verdicts"
+    inner = find_first_json_with_keys(model_text, payload_key)
     if inner is not None and has_payload_key(inner):
         return inner
 
@@ -468,6 +481,24 @@ run_capture FIND_EXTRACT_OUT FIND_EXTRACT_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FI
 assert_exit_code "find-mode: findings-keyed JSON extracts (exit 0)" "0" "$FIND_EXTRACT_EXIT"
 if [[ "$FIND_EXTRACT_EXIT" -eq 0 ]]; then
   assert_contains "find-mode: FINDINGS=1" "FINDINGS=1" "$FIND_EXTRACT_OUT"
+fi
+
+# Test 6: C-001 regression — leading non-payload JSON before real payload
+# Input has {"status":"ok"} before the real {"verdicts":[...]} object.
+# Must extract the verdicts payload (not bind to the leading status object).
+LEADING_OBJ_FIXTURE="$TMP_DIR/leading_obj_fixture.txt"
+cat >"$LEADING_OBJ_FIXTURE" <<'TEXT'
+{"status":"ok"}
+{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"test","confidence":0.9}]}
+TEXT
+
+LEADING_OBJ_OUT=""
+LEADING_OBJ_EXIT=0
+run_capture LEADING_OBJ_OUT LEADING_OBJ_EXIT python3 "$EXTRACT_PY_SCRIPT" "$LEADING_OBJ_FIXTURE" "judge"
+
+assert_exit_code "leading non-payload JSON: extraction succeeds (exit 0)" "0" "$LEADING_OBJ_EXIT"
+if [[ "$LEADING_OBJ_EXIT" -eq 0 ]]; then
+  assert_contains "leading non-payload JSON: correct payload extracted" "VERDICTS=1" "$LEADING_OBJ_OUT"
 fi
 
 # ====================================================================
@@ -858,10 +889,10 @@ run_capture NO_GEMINI_OUT NO_GEMINI_EXIT \
   bash "$ENSURE_GEMINI" --check
 
 assert_exit_code "ensure-gemini: no gemini -> exit 0" "0" "$NO_GEMINI_EXIT"
-assert_contains "ensure-gemini: no gemini -> GEMINI_INSTALLED=no"      "GEMINI_INSTALLED=no"      "$NO_GEMINI_OUT"
-assert_contains "ensure-gemini: no gemini -> GEMINI_AUTHED=unknown"    "GEMINI_AUTHED=unknown"    "$NO_GEMINI_OUT"
-assert_contains "ensure-gemini: no gemini -> INSTALL_HINT present"     "INSTALL_HINT="            "$NO_GEMINI_OUT"
-assert_contains "ensure-gemini: no gemini -> AUTH_HINT present"        "AUTH_HINT="               "$NO_GEMINI_OUT"
+assert_contains "ensure-gemini: no gemini -> GEMINI_INSTALLED=no"      "GEMINI_INSTALLED='no'"      "$NO_GEMINI_OUT"
+assert_contains "ensure-gemini: no gemini -> GEMINI_AUTHED=unknown"    "GEMINI_AUTHED='unknown'"    "$NO_GEMINI_OUT"
+assert_contains "ensure-gemini: no gemini -> INSTALL_HINT present"     "INSTALL_HINT="              "$NO_GEMINI_OUT"
+assert_contains "ensure-gemini: no gemini -> AUTH_HINT present"        "AUTH_HINT="                 "$NO_GEMINI_OUT"
 
 # ---- Test B: stubbed gemini + GEMINI_API_KEY set → GEMINI_INSTALLED=yes, GEMINI_AUTHED=yes ----
 cat >"$ENSURE_STUB_DIR/gemini" <<'STUB'
@@ -884,9 +915,9 @@ run_capture WITH_GEMINI_OUT WITH_GEMINI_EXIT \
   bash "$ENSURE_GEMINI" --check
 
 assert_exit_code "ensure-gemini: stub gemini + API key -> exit 0"        "0"                    "$WITH_GEMINI_EXIT"
-assert_contains  "ensure-gemini: stub gemini -> GEMINI_INSTALLED=yes"    "GEMINI_INSTALLED=yes" "$WITH_GEMINI_OUT"
-assert_contains  "ensure-gemini: stub gemini + key -> GEMINI_AUTHED=yes" "GEMINI_AUTHED=yes"    "$WITH_GEMINI_OUT"
-assert_contains  "ensure-gemini: stub gemini -> GEMINI_VERSION present"  "GEMINI_VERSION="      "$WITH_GEMINI_OUT"
+assert_contains  "ensure-gemini: stub gemini -> GEMINI_INSTALLED=yes"    "GEMINI_INSTALLED='yes'" "$WITH_GEMINI_OUT"
+assert_contains  "ensure-gemini: stub gemini + key -> GEMINI_AUTHED=yes" "GEMINI_AUTHED='yes'"   "$WITH_GEMINI_OUT"
+assert_contains  "ensure-gemini: stub gemini -> GEMINI_VERSION present"  "GEMINI_VERSION="       "$WITH_GEMINI_OUT"
 
 # ---- Test C: stubbed gemini, no env key, no ~/.gemini creds → GEMINI_AUTHED=no ----
 FAKE_HOME="$TMP_DIR/fake-home"
@@ -902,8 +933,8 @@ run_capture NO_AUTH_OUT NO_AUTH_EXIT \
   bash "$ENSURE_GEMINI" --check
 
 assert_exit_code "ensure-gemini: stub gemini, no auth -> exit 0"          "0"                    "$NO_AUTH_EXIT"
-assert_contains  "ensure-gemini: stub gemini, no auth -> INSTALLED=yes"   "GEMINI_INSTALLED=yes" "$NO_AUTH_OUT"
-assert_contains  "ensure-gemini: stub gemini, no auth -> AUTHED=no"       "GEMINI_AUTHED=no"     "$NO_AUTH_OUT"
+assert_contains  "ensure-gemini: stub gemini, no auth -> INSTALLED=yes"   "GEMINI_INSTALLED='yes'" "$NO_AUTH_OUT"
+assert_contains  "ensure-gemini: stub gemini, no auth -> AUTHED=no"       "GEMINI_AUTHED='no'"    "$NO_AUTH_OUT"
 
 # ---- Test D: OAuth-only creds (no API key) → GEMINI_AUTHED=no (regression test) ----
 OAUTH_HOME="$TMP_DIR/oauth-home"
@@ -925,8 +956,8 @@ run_capture OAUTH_AUTHED_OUT OAUTH_AUTHED_EXIT \
   bash "$ENSURE_GEMINI" --check
 
 assert_exit_code "ensure-gemini: OAuth-only creds -> exit 0"                  "0"                    "$OAUTH_AUTHED_EXIT"
-assert_contains  "ensure-gemini: OAuth-only creds -> INSTALLED=yes"           "GEMINI_INSTALLED=yes" "$OAUTH_AUTHED_OUT"
-assert_contains  "ensure-gemini: OAuth-only creds -> AUTHED=no (regression)"  "GEMINI_AUTHED=no"     "$OAUTH_AUTHED_OUT"
+assert_contains  "ensure-gemini: OAuth-only creds -> INSTALLED=yes"           "GEMINI_INSTALLED='yes'" "$OAUTH_AUTHED_OUT"
+assert_contains  "ensure-gemini: OAuth-only creds -> AUTHED=no (regression)"  "GEMINI_AUTHED='no'"    "$OAUTH_AUTHED_OUT"
 
 # ---- Test E: ~/.gemini/.env with GEMINI_API_KEY → GEMINI_AUTHED=yes ----
 ENV_FILE_HOME="$TMP_DIR/env-file-home"
@@ -945,8 +976,8 @@ run_capture ENV_FILE_OUT ENV_FILE_EXIT \
   bash "$ENSURE_GEMINI" --check
 
 assert_exit_code "ensure-gemini: .env key -> exit 0"              "0"                    "$ENV_FILE_EXIT"
-assert_contains  "ensure-gemini: .env key -> INSTALLED=yes"       "GEMINI_INSTALLED=yes" "$ENV_FILE_OUT"
-assert_contains  "ensure-gemini: .env key -> AUTHED=yes"          "GEMINI_AUTHED=yes"    "$ENV_FILE_OUT"
+assert_contains  "ensure-gemini: .env key -> INSTALLED=yes"       "GEMINI_INSTALLED='yes'" "$ENV_FILE_OUT"
+assert_contains  "ensure-gemini: .env key -> AUTHED=yes"          "GEMINI_AUTHED='yes'"   "$ENV_FILE_OUT"
 
 # ---- Test F: --help exits 0 ----
 HELP_ENSURE_OUT=""

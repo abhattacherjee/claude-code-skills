@@ -226,6 +226,10 @@ print(len(survivors))
 PYEOF
 )"
 
+  if [[ -z "$survivors_count" || ! "$survivors_count" =~ ^[0-9]+$ ]]; then
+    echo "Error: could not determine survivors_count from report JSON" >&2
+    return 1
+  fi
   if [[ "$survivors_count" -eq 0 ]]; then
     echo "No survivor findings to post as PR comments."
     # Still print the report

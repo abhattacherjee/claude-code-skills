@@ -229,7 +229,7 @@ def format_markdown(
             origin = f.get("origin", "unknown")
             path = f.get("path", "")
             line = f.get("line")
-            loc = f"{path}:{line}" if line else path
+            loc = f"{path}:{line}" if line is not None else path
             lines.append(
                 f"### [{severity.upper()}] {f.get('title', '(no title)')} "
                 f"`{category}` *(origin: {origin})*"
@@ -271,7 +271,7 @@ def format_markdown(
             origin = f.get("origin", "unknown")
             path = f.get("path", "")
             line = f.get("line")
-            loc = f"{path}:{line}" if line else path
+            loc = f"{path}:{line}" if line is not None else path
             lines.append(
                 f"### [{severity.upper()}] {f.get('title', '(no title)')} "
                 f"`{category}` *(origin: {origin})*"
@@ -301,7 +301,7 @@ def format_markdown(
             kill_reason = f.get("kill_reason", "")
             path = f.get("path", "")
             line = f.get("line")
-            loc = f"{path}:{line}" if line else path
+            loc = f"{path}:{line}" if line is not None else path
             lines.append(
                 f"### [{severity.upper()}] {f.get('title', '(no title)')} "
                 f"`{category}` *(origin: {origin})*"
@@ -350,6 +350,19 @@ def main() -> None:
     classified = classify_findings(
         claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw
     )
+
+    # Warn on id collisions across origins (both are preserved in the list)
+    seen_ids: dict[str, str] = {}
+    for f in classified:
+        fid = f.get("id", "")
+        origin = f.get("origin", "")
+        if fid in seen_ids and seen_ids[fid] != origin:
+            print(
+                f"Warning: id '{fid}' appears in both claude and gemini findings; "
+                "both are preserved in output",
+                file=sys.stderr,
+            )
+        seen_ids[fid] = origin
 
     survivors = [f for f in classified if f.get("status") == "survivor"]
     unconfirmed = [f for f in classified if f.get("status") == "unconfirmed"]

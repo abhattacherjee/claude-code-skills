@@ -1,5 +1,7 @@
 # Adversarial PR Review (Claude ↔ Gemini refutation loop)
 
+> **Status: Superseded** — the shipped pipeline is the symmetric 2-round design (R1 parallel independent discovery, R2 symmetric cross-examination). This spec documents the original 3-round design for historical reference; see the skill CHANGELOG.
+
 **Date:** 2026-06-01
 **Status:** Approved design → ready for implementation plan
 **Target:** new user-level skill `~/.claude/skills/adversarial-review/`; spec + plan + skill code developed in the `adversarial-review-skill` repo (this repo); runtime install to `~/.claude/skills/adversarial-review/`

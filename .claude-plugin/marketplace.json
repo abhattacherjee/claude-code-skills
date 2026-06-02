@@ -11,7 +11,7 @@
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
-      "description": "Adversarial PR review — Claude and Gemini cross-examine each other's findings on a diff via a bounded 3-round refutation loop, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable.",
+      "description": "Adversarial PR review — Claude and Gemini independently discover findings in R1 then symmetrically cross-examine each other's findings in R2; only issues both models confirm survive. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable.",
       "version": "0.1.0"
     },
     {

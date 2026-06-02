@@ -162,8 +162,8 @@ import sys, json, re
 
 MODE = sys.argv[2]  # "find" or "judge"
 
-def find_first_json_object(text):
-    """Return the first balanced {...} block that parses as a JSON dict, or None."""
+def iter_json_objects(text):
+    """Yield all balanced top-level {...} blocks that parse as JSON dicts."""
     depth = 0
     start = None
     for i, ch in enumerate(text):
@@ -179,11 +179,22 @@ def find_first_json_object(text):
                     try:
                         obj = json.loads(candidate)
                         if isinstance(obj, dict):
-                            return obj
+                            yield obj
                     except Exception:
                         pass
-                    # Reset and keep searching
                     start = None
+
+def find_first_json_object(text):
+    """Return the first balanced {...} block that parses as a JSON dict, or None."""
+    for obj in iter_json_objects(text):
+        return obj
+    return None
+
+def find_first_json_with_keys(text, *keys):
+    """Return the first JSON dict containing any of the given keys, or None."""
+    for obj in iter_json_objects(text):
+        if any(k in obj for k in keys):
+            return obj
     return None
 
 def has_payload_key(obj):
@@ -198,22 +209,17 @@ def extract_payload(text):
     Extract the mode-appropriate JSON dict from raw text.
     Returns the dict or None.
     """
-    # --- Step 1: find the first JSON object anywhere in the text ---
-    # (skips any leading prose lines automatically)
-    outer = find_first_json_object(text)
-    if outer is None:
-        return None
-
-    # --- Step 2: Shape B detection ---
-    # If the outer object has a "response" key whose value is a string,
-    # treat that string as the model's answer (v0.44.x envelope shape).
-    if "response" in outer and isinstance(outer["response"], str):
-        model_text = outer["response"]
+    # --- Step 1: look for an object with the "response" key first (v0.44.x envelope) ---
+    envelope = find_first_json_with_keys(text, "response")
+    if envelope is not None and isinstance(envelope.get("response"), str):
+        model_text = envelope["response"]
     else:
-        # Shape A: the outer object IS the model's answer
-        if has_payload_key(outer):
-            return outer
-        # Otherwise fall through to search the raw text for an inner object
+        # --- Step 2: look for an object with the payload key directly ---
+        payload_key = "findings" if MODE == "find" else "verdicts"
+        direct = find_first_json_with_keys(text, payload_key)
+        if direct is not None and has_payload_key(direct):
+            return direct
+        # No payload object found at top level; fall through to search raw text
         model_text = text
 
     # --- Step 3: extract payload from model_text ---
@@ -236,7 +242,8 @@ def extract_payload(text):
             pass
 
     # (c) JSON object embedded in prose — find first balanced {...} with payload key
-    inner = find_first_json_object(model_text)
+    payload_key = "findings" if MODE == "find" else "verdicts"
+    inner = find_first_json_with_keys(model_text, payload_key)
     if inner is not None and has_payload_key(inner):
         return inner
 
