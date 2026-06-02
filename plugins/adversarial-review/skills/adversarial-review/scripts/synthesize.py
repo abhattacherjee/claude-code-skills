@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
 """
-synthesize.py — merge R1/R2/R3 adversarial review rounds, classify findings.
+synthesize.py — symmetric convergence of Claude↔Gemini adversarial review rounds.
 
 Usage:
-  synthesize.py --r1 <r1.json> --r2 <r2.json> --r3 <r3.json>
-                [--md <out.md>] [--json <out.json>] [--help]
+  synthesize.py --claude-findings FILE --gemini-findings FILE
+                --gemini-verdicts FILE --claude-verdicts FILE
+                [--md FILE] [--json FILE] [--help]
+
+Convergence rule (mechanical):
+  A finding survives iff its author asserts it AND the opponent confirms it.
+  No model adjudicates the other's findings — verdicts are looked up by id.
+
+  Claude finding (origin=claude):
+    gemini_verdict=confirm   -> status=survivor
+    gemini_verdict=refute    -> status=rejected, killed_by=gemini
+    missing/none             -> status=unconfirmed
+
+  Gemini finding (origin=gemini):
+    claude_verdict=confirm   -> status=survivor
+    claude_verdict=refute    -> status=rejected, killed_by=claude
+    missing/none             -> status=unconfirmed
 
 Exit codes:
   0  Success
-  1  Error
+  1  Error (file not found, parse error, etc.)
   2  Usage error
 """
 
@@ -21,22 +36,19 @@ from typing import Any
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Synthesize three rounds of Claude↔Gemini adversarial review into "
-            "a classified finding report."
+            "Symmetric convergence of Claude↔Gemini adversarial review: "
+            "a finding survives iff its author asserts it AND the opponent confirms it."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Finding classification rules:
-  origin=claude:
-    gemini_verdict=confirm                        → SURVIVOR
-    gemini_verdict=refute AND defends=false       → REJECTED (killed_by=gemini)
-    gemini_verdict=refute AND defends=true        → UNCONFIRMED
-    gemini_verdict=null/missing                   → UNCONFIRMED
+Convergence rule (mechanical):
+  Claude finding: gemini_verdict=confirm -> survivor
+                  gemini_verdict=refute  -> rejected (killed_by=gemini)
+                  missing/none           -> unconfirmed
 
-  origin=gemini:
-    claude_verdict=confirm                        → SURVIVOR
-    claude_verdict=refute                         → REJECTED (killed_by=claude)
-    claude_verdict=missing                        → UNCONFIRMED
+  Gemini finding: claude_verdict=confirm -> survivor
+                  claude_verdict=refute  -> rejected (killed_by=claude)
+                  missing/none           -> unconfirmed
 
 Exit codes:
   0  Success
@@ -44,12 +56,14 @@ Exit codes:
   2  Usage error
 """,
     )
-    parser.add_argument("--r1", required=True, metavar="FILE",
-                        help="R1 Claude findings JSON (list of findings, origin=claude)")
-    parser.add_argument("--r2", required=True, metavar="FILE",
-                        help="R2 Gemini response JSON ({verdicts:[...], new_findings:[...]})")
-    parser.add_argument("--r3", required=True, metavar="FILE",
-                        help="R3 Claude response JSON ({defends:[...], gemini_finding_verdicts:[...]})")
+    parser.add_argument("--claude-findings", required=True, metavar="FILE",
+                        help="Claude R1 findings JSON (bare list OR {\"findings\":[...]})")
+    parser.add_argument("--gemini-findings", required=True, metavar="FILE",
+                        help="Gemini R1 findings JSON ({\"findings\":[...]} OR bare list)")
+    parser.add_argument("--gemini-verdicts", required=True, metavar="FILE",
+                        help="Gemini judging Claude: {\"verdicts\":[{\"id\",\"gemini_verdict\",\"reason\",\"confidence\"}]}")
+    parser.add_argument("--claude-verdicts", required=True, metavar="FILE",
+                        help="Claude judging Gemini: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
     parser.add_argument("--md", metavar="FILE",
                         help="Write human-readable markdown report to this file")
     parser.add_argument("--json", metavar="FILE", dest="json_out",
@@ -69,36 +83,47 @@ def load_json(path: str, label: str) -> Any:
         sys.exit(1)
 
 
+def unwrap_findings(raw: Any, label: str) -> list[dict]:
+    """Accept a bare list OR {"findings": [...]}. Exit 1 on invalid shape."""
+    if isinstance(raw, dict) and isinstance(raw.get("findings"), list):
+        raw = raw["findings"]
+    if not isinstance(raw, list):
+        print(
+            f"Error: {label} must be a JSON array of findings "
+            "(or an object with a 'findings' list)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return raw
+
+
 def classify_findings(
-    r1_findings: list[dict],
-    r2: dict,
-    r3: dict,
+    claude_findings: list[dict],
+    gemini_findings: list[dict],
+    gemini_verdicts_raw: dict,
+    claude_verdicts_raw: dict,
 ) -> list[dict]:
-    """Apply the both-confirm survivor rule and return findings with status filled in."""
+    """Apply symmetric convergence and return findings with status filled in."""
 
-    # Build lookup maps (skip entries missing a non-empty "id" to avoid KeyError)
-    gemini_verdicts: dict[str, dict] = {
-        v["id"]: v for v in r2.get("verdicts", []) if v.get("id")
+    # Build verdict lookup maps (skip entries missing a non-empty "id")
+    gemini_verdict_map: dict[str, dict] = {
+        v["id"]: v
+        for v in gemini_verdicts_raw.get("verdicts", [])
+        if v.get("id")
     }
-    gemini_new: list[dict] = [
-        f for f in r2.get("new_findings", []) if f.get("id")
-    ]
-
-    defends_map: dict[str, bool] = {
-        d["id"]: bool(d.get("defends", False))
-        for d in r3.get("defends", []) if d.get("id")
-    }
-    r3_gemini_verdicts: dict[str, dict] = {
-        v["id"]: v for v in r3.get("gemini_finding_verdicts", []) if v.get("id")
+    claude_verdict_map: dict[str, dict] = {
+        v["id"]: v
+        for v in claude_verdicts_raw.get("verdicts", [])
+        if v.get("id")
     }
 
     classified: list[dict] = []
 
-    # --- Process R1 Claude findings (origin=claude) ---
-    for finding in r1_findings:
+    # --- Process Claude findings ---
+    for finding in claude_findings:
         f = dict(finding)
         if not f.get("id"):
-            continue  # skip id-less entries gracefully (AR-001)
+            continue  # skip id-less entries defensively
         f.setdefault("origin", "claude")
         f.setdefault("killed_by", None)
         f.setdefault("kill_reason", None)
@@ -107,10 +132,9 @@ def classify_findings(
         f.setdefault("status", None)
 
         fid = f["id"]
-        g_verdict = gemini_verdicts.get(fid)
+        g_verdict = gemini_verdict_map.get(fid)
 
         if g_verdict is None:
-            # gemini_verdict=null/missing
             f["gemini_verdict"] = None
             f["status"] = "unconfirmed"
         elif g_verdict.get("gemini_verdict") == "confirm":
@@ -118,27 +142,20 @@ def classify_findings(
             f["status"] = "survivor"
         elif g_verdict.get("gemini_verdict") == "refute":
             f["gemini_verdict"] = "refute"
-            defended = defends_map.get(fid, False)
-            if defended:
-                # Claude defended in R3 → UNCONFIRMED (neither model's view prevails)
-                f["status"] = "unconfirmed"
-            else:
-                # Refuted and not defended → REJECTED
-                f["status"] = "rejected"
-                f["killed_by"] = "gemini"
-                f["kill_reason"] = g_verdict.get("reason", "")
+            f["status"] = "rejected"
+            f["killed_by"] = "gemini"
+            f["kill_reason"] = g_verdict.get("reason", "")
         else:
-            # Unexpected value — treat as unconfirmed
             f["gemini_verdict"] = g_verdict.get("gemini_verdict")
             f["status"] = "unconfirmed"
 
         classified.append(f)
 
-    # --- Process R2 Gemini new findings (origin=gemini) ---
-    for finding in gemini_new:
+    # --- Process Gemini findings ---
+    for finding in gemini_findings:
         f = dict(finding)
         if not f.get("id"):
-            continue  # skip id-less entries gracefully (AR-001)
+            continue  # skip id-less entries defensively
         f.setdefault("origin", "gemini")
         f.setdefault("killed_by", None)
         f.setdefault("kill_reason", None)
@@ -147,21 +164,21 @@ def classify_findings(
         f.setdefault("status", None)
 
         fid = f["id"]
-        r3_verdict = r3_gemini_verdicts.get(fid)
+        c_verdict = claude_verdict_map.get(fid)
 
-        if r3_verdict is None:
+        if c_verdict is None:
             f["claude_verdict"] = None
             f["status"] = "unconfirmed"
-        elif r3_verdict.get("claude_verdict") == "confirm":
+        elif c_verdict.get("claude_verdict") == "confirm":
             f["claude_verdict"] = "confirm"
             f["status"] = "survivor"
-        elif r3_verdict.get("claude_verdict") == "refute":
+        elif c_verdict.get("claude_verdict") == "refute":
             f["claude_verdict"] = "refute"
             f["status"] = "rejected"
             f["killed_by"] = "claude"
-            f["kill_reason"] = r3_verdict.get("reason", "")
+            f["kill_reason"] = c_verdict.get("reason", "")
         else:
-            f["claude_verdict"] = r3_verdict.get("claude_verdict")
+            f["claude_verdict"] = c_verdict.get("claude_verdict")
             f["status"] = "unconfirmed"
 
         classified.append(f)
@@ -189,12 +206,15 @@ def format_markdown(
     lines.append("# Adversarial PR Review — Synthesis Report")
     lines.append("")
     lines.append(
-        f"**Summary:** {len(survivors)} survivors | "
-        f"{len(unconfirmed)} unconfirmed (single-model) | "
-        f"{len(rejected)} rejected"
+        f"Survivors: {len(survivors)} | "
+        f"Unconfirmed: {len(unconfirmed)} | "
+        f"Rejected: {len(rejected)}"
     )
     lines.append("")
-    lines.append("> Both-confirm rule: only findings confirmed by *both* Claude and Gemini are survivors.")
+    lines.append(
+        "> Convergence rule: a finding survives iff its author asserts it AND "
+        "the opponent confirms it."
+    )
     lines.append("")
 
     # SURVIVORS
@@ -218,6 +238,17 @@ def format_markdown(
                 lines.append(f"**Location:** `{loc}`")
             lines.append("")
             lines.append(f.get("rationale", ""))
+            # Optionally append confirmer's reason
+            if origin == "claude":
+                g_v = f.get("gemini_verdict")
+                if g_v == "confirm":
+                    lines.append("")
+                    lines.append("> Confirmed by Gemini.")
+            elif origin == "gemini":
+                c_v = f.get("claude_verdict")
+                if c_v == "confirm":
+                    lines.append("")
+                    lines.append("> Confirmed by Claude.")
             lines.append("")
     else:
         lines.append("_No findings confirmed by both models._")
@@ -293,24 +324,32 @@ def format_markdown(
 def main() -> None:
     args = parse_args()
 
-    r1_raw = load_json(args.r1, "R1")
-    r2_raw = load_json(args.r2, "R2")
-    r3_raw = load_json(args.r3, "R3")
+    claude_findings_raw = load_json(args.claude_findings, "claude-findings")
+    gemini_findings_raw = load_json(args.gemini_findings, "gemini-findings")
+    gemini_verdicts_raw = load_json(args.gemini_verdicts, "gemini-verdicts")
+    claude_verdicts_raw = load_json(args.claude_verdicts, "claude-verdicts")
 
-    # Validate / unwrap R1 — accept both a bare array and {"findings": [...]} (AR-002)
-    if isinstance(r1_raw, dict) and isinstance(r1_raw.get("findings"), list):
-        r1_raw = r1_raw["findings"]
-    if not isinstance(r1_raw, list):
-        print("Error: R1 must be a JSON array of findings (or an object with a 'findings' list)", file=sys.stderr)
+    # Unwrap / validate findings inputs (accept bare list or {"findings":[...]})
+    claude_findings = unwrap_findings(claude_findings_raw, "claude-findings")
+    gemini_findings = unwrap_findings(gemini_findings_raw, "gemini-findings")
+
+    # Validate verdicts inputs must be dicts
+    if not isinstance(gemini_verdicts_raw, dict):
+        print(
+            "Error: gemini-verdicts must be a JSON object with a 'verdicts' key",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    if not isinstance(r2_raw, dict):
-        print("Error: R2 must be a JSON object with 'verdicts' and 'new_findings' keys", file=sys.stderr)
-        sys.exit(1)
-    if not isinstance(r3_raw, dict):
-        print("Error: R3 must be a JSON object with 'defends' and 'gemini_finding_verdicts' keys", file=sys.stderr)
+    if not isinstance(claude_verdicts_raw, dict):
+        print(
+            "Error: claude-verdicts must be a JSON object with a 'verdicts' key",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    classified = classify_findings(r1_raw, r2_raw, r3_raw)
+    classified = classify_findings(
+        claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw
+    )
 
     survivors = [f for f in classified if f.get("status") == "survivor"]
     unconfirmed = [f for f in classified if f.get("status") == "unconfirmed"]

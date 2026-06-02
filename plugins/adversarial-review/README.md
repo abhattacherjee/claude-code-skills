@@ -1,38 +1,37 @@
 # adversarial-review
 
-Adversarial PR review — Claude and Gemini cross-examine each other's findings on a diff via a bounded 3-round refutation loop, surfacing only issues both models confirm
+Adversarial PR review — Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm
 
 ## What It Does
 
-Runs a two-model adversarial review of a diff. Claude performs an initial review (R1), Gemini cross-examines Claude's findings and adds its own (R2), then Claude cross-examines Gemini's output against actual source files (R3). Only findings both models confirm survive to the report. Single-model findings land in an UNCONFIRMED bucket; rejected findings are retained with the killing model and its reason.
+Runs a symmetric two-model adversarial review of a diff. Both Claude and Gemini independently discover findings in R1 (neither sees the other's output). In R2, each model cross-examines the other's findings against actual source code. Only findings confirmed by the opposing model survive to the report. Single-model findings land in an UNCONFIRMED bucket; rejected findings are retained with the refuting model and its reason.
 
 **Use when:**
 - you want a high-precision code review before merging a PR, not maximal coverage,
 - Copilot is unavailable and you want a non-Claude second opinion as the adversary,
 - you are working in Git Flow and want a review of either a PR diff or your local working-tree changes,
-- you want an auditable trail showing exactly which model killed each finding and why.
+- you want an auditable trail showing exactly which model rejected each finding and why.
 
 ## How It Works
 
 ### Pipeline
 
 ```
-detect-mode → R1 Claude review → R2 Gemini refute+augment → R3 Claude refute → synthesize → sink
+detect-mode → R1 parallel independent discovery → R2 parallel symmetric cross-examination → synthesize → sink
 ```
 
-### 3-Round Refutation Loop
+### Symmetric 2-Round Pipeline
 
-1. **R1 — Claude review:** Two sub-agents (bug-hunter on Opus, convention-reviewer on Sonnet) review the diff grounded in actual source files. Each emits findings in a shared JSON schema.
-2. **R2 — Gemini cross-examines:** `gemini-review.sh` feeds Gemini the same byte-identical diff plus Claude's R1 findings. Gemini either confirms or refutes each Claude finding (with reason + confidence) and adds any new findings of its own. JSON is extracted from the CLI envelope with one retry on parse failure.
-3. **R3 — Claude cross-examines back:** The `adversarial-r3-adjudicator` (Opus) reads actual source files — not just diff hunks — to adjudicate: per Gemini refutation → accept (drop Claude's finding) or defend; per Gemini new finding → confirm or refute.
+1. **R1 — Independent discovery (parallel, blind):** Two Claude sub-agents (bug-hunter on Opus, convention-reviewer on Sonnet) review the diff grounded in actual source files — their findings become `r1-claude.json`. Simultaneously, `gemini-review.sh --mode find` runs Gemini's independent pass — findings become `r1-gemini.json`. Neither side sees the other's output.
+2. **R2 — Symmetric cross-examination (parallel):** The `adversarial-cross-examiner` (Opus) reads Gemini's R1 findings against actual source and returns confirm/refute verdicts (`r2-claude-verdicts.json`). Simultaneously, `gemini-review.sh --mode judge` cross-examines Claude's R1 findings and returns verdicts (`r2-gemini-verdicts.json`).
 
 ### Survivor Rule
 
-- A Claude finding survives **if and only if Gemini confirmed it** in R2.
-- A Gemini new finding survives **if and only if Claude confirmed it** in R3.
+- A Claude finding (C-NNN) survives **if and only if Gemini confirmed it** in R2.
+- A Gemini finding (G-NNN) survives **if and only if Claude confirmed it** in R2.
 - All other findings → `UNCONFIRMED (single-model)` bucket, surfaced below survivors and never silently dropped.
-- Rejected findings are retained with which model killed them and why.
-- The loop is bounded to exactly 3 rounds — no tie-break round.
+- Rejected findings are retained with which model refuted them and why.
+- Convergence is purely mechanical — `synthesize.py` applies the rule with no further adjudication.
 
 ### Modes
 
@@ -60,20 +59,20 @@ No manual pre-flight is required. The `gemini` binary version 0.38.2+ supports `
 
 ### Skills
 
-- `adversarial-review` — Adversarial PR review via a bounded Claude↔Gemini 3-round refutation loop. Surfaces only findings both models confirm. Auto-detects PR vs local mode.
+- `adversarial-review` — Adversarial PR review via symmetric Claude↔Gemini independent discovery and cross-examination. Surfaces only findings both models confirm. Auto-detects PR vs local mode.
 
 ### Agents
 
 - `adversarial-bug-hunter` (Opus) — R1 bug-hunt pass over the diff, grounded in actual source files. NOT user-invocable — spawned by the adversarial-review skill.
 - `adversarial-convention-reviewer` (Sonnet) — R1 convention and CLAUDE.md compliance scan over the diff. NOT user-invocable — spawned by the adversarial-review skill.
-- `adversarial-r3-adjudicator` (Opus) — R3 Claude cross-examination: reads actual source files to confirm or refute Gemini's R2 findings and rebuttals. NOT user-invocable — spawned by the adversarial-review skill.
+- `adversarial-cross-examiner` (Opus) — R2 symmetric cross-examiner: reads Gemini's R1 findings against actual source files and returns confirm/refute verdicts. NOT user-invocable — spawned by the adversarial-review skill.
 
 ### Scripts
 
 - `ensure-gemini.sh` — Step 0 detection: emits `KEY=VALUE` status lines (installed, version, authed, install hint, auth hint); never installs or calls the network; used by the orchestrator to guide setup before the pipeline runs.
 - `detect-mode.sh` — resolves PR vs local mode and emits the shared diff artifact both models consume.
-- `gemini-review.sh` — feeds Gemini the diff + R1 findings; extracts JSON from the CLI envelope; retries once on parse failure.
-- `synthesize.py` — applies the survivor rule to R1/R2/R3 outputs, classifying findings into SURVIVORS / UNCONFIRMED / REJECTED.
+- `gemini-review.sh` — `--mode find`: Gemini's independent R1 discovery pass; `--mode judge`: Gemini's R2 cross-examination of Claude's findings; extracts JSON from the CLI envelope; retries once on parse failure.
+- `synthesize.py` — applies the survivor rule to the 4 symmetric inputs (claude-findings, gemini-findings, gemini-verdicts, claude-verdicts), classifying findings into SURVIVORS / UNCONFIRMED / REJECTED.
 - `sink.sh` — delivers the report: posts PR review comments in PR mode; writes terminal report + markdown file in local mode.
 - `run-tests.sh` — script-level tests covering mode detection, diff extraction, Gemini parse/retry/degradation, the classification partition, and ensure-gemini.sh detection logic.
 
@@ -123,7 +122,7 @@ rm -rf /tmp/ccs
 - `pr-review-loop` plugin — Workflow B for posting and resolving PR comments from the adversarial review's survivor output
 - `adversarial-bug-hunter` agent (`~/.claude/agents/adversarial-bug-hunter.md`) — R1 bug-hunt sub-agent
 - `adversarial-convention-reviewer` agent (`~/.claude/agents/adversarial-convention-reviewer.md`) — R1 convention sub-agent
-- `adversarial-r3-adjudicator` agent (`~/.claude/agents/adversarial-r3-adjudicator.md`) — R3 adjudicator sub-agent
+- `adversarial-cross-examiner` agent (`~/.claude/agents/adversarial-cross-examiner.md`) — R2 cross-examiner sub-agent
 - `code-review` skill — built-in all-Claude breadth review (no adversary; use for full coverage rather than precision)
 
 ## Compatibility

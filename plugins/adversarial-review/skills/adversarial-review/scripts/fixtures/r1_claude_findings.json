@@ -1,6 +1,6 @@
 [
   {
-    "id": "AR-001",
+    "id": "C-001",
     "path": "src/auth.py",
     "line": 42,
     "severity": "critical",
@@ -15,7 +15,7 @@
     "kill_reason": null
   },
   {
-    "id": "AR-002",
+    "id": "C-002",
     "path": "src/utils.py",
     "line": 17,
     "severity": "important",
@@ -30,7 +30,7 @@
     "kill_reason": null
   },
   {
-    "id": "AR-003",
+    "id": "C-003",
     "path": "src/config.py",
     "line": 8,
     "severity": "minor",
@@ -45,7 +45,7 @@
     "kill_reason": null
   },
   {
-    "id": "AR-004",
+    "id": "C-004",
     "path": "src/processor.py",
     "line": 95,
     "severity": "important",
@@ -60,7 +60,7 @@
     "kill_reason": null
   },
   {
-    "id": "AR-005",
+    "id": "C-005",
     "path": "src/api.py",
     "line": 134,
     "severity": "minor",

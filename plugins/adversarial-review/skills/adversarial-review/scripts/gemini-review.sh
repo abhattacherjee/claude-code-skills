@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# gemini-review.sh — Gemini R2 adversarial review (refute+augment Claude findings)
-# Usage: gemini-review.sh --diff <file> --findings <r1.json> [--model <m>] [--out <r2.json>] [--help]
+# gemini-review.sh — Gemini adversarial review (find mode or judge mode)
+# Usage: gemini-review.sh --diff <file> [--findings <r1.json>] [--mode find|judge]
+#                         [--model <m>] [--out <file>] [--help]
 # Exit codes: 0=ok, 1=error, 2=usage, 3=adversary-unavailable
 
 set -eu
@@ -8,33 +9,64 @@ set -eu
 SCRIPT_NAME="$(basename "$0")"
 DIFF_FILE=""
 FINDINGS_FILE=""
+MODE="judge"
 MODEL="${GEMINI_MODEL:-gemini-2.5-pro}"
 OUT_FILE=""
 
 usage() {
   cat <<EOF
-Usage: $SCRIPT_NAME --diff <file> --findings <r1.json> [--model <m>] [--out <r2.json>] [--help]
+Usage: $SCRIPT_NAME --diff <file> [--findings <r1.json>] [--mode find|judge]
+                    [--model <m>] [--out <file>] [--help]
 
-Send Claude's R1 findings + the shared diff to Gemini for adversarial
-review (Round 2). Gemini verdicts each Claude finding and adds new ones.
+Run Gemini in one of two modes:
+
+  find (independent review):
+    Gemini independently reviews the diff and reports its own findings.
+    Requires --diff only; --findings is ignored if provided.
+    Output: {"findings":[...]}
+
+  judge (default — verdict on peer findings):
+    Gemini verdicts each provided finding as confirm or refute.
+    Requires --diff AND --findings.
+    Output: {"verdicts":[...]}
 
 Options:
   --diff <file>       Path to the shared diff artifact (required)
-  --findings <file>   Path to R1 Claude findings JSON list (required)
+  --findings <file>   Path to peer findings JSON list (required for judge mode)
+  --mode <mode>       find or judge (default: judge)
   --model <model>     Gemini model to use (default: gemini-2.5-pro,
                       or \$GEMINI_MODEL env var)
   --out <file>        Write output JSON to this file (default: stdout)
   --help              Show this help and exit
 
 Output JSON schema:
-  {
-    "verdicts": [
-      {"id": "...", "gemini_verdict": "confirm|refute", "reason": "...", "confidence": 0.0-1.0}
-    ],
-    "new_findings": [
-      { <full finding schema with origin=gemini> }
-    ]
-  }
+  find mode:
+    {
+      "findings": [
+        {
+          "id": "<unique-id>",
+          "path": "<file>",
+          "line": <n|null>,
+          "severity": "critical|important|minor",
+          "category": "bug|security|perf|convention|maintainability",
+          "title": "<short title>",
+          "rationale": "<explanation>",
+          "origin": "gemini",
+          "claude_verdict": null,
+          "gemini_verdict": null,
+          "status": null,
+          "killed_by": null,
+          "kill_reason": null
+        }
+      ]
+    }
+
+  judge mode:
+    {
+      "verdicts": [
+        {"id": "...", "gemini_verdict": "confirm|refute", "reason": "...", "confidence": 0.0}
+      ]
+    }
 
 Exit codes:
   0  Success
@@ -53,6 +85,9 @@ while [[ $# -gt 0 ]]; do
     --findings)
       [[ $# -lt 2 ]] && { echo "Error: --findings requires an argument" >&2; exit 2; }
       FINDINGS_FILE="$2"; shift 2 ;;
+    --mode)
+      [[ $# -lt 2 ]] && { echo "Error: --mode requires an argument" >&2; exit 2; }
+      MODE="$2"; shift 2 ;;
     --model)
       [[ $# -lt 2 ]] && { echo "Error: --model requires an argument" >&2; exit 2; }
       MODEL="$2"; shift 2 ;;
@@ -68,19 +103,29 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# ---- validate mode ----
+if [[ "$MODE" != "find" && "$MODE" != "judge" ]]; then
+  echo "Error: --mode must be 'find' or 'judge', got: $MODE" >&2
+  usage >&2
+  exit 2
+fi
+
 # ---- input validation ----
 if [[ -z "$DIFF_FILE" ]]; then
   echo "Error: --diff is required" >&2
   usage >&2
   exit 2
 fi
-if [[ -z "$FINDINGS_FILE" ]]; then
-  echo "Error: --findings is required" >&2
-  usage >&2
-  exit 2
-fi
 [[ -f "$DIFF_FILE" ]] || { echo "Error: diff file not found: $DIFF_FILE" >&2; exit 1; }
-[[ -f "$FINDINGS_FILE" ]] || { echo "Error: findings file not found: $FINDINGS_FILE" >&2; exit 1; }
+
+if [[ "$MODE" == "judge" ]]; then
+  if [[ -z "$FINDINGS_FILE" ]]; then
+    echo "Error: --findings is required for judge mode" >&2
+    usage >&2
+    exit 2
+  fi
+  [[ -f "$FINDINGS_FILE" ]] || { echo "Error: findings file not found: $FINDINGS_FILE" >&2; exit 1; }
+fi
 
 # ---- check gemini is available ----
 if ! command -v gemini >/dev/null 2>&1; then
@@ -94,25 +139,28 @@ fi
 #
 #  Shape A (old / plain)  — stdout IS the model's JSON (possibly wrapped in prose
 #                           or markdown fences):
-#    {"verdicts":[...], "new_findings":[...]}
+#    {"verdicts":[...]}        (judge mode)
+#    {"findings":[...]}        (find mode)
 #
 #  Shape B (v0.44.x envelope) — stdout has optional prose prefix lines, then an
 #                              outer JSON envelope whose "response" field is a
 #                              string containing the model's actual answer:
 #    Ripgrep is not available. Falling back to GrepTool.
 #    Skill conflict detected: ...
-#    {"session_id":"...","response":"{\"verdicts\":[...],\"new_findings\":[...]}","stats":{...}}
+#    {"session_id":"...","response":"{\"verdicts\":[...]}","stats":{...}}
 #
 # In both shapes the model's answer may itself be:
 #   - bare JSON
 #   - JSON wrapped in ```json ... ``` fences
 #   - JSON surrounded by prose
 #
-# On success: prints the extracted {"verdicts":...,"new_findings":...} JSON and exits 0.
+# On success: prints the extracted JSON object and exits 0.
 # On failure: exits 1.
 extract_model_answer() {
-  python3 - "$1" <<'PYEOF'
+  python3 - "$1" "$2" <<'PYEOF'
 import sys, json, re
+
+MODE = sys.argv[2]  # "find" or "judge"
 
 def find_first_json_object(text):
     """Return the first balanced {...} block that parses as a JSON dict, or None."""
@@ -138,9 +186,16 @@ def find_first_json_object(text):
                     start = None
     return None
 
+def has_payload_key(obj):
+    """Check if the dict has the expected top-level key for the current mode."""
+    if MODE == "find":
+        return "findings" in obj
+    else:
+        return "verdicts" in obj
+
 def extract_payload(text):
     """
-    Extract the model's {verdicts, new_findings} dict from raw text.
+    Extract the mode-appropriate JSON dict from raw text.
     Returns the dict or None.
     """
     # --- Step 1: find the first JSON object anywhere in the text ---
@@ -156,18 +211,16 @@ def extract_payload(text):
         model_text = outer["response"]
     else:
         # Shape A: the outer object IS the model's answer
-        # Check if it already has verdicts at the top level
-        if "verdicts" in outer:
+        if has_payload_key(outer):
             return outer
         # Otherwise fall through to search the raw text for an inner object
         model_text = text
 
     # --- Step 3: extract payload from model_text ---
-    # The model's answer may be:
-    #  (a) a bare JSON object — try direct parse first
+    # (a) a bare JSON object — try direct parse first
     try:
         obj = json.loads(model_text.strip())
-        if isinstance(obj, dict) and "verdicts" in obj:
+        if isinstance(obj, dict) and has_payload_key(obj):
             return obj
     except Exception:
         pass
@@ -177,14 +230,14 @@ def extract_payload(text):
     if fence_match:
         try:
             obj = json.loads(fence_match.group(1))
-            if isinstance(obj, dict) and "verdicts" in obj:
+            if isinstance(obj, dict) and has_payload_key(obj):
                 return obj
         except Exception:
             pass
 
-    # (c) JSON object embedded in prose — find first balanced {...} with verdicts
+    # (c) JSON object embedded in prose — find first balanced {...} with payload key
     inner = find_first_json_object(model_text)
-    if inner is not None and "verdicts" in inner:
+    if inner is not None and has_payload_key(inner):
         return inner
 
     return None
@@ -195,10 +248,6 @@ result = extract_payload(text)
 if result is None:
     sys.exit(1)
 
-# Ensure new_findings defaults to [] if absent
-if "new_findings" not in result:
-    result["new_findings"] = []
-
 print(json.dumps(result))
 sys.exit(0)
 PYEOF
@@ -206,37 +255,34 @@ PYEOF
 
 # Keep the old name as an alias so any internal callers still work
 extract_json_object() {
-  extract_model_answer "$1"
+  extract_model_answer "$1" "$MODE"
 }
 
 # ---- build prompt ----
 build_prompt() {
   local strict="$1"
-  local findings_content
-  findings_content="$(cat "$FINDINGS_FILE")"
 
-  if [[ "$strict" == "true" ]]; then
-    cat <<PROMPT
-You are an adversarial code reviewer. Below is a git diff followed by a list of code review findings made by Claude (Round 1).
+  if [[ "$MODE" == "find" ]]; then
+    if [[ "$strict" == "true" ]]; then
+      cat <<PROMPT
+You are an adversarial code reviewer. Below is a git diff.
 
-Your task is to:
-1. For each Claude finding (identified by "id"), output your verdict: "confirm" if valid, "refute" if invalid/wrong.
-2. Add any NEW findings you identify that Claude missed (use origin="gemini").
+Your task is to independently review the diff and report findings (bugs, security issues,
+performance problems, conventions, or maintainability concerns) introduced by the diff,
+grounded in the diff only.
 
-Output ONLY valid JSON, no prose, no markdown, no explanation. The JSON must have exactly this structure:
+Output ONLY valid JSON, no prose, no markdown, no explanation. The JSON must have
+exactly this structure:
 {
-  "verdicts": [
-    {"id": "<finding-id>", "gemini_verdict": "confirm|refute", "reason": "<brief reason>", "confidence": 0.0}
-  ],
-  "new_findings": [
+  "findings": [
     {
       "id": "<unique-id>",
       "path": "<file path>",
       "line": <line number or null>,
       "severity": "critical|important|minor",
-      "category": "bug|security|convention|perf|maintainability",
+      "category": "bug|security|perf|convention|maintainability",
       "title": "<short title>",
-      "rationale": "<explanation>",
+      "rationale": "<explanation of why this is a finding>",
       "origin": "gemini",
       "claude_verdict": null,
       "gemini_verdict": null,
@@ -246,23 +292,62 @@ Output ONLY valid JSON, no prose, no markdown, no explanation. The JSON must hav
     }
   ]
 }
-
-Claude's findings:
-${findings_content}
 PROMPT
+    else
+      cat <<PROMPT
+You are an adversarial code reviewer. Below is a git diff.
+
+Your task is to independently review the diff and report findings (bugs, security issues,
+performance problems, conventions, or maintainability concerns) introduced by the diff.
+
+Respond with a JSON object with a "findings" key: an array of finding objects.
+Each finding must have: id (unique string), path, line (number or null), severity
+(critical|important|minor), category (bug|security|perf|convention|maintainability),
+title, rationale, origin ("gemini"), and null values for claude_verdict, gemini_verdict,
+status, killed_by, kill_reason.
+PROMPT
+    fi
   else
-    cat <<PROMPT
-You are an adversarial code reviewer. Below is a git diff followed by a list of code review findings made by Claude (Round 1).
+    # judge mode
+    local findings_content
+    findings_content="$(cat "$FINDINGS_FILE")"
 
-Your task is to:
-1. For each Claude finding (identified by "id"), output your verdict: "confirm" if valid, "refute" if invalid/wrong.
-2. Add any NEW findings you identify that Claude missed (use origin="gemini").
+    if [[ "$strict" == "true" ]]; then
+      cat <<PROMPT
+You are an adversarial code reviewer. Below is a git diff followed by a list of code
+review findings made by another model.
 
-Respond with a JSON object with two keys: "verdicts" (array of verdict objects with id, gemini_verdict, reason, confidence) and "new_findings" (array of new finding objects following the full finding schema with origin="gemini" and null for verdict/status/killed_by/kill_reason fields).
+Your task is to verdict each finding (identified by "id"): output "confirm" if the
+finding is valid and grounded in the diff, or "refute" if it is incorrect or not
+supported by the diff.
 
-Claude's findings:
+Output ONLY valid JSON, no prose, no markdown, no explanation. The JSON must have
+exactly this structure:
+{
+  "verdicts": [
+    {"id": "<finding-id>", "gemini_verdict": "confirm|refute", "reason": "<brief reason>", "confidence": 0.0}
+  ]
+}
+
+Findings to verdict:
 ${findings_content}
 PROMPT
+    else
+      cat <<PROMPT
+You are an adversarial code reviewer. Below is a git diff followed by a list of code
+review findings made by another model.
+
+Your task is to verdict each finding (identified by "id"): "confirm" if valid and
+grounded in the diff, or "refute" if incorrect or not supported.
+
+Respond with a JSON object with a "verdicts" key: an array of verdict objects.
+Each verdict must have: id (the finding id), gemini_verdict ("confirm" or "refute"),
+reason (brief explanation), confidence (0.0–1.0).
+
+Findings to verdict:
+${findings_content}
+PROMPT
+    fi
   fi
 }
 
@@ -299,7 +384,7 @@ call_gemini() {
   fi
 
   # Try to extract JSON from the output
-  if extract_json_object "$RAW_OUTPUT_FILE" >"$EXTRACTED_JSON_FILE" 2>/dev/null; then
+  if extract_model_answer "$RAW_OUTPUT_FILE" "$MODE" >"$EXTRACTED_JSON_FILE" 2>/dev/null; then
     return 0
   fi
   return 1
@@ -315,23 +400,38 @@ if ! call_gemini "false"; then
   fi
 fi
 
-# Validate the extracted JSON has required keys and drop any id-less entries (AR-001)
-if ! python3 -c "
+# Validate the extracted JSON and drop any id-less entries
+if [[ "$MODE" == "judge" ]]; then
+  if ! python3 -c "
 import json, sys
 data = json.load(open('$EXTRACTED_JSON_FILE'))
 assert 'verdicts' in data, 'missing verdicts key'
-assert 'new_findings' in data, 'missing new_findings key'
 assert isinstance(data['verdicts'], list), 'verdicts must be a list'
-assert isinstance(data['new_findings'], list), 'new_findings must be a list'
 # Drop entries without a string id so downstream never sees id-less entries
-data['verdicts']      = [v for v in data['verdicts']      if isinstance(v.get('id'), str) and v['id']]
-data['new_findings']  = [f for f in data['new_findings']  if isinstance(f.get('id'), str) and f['id']]
+data['verdicts'] = [v for v in data['verdicts'] if isinstance(v.get('id'), str) and v['id']]
 with open('$EXTRACTED_JSON_FILE', 'w') as fh:
     json.dump(data, fh)
 " 2>"$VALIDATE_ERR_FILE"; then
-  err="$(cat "$VALIDATE_ERR_FILE" 2>/dev/null || echo 'unknown')"
-  echo "ADVERSARY_UNAVAILABLE: Gemini output missing required fields: $err" >&2
-  exit 3
+    err="$(cat "$VALIDATE_ERR_FILE" 2>/dev/null || echo 'unknown')"
+    echo "ADVERSARY_UNAVAILABLE: Gemini output missing required fields: $err" >&2
+    exit 3
+  fi
+else
+  # find mode
+  if ! python3 -c "
+import json, sys
+data = json.load(open('$EXTRACTED_JSON_FILE'))
+assert 'findings' in data, 'missing findings key'
+assert isinstance(data['findings'], list), 'findings must be a list'
+# Drop entries without a string id so downstream never sees id-less entries
+data['findings'] = [f for f in data['findings'] if isinstance(f.get('id'), str) and f['id']]
+with open('$EXTRACTED_JSON_FILE', 'w') as fh:
+    json.dump(data, fh)
+" 2>"$VALIDATE_ERR_FILE"; then
+    err="$(cat "$VALIDATE_ERR_FILE" 2>/dev/null || echo 'unknown')"
+    echo "ADVERSARY_UNAVAILABLE: Gemini output missing required fields: $err" >&2
+    exit 3
+  fi
 fi
 
 # ---- emit output ----

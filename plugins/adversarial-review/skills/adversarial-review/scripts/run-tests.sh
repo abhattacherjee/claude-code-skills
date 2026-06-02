@@ -23,11 +23,16 @@ Usage: $(basename "$0") [--help]
 Run the adversarial-review script test suite.
 
 Tests:
-  - synthesize.py: classification partition (survivors/unconfirmed/rejected)
-  - synthesize.py: all outcome types present in fixture
+  - synthesize.py: symmetric classification (survivors/unconfirmed/rejected)
+  - synthesize.py: specific finding statuses (C-### / G-### ids)
+  - synthesize.py: markdown section headers present
+  - synthesize.py: rejected findings have kill info
+  - synthesize.py: error handling (no args, nonexistent files, wrong types)
   - gemini-review.sh: JSON extraction from wrapped/prose/v0.44.x envelope
-  - gemini-review.sh: v0.44.x envelope (prose prefix + response-string) -> success
+  - gemini-review.sh: --mode find stub emits findings
+  - gemini-review.sh: --mode judge stub emits verdicts (no new_findings)
   - gemini-review.sh: auth/install failure -> exit 3
+  - gemini-review.sh: malformed output -> exit 3 after retry
   - detect-mode.sh: base branch resolution by prefix (pure logic)
   - detect-mode.sh: large-diff cap enforcement
   - ensure-gemini.sh: GEMINI_INSTALLED=no when gemini not on PATH
@@ -131,19 +136,26 @@ TMP_DIR="$(mktemp -d /tmp/adversarial-test.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 # ====================================================================
-# SECTION 1: synthesize.py — classification partition
+# SECTION 1: synthesize.py — symmetric classification partition
 # ====================================================================
-section "synthesize.py — classification partition"
+section "synthesize.py — symmetric classification partition"
 
-R1="$FIXTURES_DIR/r1_claude_findings.json"
-R2="$FIXTURES_DIR/r2_gemini_response.json"
-R3="$FIXTURES_DIR/r3_claude_response.json"
+CLAUDE_FINDINGS="$FIXTURES_DIR/r1_claude_findings.json"
+GEMINI_FINDINGS="$FIXTURES_DIR/r1_gemini_findings.json"
+GEMINI_VERDICTS="$FIXTURES_DIR/r2_gemini_verdicts.json"
+CLAUDE_VERDICTS="$FIXTURES_DIR/r2_claude_verdicts.json"
 OUT_JSON="$TMP_DIR/synthesis.json"
 OUT_MD="$TMP_DIR/synthesis.md"
 
 SYNTH_OUT=""
 SYNTH_EXIT=0
-run_capture SYNTH_OUT SYNTH_EXIT python3 "$SYNTHESIZE" --r1 "$R1" --r2 "$R2" --r3 "$R3" --json "$OUT_JSON" --md "$OUT_MD"
+run_capture SYNTH_OUT SYNTH_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CLAUDE_FINDINGS" \
+  --gemini-findings "$GEMINI_FINDINGS" \
+  --gemini-verdicts "$GEMINI_VERDICTS" \
+  --claude-verdicts "$CLAUDE_VERDICTS" \
+  --json "$OUT_JSON" \
+  --md "$OUT_MD"
 
 assert_exit_code "synthesize exits 0" 0 "$SYNTH_EXIT"
 
@@ -152,14 +164,14 @@ SURVIVORS="$(echo "$SYNTH_OUT" | grep -oE 'survivors=[0-9]+' | cut -d= -f2)"
 UNCONFIRMED="$(echo "$SYNTH_OUT" | grep -oE 'unconfirmed=[0-9]+' | cut -d= -f2)"
 REJECTED="$(echo "$SYNTH_OUT" | grep -oE 'rejected=[0-9]+' | cut -d= -f2)"
 
-# Expected classification (see fixtures/README below):
-# AR-001: gemini confirm -> SURVIVOR
-# AR-002: gemini refute + defends=false -> REJECTED (killed_by=gemini)
-# AR-003: gemini confirm -> SURVIVOR
-# AR-004: gemini refute + defends=true -> UNCONFIRMED
-# AR-005: not in r2 verdicts -> UNCONFIRMED (gemini_verdict=null)
-# gemini-new-001: claude confirm -> SURVIVOR
-# gemini-new-002: claude refute -> REJECTED (killed_by=claude)
+# Expected classification (fixtures):
+# C-001: gemini_verdict=confirm  -> SURVIVOR
+# C-002: gemini_verdict=refute   -> REJECTED (killed_by=gemini)
+# C-003: gemini_verdict=confirm  -> SURVIVOR
+# C-004: not in gemini verdicts  -> UNCONFIRMED (gemini_verdict=null)
+# C-005: not in gemini verdicts  -> UNCONFIRMED (gemini_verdict=null)
+# G-001: claude_verdict=confirm  -> SURVIVOR
+# G-002: claude_verdict=refute   -> REJECTED (killed_by=claude)
 # Survivors: 3, Rejected: 2, Unconfirmed: 2
 
 assert_eq "survivor count = 3" "3" "$SURVIVORS"
@@ -175,15 +187,15 @@ data = json.load(open(sys.argv[1]))
 findings = {f["id"]: f for f in data["findings"]}
 
 checks = [
-    ("AR-001",          "status",    "survivor"),
-    ("AR-002",          "status",    "rejected"),
-    ("AR-002",          "killed_by", "gemini"),
-    ("AR-003",          "status",    "survivor"),
-    ("AR-004",          "status",    "unconfirmed"),
-    ("AR-005",          "status",    "unconfirmed"),
-    ("gemini-new-001",  "status",    "survivor"),
-    ("gemini-new-002",  "status",    "rejected"),
-    ("gemini-new-002",  "killed_by", "claude"),
+    ("C-001", "status",    "survivor"),
+    ("C-002", "status",    "rejected"),
+    ("C-002", "killed_by", "gemini"),
+    ("C-003", "status",    "survivor"),
+    ("C-004", "status",    "unconfirmed"),
+    ("C-005", "status",    "unconfirmed"),
+    ("G-001", "status",    "survivor"),
+    ("G-002", "status",    "rejected"),
+    ("G-002", "killed_by", "claude"),
 ]
 
 failures = []
@@ -205,16 +217,18 @@ else:
 PYEOF
 
 if [[ "$STATUS_EXIT" -eq 0 ]]; then
-  pass "individual finding statuses correct"
+  pass "individual finding statuses correct (C-###/G-### ids)"
 else
   fail "individual finding statuses" "$STATUS_CHECK"
 fi
 
 # ---- verify markdown output structure ----
 if [[ -f "$OUT_MD" ]]; then
-  assert_contains "md has Survivors section" "## Confirmed Findings (Survivors)" "$(cat "$OUT_MD")"
-  assert_contains "md has Unconfirmed section" "## Unconfirmed Findings" "$(cat "$OUT_MD")"
-  assert_contains "md has Rejected section" "## Rejected Findings" "$(cat "$OUT_MD")"
+  MD_CONTENT="$(cat "$OUT_MD")"
+  assert_contains "md has title"             "# Adversarial PR Review — Synthesis Report" "$MD_CONTENT"
+  assert_contains "md has Survivors section" "## Confirmed Findings (Survivors)"          "$MD_CONTENT"
+  assert_contains "md has Unconfirmed section" "## Unconfirmed Findings"                  "$MD_CONTENT"
+  assert_contains "md has Rejected section"  "## Rejected Findings"                       "$MD_CONTENT"
   pass "markdown file generated"
 else
   fail "markdown file not generated"
@@ -227,15 +241,17 @@ run_capture KILL_CHECK KILL_EXIT python3 - "$OUT_JSON" <<'PYEOF'
 import json, sys
 data = json.load(open(sys.argv[1]))
 findings = {f["id"]: f for f in data["findings"]}
-f002 = findings.get("AR-002", {})
-fnew002 = findings.get("gemini-new-002", {})
+c002 = findings.get("C-002", {})
+g002 = findings.get("G-002", {})
 errors = []
-if f002.get("killed_by") != "gemini":
-    errors.append(f"AR-002 killed_by={f002.get('killed_by')!r} expected 'gemini'")
-if not f002.get("kill_reason"):
-    errors.append("AR-002 kill_reason is empty")
-if fnew002.get("killed_by") != "claude":
-    errors.append(f"gemini-new-002 killed_by={fnew002.get('killed_by')!r} expected 'claude'")
+if c002.get("killed_by") != "gemini":
+    errors.append(f"C-002 killed_by={c002.get('killed_by')!r} expected 'gemini'")
+if not c002.get("kill_reason"):
+    errors.append("C-002 kill_reason is empty")
+if g002.get("killed_by") != "claude":
+    errors.append(f"G-002 killed_by={g002.get('killed_by')!r} expected 'claude'")
+if not g002.get("kill_reason"):
+    errors.append("G-002 kill_reason is empty")
 if errors:
     print("\n".join(errors))
     sys.exit(1)
@@ -251,9 +267,9 @@ else
 fi
 
 # ====================================================================
-# SECTION 2: synthesize.py — all 6 outcome types present
+# SECTION 2: synthesize.py — outcome types present
 # ====================================================================
-section "synthesize.py — all 6 outcome types in fixture"
+section "synthesize.py — outcome types in fixture"
 
 ALL_OUTCOMES_OUT=""
 ALL_OUTCOMES_EXIT=0
@@ -264,48 +280,42 @@ data = json.load(open(sys.argv[1]))
 findings = data["findings"]
 
 outcomes = {
-    "claude-confirmed-survivor":    False,  # claude origin + gemini confirm
-    "gemini-new-confirmed-survivor":False,  # gemini origin + claude confirm
-    "claude-refuted-rejected":      False,  # claude origin + gemini refute + !defends
-    "gemini-new-refuted-rejected":  False,  # gemini origin + claude refute
-    "defended-unconfirmed":         False,  # claude origin + gemini refute + defends
-    "unaddressed-unconfirmed":      False,  # claude origin + no gemini verdict
+    "claude-confirmed-survivor":   False,   # origin=claude + gemini confirm
+    "gemini-confirmed-survivor":   False,   # origin=gemini + claude confirm
+    "claude-rejected-by-gemini":   False,   # origin=claude + gemini refute
+    "gemini-rejected-by-claude":   False,   # origin=gemini + claude refute
+    "claude-unconfirmed":          False,   # origin=claude + no gemini verdict
 }
 
 for f in findings:
     origin = f.get("origin")
     status = f.get("status")
-    gv     = f.get("gemini_verdict")
     kb     = f.get("killed_by")
 
     if origin == "claude" and status == "survivor":
         outcomes["claude-confirmed-survivor"] = True
     if origin == "gemini" and status == "survivor":
-        outcomes["gemini-new-confirmed-survivor"] = True
+        outcomes["gemini-confirmed-survivor"] = True
     if origin == "claude" and status == "rejected" and kb == "gemini":
-        outcomes["claude-refuted-rejected"] = True
+        outcomes["claude-rejected-by-gemini"] = True
     if origin == "gemini" and status == "rejected" and kb == "claude":
-        outcomes["gemini-new-refuted-rejected"] = True
-    # defended: unconfirmed with gemini_verdict=refute
-    if origin == "claude" and status == "unconfirmed" and gv == "refute":
-        outcomes["defended-unconfirmed"] = True
-    # unaddressed: unconfirmed with no gemini verdict
-    if origin == "claude" and status == "unconfirmed" and gv is None:
-        outcomes["unaddressed-unconfirmed"] = True
+        outcomes["gemini-rejected-by-claude"] = True
+    if origin == "claude" and status == "unconfirmed":
+        outcomes["claude-unconfirmed"] = True
 
 missing = [k for k, v in outcomes.items() if not v]
 if missing:
     print("Missing outcome types: " + ", ".join(missing))
     sys.exit(1)
 else:
-    print("All 6 outcome types present")
+    print("All outcome types present")
     sys.exit(0)
 PYEOF
 
 if [[ "$ALL_OUTCOMES_EXIT" -eq 0 ]]; then
-  pass "all 6 outcome types present in fixture"
+  pass "all symmetric outcome types present in fixture"
 else
-  fail "all 6 outcome types" "$ALL_OUTCOMES_OUT"
+  fail "outcome types" "$ALL_OUTCOMES_OUT"
 fi
 
 # ====================================================================
@@ -315,11 +325,14 @@ section "JSON extraction — wrapped envelope, prose-only, and v0.44.x envelope"
 
 # Standalone Python extractor that mirrors the logic embedded in
 # gemini-review.sh's extract_model_answer function.
-# Outputs: "ok VERDICTS=<n> NEW_FINDINGS=<n>" on success, nothing on failure.
+# Outputs: "ok KEY=<n>" on success, nothing on failure.
+# Takes an extra arg: mode (find|judge) to know which key to look for.
 EXTRACT_PY_SCRIPT="$TMP_DIR/extract_json.py"
 cat >"$EXTRACT_PY_SCRIPT" <<'PYEOF'
 #!/usr/bin/env python3
 import sys, json, re
+
+MODE = sys.argv[2] if len(sys.argv) > 2 else "judge"
 
 def find_first_json_object(text):
     depth = 0
@@ -343,22 +356,27 @@ def find_first_json_object(text):
                     start = None
     return None
 
+def has_payload_key(obj):
+    if MODE == "find":
+        return "findings" in obj
+    return "verdicts" in obj
+
 def extract_payload(text):
     outer = find_first_json_object(text)
     if outer is None:
         return None
-    # Shape B: v0.44.x envelope — "response" is a string with the model answer
+    # Shape B: v0.44.x envelope
     if "response" in outer and isinstance(outer["response"], str):
         model_text = outer["response"]
     else:
-        if "verdicts" in outer:
+        if has_payload_key(outer):
             return outer
         model_text = text
 
     # Bare JSON
     try:
         obj = json.loads(model_text.strip())
-        if isinstance(obj, dict) and "verdicts" in obj:
+        if isinstance(obj, dict) and has_payload_key(obj):
             return obj
     except Exception:
         pass
@@ -368,14 +386,14 @@ def extract_payload(text):
     if fence_match:
         try:
             obj = json.loads(fence_match.group(1))
-            if isinstance(obj, dict) and "verdicts" in obj:
+            if isinstance(obj, dict) and has_payload_key(obj):
                 return obj
         except Exception:
             pass
 
     # JSON embedded in prose
     inner = find_first_json_object(model_text)
-    if inner is not None and "verdicts" in inner:
+    if inner is not None and has_payload_key(inner):
         return inner
 
     return None
@@ -386,20 +404,21 @@ result = extract_payload(text)
 if result is None:
     sys.exit(1)
 
-if "new_findings" not in result:
-    result["new_findings"] = []
-
-nv = len(result["verdicts"])
-nf = len(result["new_findings"])
-print(f"ok VERDICTS={nv} NEW_FINDINGS={nf}")
+if MODE == "find":
+    n = len(result.get("findings", []))
+    print(f"ok FINDINGS={n}")
+else:
+    nv = len(result.get("verdicts", []))
+    print(f"ok VERDICTS={nv}")
 sys.exit(0)
 PYEOF
 chmod +x "$EXTRACT_PY_SCRIPT"
 
 # Test 1: wrapped JSON (JSON inside markdown fences + prose) -> should extract successfully
+# The existing gemini_envelope_wrapped.txt has verdicts key (judge mode)
 WRAPPED_OUT=""
 WRAPPED_EXIT=0
-run_capture WRAPPED_OUT WRAPPED_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_wrapped.txt"
+run_capture WRAPPED_OUT WRAPPED_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_wrapped.txt" "judge"
 
 assert_exit_code "JSON extracted from prose-wrapped envelope (exit 0)" "0" "$WRAPPED_EXIT"
 if [[ "$WRAPPED_EXIT" -eq 0 ]]; then
@@ -409,14 +428,14 @@ fi
 # Test 2: pure prose (no JSON object) -> should fail with exit 1
 PROSE_OUT=""
 PROSE_EXIT=0
-run_capture PROSE_OUT PROSE_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_prose_only.txt"
+run_capture PROSE_OUT PROSE_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_prose_only.txt" "judge"
 
 assert_exit_code "prose-only input fails extraction (exit 1)" "1" "$PROSE_EXIT"
 
-# Test 3: valid bare JSON file -> should parse directly (exit 0)
+# Test 3: valid bare JSON file (judge mode) -> should parse directly (exit 0)
 VALID_OUT=""
 VALID_EXIT=0
-run_capture VALID_OUT VALID_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_valid_json.json"
+run_capture VALID_OUT VALID_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_valid_json.json" "judge"
 
 assert_exit_code "valid JSON file extraction succeeds (exit 0)" "0" "$VALID_EXIT"
 if [[ "$VALID_EXIT" -eq 0 ]]; then
@@ -426,15 +445,29 @@ fi
 # Test 4: gemini-cli v0.44.x envelope —
 #   2 prose prefix lines, then outer JSON with "response" string containing the model answer.
 #   Fixture: fixtures/gemini_envelope_v044.txt
-#   Expected: verdicts len=1, new_findings len=0
+#   Expected: verdicts len=1
 V044_OUT=""
 V044_EXIT=0
-run_capture V044_OUT V044_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_v044.txt"
+run_capture V044_OUT V044_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_v044.txt" "judge"
 
 assert_exit_code "v0.44.x envelope: extraction succeeds (exit 0)" "0" "$V044_EXIT"
 if [[ "$V044_EXIT" -eq 0 ]]; then
-  assert_contains "v0.44.x envelope: verdicts=1" "VERDICTS=1"    "$V044_OUT"
-  assert_contains "v0.44.x envelope: new_findings=0" "NEW_FINDINGS=0" "$V044_OUT"
+  assert_contains "v0.44.x envelope: verdicts=1" "VERDICTS=1" "$V044_OUT"
+fi
+
+# Test 5: find mode — a findings-keyed JSON should extract in find mode
+FIND_FIXTURE="$TMP_DIR/find_fixture.json"
+cat >"$FIND_FIXTURE" <<'JSON'
+{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}
+JSON
+
+FIND_EXTRACT_OUT=""
+FIND_EXTRACT_EXIT=0
+run_capture FIND_EXTRACT_OUT FIND_EXTRACT_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIND_FIXTURE" "find"
+
+assert_exit_code "find-mode: findings-keyed JSON extracts (exit 0)" "0" "$FIND_EXTRACT_EXIT"
+if [[ "$FIND_EXTRACT_EXIT" -eq 0 ]]; then
+  assert_contains "find-mode: FINDINGS=1" "FINDINGS=1" "$FIND_EXTRACT_OUT"
 fi
 
 # ====================================================================
@@ -445,16 +478,7 @@ section "gemini-review.sh — adversary unavailable (stubbed gemini)"
 STUB_BIN_DIR="$TMP_DIR/stubs"
 mkdir -p "$STUB_BIN_DIR"
 
-# ---- stub: gemini not available — use a stub that exits 127 (command not found) ----
-# Rather than stripping PATH (which breaks python3/basename etc.), we put a
-# "not-gemini" stub in the PATH that simulates gemini being absent:
-# The cleanest way is to put a gemini stub that exits non-zero with a non-auth message.
-# For "not installed" semantics we test command -v behavior by making gemini absent
-# from a stub dir we put FIRST in PATH; since real gemini exists on system PATH,
-# we instead test the "auth error" path and the "not in PATH" path via wrapper.
-
-# Test: gemini is present but auth fails (covers the real-world case on this machine)
-# The script emits ADVERSARY_UNAVAILABLE and exits 3 when gemini returns auth error.
+# ---- Test: gemini auth error -> exit 3 ----
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
 # Simulate auth error
@@ -469,42 +493,71 @@ run_capture AUTH_FAIL_OUT AUTH_FAIL_EXIT \
   env PATH="$STUB_BIN_DIR:$PATH" \
   bash "$GEMINI_REVIEW" \
   --diff "$FIXTURES_DIR/r1_claude_findings.json" \
-  --findings "$FIXTURES_DIR/r1_claude_findings.json"
+  --findings "$FIXTURES_DIR/r1_claude_findings.json" \
+  --mode judge
 
 assert_exit_code "auth-error gemini -> exit 3" "3" "$AUTH_FAIL_EXIT"
 assert_contains "auth-error -> ADVERSARY_UNAVAILABLE" "ADVERSARY_UNAVAILABLE" "$AUTH_FAIL_OUT"
 
-# ---- stub: gemini outputs pure JSON (no wrapping) — success path ----
+# ---- Test: --mode judge stub emits verdicts (no new_findings key) ----
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
-# Stub gemini that outputs valid JSON directly
-printf '{"verdicts":[{"id":"claude-001","gemini_verdict":"confirm","reason":"test","confidence":0.9}],"new_findings":[]}\n'
+# Stub gemini that outputs valid judge-mode JSON (verdicts only, no new_findings)
+printf '{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"test","confidence":0.9}]}\n'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
-GEMINI_SUCCESS_OUT=""
-GEMINI_SUCCESS_EXIT=0
-run_capture GEMINI_SUCCESS_OUT GEMINI_SUCCESS_EXIT \
+GEMINI_JUDGE_OUT=""
+GEMINI_JUDGE_EXIT=0
+run_capture GEMINI_JUDGE_OUT GEMINI_JUDGE_EXIT \
   env PATH="$STUB_BIN_DIR:$PATH" \
   bash "$GEMINI_REVIEW" \
   --diff "$FIXTURES_DIR/r1_claude_findings.json" \
-  --findings "$FIXTURES_DIR/r1_claude_findings.json"
+  --findings "$FIXTURES_DIR/r1_claude_findings.json" \
+  --mode judge
 
-assert_exit_code "valid gemini JSON -> exit 0" "0" "$GEMINI_SUCCESS_EXIT"
-GEMINI_OUT_KEYS="$(echo "$GEMINI_SUCCESS_OUT" | python3 -c "
+assert_exit_code "judge mode valid JSON -> exit 0" "0" "$GEMINI_JUDGE_EXIT"
+JUDGE_KEY_CHECK="$(echo "$GEMINI_JUDGE_OUT" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-print('ok' if 'verdicts' in d and 'new_findings' in d else 'missing-keys')
+has_verdicts = 'verdicts' in d
+no_new_findings = 'new_findings' not in d
+print('ok' if has_verdicts and no_new_findings else 'bad-keys')
 " 2>/dev/null || echo "parse-error")"
-assert_eq "valid gemini output has required keys" "ok" "$GEMINI_OUT_KEYS"
+assert_eq "judge mode output has verdicts and no new_findings key" "ok" "$JUDGE_KEY_CHECK"
 
-# ---- stub: gemini outputs wrapped JSON — tests envelope extraction ----
+# ---- Test: --mode find stub emits findings ----
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
-# Stub gemini that wraps JSON in prose
+# Stub gemini that outputs valid find-mode JSON (findings)
+printf '{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}\n'
+STUB
+chmod +x "$STUB_BIN_DIR/gemini"
+
+GEMINI_FIND_OUT=""
+GEMINI_FIND_EXIT=0
+run_capture GEMINI_FIND_OUT GEMINI_FIND_EXIT \
+  env PATH="$STUB_BIN_DIR:$PATH" \
+  bash "$GEMINI_REVIEW" \
+  --diff "$FIXTURES_DIR/r1_claude_findings.json" \
+  --mode find
+
+assert_exit_code "find mode valid JSON -> exit 0" "0" "$GEMINI_FIND_EXIT"
+FIND_KEY_CHECK="$(echo "$GEMINI_FIND_OUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+n = len(d.get('findings', []))
+print(f'ok findings={n}' if 'findings' in d else 'missing-findings-key')
+" 2>/dev/null || echo "parse-error")"
+assert_eq "find mode output has findings key with 1 finding" "ok findings=1" "$FIND_KEY_CHECK"
+
+# ---- Test: wrapped judge-mode JSON -> success ----
+cat >"$STUB_BIN_DIR/gemini" <<'STUB'
+#!/usr/bin/env bash
+# Stub gemini that wraps judge JSON in prose
 echo "Here is my analysis:"
 echo ""
-printf '{"verdicts":[{"id":"test-001","gemini_verdict":"confirm","reason":"found it","confidence":0.8}],"new_findings":[]}\n'
+printf '{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"found it","confidence":0.8}]}\n'
 echo ""
 echo "That completes my review."
 STUB
@@ -516,23 +569,24 @@ run_capture GEMINI_WRAPPED_OUT GEMINI_WRAPPED_EXIT \
   env PATH="$STUB_BIN_DIR:$PATH" \
   bash "$GEMINI_REVIEW" \
   --diff "$FIXTURES_DIR/r1_claude_findings.json" \
-  --findings "$FIXTURES_DIR/r1_claude_findings.json"
+  --findings "$FIXTURES_DIR/r1_claude_findings.json" \
+  --mode judge
 
-assert_exit_code "wrapped gemini JSON -> exit 0 (extraction succeeds)" "0" "$GEMINI_WRAPPED_EXIT"
+assert_exit_code "wrapped judge JSON -> exit 0 (extraction succeeds)" "0" "$GEMINI_WRAPPED_EXIT"
 WRAPPED_KEY_CHECK="$(echo "$GEMINI_WRAPPED_OUT" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-print('ok' if 'verdicts' in d and 'new_findings' in d else 'missing-keys')
+print('ok' if 'verdicts' in d else 'missing-keys')
 " 2>/dev/null || echo "parse-error")"
-assert_eq "wrapped gemini output correctly extracted" "ok" "$WRAPPED_KEY_CHECK"
+assert_eq "wrapped judge output correctly extracted" "ok" "$WRAPPED_KEY_CHECK"
 
-# ---- stub: gemini outputs v0.44.x envelope (prose prefix + outer JSON with response string) ----
+# ---- Test: v0.44.x envelope (prose prefix + outer JSON with response string) ----
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
 # Stub gemini v0.44.x: prose lines printed before outer envelope JSON
 echo "Ripgrep is not available. Falling back to GrepTool."
 echo "Skill conflict detected: stub-skill loaded twice."
-echo '{"session_id":"test-session","response":"{\"verdicts\":[{\"id\":\"claude-001\",\"gemini_verdict\":\"confirm\",\"reason\":\"confirmed by gemini\",\"confidence\":0.9}],\"new_findings\":[]}","stats":{"tokens":42}}'
+echo '{"session_id":"test-session","response":"{\"verdicts\":[{\"id\":\"C-001\",\"gemini_verdict\":\"confirm\",\"reason\":\"confirmed by gemini\",\"confidence\":0.9}]}","stats":{"tokens":42}}'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
@@ -542,19 +596,19 @@ run_capture GEMINI_V044_OUT GEMINI_V044_EXIT \
   env PATH="$STUB_BIN_DIR:$PATH" \
   bash "$GEMINI_REVIEW" \
   --diff "$FIXTURES_DIR/r1_claude_findings.json" \
-  --findings "$FIXTURES_DIR/r1_claude_findings.json"
+  --findings "$FIXTURES_DIR/r1_claude_findings.json" \
+  --mode judge
 
 assert_exit_code "v0.44.x envelope gemini stub -> exit 0" "0" "$GEMINI_V044_EXIT"
 GEMINI_V044_KEYS="$(echo "$GEMINI_V044_OUT" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 v = len(d.get('verdicts', []))
-n = len(d.get('new_findings', []))
-print(f'ok v={v} n={n}' if 'verdicts' in d and 'new_findings' in d else 'missing-keys')
+print(f'ok v={v}' if 'verdicts' in d else 'missing-keys')
 " 2>/dev/null || echo "parse-error")"
-assert_eq "v0.44.x envelope: verdicts+new_findings extracted" "ok v=1 n=0" "$GEMINI_V044_KEYS"
+assert_eq "v0.44.x envelope: verdicts extracted" "ok v=1" "$GEMINI_V044_KEYS"
 
-# ---- stub: gemini outputs pure prose (no JSON) — should exit 3 after retry ----
+# ---- Test: malformed output -> exit 3 after retry ----
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
 # Stub gemini that always returns pure prose (malformed, even after retry)
@@ -568,29 +622,17 @@ run_capture GEMINI_MALFORMED_OUT GEMINI_MALFORMED_EXIT \
   env PATH="$STUB_BIN_DIR:$PATH" \
   bash "$GEMINI_REVIEW" \
   --diff "$FIXTURES_DIR/r1_claude_findings.json" \
-  --findings "$FIXTURES_DIR/r1_claude_findings.json"
+  --findings "$FIXTURES_DIR/r1_claude_findings.json" \
+  --mode judge
 
 assert_exit_code "malformed gemini output -> exit 3 after retry" "3" "$GEMINI_MALFORMED_EXIT"
 assert_contains "malformed output -> ADVERSARY_UNAVAILABLE" "ADVERSARY_UNAVAILABLE" "$GEMINI_MALFORMED_OUT"
 
-# ---- stub: gemini not found in path ----
-# Create an empty stub dir with NO gemini binary
-EMPTY_STUB_DIR="$TMP_DIR/empty-stubs"
-mkdir -p "$EMPTY_STUB_DIR"
-# Prepend a wrapper that makes gemini invisible by shadowing with a failing fake
-cat >"$EMPTY_STUB_DIR/gemini-not-here-marker" <<'EOF'
-(not a binary)
-EOF
-
-# Test: check what happens when command -v gemini fails
-# We can test this by creating a "gemini" that is intentionally not executable
+# ---- Test: gemini not found in path ----
 NONEXEC_STUB_DIR="$TMP_DIR/nonexec-stubs"
 mkdir -p "$NONEXEC_STUB_DIR"
-# Create a directory named gemini (not executable as a command)
 mkdir -p "$NONEXEC_STUB_DIR/gemini"
 
-# Verify the "gemini not found" detection in isolation
-# Use full path to bash so PATH restriction doesn't break the subshell itself
 BASH_BIN="$(command -v bash)"
 NOT_FOUND_RESULT="$(PATH="$NONEXEC_STUB_DIR" "$BASH_BIN" -c 'command -v gemini >/dev/null 2>&1 && echo found || echo notfound')"
 if [[ "$NOT_FOUND_RESULT" == "notfound" ]]; then
@@ -772,19 +814,25 @@ ERR_EXIT=0
 run_capture ERR_OUT ERR_EXIT python3 "$SYNTHESIZE"
 assert_exit_code "synthesize.py no args -> exit 2" "2" "$ERR_EXIT"
 
-# Nonexistent input file -> exit 1
+# Nonexistent input files -> exit 1
 ERR_EXIT=0
 run_capture ERR_OUT ERR_EXIT python3 "$SYNTHESIZE" \
-  --r1 /nonexistent.json --r2 /nonexistent.json --r3 /nonexistent.json
-assert_exit_code "synthesize.py nonexistent file -> exit 1" "1" "$ERR_EXIT"
+  --claude-findings /nonexistent.json \
+  --gemini-findings /nonexistent.json \
+  --gemini-verdicts /nonexistent.json \
+  --claude-verdicts /nonexistent.json
+assert_exit_code "synthesize.py nonexistent files -> exit 1" "1" "$ERR_EXIT"
 
-# Wrong types (r1 must be array, not object) -> exit 1
+# Wrong type for claude-findings (must be array or {"findings":...}) -> exit 1
 WRONG_TYPE_FILE="$TMP_DIR/wrong_type.json"
 echo '{"not": "an array"}' >"$WRONG_TYPE_FILE"
 ERR_EXIT=0
 run_capture ERR_OUT ERR_EXIT python3 "$SYNTHESIZE" \
-  --r1 "$WRONG_TYPE_FILE" --r2 "$R2" --r3 "$R3"
-assert_exit_code "synthesize.py r1 wrong type -> exit 1" "1" "$ERR_EXIT"
+  --claude-findings "$WRONG_TYPE_FILE" \
+  --gemini-findings "$GEMINI_FINDINGS" \
+  --gemini-verdicts "$GEMINI_VERDICTS" \
+  --claude-verdicts "$CLAUDE_VERDICTS"
+assert_exit_code "synthesize.py claude-findings wrong type -> exit 1" "1" "$ERR_EXIT"
 
 # ====================================================================
 # SECTION 10: ensure-gemini.sh — detection logic
@@ -795,16 +843,6 @@ ENSURE_STUB_DIR="$TMP_DIR/ensure-stubs"
 mkdir -p "$ENSURE_STUB_DIR"
 
 # ---- Test A: gemini not on PATH → GEMINI_INSTALLED=no, GEMINI_AUTHED=unknown ----
-# Use a stub dir with NO gemini binary, plus a minimal PATH that still has bash/printf/etc.
-BASH_BIN="$(command -v bash)"
-GREP_BIN="$(command -v grep)"
-PYTHON3_BIN="$(command -v python3)"
-EMPTY_BIN_DIR="$TMP_DIR/no-gemini-bin"
-mkdir -p "$EMPTY_BIN_DIR"
-
-# Build a minimal PATH: script needs bash, printf (builtin), command (builtin), grep
-# Use the real system dirs but WITHOUT any dir that contains a 'gemini' binary.
-# Simplest: strip entries that contain gemini from PATH.
 SAFE_PATH="$(python3 -c "
 import os, subprocess
 path_dirs = os.environ.get('PATH','').split(':')
@@ -851,7 +889,6 @@ assert_contains  "ensure-gemini: stub gemini + key -> GEMINI_AUTHED=yes" "GEMINI
 assert_contains  "ensure-gemini: stub gemini -> GEMINI_VERSION present"  "GEMINI_VERSION="      "$WITH_GEMINI_OUT"
 
 # ---- Test C: stubbed gemini, no env key, no ~/.gemini creds → GEMINI_AUTHED=no ----
-# Redirect HOME to an empty temp dir so no ~/.gemini/ creds exist
 FAKE_HOME="$TMP_DIR/fake-home"
 mkdir -p "$FAKE_HOME"
 
@@ -869,18 +906,12 @@ assert_contains  "ensure-gemini: stub gemini, no auth -> INSTALLED=yes"   "GEMIN
 assert_contains  "ensure-gemini: stub gemini, no auth -> AUTHED=no"       "GEMINI_AUTHED=no"     "$NO_AUTH_OUT"
 
 # ---- Test D: OAuth-only creds (no API key) → GEMINI_AUTHED=no (regression test) ----
-# This is the regression test for the bug where interactive-OAuth credentials
-# (google_accounts.json, oauth_creds.json) caused GEMINI_AUTHED=yes even though
-# those credentials are NOT sufficient for headless gemini -p/-o json calls.
 OAUTH_HOME="$TMP_DIR/oauth-home"
 mkdir -p "$OAUTH_HOME/.gemini"
-# Populate the OAuth credential files that were previously causing the false positive
 printf '{"accounts": [{"email": "user@example.com"}]}' > "$OAUTH_HOME/.gemini/google_accounts.json"
 printf '{"token": "ya29.fake-oauth-token", "refresh_token": "1//fake"}' > "$OAUTH_HOME/.gemini/oauth_creds.json"
-# Also add a settings.json with email/account fields (old false-positive trigger)
 printf '{"security":{"auth":{"selectedType":"google-personal"}},"user":{"email":"user@example.com"}}' \
   > "$OAUTH_HOME/.gemini/settings.json"
-# No .env file; no GEMINI_API_KEY or GOOGLE_API_KEY env vars
 
 OAUTH_AUTHED_OUT=""
 OAUTH_AUTHED_EXIT=0
@@ -898,11 +929,9 @@ assert_contains  "ensure-gemini: OAuth-only creds -> INSTALLED=yes"           "G
 assert_contains  "ensure-gemini: OAuth-only creds -> AUTHED=no (regression)"  "GEMINI_AUTHED=no"     "$OAUTH_AUTHED_OUT"
 
 # ---- Test E: ~/.gemini/.env with GEMINI_API_KEY → GEMINI_AUTHED=yes ----
-# Verifies that the recommended key placement (~/.gemini/.env) is detected.
 ENV_FILE_HOME="$TMP_DIR/env-file-home"
 mkdir -p "$ENV_FILE_HOME/.gemini"
 printf 'GEMINI_API_KEY=AIzaSy_test_key_from_env_file\n' > "$ENV_FILE_HOME/.gemini/.env"
-# No API key env vars; only the .env file
 
 ENV_FILE_OUT=""
 ENV_FILE_EXIT=0

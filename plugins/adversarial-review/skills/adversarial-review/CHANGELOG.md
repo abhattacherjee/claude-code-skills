@@ -28,3 +28,4 @@ All notable changes to this skill will be documented in this file.
 
 - **detect-mode.sh: exit-code header comment (AR-006)** — removed the non-existent `3=adversary-unavailable` exit code from the header comment; actual exit codes are 0=ok, 1=error, 2=usage/large-diff
 - **Fixture IDs renamed to AR-NNN scheme (AR-005)** — `r1_claude_findings.json` IDs updated from `claude-001…005` to `AR-001…005`; cross-references in `r2_gemini_response.json` and `r3_claude_response.json` updated to match
+- **Symmetric pipeline** — pipeline is now symmetric: both Claude and Gemini discover findings independently in R1 (blind to each other), then each cross-examines the other's findings in R2; convergence is mechanical via `synthesize.py` with 4 input files; replaces the prior Claude-first/Claude-adjudicates flow. `adversarial-r3-adjudicator` agent replaced by `adversarial-cross-examiner` (judges Gemini's R1 findings in R2, parallel with Gemini judging Claude's).

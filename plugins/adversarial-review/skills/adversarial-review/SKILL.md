@@ -7,17 +7,15 @@ metadata:
 
 # Adversarial Review
 
-Runs a bounded 3-round Claude↔Gemini cross-examination on a diff. Only findings **both models confirm** (the survivor rule) reach the final report. Single-model findings are retained as `UNCONFIRMED`, never silently dropped.
+Runs a symmetric 2-round Claude↔Gemini cross-examination on a diff. Both models discover findings independently in R1, then each cross-examines the other's findings in R2. Only findings **the opposing model confirms** reach the final report. Single-model findings are retained as `UNCONFIRMED`, never silently dropped.
 
 ## Prerequisites
 
-Gemini setup is now **guided automatically** via Step 0 below. When the skill runs, `ensure-gemini.sh` detects whether Gemini is installed and has a **headless-capable credential**, then the orchestrator prompts the user to install or authenticate with their consent before proceeding. No manual pre-flight needed; the skill degrades to Claude-only mode only if the user declines or setup fails.
+Gemini setup is **guided automatically** via Step 0 below. When the skill runs, `ensure-gemini.sh` detects whether Gemini is installed and has a **headless-capable credential**, then the orchestrator prompts the user to install or authenticate with their consent before proceeding. No manual pre-flight needed; the skill degrades to Claude-only mode only if the user declines or setup fails.
 
-**Important — interactive Google login is NOT sufficient.** The skill's headless calls (`gemini -p ... -o json -m <model>`) require a `GEMINI_API_KEY` (or Vertex AI credentials). Running `gemini` once for interactive "Login with Google" creates OAuth credentials that work only for interactive terminal sessions, not for programmatic use. `ensure-gemini.sh` correctly reports `GEMINI_AUTHED=no` when only OAuth credentials are present.
+**Important — interactive Google login is NOT sufficient.** The skill's headless calls (`gemini -p ... -o json -m <model>`) require a `GEMINI_API_KEY` (or Vertex AI credentials). `ensure-gemini.sh` correctly reports `GEMINI_AUTHED=no` when only OAuth credentials are present.
 
-**Recommended credential location:** add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`. The gemini CLI auto-loads this file for all invocations including non-login shells and sub-agent/tool contexts — no shell profile changes needed.
-
-No setup needed for Claude (runs in the current session).
+**Recommended credential location:** add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`. The gemini CLI auto-loads this file for all invocations including non-login shells and sub-agent contexts — no shell profile changes needed.
 
 ## Quick Start
 
@@ -32,8 +30,6 @@ No setup needed for Claude (runs in the current session).
 /adversarial-review --force
 ```
 
-The skill auto-detects mode. Pass `--force` only to override the large-diff warning.
-
 ---
 
 ## Pipeline Overview
@@ -44,16 +40,19 @@ detect-mode.sh
      ├── MODE=pr   → diff from PR
      └── MODE=local → diff from working tree vs base
 
-R1: bug-hunter (opus) ╗
-    convention-reviewer (sonnet) ╝ ← parallel, same diff
-     │ merge → r1.json
-
-R2: gemini-review.sh → r2.json
-     │ exit 3? → DEGRADE (Claude-only report, exit 0)
-
-R3: adversarial-r3-adjudicator (opus) → r3.json
-
-synthesize.py → report.md + report.json
+R1 (parallel, blind — neither side sees the other):
+  Claude: bug-hunter (opus) + convention-reviewer (sonnet) → r1-claude.json [C-001, C-002, ...]
+  Gemini: gemini-review.sh --mode find                     → r1-gemini.json [G-001, G-002, ...]
+     │
+     │  emit R1 DIGEST
+     │
+R2 (parallel, symmetric cross-examination):
+  Claude: adversarial-cross-examiner (opus)  reads r1-gemini.json → r2-claude-verdicts.json
+  Gemini: gemini-review.sh --mode judge      reads r1-claude.json  → r2-gemini-verdicts.json
+     │
+     │  emit R2 DIGEST
+     │
+CONVERGE: synthesize.py (4 files) → report.md + report.json
 
 sink.sh → PR comments (MODE=pr) | terminal + .md (MODE=local)
 ```
@@ -62,15 +61,24 @@ sink.sh → PR comments (MODE=pr) | terminal + .md (MODE=local)
 
 | Agent | Model | Round | Purpose | Scheduling |
 |---|---|---|---|---|
-| `adversarial-bug-hunter` | opus | R1 | Find bugs, security, perf, correctness in actual source | Parallel with convention-reviewer |
-| `adversarial-convention-reviewer` | sonnet | R1 | Find convention, CLAUDE.md, maintainability issues | Parallel with bug-hunter |
-| `adversarial-r3-adjudicator` | opus | R3 | Adjudicate Gemini's R2 verdicts against real source | Sequential (after R2) |
+| `adversarial-bug-hunter` | opus | R1 | Find bugs, security, perf, correctness in actual source | Parallel with convention-reviewer and Gemini find |
+| `adversarial-convention-reviewer` | sonnet | R1 | Find convention, CLAUDE.md, maintainability issues | Parallel with bug-hunter and Gemini find |
+| `adversarial-cross-examiner` | opus | R2 | Judges Gemini's R1 findings against actual source; returns confirm/refute verdicts | Parallel with Gemini judge |
 
-Gemini (R2) runs via `scripts/gemini-review.sh`, not a Claude sub-agent.
+Gemini (R1 find + R2 judge) runs via `scripts/gemini-review.sh`, not a Claude sub-agent.
 
 ---
 
 ## Orchestration Workflow
+
+### Context Discipline
+
+All round outputs are written to files in a single `mktemp -d` run directory created at the start of the pipeline. The orchestrator passes **file paths** between sub-agents and reads only counts and digests into the conversation context — never paste full round JSON into the chat. This keeps context windows bounded regardless of finding volume.
+
+```bash
+RUN_DIR=$(mktemp -d)
+# All round files: $RUN_DIR/r1-claude.json, $RUN_DIR/r1-gemini.json, etc.
+```
 
 ### Step 0 — Ensure the adversary (Gemini) is available
 
@@ -92,53 +100,63 @@ After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. I
 
 **Case B — installed but `GEMINI_AUTHED=no`:**
 Tell the user Gemini is installed but lacks a headless-capable credential, and show the `AUTH_HINT`. **Emphasise that interactive Google login is NOT sufficient** — the skill's headless calls require an API key. ASK the user to:
-- (Recommended) Add `GEMINI_API_KEY=<key>` to `~/.gemini/.env` — the gemini CLI auto-loads this for all shells including sub-agents; get a key at [Google AI Studio](https://aistudio.google.com/apikey), OR
+- (Recommended) Add `GEMINI_API_KEY=<key>` to `~/.gemini/.env` — auto-loaded for all shells including sub-agents; get a key at [Google AI Studio](https://aistudio.google.com/apikey), OR
 - `export GEMINI_API_KEY=<key>` in the current shell session, OR
 - Configure Vertex AI: `export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=<project>`.
 
-**Do NOT suggest** `gemini` interactive login as an auth path for this skill — it produces OAuth credentials that work only for interactive terminal sessions, not headless `-p`/`-o json` calls.
+**Do NOT suggest** `gemini` interactive login — it produces OAuth credentials insufficient for headless `-p`/`-o json` calls.
 
 Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, proceed in **degraded Claude-only mode**.
 
-**Case C — `GEMINI_AUTHED=unknown` (installed, auth state indeterminate):**
-No user interaction needed. Proceed normally and rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails, which triggers the same degradation backstop.
+**Case C — `GEMINI_AUTHED=unknown`:**
+No user interaction needed. Proceed normally; rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails.
 
 **Case D — `GEMINI_INSTALLED=yes` and `GEMINI_AUTHED=yes`:**
 Adversary confirmed available. Continue to Step 1 with no user interaction.
 
-> The runtime guard in `gemini-review.sh` (exit 3) remains as the final backstop for transient failures even when Step 0 passes (network errors, expired tokens, etc.).
-
 ### Step 1 — Detect Mode
 
 ```bash
-SCRIPTS="$(dirname "$0")/scripts"
 eval "$($SCRIPTS/detect-mode.sh $FORCE_FLAG)"
 # Exports: MODE  PR  BASE  DIFF_FILE  FILES_FILE
 # Exit 2 = diff too large → stop unless --force was passed
 ```
 
-Parse the `KEY=VALUE` output. If exit code is 2 and `--force` was not passed, halt and tell the user the diff is too large, offer `--force` to continue.
+Parse the `KEY=VALUE` output. If exit code is 2 and `--force` was not passed, halt and tell the user the diff is too large; offer `--force` to continue.
 
-### Step 2 — R1: Parallel Claude Review
+### Step 2 — R1: Parallel Independent Discovery
 
-Launch **both agents in a single message** (parallel dispatch). Each receives:
-- The absolute path to `DIFF_FILE`
-- The absolute path to `FILES_FILE` (list of changed file paths for repo navigation)
-- Read access to the repo for full source context
+Launch all three discovery tasks **in a single message** (parallel dispatch). Neither Claude agent nor Gemini sees the other's output at this stage.
 
-**Bug-hunter returns** a JSON array of findings (see Finding Schema below), `origin="claude"`, categories limited to `bug|security|perf`.
+**(a) Claude finders — two agents in parallel:**
 
-**Convention-reviewer returns** a JSON array of findings, `origin="claude"`, categories limited to `convention|maintainability`.
+Each receives: absolute path to `DIFF_FILE`, absolute path to `FILES_FILE`, and read access to the repo.
 
-Merge both arrays into `r1.json`. Set `claude_verdict=null`, `gemini_verdict=null`, `status="unconfirmed"` for every finding at this stage. Assign sequential IDs (`AR-001`, `AR-002`, …).
+- **Bug-hunter** returns `{"findings":[...]}` with `origin="claude"`. Assign sequential ids `BH-001`, `BH-002`, ...
+- **Convention-reviewer** returns `{"findings":[...]}` with `origin="claude"`. Assign sequential ids `CR-001`, `CR-002`, ...
 
-**r1.json format:**
+Merge both arrays. Renumber with unified prefix: `C-001`, `C-002`, ... Set `claude_verdict=null`, `gemini_verdict=null`, `status="unconfirmed"` on every entry. Write to `$RUN_DIR/r1-claude.json`.
+
+**(b) Gemini finder — run in parallel with Claude agents:**
+
+```bash
+$SCRIPTS/gemini-review.sh \
+  --diff "$DIFF_FILE" \
+  --mode find \
+  --out "$RUN_DIR/r1-gemini.json"
+```
+
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): print the degradation banner (see Degradation Behavior), emit the Claude findings as the report (all `status=unconfirmed`), and exit 0.
+
+Script emits `{"findings":[...]}` with `origin="gemini"`. Renumber ids: `G-001`, `G-002`, ... Write to `$RUN_DIR/r1-gemini.json`.
+
+**r1-claude.json and r1-gemini.json format:**
 
 ```json
 {
   "findings": [
     {
-      "id": "AR-001",
+      "id": "C-001",
       "path": "src/foo.ts",
       "line": 42,
       "severity": "critical|important|minor",
@@ -156,92 +174,73 @@ Merge both arrays into `r1.json`. Set `claude_verdict=null`, `gemini_verdict=nul
 }
 ```
 
-### Step 3 — R2: Gemini Cross-Examination
+**Emit R1 DIGEST** (print to conversation after both sides complete):
+
+```
+=== R1 Discovery Digest ===
+Claude findings: <N> total  (critical=X important=Y minor=Z)
+  bug=A  security=B  perf=C  convention=D  maintainability=E
+Gemini findings: <M> total  (critical=X important=Y minor=Z)
+  (categories if available)
+```
+
+### Step 3 — R2: Parallel Symmetric Cross-Examination
+
+Launch both cross-examination tasks **in a single message** (parallel dispatch).
+
+**(a) Claude cross-examines Gemini's findings:**
+
+Launch the `adversarial-cross-examiner` agent (opus). Provide:
+- Absolute path to `$RUN_DIR/r1-gemini.json` (Gemini's findings)
+- Absolute path to `DIFF_FILE`
+- Repo read access
+
+Agent returns `{"verdicts":[{"id":"G-NNN","claude_verdict":"confirm|refute","reason":"..."}]}`. Write to `$RUN_DIR/r2-claude-verdicts.json`.
+
+**(b) Gemini cross-examines Claude's findings:**
 
 ```bash
 $SCRIPTS/gemini-review.sh \
   --diff "$DIFF_FILE" \
-  --findings r1.json \
-  --out r2.json
+  --findings "$RUN_DIR/r1-claude.json" \
+  --mode judge \
+  --out "$RUN_DIR/r2-gemini-verdicts.json"
 ```
 
-**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): skip R3 and synthesis. Print the degradation banner (see below), emit the R1 findings as the report (all status=`unconfirmed`), and exit 0.
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): print the degradation banner, emit Claude findings as unconfirmed report, exit 0.
 
-**r2.json format** (returned by script):
+Script emits `{"verdicts":[{"id":"C-NNN","gemini_verdict":"confirm|refute","reason":"...","confidence":...}]}`. Written to `$RUN_DIR/r2-gemini-verdicts.json`.
 
-```json
-{
-  "verdicts": [
-    {
-      "id": "AR-001",
-      "gemini_verdict": "confirm|refute",
-      "reason": "...",
-      "confidence": "high|medium|low"
-    }
-  ],
-  "new_findings": [
-    {
-      "id": "G-001",
-      "path": "src/bar.ts",
-      "line": 17,
-      "severity": "important",
-      "category": "bug",
-      "title": "...",
-      "rationale": "..."
-    }
-  ]
-}
+**Emit R2 DIGEST** (print to conversation after both sides complete):
+
+```
+=== R2 Cross-Examination Digest ===
+Gemini's verdict on Claude's findings (<N> total):
+  confirmed=A  refuted=B  unjudged=C
+Claude's verdict on Gemini's findings (<M> total):
+  confirmed=D  refuted=E  unjudged=F
 ```
 
-### Step 4 — R3: Claude Adjudicates Gemini's Output
-
-Launch the `adversarial-r3-adjudicator` agent (opus, sequential). Provide:
-- `r1.json` (Claude's original findings)
-- `r2.json` (Gemini's verdicts + new findings)
-- Repo access to read actual source for any finding Gemini introduced
-
-**r3.json format** (returned by agent):
-
-```json
-{
-  "defends": [
-    {
-      "id": "AR-001",
-      "defends": true
-    }
-  ],
-  "gemini_finding_verdicts": [
-    {
-      "id": "G-001",
-      "claude_verdict": "confirm|refute",
-      "reason": "Grounded explanation citing actual source"
-    }
-  ]
-}
-```
-
-`defends: true` means Claude stands by the finding despite Gemini's refutation.
-`defends: false` means Claude accepts Gemini's kill — finding becomes `rejected`.
-
-### Step 5 — Synthesize
+### Step 4 — Converge: Synthesize
 
 ```bash
 $SCRIPTS/synthesize.py \
-  --r1 r1.json \
-  --r2 r2.json \
-  --r3 r3.json \
-  --md report.md \
-  --json report.json
+  --claude-findings "$RUN_DIR/r1-claude.json" \
+  --gemini-findings "$RUN_DIR/r1-gemini.json" \
+  --gemini-verdicts "$RUN_DIR/r2-gemini-verdicts.json" \
+  --claude-verdicts "$RUN_DIR/r2-claude-verdicts.json" \
+  --md "$RUN_DIR/report.md" \
+  --json "$RUN_DIR/report.json"
 ```
 
-Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K`.
+Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout. Read and relay these counts to the user.
 
-### Step 6 — Sink
+### Step 5 — Sink
 
 ```bash
 $SCRIPTS/sink.sh \
-  --report-md report.md \
-  --report-json report.json \
+  --report-md "$RUN_DIR/report.md" \
+  --report-json "$RUN_DIR/report.json" \
   --mode "$MODE" \
   [--pr "$PR"] \
   [--branch "$(git branch --show-current)"]
@@ -251,18 +250,22 @@ $SCRIPTS/sink.sh \
 
 ## Survivor Rule
 
-A finding reaches the **Survivors** section only when BOTH models confirm it:
+A finding reaches the **Survivors** section only when the **opposing model** confirms it. Convergence is mechanical — no model adjudicates both sides.
 
 | Finding origin | Survives when |
 |---|---|
-| Claude (R1) | Gemini verdict = `confirm` in R2 |
-| Gemini new (R2) | Claude verdict = `confirm` in R3 |
+| Claude finding (C-NNN in r1-claude.json) | Gemini verdict = `confirm` in r2-gemini-verdicts.json |
+| Gemini finding (G-NNN in r1-gemini.json) | Claude verdict = `confirm` in r2-claude-verdicts.json |
 
-All other findings go to **UNCONFIRMED** (single-model). Rejected findings (killed by the opposing model) are listed separately with the kill reason. Nothing is ever silently discarded.
+- **Survivors** — confirmed by the opposing model; both models agree
+- **Unconfirmed** — not judged by the opponent, or opponent abstained
+- **Rejected** — opponent explicitly refuted; retained with refuter and reason
+
+Nothing is ever silently discarded.
 
 ## Degradation Behavior
 
-If `gemini-review.sh` exits with code 3 (unauthenticated, network error, unparseable JSON after one retry), the skill degrades loudly:
+If `gemini-review.sh` exits with code 3 (unauthenticated, network error, unparseable JSON after one retry) at **either** the R1 find step or the R2 judge step, the skill degrades loudly to Claude-only mode:
 
 ```
 ╔══════════════════════════════════════════════════════════╗
@@ -273,11 +276,11 @@ If `gemini-review.sh` exits with code 3 (unauthenticated, network error, unparse
 ╚══════════════════════════════════════════════════════════╝
 ```
 
-The R1 Claude findings are reported as-is with status=`unconfirmed`. The skill exits 0 (not an error).
+Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without Gemini. The skill exits 0 (not an error).
 
 ## Same-Diff Invariant
 
-Both Claude agents (R1) and Gemini (R2) receive the **byte-identical** `DIFF_FILE` path produced by `detect-mode.sh`. The orchestrator must not re-generate or alter the diff between steps.
+Both Claude agents (R1) and Gemini (R1 find + R2 judge) receive the **byte-identical** `DIFF_FILE` path produced by `detect-mode.sh`. The orchestrator must not re-generate or alter the diff between steps.
 
 ## Output Locations
 
@@ -288,9 +291,9 @@ Both Claude agents (R1) and Gemini (R2) receive the **byte-identical** `DIFF_FIL
 
 ## See Also
 
-- `scripts/ensure-gemini.sh` — Step 0 detection: emits Gemini install/auth status + install/auth hints; never installs or calls the network
+- `scripts/ensure-gemini.sh` — Step 0 detection: emits Gemini install/auth status + hints; never installs or calls the network
 - `scripts/detect-mode.sh` — diff extraction and mode detection
-- `scripts/gemini-review.sh` — R2 Gemini cross-examination
-- `scripts/synthesize.py` — survivor rule application
+- `scripts/gemini-review.sh` — R1 find + R2 judge Gemini calls
+- `scripts/synthesize.py` — survivor rule application (4-file symmetric input)
 - `scripts/sink.sh` — output routing (PR comments or local file)
 - `pr-review-loop` plugin — PR comment posting used by sink in PR mode
