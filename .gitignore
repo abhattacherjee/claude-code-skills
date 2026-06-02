@@ -1,5 +1,5 @@
 .DS_Store
 *.swp
 *~
-.claude/
+.claude/settings.local.json
 plugins/obsidian-brain/.coverage
