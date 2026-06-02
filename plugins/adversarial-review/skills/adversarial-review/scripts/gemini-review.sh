@@ -270,8 +270,10 @@ PROMPT
 COMBINED_INPUT_FILE="$(mktemp /tmp/adversarial-gemini-input.XXXXXX)"
 RAW_OUTPUT_FILE="$(mktemp /tmp/adversarial-gemini-raw.XXXXXX)"
 EXTRACTED_JSON_FILE="$(mktemp /tmp/adversarial-gemini-json.XXXXXX)"
+GEMINI_STDERR_FILE="$(mktemp /tmp/adversarial-gemini-stderr.XXXXXX)"
+VALIDATE_ERR_FILE="$(mktemp /tmp/adversarial-validate-err.XXXXXX)"
 
-trap 'rm -f "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE"' EXIT
+trap 'rm -f "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE" "$GEMINI_STDERR_FILE" "$VALIDATE_ERR_FILE"' EXIT
 
 # Build combined input (diff + prompt context)
 cat "$DIFF_FILE" >"$COMBINED_INPUT_FILE"
@@ -283,9 +285,9 @@ call_gemini() {
 
   # Call gemini: -p for prompt, -o json for output format, -m for model
   # stdin receives the diff content
-  if ! gemini -p "$prompt" -o json -m "$MODEL" <"$COMBINED_INPUT_FILE" >"$RAW_OUTPUT_FILE" 2>/tmp/adversarial-gemini-stderr.txt; then
+  if ! gemini -p "$prompt" -o json -m "$MODEL" <"$COMBINED_INPUT_FILE" >"$RAW_OUTPUT_FILE" 2>"$GEMINI_STDERR_FILE"; then
     local stderr_content
-    stderr_content="$(cat /tmp/adversarial-gemini-stderr.txt 2>/dev/null || true)"
+    stderr_content="$(cat "$GEMINI_STDERR_FILE" 2>/dev/null || true)"
     # Check for auth-related errors
     if echo "$stderr_content" | grep -qiE 'auth|credentials|api.key|unauthorized|permission|403|401'; then
       echo "ADVERSARY_UNAVAILABLE: Gemini authentication error: $stderr_content" >&2
@@ -313,7 +315,7 @@ if ! call_gemini "false"; then
   fi
 fi
 
-# Validate the extracted JSON has required keys
+# Validate the extracted JSON has required keys and drop any id-less entries (AR-001)
 if ! python3 -c "
 import json, sys
 data = json.load(open('$EXTRACTED_JSON_FILE'))
@@ -321,8 +323,13 @@ assert 'verdicts' in data, 'missing verdicts key'
 assert 'new_findings' in data, 'missing new_findings key'
 assert isinstance(data['verdicts'], list), 'verdicts must be a list'
 assert isinstance(data['new_findings'], list), 'new_findings must be a list'
-" 2>/tmp/adversarial-validate-err.txt; then
-  err="$(cat /tmp/adversarial-validate-err.txt 2>/dev/null || echo 'unknown')"
+# Drop entries without a string id so downstream never sees id-less entries
+data['verdicts']      = [v for v in data['verdicts']      if isinstance(v.get('id'), str) and v['id']]
+data['new_findings']  = [f for f in data['new_findings']  if isinstance(f.get('id'), str) and f['id']]
+with open('$EXTRACTED_JSON_FILE', 'w') as fh:
+    json.dump(data, fh)
+" 2>"$VALIDATE_ERR_FILE"; then
+  err="$(cat "$VALIDATE_ERR_FILE" 2>/dev/null || echo 'unknown')"
   echo "ADVERSARY_UNAVAILABLE: Gemini output missing required fields: $err" >&2
   exit 3
 fi

@@ -1,12 +1,12 @@
 {
   "defends": [
     {
-      "id": "claude-002",
+      "id": "AR-002",
       "defends": false,
       "reason": "Gemini is correct; the exclusive upper bound is documented and intentional."
     },
     {
-      "id": "claude-004",
+      "id": "AR-004",
       "defends": true,
       "reason": "The modification-during-iteration claim needs further verification; both positions have merit."
     }

@@ -76,18 +76,20 @@ def classify_findings(
 ) -> list[dict]:
     """Apply the both-confirm survivor rule and return findings with status filled in."""
 
-    # Build lookup maps
+    # Build lookup maps (skip entries missing a non-empty "id" to avoid KeyError)
     gemini_verdicts: dict[str, dict] = {
-        v["id"]: v for v in r2.get("verdicts", [])
+        v["id"]: v for v in r2.get("verdicts", []) if v.get("id")
     }
-    gemini_new: list[dict] = r2.get("new_findings", [])
+    gemini_new: list[dict] = [
+        f for f in r2.get("new_findings", []) if f.get("id")
+    ]
 
     defends_map: dict[str, bool] = {
         d["id"]: bool(d.get("defends", False))
-        for d in r3.get("defends", [])
+        for d in r3.get("defends", []) if d.get("id")
     }
     r3_gemini_verdicts: dict[str, dict] = {
-        v["id"]: v for v in r3.get("gemini_finding_verdicts", [])
+        v["id"]: v for v in r3.get("gemini_finding_verdicts", []) if v.get("id")
     }
 
     classified: list[dict] = []
@@ -95,6 +97,8 @@ def classify_findings(
     # --- Process R1 Claude findings (origin=claude) ---
     for finding in r1_findings:
         f = dict(finding)
+        if not f.get("id"):
+            continue  # skip id-less entries gracefully (AR-001)
         f.setdefault("origin", "claude")
         f.setdefault("killed_by", None)
         f.setdefault("kill_reason", None)
@@ -133,6 +137,8 @@ def classify_findings(
     # --- Process R2 Gemini new findings (origin=gemini) ---
     for finding in gemini_new:
         f = dict(finding)
+        if not f.get("id"):
+            continue  # skip id-less entries gracefully (AR-001)
         f.setdefault("origin", "gemini")
         f.setdefault("killed_by", None)
         f.setdefault("kill_reason", None)
@@ -291,9 +297,11 @@ def main() -> None:
     r2_raw = load_json(args.r2, "R2")
     r3_raw = load_json(args.r3, "R3")
 
-    # Validate types
+    # Validate / unwrap R1 — accept both a bare array and {"findings": [...]} (AR-002)
+    if isinstance(r1_raw, dict) and isinstance(r1_raw.get("findings"), list):
+        r1_raw = r1_raw["findings"]
     if not isinstance(r1_raw, list):
-        print("Error: R1 must be a JSON array of findings", file=sys.stderr)
+        print("Error: R1 must be a JSON array of findings (or an object with a 'findings' list)", file=sys.stderr)
         sys.exit(1)
     if not isinstance(r2_raw, dict):
         print("Error: R2 must be a JSON object with 'verdicts' and 'new_findings' keys", file=sys.stderr)

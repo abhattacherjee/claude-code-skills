@@ -18,7 +18,7 @@ This repo's `.claude-plugin/marketplace.json` is named **`claude-code-skills`** 
 /plugin marketplace remove claude-code-skills
 
 # 3. Add this local clone (reads .claude-plugin/marketplace.json from disk)
-/plugin marketplace add /Users/abhishek/dev/claude_workspace/claude-code-skills
+/plugin marketplace add /absolute/path/to/claude-code-skills
 
 # 4. Install / test a plugin from the local source
 /plugin install adversarial-review@claude-code-skills

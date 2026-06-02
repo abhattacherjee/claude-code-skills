@@ -2,7 +2,7 @@
 # detect-mode.sh — resolve PR/local mode, produce shared diff artifact
 # Usage: detect-mode.sh [--force] [--help]
 # Outputs KEY=VALUE pairs: MODE, PR, BASE, DIFF_FILE, FILES_FILE
-# Exit codes: 0=ok, 1=error, 2=usage/large-diff, 3=adversary-unavailable
+# Exit codes: 0=ok, 1=error, 2=usage/large-diff
 
 set -eu
 
@@ -121,7 +121,8 @@ else
 fi
 
 # ---- large-diff cap ----
-DIFF_LINES="$(wc -l <"$DIFF_FILE")"
+# Use grep -c '' to count lines correctly even when the file lacks a trailing newline
+DIFF_LINES="$(grep -c '' "$DIFF_FILE" || true)"
 if [[ "$DIFF_LINES" -gt 4000 ]] && [[ "$FORCE" == "false" ]]; then
   echo "Warning: diff is $DIFF_LINES lines (cap: 4000). Use --force to proceed anyway." >&2
   rm -f "$DIFF_FILE" "$FILES_FILE"

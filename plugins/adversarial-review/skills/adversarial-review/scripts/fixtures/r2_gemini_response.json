@@ -1,25 +1,25 @@
 {
   "verdicts": [
     {
-      "id": "claude-001",
+      "id": "AR-001",
       "gemini_verdict": "confirm",
       "reason": "Confirmed: the query construction on line 42 uses f-string interpolation of request.args['user_id'] directly into the SQL string. Classic injection vector.",
       "confidence": 0.98
     },
     {
-      "id": "claude-002",
+      "id": "AR-002",
       "gemini_verdict": "refute",
       "reason": "The range is intentionally exclusive of the last element per the slice convention in this codebase; the docstring on line 12 specifies exclusive upper bound.",
       "confidence": 0.85
     },
     {
-      "id": "claude-003",
+      "id": "AR-003",
       "gemini_verdict": "confirm",
       "reason": "Agreed: 3600 appears 4 times in the file; extracting to SESSION_DURATION_SECONDS would improve readability.",
       "confidence": 0.75
     },
     {
-      "id": "claude-004",
+      "id": "AR-004",
       "gemini_verdict": "refute",
       "reason": "The nested loop is necessary here because the inner list is modified during iteration; a set lookup would cause incorrect skip behavior.",
       "confidence": 0.90

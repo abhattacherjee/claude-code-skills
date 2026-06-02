@@ -153,11 +153,11 @@ UNCONFIRMED="$(echo "$SYNTH_OUT" | grep -oE 'unconfirmed=[0-9]+' | cut -d= -f2)"
 REJECTED="$(echo "$SYNTH_OUT" | grep -oE 'rejected=[0-9]+' | cut -d= -f2)"
 
 # Expected classification (see fixtures/README below):
-# claude-001: gemini confirm -> SURVIVOR
-# claude-002: gemini refute + defends=false -> REJECTED (killed_by=gemini)
-# claude-003: gemini confirm -> SURVIVOR
-# claude-004: gemini refute + defends=true -> UNCONFIRMED
-# claude-005: not in r2 verdicts -> UNCONFIRMED (gemini_verdict=null)
+# AR-001: gemini confirm -> SURVIVOR
+# AR-002: gemini refute + defends=false -> REJECTED (killed_by=gemini)
+# AR-003: gemini confirm -> SURVIVOR
+# AR-004: gemini refute + defends=true -> UNCONFIRMED
+# AR-005: not in r2 verdicts -> UNCONFIRMED (gemini_verdict=null)
 # gemini-new-001: claude confirm -> SURVIVOR
 # gemini-new-002: claude refute -> REJECTED (killed_by=claude)
 # Survivors: 3, Rejected: 2, Unconfirmed: 2
@@ -175,12 +175,12 @@ data = json.load(open(sys.argv[1]))
 findings = {f["id"]: f for f in data["findings"]}
 
 checks = [
-    ("claude-001",      "status",    "survivor"),
-    ("claude-002",      "status",    "rejected"),
-    ("claude-002",      "killed_by", "gemini"),
-    ("claude-003",      "status",    "survivor"),
-    ("claude-004",      "status",    "unconfirmed"),
-    ("claude-005",      "status",    "unconfirmed"),
+    ("AR-001",          "status",    "survivor"),
+    ("AR-002",          "status",    "rejected"),
+    ("AR-002",          "killed_by", "gemini"),
+    ("AR-003",          "status",    "survivor"),
+    ("AR-004",          "status",    "unconfirmed"),
+    ("AR-005",          "status",    "unconfirmed"),
     ("gemini-new-001",  "status",    "survivor"),
     ("gemini-new-002",  "status",    "rejected"),
     ("gemini-new-002",  "killed_by", "claude"),
@@ -227,13 +227,13 @@ run_capture KILL_CHECK KILL_EXIT python3 - "$OUT_JSON" <<'PYEOF'
 import json, sys
 data = json.load(open(sys.argv[1]))
 findings = {f["id"]: f for f in data["findings"]}
-f002 = findings.get("claude-002", {})
+f002 = findings.get("AR-002", {})
 fnew002 = findings.get("gemini-new-002", {})
 errors = []
 if f002.get("killed_by") != "gemini":
-    errors.append(f"claude-002 killed_by={f002.get('killed_by')!r} expected 'gemini'")
+    errors.append(f"AR-002 killed_by={f002.get('killed_by')!r} expected 'gemini'")
 if not f002.get("kill_reason"):
-    errors.append("claude-002 kill_reason is empty")
+    errors.append("AR-002 kill_reason is empty")
 if fnew002.get("killed_by") != "claude":
     errors.append(f"gemini-new-002 killed_by={fnew002.get('killed_by')!r} expected 'claude'")
 if errors:
