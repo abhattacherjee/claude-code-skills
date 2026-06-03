@@ -61,13 +61,19 @@ done
 command -v gh >/dev/null || die "gh CLI not found."
 command -v jq >/dev/null || die "jq not found."
 
-# auth scope: read:project for discovery; project for mutation.
+# Auth scope. Every path hits the Projects API, so require at least read:project;
+# applying a move (not --list-status / --dry-run) additionally needs write 'project'.
 SCOPES=$(gh auth status 2>&1 | grep -i "Token scopes" || true)
+case "$SCOPES" in
+  *"read:project"*|*"'project'"*) ;;
+  *) echo "Error: gh token lacks a GitHub Projects scope (need at least read:project)." >&2
+     echo "Run: gh auth refresh -s read:project,project" >&2; exit 3;;
+esac
 if ! $LIST && ! $DRY_RUN; then
   case "$SCOPES" in
     *"'project'"*) ;;
-    *) echo "Error: gh token lacks the 'project' scope (needed to modify a board)." >&2
-       echo "Run: gh auth refresh -s project" >&2; exit 3;;
+    *) echo "Error: gh token has read:project but not write 'project' (needed to modify a board)." >&2
+       echo "Run: gh auth refresh -s read:project,project" >&2; exit 3;;
   esac
 fi
 
@@ -81,7 +87,7 @@ gql() { gh api graphql -f query="$1" "${@:2}"; }
 
 # discover board
 if [[ -z "$PROJECT" ]]; then
-  BOARDS=$(gql 'query($o:String!,$n:String!){repository(owner:$o,name:$n){projectsV2(first:50){nodes{number title closed}}}}' \
+  BOARDS=$(gql 'query($o:String!,$n:String!){repository(owner:$o,name:$n){projectsV2(first:100){nodes{number title closed}}}}' \
     -F o="$OWNER" -F n="$NAME" --jq '[.data.repository.projectsV2.nodes[]|select(.closed==false)]')
   COUNT=$(echo "$BOARDS" | jq 'length')
   [[ "$COUNT" -ge 1 ]] || die "no open Project (v2) board linked to $REPO."
@@ -131,21 +137,25 @@ ONAME=$(echo "$FIELD_JSON" | jq -r --arg id "$OID" '.options[]|select(.id==$id).
 
 if [[ -n "$ISSUE" ]]; then KIND=issue; NUM="$ISSUE"; else KIND=pullRequest; NUM="$PR"; fi
 [[ "$NUM" =~ ^[0-9]+$ ]] || die "issue/PR number must be numeric (got: $NUM)."
-CONTENT=$(gql "query(\$o:String!,\$n:String!,\$num:Int!){repository(owner:\$o,name:\$n){$KIND(number:\$num){id projectItems(first:50){nodes{id project{number}}}}}}" \
+# Note: projectItems is capped at 100 (un-paginated). An item on >100 boards is not supported.
+CONTENT=$(gql "query(\$o:String!,\$n:String!,\$num:Int!){repository(owner:\$o,name:\$n){$KIND(number:\$num){id projectItems(first:100){nodes{id project{number}}}}}}" \
   -F o="$OWNER" -F n="$NAME" -F num="$NUM")
 CONTENT_ID=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.id // empty")
 [[ -n "$CONTENT_ID" ]] || die "$KIND #$NUM not found on $REPO."
 IID=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.projectItems.nodes | map(select(.project.number==$PROJECT))[0].id // empty")
 
 if [[ -z "$IID" ]]; then
-  if $ADD; then
-    IID=$(gql 'mutation($pid:ID!,$cid:ID!){addProjectV2ItemById(input:{projectId:$pid,contentId:$cid}){item{id}}}' \
-      -F pid="$PID" -F cid="$CONTENT_ID" --jq '.data.addProjectV2ItemById.item.id // empty')
-    [[ -n "$IID" ]] || die "failed to add $KIND #$NUM to board #$PROJECT."
-    echo "Added $KIND #$NUM to board #$PROJECT."
-  else
+  if ! $ADD; then
     die "$KIND #$NUM is not a card on board #$PROJECT. Re-run with --add to add it first."
   fi
+  if $DRY_RUN; then
+    echo "[dry-run] would add $KIND #$NUM to board #$PROJECT, then set Status -> \"$ONAME\"."
+    exit 0
+  fi
+  IID=$(gql 'mutation($pid:ID!,$cid:ID!){addProjectV2ItemById(input:{projectId:$pid,contentId:$cid}){item{id}}}' \
+    -F pid="$PID" -F cid="$CONTENT_ID" --jq '.data.addProjectV2ItemById.item.id // empty')
+  [[ -n "$IID" ]] || die "failed to add $KIND #$NUM to board #$PROJECT."
+  echo "Added $KIND #$NUM to board #$PROJECT."
 fi
 
 if $DRY_RUN; then
