@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Added
+
+- **github-board-move** skill (v1.0.0) — moves an issue/PR's Project (v2) card to a target Status column (`scripts/board-move.sh`): board discovery, Status field/option lookup, fuzzy column matching, `--list-status`, `--dry-run`, `--add`, and the `updateProjectV2ItemFieldValue` mutation. Fills the mid-lifecycle gap between `create-gh-board` and `github-release-board-promote`. (#28)
+
 ## [3.12.0] - 2026-06-02
 
 ### Added
