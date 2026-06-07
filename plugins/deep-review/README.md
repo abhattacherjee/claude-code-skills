@@ -8,15 +8,12 @@ Runs two convergence phases on a PR or working-tree diff. Phase 1 dispatches spe
 
 ## Key Features
 
-- **When to use**
-- **Arguments**
-- **Prerequisites & composition**
-- **Phase 0 — Scope**
-- **Phase 1 — Iterative review to convergence**
-- **Phase 2 — Multi-round Gemini-primary adversarial review**
-- **Final report**
-- **Red Flags — do not**
-- **Integration**
+- **Two-phase convergence** — an iterative multi-reviewer depth pass followed by an adversarial cross-model pass; the changeset must clear both gauntlets.
+- **Iterative review to zero issues** — specialized reviewers (code, tests, silent-failure, types, comments) run in fix→re-review rounds until a full round finds nothing actionable.
+- **Claude↔Gemini adversarial cross-examination** — both models discover findings independently, then judge each other's; only findings the opposing model confirms survive.
+- **Evidence-settled disputes** — refuted findings go to a counter-round where direct source evidence (not opinion) decides, and genuine judgment calls are escalated to you.
+- **Graceful degradation** — if Gemini isn't available it falls back to a second independent Claude reviewer as the adversary, with a loud banner that cross-model confirmation was skipped.
+- **PR or working-tree mode** — auto-targets an open PR's diff or local changes, with flags for phase selection (`--phase1-only`/`--phase2-only`) and `--max-rounds`.
 
 ## Contents
 

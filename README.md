@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 8 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 7 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
