@@ -1,7 +1,7 @@
 
 # Claude Code Skills
 
-A curated collection of 7 reusable [Agent Skills](https://agentskills.io) for
+A curated collection of 8 reusable [Agent Skills](https://agentskills.io) for
 Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 ## Skills
@@ -23,9 +23,11 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 
 | Plugin | Version | Skills | Commands | Description |
 |--------|---------|--------|----------|-------------|
+| [adversarial-review](./plugins/adversarial-review/) | 0.1.0 | 1 | 0 | Adversarial PR review — Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable. |
 | [context-bar](./plugins/context-bar/) | 1.0.0 | 1 | 0 | Color-coded context window usage bar for Claude Code statusline and /context-bar command |
 | [context-shield](./plugins/context-shield/) | 1.3.0 | 1 | 0 | Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories. |
 | [custom-statusline](./plugins/custom-statusline/) | 1.3.0 | 1 | 0 | 4-tier adaptive statusline with icons for folder, git branch, and context usage |
+| [deep-review](./plugins/deep-review/) | 1.0.0 | 1 | 0 | Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks. |
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
 | [obsidian-brain](./plugins/obsidian-brain/) | 2.5.1 | 18 | 0 | Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, enables project-scoped context resume, and provides fast cross-project search via tags and metadata. |
 | [product-video-creation](./plugins/product-video-creation/) | 2.0.0 | 1 | 0 | Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music. |
@@ -84,6 +86,7 @@ cp -r /tmp/claude-code-skills/claudeception ~/.claude/skills/claudeception
 cp -r /tmp/claude-code-skills/context-shield ~/.claude/skills/context-shield
 cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
 cp -r /tmp/claude-code-skills/figma-ui-designer ~/.claude/skills/figma-ui-designer
+cp -r /tmp/claude-code-skills/github-board-move ~/.claude/skills/github-board-move
 cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
 cp -r /tmp/claude-code-skills/worktree ~/.claude/skills/worktree
 rm -rf /tmp/claude-code-skills
@@ -142,4 +145,4 @@ These skills follow the **Agent Skills** standard — a `SKILL.md` file with YAM
 [MIT](LICENSE)
 
 ---
-*Last synced: 2026-06-01*
+*Last synced: 2026-06-06*
