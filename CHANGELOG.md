@@ -11,6 +11,10 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 - **github-board-move** skill (v1.0.0) — moves an issue/PR's Project (v2) card to a target Status column (`scripts/board-move.sh`): board discovery, Status field/option lookup, fuzzy column matching, `--list-status`, `--dry-run`, `--add`, and the `updateProjectV2ItemFieldValue` mutation. Fills the mid-lifecycle gap between `create-gh-board` and `github-release-board-promote`. (#28)
 
+### Fixed
+
+- **Publishing scripts** — `validate-skill.sh` now parses folded YAML block-scalar descriptions (`description: >-`) by folding continuation lines, instead of reading only the `description:` line and failing the mandatory `Use when:` check on a 2-char value. `prepare-plugin.sh` no longer emits phantom `` `Command: /null` `` entries: the `seq 0 $((COUNT-1))` loops (which run twice at COUNT=0 under BSD/macOS `seq`) were replaced with C-style `for ((i=0; i<COUNT; i++))` loops. (#34)
+
 ## [3.12.0] - 2026-06-02
 
 ### Added
