@@ -4,7 +4,7 @@ Two-phase convergence harness for high-assurance review of a changeset (PR or wo
 
 ## What It Does
 
->-
+Runs two convergence phases on a PR or working-tree diff. Phase 1 dispatches specialized reviewers (general code, test coverage, silent-failure, type design, comments) in fix→re-review rounds until a full round finds zero actionable issues. Phase 2 runs a Gemini-primary adversarial cross-examination — Gemini finds, Claude judges, Gemini counters — so only findings the opposing model confirms survive, and every survivor is fixed and verified. The result is a changeset that passed both a depth gauntlet and a cross-model gauntlet.
 
 ## Key Features
 
@@ -24,7 +24,7 @@ Two-phase convergence harness for high-assurance review of a changeset (PR or wo
 
 ### Skills
 
-- `deep-review` — >-
+- `deep-review` — Two-phase iterative + adversarial review harness that converges a changeset to zero actionable, cross-model-confirmed issues.
 
 ## Installation
 
