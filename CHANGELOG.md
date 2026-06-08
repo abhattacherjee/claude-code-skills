@@ -19,8 +19,11 @@ Synced 7 skills from local source.
 
 ## [Unreleased]
 
+## [3.13.0] - 2026-06-08
+
 ### Added
 
+- **deep-review** plugin (v1.0.0) — two-phase convergence harness for high-assurance changeset review: Phase 1 drives the `pr-review-toolkit` reviewers in fix→re-review rounds until they converge to zero actionable (Critical/Important) findings; Phase 2 runs an adversarial Claude↔Gemini cross-examination so only findings the *opposing* model confirms survive. Orchestrates the existing `pr-review-toolkit` and `adversarial-review` capabilities rather than reimplementing them, and degrades to Claude-only self-cross-examination (with a loud banner) when the Gemini adversary is unavailable. (#33)
 - **github-board-move** skill (v1.0.0) — moves an issue/PR's Project (v2) card to a target Status column (`scripts/board-move.sh`): board discovery, Status field/option lookup, fuzzy column matching, `--list-status`, `--dry-run`, `--add`, and the `updateProjectV2ItemFieldValue` mutation. Fills the mid-lifecycle gap between `create-gh-board` and `github-release-board-promote`. (#28)
 
 ### Fixed
