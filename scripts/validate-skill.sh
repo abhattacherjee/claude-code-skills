@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # validate-skill.sh — Validate a Claude Code skill directory against quality rules
+# NOTE: This validator is duplicated across skills (each <skill>/scripts/, the monorepo
+# root scripts/, and plugin bundles). Keep all copies byte-identical when editing.
 # Exit codes: 0 = pass, 1 = fail, 2 = usage error
 set -eu
 
@@ -93,7 +95,30 @@ get_frontmatter() {
 
 extract_field() {
   local field="$1"
-  get_frontmatter | grep "^${field}:" | head -1 | sed "s/^${field}:[[:space:]]*//; s/^[\"']//; s/[\"']$//"
+  local fm first val
+  fm="$(get_frontmatter)"
+  first="$(printf '%s\n' "$fm" | grep "^${field}:" | head -1)"
+  [[ -z "$first" ]] && return 0
+  val="$(printf '%s' "$first" | sed "s/^${field}:[[:space:]]*//")"
+  # YAML block scalar (>, >-, |, |-, etc.): fold the indented continuation lines into one
+  # space-joined string. Both > (fold) and | (literal) indicators are treated the same —
+  # only the text is needed for the length / "Use when:" / third-person checks, not exact
+  # newline semantics. Continuation lines are assumed uniformly indented: a non-indented
+  # line ends the block (per YAML), so a mis-indented line legitimately stops folding.
+  if printf '%s' "$val" | grep -qE '^[|>][0-9]*[+-]?[[:space:]]*(#.*)?$'; then
+    printf '%s\n' "$fm" | awk -v f="^${field}:" '
+      $0 ~ f { grab = 1; next }
+      grab {
+        if ($0 ~ /^[^[:space:]]/) exit        # non-indented line ends the block scalar
+        if ($0 ~ /^[[:space:]]*$/) next       # skip blank lines (avoid double spaces)
+        sub(/^[[:space:]]+/, "")
+        out = out (out == "" ? "" : " ") $0
+      }
+      END { print out }
+    '
+  else
+    printf '%s' "$val" | sed "s/^[\"']//; s/[\"']$//"
+  fi
 }
 
 extract_version() {

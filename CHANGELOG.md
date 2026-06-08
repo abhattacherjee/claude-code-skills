@@ -5,7 +5,30 @@ Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
 
+## [2026-06-06] — Monorepo sync
+
+Synced 7 skills from local source.
+
+- `changelog-keeper` v1.1.1 — Keeps CHANGELOG.md up to date by generating categorized entries from git commit history
+- `claudeception` v3.2.0 — Extracts reusable knowledge from work sessions and codifies it into Claude Code skills
+- `context-shield` v1.3.0 — Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count
+- `conversation-search` v1.1.0 — Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries
+- `figma-ui-designer` v3.2.0 — Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code
+- `skill-authoring` v2.6.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
+- `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
+
 ## [Unreleased]
+
+## [3.13.0] - 2026-06-08
+
+### Added
+
+- **deep-review** plugin (v1.0.0) — two-phase convergence harness for high-assurance changeset review: Phase 1 drives the `pr-review-toolkit` reviewers in fix→re-review rounds until they converge to zero actionable (Critical/Important) findings; Phase 2 runs an adversarial Claude↔Gemini cross-examination so only findings the *opposing* model confirms survive. Orchestrates the existing `pr-review-toolkit` and `adversarial-review` capabilities rather than reimplementing them, and degrades to Claude-only self-cross-examination (with a loud banner) when the Gemini adversary is unavailable. (#33)
+- **github-board-move** skill (v1.0.0) — moves an issue/PR's Project (v2) card to a target Status column (`scripts/board-move.sh`): board discovery, Status field/option lookup, fuzzy column matching, `--list-status`, `--dry-run`, `--add`, and the `updateProjectV2ItemFieldValue` mutation. Fills the mid-lifecycle gap between `create-gh-board` and `github-release-board-promote`. (#28)
+
+### Fixed
+
+- **Publishing scripts** — `validate-skill.sh` now parses folded YAML block-scalar descriptions (`description: >-`) by folding continuation lines, instead of reading only the `description:` line and failing the mandatory `Use when:` check on a 2-char value. `prepare-plugin.sh` no longer emits phantom `` `Command: /null` `` entries: the `seq 0 $((COUNT-1))` loops (which run twice at COUNT=0 under BSD/macOS `seq`) were replaced with C-style `for ((i=0; i<COUNT; i++))` loops. (#34)
 
 ## [3.12.0] - 2026-06-02
 

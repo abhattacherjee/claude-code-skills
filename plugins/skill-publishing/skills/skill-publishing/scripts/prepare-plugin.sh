@@ -155,7 +155,7 @@ fi
 if [[ $SKILL_COUNT -gt 0 ]]; then
   echo ""
   echo "--- Skills ---"
-  for i in $(seq 0 $((SKILL_COUNT - 1))); do
+  for ((i=0; i<SKILL_COUNT; i++)); do
     SKILL_NAME_I=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
     SKILL_SRC=$(jq -r ".skills[$i].source" "$MANIFEST_FILE")
     SKILL_SRC=$(resolve_tilde "$SKILL_SRC")
@@ -189,7 +189,7 @@ fi
 if [[ $CMD_COUNT -gt 0 ]]; then
   echo ""
   echo "--- Commands ---"
-  for i in $(seq 0 $((CMD_COUNT - 1))); do
+  for ((i=0; i<CMD_COUNT; i++)); do
     CMD_NAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
     CMD_SRC=$(jq -r ".commands[$i].source" "$MANIFEST_FILE")
     CMD_SRC=$(resolve_tilde "$CMD_SRC")
@@ -213,7 +213,7 @@ fi
 if [[ $AGENT_COUNT -gt 0 ]]; then
   echo ""
   echo "--- Agents ---"
-  for i in $(seq 0 $((AGENT_COUNT - 1))); do
+  for ((i=0; i<AGENT_COUNT; i++)); do
     AGENT_NAME=$(jq -r ".agents[$i].name" "$MANIFEST_FILE")
     AGENT_SRC=$(jq -r ".agents[$i].source" "$MANIFEST_FILE")
     AGENT_SRC=$(resolve_tilde "$AGENT_SRC")
@@ -309,14 +309,14 @@ Initial plugin release.
 - **$SKILL_COUNT skill(s)**, **$CMD_COUNT command(s)**"
 
   # Add skill names
-  for i in $(seq 0 $((SKILL_COUNT - 1))); do
+  for ((i=0; i<SKILL_COUNT; i++)); do
     SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
     CHANGELOG_CONTENT="$CHANGELOG_CONTENT
 - Skill: \`$SNAME\`"
   done
 
   # Add command names
-  for i in $(seq 0 $((CMD_COUNT - 1))); do
+  for ((i=0; i<CMD_COUNT; i++)); do
     CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
     CHANGELOG_CONTENT="$CHANGELOG_CONTENT
 - Command: \`/$CNAME\`"
@@ -378,7 +378,7 @@ fi
 
 # --- Build Contents lists with descriptions ---
 SKILL_LIST=""
-for i in $(seq 0 $((SKILL_COUNT - 1))); do
+for ((i=0; i<SKILL_COUNT; i++)); do
   SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
   SSRC=$(jq -r ".skills[$i].source" "$MANIFEST_FILE")
   SSRC=$(resolve_tilde "$SSRC")
@@ -397,7 +397,7 @@ SKILL_LIST=$(echo "$SKILL_LIST" | sed '/./,$!d')
 CMD_LIST=""
 MANUAL_CMD_STEP=""
 if [[ $CMD_COUNT -gt 0 ]]; then
-  for i in $(seq 0 $((CMD_COUNT - 1))); do
+  for ((i=0; i<CMD_COUNT; i++)); do
     CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
     CSRC=$(jq -r ".commands[$i].source" "$MANIFEST_FILE")
     CSRC=$(resolve_tilde "$CSRC")
@@ -418,7 +418,7 @@ fi
 
 AGENT_LIST=""
 if [[ $AGENT_COUNT -gt 0 ]]; then
-  for i in $(seq 0 $((AGENT_COUNT - 1))); do
+  for ((i=0; i<AGENT_COUNT; i++)); do
     ANAME=$(jq -r ".agents[$i].name" "$MANIFEST_FILE")
     ASRC=$(jq -r ".agents[$i].source" "$MANIFEST_FILE")
     ASRC=$(resolve_tilde "$ASRC")

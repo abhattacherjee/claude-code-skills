@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Reusable Agent Skills and Plugins for Claude Code",
-    "version": "2026.04.16"
+    "version": "2026.06.06"
   },
   "plugins": [
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
-      "description": "Adversarial PR review — Claude and Gemini independently discover findings in R1 then symmetrically cross-examine each other's findings in R2; only issues both models confirm survive. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable.",
+      "description": "Adversarial PR review — Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable.",
       "version": "0.1.0"
     },
     {
@@ -31,6 +31,12 @@
       "source": "./plugins/custom-statusline",
       "description": "4-tier adaptive statusline with icons for folder, git branch, and context usage",
       "version": "1.3.0"
+    },
+    {
+      "name": "deep-review",
+      "source": "./plugins/deep-review",
+      "description": "Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.",
+      "version": "1.0.0"
     },
     {
       "name": "figma-ui-designer",
