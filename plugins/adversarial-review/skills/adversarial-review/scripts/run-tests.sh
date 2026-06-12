@@ -319,9 +319,9 @@ else
 fi
 
 # ====================================================================
-# SECTION 3: JSON extraction logic — wrapped envelope and prose-only
+# SECTION 3: JSON extraction logic — wrapped envelope, prose-only, v0.44.x envelope, and fenced-.response envelope
 # ====================================================================
-section "JSON extraction — wrapped envelope, prose-only, and v0.44.x envelope"
+section "JSON extraction — wrapped envelope, prose-only, v0.44.x envelope, and fenced-.response envelope"
 
 # Standalone Python extractor that mirrors the logic embedded in
 # gemini-review.sh's extract_model_answer function.
@@ -501,7 +501,7 @@ if [[ "$LEADING_OBJ_EXIT" -eq 0 ]]; then
   assert_contains "leading non-payload JSON: correct payload extracted" "VERDICTS=1" "$LEADING_OBJ_OUT"
 fi
 
-# Test 7: fenced JSON inside .response envelope (end-to-end input-shape guard).
+# Test 7: fenced JSON inside .response envelope (end-to-end input-shape guard)
 #   Outer JSON with "response" string containing a ```json fenced block.
 #   Fixture: fixtures/gemini_envelope_fenced_response.txt
 #   Exercises the envelope-unwrap path; the fence-strip sub-path is shadowed
