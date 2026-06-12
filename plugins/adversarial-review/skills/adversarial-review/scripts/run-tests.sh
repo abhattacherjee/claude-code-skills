@@ -28,7 +28,7 @@ Tests:
   - synthesize.py: markdown section headers present
   - synthesize.py: rejected findings have kill info
   - synthesize.py: error handling (no args, nonexistent files, wrong types)
-  - gemini-review.sh: JSON extraction from wrapped/prose/v0.44.x envelope
+  - gemini-review.sh: JSON extraction from wrapped/prose/v0.44.x/fenced-.response envelope
   - gemini-review.sh: --mode find stub emits findings
   - gemini-review.sh: --mode judge stub emits verdicts (no new_findings)
   - gemini-review.sh: auth/install failure -> exit 3
@@ -319,9 +319,9 @@ else
 fi
 
 # ====================================================================
-# SECTION 3: JSON extraction logic — wrapped envelope and prose-only
+# SECTION 3: JSON extraction logic — wrapped envelope, prose-only, v0.44.x envelope, and fenced-.response envelope
 # ====================================================================
-section "JSON extraction — wrapped envelope, prose-only, and v0.44.x envelope"
+section "JSON extraction — wrapped envelope, prose-only, v0.44.x envelope, and fenced-.response envelope"
 
 # Standalone Python extractor that mirrors the logic embedded in
 # gemini-review.sh's extract_model_answer function.
@@ -499,6 +499,21 @@ run_capture LEADING_OBJ_OUT LEADING_OBJ_EXIT python3 "$EXTRACT_PY_SCRIPT" "$LEAD
 assert_exit_code "leading non-payload JSON: extraction succeeds (exit 0)" "0" "$LEADING_OBJ_EXIT"
 if [[ "$LEADING_OBJ_EXIT" -eq 0 ]]; then
   assert_contains "leading non-payload JSON: correct payload extracted" "VERDICTS=1" "$LEADING_OBJ_OUT"
+fi
+
+# Test 7: fenced JSON inside .response envelope (end-to-end input-shape guard)
+#   Outer JSON with "response" string containing a ```json fenced block.
+#   Fixture: fixtures/gemini_envelope_fenced_response.txt
+#   Exercises the envelope-unwrap path; the fence-strip sub-path is shadowed
+#   by the prose-fallback (iter_json_objects finds the braces regardless of
+#   surrounding backticks), so fence-strip isolation is NOT separately proven here.
+FENCED_OUT=""
+FENCED_EXIT=0
+run_capture FENCED_OUT FENCED_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_fenced_response.txt" "judge"
+
+assert_exit_code "fenced-.response envelope: end-to-end extraction succeeds (exit 0)" "0" "$FENCED_EXIT"
+if [[ "$FENCED_EXIT" -eq 0 ]]; then
+  assert_contains "fenced-.response envelope: verdicts=1" "VERDICTS=1" "$FENCED_OUT"
 fi
 
 # ====================================================================
