@@ -19,6 +19,9 @@ Synced 7 skills from local source.
 
 ## [Unreleased]
 
+### Added
+- adversarial-review: regression fixture + extractor test for the fenced-JSON-inside-`.response` envelope shape in gemini-review.sh (#41)
+
 ## [3.13.0] - 2026-06-08
 
 ### Added

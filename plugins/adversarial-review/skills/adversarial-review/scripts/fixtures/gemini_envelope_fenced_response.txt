@@ -1,0 +1,3 @@
+Ripgrep is not available. Falling back to GrepTool.
+Skill conflict detected: "adversarial-review" loaded twice; using first occurrence.
+{"session_id":"x","response":"```json\n{\"verdicts\":[{\"id\":\"G-001\",\"gemini_verdict\":\"confirm\",\"reason\":\"Confirmed by adversarial review.\",\"confidence\":\"high\"}],\"new_findings\":[]}\n```","stats":{}}

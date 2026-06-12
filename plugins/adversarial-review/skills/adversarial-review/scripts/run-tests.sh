@@ -501,6 +501,19 @@ if [[ "$LEADING_OBJ_EXIT" -eq 0 ]]; then
   assert_contains "leading non-payload JSON: correct payload extracted" "VERDICTS=1" "$LEADING_OBJ_OUT"
 fi
 
+# Test 7: fenced JSON inside .response envelope —
+#   Outer JSON with "response" string containing a ```json fenced block.
+#   Fixture: fixtures/gemini_envelope_fenced_response.txt
+#   Expected: verdicts len=1 (envelope unwrap -> fence strip)
+FENCED_OUT=""
+FENCED_EXIT=0
+run_capture FENCED_OUT FENCED_EXIT python3 "$EXTRACT_PY_SCRIPT" "$FIXTURES_DIR/gemini_envelope_fenced_response.txt" "judge"
+
+assert_exit_code "fenced-JSON-inside-.response: extraction succeeds (exit 0)" "0" "$FENCED_EXIT"
+if [[ "$FENCED_EXIT" -eq 0 ]]; then
+  assert_contains "fenced-JSON-inside-.response: verdicts=1" "VERDICTS=1" "$FENCED_OUT"
+fi
+
 # ====================================================================
 # SECTION 4: gemini-review.sh — adversary unavailable paths
 # ====================================================================
