@@ -38,10 +38,9 @@ Options:
   --model <model>     Gemini model to use (default: gemini-2.5-pro,
                       or \$GEMINI_MODEL env var)
   --out <file>        Write output JSON to this file (default: stdout)
-  --strict            Force the hardened judge prompt (strict mode) on the first
-                      call instead of the standard prompt. In strict/judge mode
-                      Gemini must quote the exact offending diff line verbatim
-                      for every confirm. Use for low-signal escalation re-runs.
+  --strict            Force the hardened/strict prompt variant on the first call
+                      instead of the standard prompt, regardless of --mode.
+                      Use for low-signal escalation re-runs.
   --help              Show this help and exit
 
 Output JSON schema:

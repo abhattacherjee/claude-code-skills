@@ -1830,15 +1830,7 @@ assert_contains  "confirm-rate T2: gemini_on_claude low_signal=false (no false a
 
 # ---- Test 3: below min sample (2 findings, both confirmed) ----
 # confirm_rate=1.000 but judged=2 < RUBBER_STAMP_MIN_JUDGED=5 -> low_signal=false
-CR_GEM_2_CONFIRM_FILE="$TMP_DIR/cr_gem_2_confirm.json"
-cat >"$CR_GEM_2_CONFIRM_FILE" <<'JSON'
-{
-  "verdicts": [
-    {"id":"C-301","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-302","gemini_verdict":"confirm","reason":"ok","confidence":0.9}
-  ]
-}
-JSON
+CR_GEM_2_CONFIRM_FILE="$FIXTURES_DIR/cr_gemini_verdicts_2_confirm.json"
 
 CR_T3_OUT=""
 CR_T3_EXIT=0
@@ -2009,31 +2001,31 @@ assert_contains  "confirm-rate Fix-D: unrecognized warn on stderr" \
 assert_contains  "confirm-rate Fix-E: low_signal warn in T1 stderr" \
   "confirm-rate guard FIRED" "$CR_T1_OUT"
 
-# ---- Test 6: Presence — gemini-review.sh contains strict judge prompt phrase ----
+# ---- Presence P1: gemini-review.sh contains strict judge prompt phrase ----
 # (gemini-review.sh must contain the hardened default-to-refute instruction)
 GEMINI_REVIEW_CONTENT="$(cat "$GEMINI_REVIEW")"
-assert_contains "presence T6: gemini-review.sh has default-to-refute phrase" \
+assert_contains "presence P1: gemini-review.sh has default-to-refute phrase" \
   "Default to refute unless the finding is incontrovertibly grounded" \
   "$GEMINI_REVIEW_CONTENT"
 
-# ---- Test 7: Presence — gemini-review.sh contains forced-refute escalation phrase ----
-assert_contains "presence T7: gemini-review.sh has quote-offending-line phrase" \
+# ---- Presence P2: gemini-review.sh contains forced-refute escalation phrase ----
+assert_contains "presence P2: gemini-review.sh has quote-offending-line phrase" \
   "Quote the exact offending line from the diff verbatim" \
   "$GEMINI_REVIEW_CONTENT"
 
-# ---- Test 7b: Presence — gemini-review.sh has --strict flag ----
+# ---- Presence P3: gemini-review.sh has --strict flag ----
 # Note: avoid passing --strict as the grep pattern directly (ugrep interprets it
 # as a flag). Test for the FORCE_STRICT variable name instead, which is set only
 # when --strict is parsed, and for the usage line suffix that contains the flag.
-assert_contains "presence T7b: gemini-review.sh has FORCE_STRICT (--strict implementation)" \
+assert_contains "presence P3: gemini-review.sh has FORCE_STRICT (--strict implementation)" \
   "FORCE_STRICT" \
   "$GEMINI_REVIEW_CONTENT"
 
-# ---- Test 8: Presence — adversarial-cross-examiner.md contains cannot-point phrase ----
+# ---- Presence P4: adversarial-cross-examiner.md contains cannot-point phrase ----
 # Path: scripts/ -> (skill)adversarial-review/ -> skills/ -> (plugin)adversarial-review/ -> agents/
 CROSS_EXAMINER_FILE="$SCRIPT_DIR/../../../agents/adversarial-cross-examiner.md"
 CROSS_EXAMINER_CONTENT="$(cat "$CROSS_EXAMINER_FILE")"
-assert_contains "presence T8: cross-examiner.md has cannot-point-to-proving-line phrase" \
+assert_contains "presence P4: cross-examiner.md has cannot-point-to-proving-line phrase" \
   "cannot point to the proving line" \
   "$CROSS_EXAMINER_CONTENT"
 
