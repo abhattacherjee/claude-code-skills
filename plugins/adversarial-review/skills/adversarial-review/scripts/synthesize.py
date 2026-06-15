@@ -29,6 +29,7 @@ Exit codes:
 
 import argparse
 import json
+import re
 import sys
 from typing import Any
 
@@ -97,6 +98,98 @@ def unwrap_findings(raw: Any, label: str) -> list[dict]:
     return raw
 
 
+def _slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+
+
+def _warn(msg: str) -> None:
+    print(f"[synthesize] WARNING: {msg}", file=sys.stderr)
+
+
+def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_field: str) -> dict[str, dict]:
+    """Map finding-id -> verdict, recovering verdicts whose 'id' is a slug or
+    other non-canonical value instead of the orchestrator's C-NNN/G-NNN id.
+
+    Matching is layered and conservative:
+      1. exact finding-id,
+      2. slugified-title equality (ambiguous title slugs are dropped),
+      3. a single unambiguous file:line token in the verdict's reason.
+    A candidate already claimed by another verdict is never overwritten, and the
+    reason-location heuristic abstains when the reason points at more than one
+    finding. Recovery is heuristic, so every recovery and every unrecoverable
+    verdict is logged to stderr for audit. Returns a finding-id -> verdict dict;
+    recovered verdicts are keyed by the resolved finding id. Every recovery and
+    every unrecoverable verdict is logged to stderr for audit.
+    """
+    findings = [f for f in findings if f.get("id")]
+    finding_ids = {f["id"] for f in findings}
+    resolved = {}
+    leftover = []
+    for v in verdicts:
+        vid = v.get("id")
+        if not vid:
+            continue
+        if vid in finding_ids:
+            if vid in resolved:
+                _warn(f"duplicate verdict for finding id '{vid}'; keeping first "
+                      f"({resolved[vid].get(verdict_field)!r}), ignoring later "
+                      f"({v.get(verdict_field)!r})")
+            else:
+                resolved[vid] = v
+        else:
+            leftover.append(v)
+
+    def build_index(key_fn):
+        idx, ambiguous = {}, set()
+        for f in findings:
+            k = key_fn(f)
+            if not k:
+                continue
+            if k in idx and idx[k] != f["id"]:
+                ambiguous.add(k)
+            else:
+                idx[k] = f["id"]
+        for k in ambiguous:
+            idx.pop(k, None)
+        return idx
+
+    slug_index = build_index(lambda f: _slugify(f.get("title")))
+    loc_index = build_index(
+        lambda f: f"{f.get('path')}:{f.get('line')}"
+        if f.get("path") and f.get("line") is not None else None
+    )
+
+    for v in leftover:
+        vid = v["id"]
+        candidates = set()
+        slug_cand = slug_index.get(_slugify(vid))
+        if slug_cand and slug_cand not in resolved:
+            candidates.add(slug_cand)
+        reason = v.get("reason", "") or ""
+        loc_cands = {
+            loc_index[tok]
+            for tok in re.findall(r"[\w./-]+:\d+", reason)
+            if tok in loc_index and loc_index[tok] not in resolved
+        }
+        if len(loc_cands) == 1:
+            candidates.add(next(iter(loc_cands)))
+        if len(candidates) == 1:
+            target = next(iter(candidates))
+            resolved[target] = v
+            _warn(f"verdict id '{vid}' did not match any finding id; recovered "
+                  f"(heuristic) -> '{target}' — verify this association")
+        elif len(candidates) > 1:
+            _warn(f"verdict id '{vid}' has conflicting recovery signals "
+                  f"(slug and reason-location point to different findings: "
+                  f"{sorted(candidates)}); abstaining — the targeted finding stays "
+                  f"'unconfirmed' (its {verdict_field} is ignored)")
+        else:
+            _warn(f"verdict id '{vid}' did not match any finding id and could not "
+                  f"be recovered; the targeted finding stays 'unconfirmed' "
+                  f"(its {verdict_field} is ignored)")
+    return resolved
+
+
 def classify_findings(
     claude_findings: list[dict],
     gemini_findings: list[dict],
@@ -105,17 +198,18 @@ def classify_findings(
 ) -> list[dict]:
     """Apply symmetric convergence and return findings with status filled in."""
 
-    # Build verdict lookup maps (skip entries missing a non-empty "id")
-    gemini_verdict_map: dict[str, dict] = {
-        v["id"]: v
-        for v in gemini_verdicts_raw.get("verdicts", [])
-        if v.get("id")
-    }
-    claude_verdict_map: dict[str, dict] = {
-        v["id"]: v
-        for v in claude_verdicts_raw.get("verdicts", [])
-        if v.get("id")
-    }
+    # Build verdict lookup maps with slug/location fallback matching (bug #30).
+    # gemini_verdict_map: Gemini's verdicts on Claude findings, keyed by the
+    # resolved Claude finding id (C-NNN); reconcile recovers slug/location-keyed
+    # verdicts back to that id.
+    gemini_verdict_map: dict[str, dict] = reconcile_verdict_map(
+        gemini_verdicts_raw.get("verdicts", []), claude_findings, "gemini_verdict"
+    )
+    # claude_verdict_map: Claude's verdicts on Gemini findings, keyed by the
+    # resolved Gemini finding id (G-NNN); same recovery applies.
+    claude_verdict_map: dict[str, dict] = reconcile_verdict_map(
+        claude_verdicts_raw.get("verdicts", []), gemini_findings, "claude_verdict"
+    )
 
     classified: list[dict] = []
 

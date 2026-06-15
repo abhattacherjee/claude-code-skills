@@ -22,6 +22,9 @@ Synced 7 skills from local source.
 ### Added
 - adversarial-review: regression fixture + extractor test for the fenced-JSON-inside-`.response` envelope shape in gemini-review.sh (#41)
 
+### Fixed
+- adversarial-review: `synthesize.py` now recovers cross-examiner verdicts keyed by a descriptive slug — or via a `file:line` token in the verdict reason — instead of the canonical `G-NNN`/`C-NNN` id, so a refuted finding is reported as **rejected** rather than silently mis-filed as **unconfirmed**; truly-unmatched verdict ids now emit a loud stderr warning. The `adversarial-cross-examiner` agent contract is hardened to echo the canonical id verbatim. (#30)
+
 ## [3.13.0] - 2026-06-08
 
 ### Added
