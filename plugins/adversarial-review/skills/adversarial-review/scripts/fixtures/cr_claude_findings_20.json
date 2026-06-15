@@ -1,0 +1,22 @@
+[
+  {"id":"C-201","path":"src/a.py","line":1,"severity":"minor","category":"bug","title":"F1","rationale":"R1","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-202","path":"src/a.py","line":2,"severity":"minor","category":"bug","title":"F2","rationale":"R2","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-203","path":"src/a.py","line":3,"severity":"minor","category":"bug","title":"F3","rationale":"R3","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-204","path":"src/a.py","line":4,"severity":"minor","category":"bug","title":"F4","rationale":"R4","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-205","path":"src/a.py","line":5,"severity":"minor","category":"bug","title":"F5","rationale":"R5","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-206","path":"src/a.py","line":6,"severity":"minor","category":"bug","title":"F6","rationale":"R6","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-207","path":"src/a.py","line":7,"severity":"minor","category":"bug","title":"F7","rationale":"R7","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-208","path":"src/a.py","line":8,"severity":"minor","category":"bug","title":"F8","rationale":"R8","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-209","path":"src/a.py","line":9,"severity":"minor","category":"bug","title":"F9","rationale":"R9","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-210","path":"src/a.py","line":10,"severity":"minor","category":"bug","title":"F10","rationale":"R10","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-211","path":"src/a.py","line":11,"severity":"minor","category":"bug","title":"F11","rationale":"R11","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-212","path":"src/a.py","line":12,"severity":"minor","category":"bug","title":"F12","rationale":"R12","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-213","path":"src/a.py","line":13,"severity":"minor","category":"bug","title":"F13","rationale":"R13","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-214","path":"src/a.py","line":14,"severity":"minor","category":"bug","title":"F14","rationale":"R14","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-215","path":"src/a.py","line":15,"severity":"minor","category":"bug","title":"F15","rationale":"R15","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-216","path":"src/a.py","line":16,"severity":"minor","category":"bug","title":"F16","rationale":"R16","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-217","path":"src/a.py","line":17,"severity":"minor","category":"bug","title":"F17","rationale":"R17","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-218","path":"src/a.py","line":18,"severity":"minor","category":"bug","title":"F18","rationale":"R18","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-219","path":"src/a.py","line":19,"severity":"minor","category":"bug","title":"F19","rationale":"R19","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-220","path":"src/a.py","line":20,"severity":"minor","category":"bug","title":"F20","rationale":"R20","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}
+]

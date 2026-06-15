@@ -1,0 +1,34 @@
+{
+  "verdicts": [
+    {
+      "id": "C-101",
+      "gemini_verdict": "confirm",
+      "reason": "Finding one is valid.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-102",
+      "gemini_verdict": "confirm",
+      "reason": "Finding two is valid.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-103",
+      "gemini_verdict": "confirm",
+      "reason": "Finding three is valid.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-104",
+      "gemini_verdict": "confirm",
+      "reason": "Finding four is valid.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-105",
+      "gemini_verdict": "confirm",
+      "reason": "Finding five is valid.",
+      "confidence": 0.9
+    }
+  ]
+}

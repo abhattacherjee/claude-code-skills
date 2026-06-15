@@ -29,8 +29,56 @@ Exit codes:
 
 import argparse
 import json
+import re
 import sys
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Confirm-rate guard: detects rubber-stamping (all-confirm) and
+# rubber-rejecting (all-refute) judge behaviour, both of which are low-signal.
+# ---------------------------------------------------------------------------
+RUBBER_STAMP_MIN_JUDGED = 5            # below this, near-unanimity isn't meaningful signal
+RUBBER_STAMP_CONFIRM_RATE_HIGH = 0.95  # >= this confirm-rate looks like rubber-stamping (all-confirm)
+RUBBER_STAMP_CONFIRM_RATE_LOW = 0.05   # <= this looks like rubber-rejecting (all-refute), equally low-signal
+
+
+def compute_confirm_rate(verdict_map: dict, verdict_field: str) -> dict:
+    """Return {confirmed, refuted, judged, confirm_rate, low_signal, unrecognized} for one judge direction.
+
+    judged = confirmed + refuted (verdicts that are neither are ignored for the rate).
+    unrecognized = verdicts whose verdict_field is neither "confirm" nor "refute".
+    confirm_rate = confirmed/judged (0.0 when judged==0).
+    low_signal fires only with a meaningful sample AND near-unanimity in EITHER direction.
+    """
+    confirmed = sum(
+        1 for v in verdict_map.values()
+        if v.get(verdict_field) == "confirm"
+    )
+    refuted = sum(
+        1 for v in verdict_map.values()
+        if v.get(verdict_field) == "refute"
+    )
+    unrecognized = sum(
+        1 for v in verdict_map.values()
+        if v.get(verdict_field) not in ("confirm", "refute")
+    )
+    judged = confirmed + refuted
+    confirm_rate = confirmed / judged if judged else 0.0
+    low_signal = (
+        judged >= RUBBER_STAMP_MIN_JUDGED
+        and (
+            confirm_rate >= RUBBER_STAMP_CONFIRM_RATE_HIGH
+            or confirm_rate <= RUBBER_STAMP_CONFIRM_RATE_LOW
+        )
+    )
+    return {
+        "confirmed": confirmed,
+        "refuted": refuted,
+        "judged": judged,
+        "confirm_rate": confirm_rate,
+        "low_signal": low_signal,
+        "unrecognized": unrecognized,
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,25 +145,122 @@ def unwrap_findings(raw: Any, label: str) -> list[dict]:
     return raw
 
 
+def _slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+
+
+def _warn(msg: str) -> None:
+    print(f"[synthesize] WARNING: {msg}", file=sys.stderr)
+
+
+def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_field: str) -> dict[str, dict]:
+    """Map finding-id -> verdict, recovering verdicts whose 'id' is a slug or
+    other non-canonical value instead of the orchestrator's C-NNN/G-NNN id.
+
+    Matching is layered and conservative:
+      1. exact finding-id,
+      2. slugified-title equality (ambiguous title slugs are dropped),
+      3. a single unambiguous file:line token in the verdict's reason.
+    A candidate already claimed by another verdict is never overwritten, and the
+    reason-location heuristic abstains when the reason points at more than one
+    finding. Recovery is heuristic, so every recovery and every unrecoverable
+    verdict is logged to stderr for audit. Returns a finding-id -> verdict dict;
+    recovered verdicts are keyed by the resolved finding id. Every recovery and
+    every unrecoverable verdict is logged to stderr for audit.
+    """
+    findings = [f for f in findings if f.get("id")]
+    finding_ids = {f["id"] for f in findings}
+    resolved = {}
+    leftover = []
+    for v in verdicts:
+        vid = v.get("id")
+        if not vid:
+            continue
+        if vid in finding_ids:
+            if vid in resolved:
+                _warn(f"duplicate verdict for finding id '{vid}'; keeping first "
+                      f"({resolved[vid].get(verdict_field)!r}), ignoring later "
+                      f"({v.get(verdict_field)!r})")
+            else:
+                resolved[vid] = v
+        else:
+            leftover.append(v)
+
+    def build_index(key_fn):
+        idx, ambiguous = {}, set()
+        for f in findings:
+            k = key_fn(f)
+            if not k:
+                continue
+            if k in idx and idx[k] != f["id"]:
+                ambiguous.add(k)
+            else:
+                idx[k] = f["id"]
+        for k in ambiguous:
+            idx.pop(k, None)
+        return idx
+
+    slug_index = build_index(lambda f: _slugify(f.get("title")))
+    loc_index = build_index(
+        lambda f: f"{f.get('path')}:{f.get('line')}"
+        if f.get("path") and f.get("line") is not None else None
+    )
+
+    for v in leftover:
+        vid = v["id"]
+        candidates = set()
+        slug_cand = slug_index.get(_slugify(vid))
+        if slug_cand and slug_cand not in resolved:
+            candidates.add(slug_cand)
+        reason = v.get("reason", "") or ""
+        loc_cands = {
+            loc_index[tok]
+            for tok in re.findall(r"[\w./-]+:\d+", reason)
+            if tok in loc_index and loc_index[tok] not in resolved
+        }
+        if len(loc_cands) == 1:
+            candidates.add(next(iter(loc_cands)))
+        if len(candidates) == 1:
+            target = next(iter(candidates))
+            resolved[target] = v
+            _warn(f"verdict id '{vid}' did not match any finding id; recovered "
+                  f"(heuristic) -> '{target}' — verify this association")
+        elif len(candidates) > 1:
+            _warn(f"verdict id '{vid}' has conflicting recovery signals "
+                  f"(slug and reason-location point to different findings: "
+                  f"{sorted(candidates)}); abstaining — the targeted finding stays "
+                  f"'unconfirmed' (its {verdict_field} is ignored)")
+        else:
+            _warn(f"verdict id '{vid}' did not match any finding id and could not "
+                  f"be recovered; the targeted finding stays 'unconfirmed' "
+                  f"(its {verdict_field} is ignored)")
+    return resolved
+
+
 def classify_findings(
     claude_findings: list[dict],
     gemini_findings: list[dict],
     gemini_verdicts_raw: dict,
     claude_verdicts_raw: dict,
-) -> list[dict]:
-    """Apply symmetric convergence and return findings with status filled in."""
+) -> tuple[list[dict], dict[str, dict], dict[str, dict]]:
+    """Apply symmetric convergence and return (findings, gemini_verdict_map, claude_verdict_map).
 
-    # Build verdict lookup maps (skip entries missing a non-empty "id")
-    gemini_verdict_map: dict[str, dict] = {
-        v["id"]: v
-        for v in gemini_verdicts_raw.get("verdicts", [])
-        if v.get("id")
-    }
-    claude_verdict_map: dict[str, dict] = {
-        v["id"]: v
-        for v in claude_verdicts_raw.get("verdicts", [])
-        if v.get("id")
-    }
+    The verdict maps are returned alongside the classified findings so callers can
+    reuse them for the confirm-rate guard without a second reconcile call.
+    """
+
+    # Build verdict lookup maps with slug/location fallback matching (bug #30).
+    # gemini_verdict_map: Gemini's verdicts on Claude findings, keyed by the
+    # resolved Claude finding id (C-NNN); reconcile recovers slug/location-keyed
+    # verdicts back to that id.
+    gemini_verdict_map: dict[str, dict] = reconcile_verdict_map(
+        gemini_verdicts_raw.get("verdicts", []), claude_findings, "gemini_verdict"
+    )
+    # claude_verdict_map: Claude's verdicts on Gemini findings, keyed by the
+    # resolved Gemini finding id (G-NNN); same recovery applies.
+    claude_verdict_map: dict[str, dict] = reconcile_verdict_map(
+        claude_verdicts_raw.get("verdicts", []), gemini_findings, "claude_verdict"
+    )
 
     classified: list[dict] = []
 
@@ -183,7 +328,7 @@ def classify_findings(
 
         classified.append(f)
 
-    return classified
+    return classified, gemini_verdict_map, claude_verdict_map
 
 
 SEVERITY_ORDER = {"critical": 0, "important": 1, "minor": 2}
@@ -347,7 +492,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    classified = classify_findings(
+    classified, gemini_verdict_map, claude_verdict_map = classify_findings(
         claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw
     )
 
@@ -370,6 +515,50 @@ def main() -> None:
 
     # Print summary counts to stdout
     print(f"survivors={len(survivors)} unconfirmed={len(unconfirmed)} rejected={len(rejected)}")
+
+    # Confirm-rate guard: report rubber-stamp / rubber-reject signals for each judge direction.
+    # Reuse the verdict maps built once inside classify_findings (no duplicate reconcile).
+    gem_stats = compute_confirm_rate(gemini_verdict_map, "gemini_verdict")
+    cla_stats = compute_confirm_rate(claude_verdict_map, "claude_verdict")
+
+    # Warn on unrecognized verdicts (Fix D)
+    if gem_stats["unrecognized"] > 0:
+        _warn(
+            f"confirm-rate(gemini_on_claude): {gem_stats['unrecognized']} verdict(s) had an "
+            "unrecognized verdict value — judge output may be malformed"
+        )
+    if cla_stats["unrecognized"] > 0:
+        _warn(
+            f"confirm-rate(claude_on_gemini): {cla_stats['unrecognized']} verdict(s) had an "
+            "unrecognized verdict value — judge output may be malformed"
+        )
+
+    print(
+        f"gemini_on_claude: confirmed={gem_stats['confirmed']} refuted={gem_stats['refuted']} "
+        f"judged={gem_stats['judged']} confirm_rate={gem_stats['confirm_rate']:.3f} "
+        f"low_signal={'true' if gem_stats['low_signal'] else 'false'} "
+        f"unrecognized={gem_stats['unrecognized']}"
+    )
+    print(
+        f"claude_on_gemini: confirmed={cla_stats['confirmed']} refuted={cla_stats['refuted']} "
+        f"judged={cla_stats['judged']} confirm_rate={cla_stats['confirm_rate']:.3f} "
+        f"low_signal={'true' if cla_stats['low_signal'] else 'false'} "
+        f"unrecognized={cla_stats['unrecognized']}"
+    )
+
+    # Warn loudly when low_signal fires (Fix E)
+    if gem_stats["low_signal"]:
+        _warn(
+            f"confirm-rate guard FIRED (gemini_on_claude): "
+            f"confirm_rate={gem_stats['confirm_rate']:.3f} over {gem_stats['judged']} judged "
+            "— judge may be rubber-stamping/rubber-rejecting; treat survivors with caution"
+        )
+    if cla_stats["low_signal"]:
+        _warn(
+            f"confirm-rate guard FIRED (claude_on_gemini): "
+            f"confirm_rate={cla_stats['confirm_rate']:.3f} over {cla_stats['judged']} judged "
+            "— judge may be rubber-stamping/rubber-rejecting; treat survivors with caution"
+        )
 
     # Write JSON output
     if args.json_out:

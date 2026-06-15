@@ -12,11 +12,12 @@ FINDINGS_FILE=""
 MODE="judge"
 MODEL="${GEMINI_MODEL:-gemini-2.5-pro}"
 OUT_FILE=""
+FORCE_STRICT=false
 
 usage() {
   cat <<EOF
 Usage: $SCRIPT_NAME --diff <file> [--findings <r1.json>] [--mode find|judge]
-                    [--model <m>] [--out <file>] [--help]
+                    [--model <m>] [--out <file>] [--strict] [--help]
 
 Run Gemini in one of two modes:
 
@@ -37,6 +38,9 @@ Options:
   --model <model>     Gemini model to use (default: gemini-2.5-pro,
                       or \$GEMINI_MODEL env var)
   --out <file>        Write output JSON to this file (default: stdout)
+  --strict            Force the hardened/strict prompt variant on the first call
+                      instead of the standard prompt, regardless of --mode.
+                      Use for low-signal escalation re-runs.
   --help              Show this help and exit
 
 Output JSON schema:
@@ -94,6 +98,8 @@ while [[ $# -gt 0 ]]; do
     --out)
       [[ $# -lt 2 ]] && { echo "Error: --out requires an argument" >&2; exit 2; }
       OUT_FILE="$2"; shift 2 ;;
+    --strict)
+      FORCE_STRICT=true; shift ;;
     --help) usage; exit 0 ;;
     *)
       echo "Error: unknown argument: $1" >&2
@@ -328,6 +334,20 @@ Your task is to verdict each finding (identified by "id"): output "confirm" if t
 finding is valid and grounded in the diff, or "refute" if it is incorrect or not
 supported by the diff.
 
+Default to refute unless the finding is incontrovertibly grounded in the diff shown
+below. The cost of a wrongly-confirmed finding (it inflates the survivors list and
+erodes trust) is higher than a wrongly-refuted one (it is retained as UNCONFIRMED,
+not lost).
+
+Refute findings that rest on taste, convention preference, speculation about runtime
+behavior not shown, or severity-inflation.
+
+For every confirm, your reason MUST cite the specific diff line(s) or code that prove
+the finding. A confirm without grounded evidence is not allowed — refute instead.
+
+Quote the exact offending line from the diff verbatim in your reason for every
+confirm; if you cannot quote a line that proves it, refute.
+
 Output ONLY valid JSON, no prose, no markdown, no explanation. The JSON must have
 exactly this structure:
 {
@@ -346,6 +366,17 @@ review findings made by another model.
 
 Your task is to verdict each finding (identified by "id"): "confirm" if valid and
 grounded in the diff, or "refute" if incorrect or not supported.
+
+Default to refute unless the finding is incontrovertibly grounded in the diff shown
+below. The cost of a wrongly-confirmed finding (it inflates the survivors list and
+erodes trust) is higher than a wrongly-refuted one (it is retained as UNCONFIRMED,
+not lost).
+
+Refute findings that rest on taste, convention preference, speculation about runtime
+behavior not shown, or severity-inflation.
+
+For every confirm, your reason MUST cite the specific diff line(s) or code that prove
+the finding. A confirm without grounded evidence is not allowed — refute instead.
 
 Respond with a JSON object with a "verdicts" key: an array of verdict objects.
 Each verdict must have: id (the finding id), gemini_verdict ("confirm" or "refute"),
@@ -397,9 +428,9 @@ call_gemini() {
   return 1
 }
 
-# First attempt (non-strict prompt)
-if ! call_gemini "false"; then
-  # Retry with strict prompt
+# First attempt: use FORCE_STRICT if --strict was passed, otherwise non-strict
+if ! call_gemini "$FORCE_STRICT"; then
+  # Retry with strict prompt (always true on retry)
   echo "Warning: Failed to parse Gemini output, retrying with stricter prompt..." >&2
   if ! call_gemini "true"; then
     echo "ADVERSARY_UNAVAILABLE: Could not extract valid JSON from Gemini output after retry" >&2

@@ -5,6 +5,17 @@ Each skill also maintains its own `CHANGELOG.md` within its directory.
 
 Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
 
+## [Unreleased]
+
+## [3.14.0] - 2026-06-15
+
+### Added
+- adversarial-review: regression fixture + extractor test for the fenced-JSON-inside-`.response` envelope shape in gemini-review.sh (#41)
+- adversarial-review: judge passes now apply refutation pressure (default-to-refute-unless-grounded prompt hardening for both Gemini `--mode judge` and Claude's cross-examiner) and `synthesize.py` surfaces a per-direction confirm-rate with a `low_signal` flag that detects a rubber-stamping (near-unanimous) judge. (#31)
+
+### Fixed
+- adversarial-review: `synthesize.py` now recovers cross-examiner verdicts keyed by a descriptive slug — or via a `file:line` token in the verdict reason — instead of the canonical `G-NNN`/`C-NNN` id, so a refuted finding is reported as **rejected** rather than silently mis-filed as **unconfirmed**; truly-unmatched verdict ids now emit a loud stderr warning. The `adversarial-cross-examiner` agent contract is hardened to echo the canonical id verbatim. (#30)
+
 ## [2026-06-06] — Monorepo sync
 
 Synced 7 skills from local source.
@@ -16,8 +27,6 @@ Synced 7 skills from local source.
 - `figma-ui-designer` v3.2.0 — Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code
 - `skill-authoring` v2.6.0 — Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism
 - `worktree` v1.0.0 — Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch
-
-## [Unreleased]
 
 ## [3.13.0] - 2026-06-08
 

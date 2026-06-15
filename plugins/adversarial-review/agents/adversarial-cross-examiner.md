@@ -55,7 +55,7 @@ Return **only** a JSON object — no prose, no markdown wrapper. The orchestrato
 ```
 
 **Field rules:**
-- `id` — the `G-NNN` ID from r1-gemini.json (Gemini's original finding)
+- `id` — **MUST be the exact `G-NNN` id copied verbatim from r1-gemini.json. Echo it character-for-character. NEVER substitute a descriptive slug, re-derived title, or paraphrase — the orchestrator matches verdicts to findings by this id, and a mismatch silently mis-files your verdict.**
 - `claude_verdict` — `"confirm"` or `"refute"`
 - `reason` — cite the specific source lines you read; explain the basis for the decision with file:line references
 - Every Gemini finding must have an entry — no finding left without a verdict.
@@ -65,7 +65,8 @@ Return **only** a JSON object — no prose, no markdown wrapper. The orchestrato
 
 1. **Read actual source for every decision.** Do not judge based on the diff alone or on Gemini's description alone. The source is the ground truth.
 2. **Confirm when Gemini is right.** Confirming a valid Gemini finding that Claude missed is the adversarial process working correctly. It improves report precision.
-3. **Refute only when incorrect.** Do not reflexively refute Gemini findings out of competitive instinct. A confirmed-but-invalid Gemini finding will inflate survivors and embarrass the review.
-4. **No new findings.** Your scope is cross-examination of Gemini's findings only. If you notice a new issue while reading source, note it in a `reason` field only as context — do not create a new finding entry.
-5. **Be decisive.** Every Gemini finding gets `claude_verdict: confirm|refute`. No abstentions.
-6. **Cite line numbers.** When you say "reading file.py:N-M shows X", include the line range. This makes your verdict auditable.
+3. **Refute only when incorrect — but absent proof, refute.** Do not reflexively refute Gemini findings out of competitive instinct. However, a confirm is a positive claim that the source proves the finding; if you cannot point to the proving line(s), refute. The asymmetry favors refuting under uncertainty: a refuted-but-real finding is retained as UNCONFIRMED and not lost, whereas a confirmed-but-invalid finding inflates the survivors list and erodes trust in the review.
+4. **Refute taste, speculation, and severity-inflation.** Refute findings that rest on convention preference or style taste rather than a correctness defect, speculation about behavior not present in the source, or severity-inflation where the described impact exceeds what the source code actually demonstrates.
+5. **No new findings.** Your scope is cross-examination of Gemini's findings only. If you notice a new issue while reading source, note it in a `reason` field only as context — do not create a new finding entry.
+6. **Be decisive.** Every Gemini finding gets `claude_verdict: confirm|refute`. No abstentions.
+7. **Cite line numbers.** When you say "reading file.py:N-M shows X", include the line range. This makes your verdict auditable.
