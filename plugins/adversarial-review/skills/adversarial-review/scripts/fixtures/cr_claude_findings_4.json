@@ -1,0 +1,6 @@
+[
+  {"id":"C-401","path":"src/a.py","line":1,"severity":"minor","category":"bug","title":"F1","rationale":"R1","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-402","path":"src/a.py","line":2,"severity":"minor","category":"bug","title":"F2","rationale":"R2","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-403","path":"src/a.py","line":3,"severity":"minor","category":"bug","title":"F3","rationale":"R3","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-404","path":"src/a.py","line":4,"severity":"minor","category":"bug","title":"F4","rationale":"R4","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}
+]

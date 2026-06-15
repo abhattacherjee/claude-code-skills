@@ -12,11 +12,12 @@ FINDINGS_FILE=""
 MODE="judge"
 MODEL="${GEMINI_MODEL:-gemini-2.5-pro}"
 OUT_FILE=""
+FORCE_STRICT=false
 
 usage() {
   cat <<EOF
 Usage: $SCRIPT_NAME --diff <file> [--findings <r1.json>] [--mode find|judge]
-                    [--model <m>] [--out <file>] [--help]
+                    [--model <m>] [--out <file>] [--strict] [--help]
 
 Run Gemini in one of two modes:
 
@@ -37,6 +38,10 @@ Options:
   --model <model>     Gemini model to use (default: gemini-2.5-pro,
                       or \$GEMINI_MODEL env var)
   --out <file>        Write output JSON to this file (default: stdout)
+  --strict            Force the hardened judge prompt (strict mode) on the first
+                      call instead of the standard prompt. In strict/judge mode
+                      Gemini must quote the exact offending diff line verbatim
+                      for every confirm. Use for low-signal escalation re-runs.
   --help              Show this help and exit
 
 Output JSON schema:
@@ -94,6 +99,8 @@ while [[ $# -gt 0 ]]; do
     --out)
       [[ $# -lt 2 ]] && { echo "Error: --out requires an argument" >&2; exit 2; }
       OUT_FILE="$2"; shift 2 ;;
+    --strict)
+      FORCE_STRICT=true; shift ;;
     --help) usage; exit 0 ;;
     *)
       echo "Error: unknown argument: $1" >&2
@@ -422,9 +429,9 @@ call_gemini() {
   return 1
 }
 
-# First attempt (non-strict prompt)
-if ! call_gemini "false"; then
-  # Retry with strict prompt
+# First attempt: use FORCE_STRICT if --strict was passed, otherwise non-strict
+if ! call_gemini "$FORCE_STRICT"; then
+  # Retry with strict prompt (always true on retry)
   echo "Warning: Failed to parse Gemini output, retrying with stricter prompt..." >&2
   if ! call_gemini "true"; then
     echo "ADVERSARY_UNAVAILABLE: Could not extract valid JSON from Gemini output after retry" >&2

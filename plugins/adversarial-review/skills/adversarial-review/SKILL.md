@@ -216,19 +216,23 @@ Script emits `{"verdicts":[{"id":"C-NNN","gemini_verdict":"confirm|refute","reas
 ```
 === R2 Cross-Examination Digest ===
 Gemini's verdict on Claude's findings (<N> total):
-  confirmed=A  refuted=B  unjudged=C  judged=J  confirm_rate=R.RR
+  confirmed=A  refuted=B  judged=J  confirm_rate=R.RRR  low_signal=true|false  unrecognized=U
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
+  [⚠ UNRECOGNIZED — U verdict(s) had an unrecognized value; judge output may be malformed]
 Claude's verdict on Gemini's findings (<M> total):
-  confirmed=D  refuted=E  unjudged=F  judged=K  confirm_rate=S.SS
+  confirmed=D  refuted=E  judged=K  confirm_rate=S.RRR  low_signal=true|false  unrecognized=V
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
+  [⚠ UNRECOGNIZED — V verdict(s) had an unrecognized value; judge output may be malformed]
 ```
 
-The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.95 or <= 0.05 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`.
+The per-direction fields `confirmed`, `refuted`, `judged`, `confirm_rate`, `low_signal`, and `unrecognized` come verbatim from `synthesize.py` stdout. The orchestrator may derive `unjudged = <total findings> − judged` if it wants to display that count.
 
-**Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge in forced-refute mode and re-synthesize:
+The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.950 or <= 0.050 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`. The `UNRECOGNIZED` banner is printed only when `unrecognized > 0`.
 
-- Gemini rubber-stamping Claude's findings: `$SCRIPTS/gemini-review.sh --diff "$DIFF_FILE" --findings "$RUN_DIR/r1-claude.json" --mode judge --strict --out "$RUN_DIR/r2-gemini-verdicts.json"` (the `--strict` flag engages the hardened forced-refute prompt round)
-- Claude rubber-stamping Gemini's findings: re-spawn the `adversarial-cross-examiner` agent with an explicit instruction to apply maximum skepticism and refute unless the evidence is unambiguous
+**Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge with maximum skepticism and re-synthesize:
+
+- Gemini rubber-stamping Claude's findings: `$SCRIPTS/gemini-review.sh --diff "$DIFF_FILE" --findings "$RUN_DIR/r1-claude.json" --mode judge --strict --out "$RUN_DIR/r2-gemini-verdicts.json"` (the `--strict` flag forces the hardened judge prompt on the first call, requiring Gemini to quote the exact offending diff line verbatim for every confirm)
+- Claude rubber-stamping Gemini's findings: re-spawn the `adversarial-cross-examiner` agent with an explicit instruction for a maximum-skepticism re-judge — refute unless the evidence is unambiguous and cite the proving line
 
 Re-run `synthesize.py` after the escalation pass and relay the updated digest. The `low_signal` flag is informational only — it does not change survivor classification; surviving findings are still those confirmed by the opposing model (see Survivor Rule).
 
@@ -244,7 +248,7 @@ $SCRIPTS/synthesize.py \
   --json "$RUN_DIR/report.json"
 ```
 
-Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, and `low_signal=true|false`. Read and relay these counts and any `low_signal=true` flags to the user.
+Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, and `unrecognized=`. Read and relay these counts and any `low_signal=true` flags and any `unrecognized > 0` count to the user.
 
 ### Step 5 — Sink
 

@@ -1,0 +1,8 @@
+{
+  "verdicts": [
+    {"id":"C-401","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-402","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-403","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-404","gemini_verdict":"confirm","reason":"ok","confidence":0.9}
+  ]
+}
