@@ -39,6 +39,9 @@ Tests:
   - ensure-gemini.sh: GEMINI_INSTALLED=yes + GEMINI_AUTHED=yes with stub + API key
   - ensure-gemini.sh: OAuth-only creds (no API key) -> GEMINI_AUTHED=no (regression)
   - ensure-gemini.sh: ~/.gemini/.env with GEMINI_API_KEY -> GEMINI_AUTHED=yes
+  - synthesize.py: slug-keyed claude verdict still rejects (G-### recovery)
+  - synthesize.py: reason-location recovery for unmatched verdict id
+  - synthesize.py: truly-unmatched verdict id warns on stderr
 
 Exit codes:
   0  All tests pass
@@ -1000,6 +1003,195 @@ HELP_ENSURE_EXIT=0
 run_capture HELP_ENSURE_OUT HELP_ENSURE_EXIT bash "$ENSURE_GEMINI" --help
 assert_exit_code "ensure-gemini: --help exits 0" "0" "$HELP_ENSURE_EXIT"
 assert_contains  "ensure-gemini: --help shows usage" "Usage:" "$HELP_ENSURE_OUT"
+
+# ====================================================================
+# SECTION 11: synthesize.py — slug/location fallback matching (bug #30 regression)
+# ====================================================================
+section "synthesize.py — slug/location fallback matching (bug #30 regression)"
+
+# G-002 facts (from r1_gemini_findings.json):
+#   title: "Unhandled None return from parse_record()"
+#   path:  src/processor.py
+#   line:  22
+#   slug:  unhandled-none-return-from-parse-record
+#            (lowercase; non-alphanumeric runs -> single hyphen; trim hyphens)
+
+SLUG_VERDICTS_FILE="$TMP_DIR/slug_claude_verdicts.json"
+SLUG_OUT_JSON="$TMP_DIR/slug_synthesis.json"
+
+# ---- Test A: slug-keyed claude verdict still rejects G-002 ----
+# Build a claude-verdicts JSON identical to the canonical one EXCEPT the G-002
+# refute entry uses the slug "unhandled-none-return-from-parse-record" as id
+# instead of "G-002". The fix will add slug-based fallback matching so this
+# still resolves to G-002 and marks it rejected.
+cat >"$SLUG_VERDICTS_FILE" <<'JSON'
+{
+  "verdicts": [
+    {
+      "id": "G-001",
+      "claude_verdict": "confirm",
+      "reason": "Confirmed: 'super-secret-key-123' is present on line 78. This is a critical security issue."
+    },
+    {
+      "id": "unhandled-none-return-from-parse-record",
+      "claude_verdict": "refute",
+      "reason": "parse_record() was updated in a prior commit to always return a dict (possibly empty), never None; the docstring is stale. The .get() call is safe."
+    }
+  ]
+}
+JSON
+
+SLUG_A_OUT=""
+SLUG_A_EXIT=0
+run_capture SLUG_A_OUT SLUG_A_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CLAUDE_FINDINGS" \
+  --gemini-findings "$GEMINI_FINDINGS" \
+  --gemini-verdicts "$GEMINI_VERDICTS" \
+  --claude-verdicts "$SLUG_VERDICTS_FILE" \
+  --json "$SLUG_OUT_JSON"
+
+assert_exit_code "slug-keyed verdict: synthesize exits 0" 0 "$SLUG_A_EXIT"
+
+SLUG_A_CHECK=""
+SLUG_A_CHECK_EXIT=0
+run_capture SLUG_A_CHECK SLUG_A_CHECK_EXIT python3 - "$SLUG_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+g002 = findings.get("G-002", {})
+errors = []
+if g002.get("status") != "rejected":
+    errors.append(f"G-002.status='{g002.get('status')}' expected='rejected'")
+if g002.get("killed_by") != "claude":
+    errors.append(f"G-002.killed_by='{g002.get('killed_by')}' expected='claude'")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$SLUG_A_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: slug-keyed claude verdict still rejects (G-### recovery)"
+else
+  fail "synthesize.py: slug-keyed claude verdict still rejects (G-### recovery)" "$SLUG_A_CHECK"
+fi
+
+# ---- Test B: reason-location recovery for unmatched verdict id ----
+# Build a claude-verdicts JSON where G-002's refute entry has a gibberish id
+# AND a reason string containing G-002's exact "path:line" token.
+# The fix will parse "src/processor.py:22" from the reason and match it to G-002.
+LOCATION_VERDICTS_FILE="$TMP_DIR/location_claude_verdicts.json"
+LOCATION_OUT_JSON="$TMP_DIR/location_synthesis.json"
+
+cat >"$LOCATION_VERDICTS_FILE" <<'JSON'
+{
+  "verdicts": [
+    {
+      "id": "G-001",
+      "claude_verdict": "confirm",
+      "reason": "Confirmed: 'super-secret-key-123' is present on line 78. This is a critical security issue."
+    },
+    {
+      "id": "totally-wrong-xyz",
+      "claude_verdict": "refute",
+      "reason": "At src/processor.py:22 the .get() call is safe because parse_record() never returns None since a prior commit."
+    }
+  ]
+}
+JSON
+
+SLUG_B_OUT=""
+SLUG_B_EXIT=0
+run_capture SLUG_B_OUT SLUG_B_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CLAUDE_FINDINGS" \
+  --gemini-findings "$GEMINI_FINDINGS" \
+  --gemini-verdicts "$GEMINI_VERDICTS" \
+  --claude-verdicts "$LOCATION_VERDICTS_FILE" \
+  --json "$LOCATION_OUT_JSON"
+
+assert_exit_code "reason-location recovery: synthesize exits 0" 0 "$SLUG_B_EXIT"
+
+SLUG_B_CHECK=""
+SLUG_B_CHECK_EXIT=0
+run_capture SLUG_B_CHECK SLUG_B_CHECK_EXIT python3 - "$LOCATION_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+g002 = findings.get("G-002", {})
+errors = []
+if g002.get("status") != "rejected":
+    errors.append(f"G-002.status='{g002.get('status')}' expected='rejected'")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$SLUG_B_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: reason-location recovery for unmatched verdict id"
+else
+  fail "synthesize.py: reason-location recovery for unmatched verdict id" "$SLUG_B_CHECK"
+fi
+
+# ---- Test C: truly-unmatched verdict id warns on stderr ----
+# Build a claude-verdicts JSON where one verdict has a gibberish id AND a reason
+# with NO file:line token matching any finding. The fix will emit a WARNING to
+# stderr for the unmatched id. Current code emits nothing -> captured output
+# will NOT contain "WARNING" -> assertion fails (correct fail-first behavior).
+UNMATCHED_VERDICTS_FILE="$TMP_DIR/unmatched_claude_verdicts.json"
+UNMATCHED_OUT_JSON="$TMP_DIR/unmatched_synthesis.json"
+
+cat >"$UNMATCHED_VERDICTS_FILE" <<'JSON'
+{
+  "verdicts": [
+    {
+      "id": "G-001",
+      "claude_verdict": "confirm",
+      "reason": "Confirmed: 'super-secret-key-123' is present on line 78. This is a critical security issue."
+    },
+    {
+      "id": "no-such-finding-zzz",
+      "claude_verdict": "refute",
+      "reason": "This finding does not exist and has no file:line location anchor in this reason text."
+    }
+  ]
+}
+JSON
+
+SLUG_C_OUT=""
+SLUG_C_EXIT=0
+run_capture SLUG_C_OUT SLUG_C_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CLAUDE_FINDINGS" \
+  --gemini-findings "$GEMINI_FINDINGS" \
+  --gemini-verdicts "$GEMINI_VERDICTS" \
+  --claude-verdicts "$UNMATCHED_VERDICTS_FILE" \
+  --json "$UNMATCHED_OUT_JSON"
+
+assert_exit_code "truly-unmatched verdict: synthesize exits 0" 0 "$SLUG_C_EXIT"
+
+# The fix will emit: [synthesize] WARNING: verdict id 'no-such-finding-zzz' ...
+# on stderr (captured via run_capture's 2>&1 merge).
+# Case-insensitive check: look for both the id and "WARNING" in the combined output.
+SLUG_C_ID_CHECK="$(echo "$SLUG_C_OUT" | grep -i 'no-such-finding-zzz' | head -1 || true)"
+SLUG_C_WARN_CHECK="$(echo "$SLUG_C_OUT" | grep -i 'warning' | head -1 || true)"
+
+if [[ -n "$SLUG_C_ID_CHECK" ]]; then
+  pass "synthesize.py: truly-unmatched verdict id warns on stderr (id present)"
+else
+  fail "synthesize.py: truly-unmatched verdict id warns on stderr (id present)" "expected 'no-such-finding-zzz' in stderr output; got: $SLUG_C_OUT"
+fi
+
+if [[ -n "$SLUG_C_WARN_CHECK" ]]; then
+  pass "synthesize.py: truly-unmatched verdict id warns on stderr (WARNING present)"
+else
+  fail "synthesize.py: truly-unmatched verdict id warns on stderr (WARNING present)" "expected 'WARNING' in stderr output; got: $SLUG_C_OUT"
+fi
 
 # ====================================================================
 # FINAL SUMMARY

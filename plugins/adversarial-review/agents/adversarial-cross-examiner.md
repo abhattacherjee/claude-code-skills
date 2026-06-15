@@ -55,7 +55,7 @@ Return **only** a JSON object — no prose, no markdown wrapper. The orchestrato
 ```
 
 **Field rules:**
-- `id` — the `G-NNN` ID from r1-gemini.json (Gemini's original finding)
+- `id` — **MUST be the exact `G-NNN` id copied verbatim from r1-gemini.json. Echo it character-for-character. NEVER substitute a descriptive slug, re-derived title, or paraphrase — the orchestrator matches verdicts to findings by this id, and a mismatch silently mis-files your verdict.**
 - `claude_verdict` — `"confirm"` or `"refute"`
 - `reason` — cite the specific source lines you read; explain the basis for the decision with file:line references
 - Every Gemini finding must have an entry — no finding left without a verdict.
