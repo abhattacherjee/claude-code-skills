@@ -1774,6 +1774,140 @@ assert_contains "Test K: conflicting signals warns on stderr" \
   "conflicting recovery signals" "$KTEST_OUT"
 
 # ====================================================================
+# SECTION 15: synthesize.py — confirm-rate guard (rubber-stamp / rubber-reject detection)
+# ====================================================================
+section "synthesize.py — confirm-rate guard"
+
+# Shared: empty Gemini findings + empty Claude verdicts so the claude_on_gemini
+# direction is always zero and doesn't interfere with gemini_on_claude assertions.
+CR_EMPTY_GEMINI_FINDINGS="$TMP_DIR/cr_empty_gemini_findings.json"
+CR_EMPTY_CLAUDE_VERDICTS="$TMP_DIR/cr_empty_claude_verdicts.json"
+cat >"$CR_EMPTY_GEMINI_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+cat >"$CR_EMPTY_CLAUDE_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+# Fixtures in the fixtures/ dir
+CR_CLAUDE_5="$FIXTURES_DIR/cr_claude_findings_5.json"
+CR_CLAUDE_7="$FIXTURES_DIR/cr_claude_findings_7.json"
+CR_CLAUDE_2="$FIXTURES_DIR/cr_claude_findings_2.json"
+CR_GEM_ALL_CONFIRM="$FIXTURES_DIR/cr_gemini_verdicts_all_confirm.json"
+CR_GEM_ALL_REFUTE="$FIXTURES_DIR/cr_gemini_verdicts_all_refute.json"
+CR_GEM_MIXED="$FIXTURES_DIR/cr_gemini_verdicts_mixed_4c3r.json"
+
+# ---- Test 1: guard fires (all-confirm rubber-stamp) ----
+# 5 Claude findings, all confirmed by Gemini -> confirm_rate=1.00, judged=5 >= MIN -> low_signal=true
+CR_T1_OUT=""
+CR_T1_EXIT=0
+run_capture CR_T1_OUT CR_T1_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_5" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_ALL_CONFIRM" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T1: all-confirm (5) exits 0" 0 "$CR_T1_EXIT"
+assert_contains  "confirm-rate T1: gemini_on_claude low_signal=true" \
+  "gemini_on_claude:" "$CR_T1_OUT"
+assert_contains  "confirm-rate T1: low_signal=true fires" \
+  "low_signal=true" "$CR_T1_OUT"
+
+# ---- Test 2: no false alarm (mixed 4 confirm / 3 refute) ----
+# confirm_rate = 4/7 ≈ 0.57 — not near 1.0 or 0.0 -> low_signal=false
+CR_T2_OUT=""
+CR_T2_EXIT=0
+run_capture CR_T2_OUT CR_T2_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_7" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_MIXED" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T2: mixed exits 0" 0 "$CR_T2_EXIT"
+assert_contains  "confirm-rate T2: gemini_on_claude present" \
+  "gemini_on_claude:" "$CR_T2_OUT"
+assert_contains  "confirm-rate T2: low_signal=false (no false alarm)" \
+  "low_signal=false" "$CR_T2_OUT"
+
+# ---- Test 3: below min sample (2 findings, both confirmed) ----
+# confirm_rate=1.00 but judged=2 < RUBBER_STAMP_MIN_JUDGED=5 -> low_signal=false
+CR_GEM_2_CONFIRM_FILE="$TMP_DIR/cr_gem_2_confirm.json"
+cat >"$CR_GEM_2_CONFIRM_FILE" <<'JSON'
+{
+  "verdicts": [
+    {"id":"C-301","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-302","gemini_verdict":"confirm","reason":"ok","confidence":0.9}
+  ]
+}
+JSON
+
+CR_T3_OUT=""
+CR_T3_EXIT=0
+run_capture CR_T3_OUT CR_T3_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_2" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_2_CONFIRM_FILE" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T3: below-min-sample exits 0" 0 "$CR_T3_EXIT"
+assert_contains  "confirm-rate T3: gemini_on_claude present" \
+  "gemini_on_claude:" "$CR_T3_OUT"
+assert_contains  "confirm-rate T3: low_signal=false (below min sample)" \
+  "low_signal=false" "$CR_T3_OUT"
+
+# ---- Test 4: all-refute extreme (rubber-reject) ----
+# 5 Claude findings, all refuted by Gemini -> confirm_rate=0.00, judged=5 >= MIN -> low_signal=true
+CR_T4_OUT=""
+CR_T4_EXIT=0
+run_capture CR_T4_OUT CR_T4_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_5" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_ALL_REFUTE" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T4: all-refute (5) exits 0" 0 "$CR_T4_EXIT"
+assert_contains  "confirm-rate T4: gemini_on_claude present" \
+  "gemini_on_claude:" "$CR_T4_OUT"
+assert_contains  "confirm-rate T4: low_signal=true fires (rubber-reject)" \
+  "low_signal=true" "$CR_T4_OUT"
+
+# ---- Test 5: ratio correctness — exact confirmed=, refuted=, confirm_rate= values ----
+# 7 Claude findings, 4 confirm / 3 refute -> confirmed=4 refuted=3 judged=7 confirm_rate=0.57
+CR_T5_OUT=""
+CR_T5_EXIT=0
+run_capture CR_T5_OUT CR_T5_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_7" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_MIXED" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T5: ratio correctness exits 0" 0 "$CR_T5_EXIT"
+assert_contains  "confirm-rate T5: confirmed=4 refuted=3" \
+  "confirmed=4 refuted=3" "$CR_T5_OUT"
+assert_contains  "confirm-rate T5: confirm_rate=0.57" \
+  "confirm_rate=0.57" "$CR_T5_OUT"
+
+# ---- Test 6: Presence — gemini-review.sh contains strict judge prompt phrase ----
+# (gemini-review.sh must contain the hardened default-to-refute instruction)
+GEMINI_REVIEW_CONTENT="$(cat "$GEMINI_REVIEW")"
+assert_contains "presence T6: gemini-review.sh has default-to-refute phrase" \
+  "Default to refute unless the finding is incontrovertibly grounded" \
+  "$GEMINI_REVIEW_CONTENT"
+
+# ---- Test 7: Presence — gemini-review.sh contains forced-refute escalation phrase ----
+assert_contains "presence T7: gemini-review.sh has quote-offending-line phrase" \
+  "Quote the exact offending line from the diff verbatim" \
+  "$GEMINI_REVIEW_CONTENT"
+
+# ---- Test 8: Presence — adversarial-cross-examiner.md contains cannot-point phrase ----
+# Path: scripts/ -> (skill)adversarial-review/ -> skills/ -> (plugin)adversarial-review/ -> agents/
+CROSS_EXAMINER_FILE="$SCRIPT_DIR/../../../agents/adversarial-cross-examiner.md"
+CROSS_EXAMINER_CONTENT="$(cat "$CROSS_EXAMINER_FILE")"
+assert_contains "presence T8: cross-examiner.md has cannot-point-to-proving-line phrase" \
+  "cannot point to the proving line" \
+  "$CROSS_EXAMINER_CONTENT"
+
+# ====================================================================
 # FINAL SUMMARY
 # ====================================================================
 echo ""

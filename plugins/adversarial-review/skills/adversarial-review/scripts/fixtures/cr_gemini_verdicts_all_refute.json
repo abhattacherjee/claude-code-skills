@@ -1,0 +1,34 @@
+{
+  "verdicts": [
+    {
+      "id": "C-101",
+      "gemini_verdict": "refute",
+      "reason": "Finding one is not supported by the diff.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-102",
+      "gemini_verdict": "refute",
+      "reason": "Finding two is not supported by the diff.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-103",
+      "gemini_verdict": "refute",
+      "reason": "Finding three is not supported by the diff.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-104",
+      "gemini_verdict": "refute",
+      "reason": "Finding four is not supported by the diff.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-105",
+      "gemini_verdict": "refute",
+      "reason": "Finding five is not supported by the diff.",
+      "confidence": 0.9
+    }
+  ]
+}

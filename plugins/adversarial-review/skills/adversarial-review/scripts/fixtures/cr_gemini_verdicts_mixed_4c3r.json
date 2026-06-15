@@ -1,0 +1,46 @@
+{
+  "verdicts": [
+    {
+      "id": "C-201",
+      "gemini_verdict": "confirm",
+      "reason": "Finding alpha is confirmed by the diff.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-202",
+      "gemini_verdict": "confirm",
+      "reason": "Finding beta is confirmed by the diff.",
+      "confidence": 0.85
+    },
+    {
+      "id": "C-203",
+      "gemini_verdict": "refute",
+      "reason": "Finding gamma is not supported — the constant is intentional.",
+      "confidence": 0.8
+    },
+    {
+      "id": "C-204",
+      "gemini_verdict": "confirm",
+      "reason": "Finding delta is confirmed — the loop is indeed quadratic.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-205",
+      "gemini_verdict": "refute",
+      "reason": "Finding epsilon is not supported — function length is within project norms.",
+      "confidence": 0.75
+    },
+    {
+      "id": "C-206",
+      "gemini_verdict": "confirm",
+      "reason": "Finding zeta is confirmed by the diff.",
+      "confidence": 0.88
+    },
+    {
+      "id": "C-207",
+      "gemini_verdict": "refute",
+      "reason": "Finding eta is not supported — the secret is loaded from env at runtime.",
+      "confidence": 0.92
+    }
+  ]
+}

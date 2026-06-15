@@ -328,6 +328,20 @@ Your task is to verdict each finding (identified by "id"): output "confirm" if t
 finding is valid and grounded in the diff, or "refute" if it is incorrect or not
 supported by the diff.
 
+Default to refute unless the finding is incontrovertibly grounded in the diff shown
+below. The cost of a wrongly-confirmed finding (it inflates the survivors list and
+erodes trust) is higher than a wrongly-refuted one (it is retained as UNCONFIRMED,
+not lost).
+
+Refute findings that rest on taste, convention preference, speculation about runtime
+behavior not shown, or severity-inflation.
+
+For every confirm, your reason MUST cite the specific diff line(s) or code that prove
+the finding. A confirm without grounded evidence is not allowed — refute instead.
+
+Quote the exact offending line from the diff verbatim in your reason for every
+confirm; if you cannot quote a line that proves it, refute.
+
 Output ONLY valid JSON, no prose, no markdown, no explanation. The JSON must have
 exactly this structure:
 {
@@ -346,6 +360,17 @@ review findings made by another model.
 
 Your task is to verdict each finding (identified by "id"): "confirm" if valid and
 grounded in the diff, or "refute" if incorrect or not supported.
+
+Default to refute unless the finding is incontrovertibly grounded in the diff shown
+below. The cost of a wrongly-confirmed finding (it inflates the survivors list and
+erodes trust) is higher than a wrongly-refuted one (it is retained as UNCONFIRMED,
+not lost).
+
+Refute findings that rest on taste, convention preference, speculation about runtime
+behavior not shown, or severity-inflation.
+
+For every confirm, your reason MUST cite the specific diff line(s) or code that prove
+the finding. A confirm without grounded evidence is not allowed — refute instead.
 
 Respond with a JSON object with a "verdicts" key: an array of verdict objects.
 Each verdict must have: id (the finding id), gemini_verdict ("confirm" or "refute"),

@@ -33,6 +33,47 @@ import re
 import sys
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# Confirm-rate guard: detects rubber-stamping (all-confirm) and
+# rubber-rejecting (all-refute) judge behaviour, both of which are low-signal.
+# ---------------------------------------------------------------------------
+RUBBER_STAMP_MIN_JUDGED = 5            # below this, near-unanimity isn't meaningful signal
+RUBBER_STAMP_CONFIRM_RATE_HIGH = 0.95  # >= this confirm-rate looks like rubber-stamping (all-confirm)
+RUBBER_STAMP_CONFIRM_RATE_LOW = 0.05   # <= this looks like rubber-rejecting (all-refute), equally low-signal
+
+
+def compute_confirm_rate(verdict_map: dict, verdict_field: str) -> dict:
+    """Return {confirmed, refuted, judged, confirm_rate, low_signal} for one judge direction.
+
+    judged = confirmed + refuted (verdicts that are neither are ignored).
+    confirm_rate = confirmed/judged (0.0 when judged==0).
+    low_signal fires only with a meaningful sample AND near-unanimity in EITHER direction.
+    """
+    confirmed = sum(
+        1 for v in verdict_map.values()
+        if v.get(verdict_field) == "confirm"
+    )
+    refuted = sum(
+        1 for v in verdict_map.values()
+        if v.get(verdict_field) == "refute"
+    )
+    judged = confirmed + refuted
+    confirm_rate = confirmed / judged if judged else 0.0
+    low_signal = (
+        judged >= RUBBER_STAMP_MIN_JUDGED
+        and (
+            confirm_rate >= RUBBER_STAMP_CONFIRM_RATE_HIGH
+            or confirm_rate <= RUBBER_STAMP_CONFIRM_RATE_LOW
+        )
+    )
+    return {
+        "confirmed": confirmed,
+        "refuted": refuted,
+        "judged": judged,
+        "confirm_rate": confirm_rate,
+        "low_signal": low_signal,
+    }
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -464,6 +505,28 @@ def main() -> None:
 
     # Print summary counts to stdout
     print(f"survivors={len(survivors)} unconfirmed={len(unconfirmed)} rejected={len(rejected)}")
+
+    # Confirm-rate guard: report rubber-stamp / rubber-reject signals for each judge direction.
+    # gemini_verdict_map and claude_verdict_map are built inside classify_findings; reconstruct
+    # them here from the classified output for reporting.
+    gemini_verdict_map_report: dict[str, dict] = reconcile_verdict_map(
+        gemini_verdicts_raw.get("verdicts", []), claude_findings, "gemini_verdict"
+    )
+    claude_verdict_map_report: dict[str, dict] = reconcile_verdict_map(
+        claude_verdicts_raw.get("verdicts", []), gemini_findings, "claude_verdict"
+    )
+    gem_stats = compute_confirm_rate(gemini_verdict_map_report, "gemini_verdict")
+    cla_stats = compute_confirm_rate(claude_verdict_map_report, "claude_verdict")
+    print(
+        f"gemini_on_claude: confirmed={gem_stats['confirmed']} refuted={gem_stats['refuted']} "
+        f"judged={gem_stats['judged']} confirm_rate={gem_stats['confirm_rate']:.2f} "
+        f"low_signal={'true' if gem_stats['low_signal'] else 'false'}"
+    )
+    print(
+        f"claude_on_gemini: confirmed={cla_stats['confirmed']} refuted={cla_stats['refuted']} "
+        f"judged={cla_stats['judged']} confirm_rate={cla_stats['confirm_rate']:.2f} "
+        f"low_signal={'true' if cla_stats['low_signal'] else 'false'}"
+    )
 
     # Write JSON output
     if args.json_out:

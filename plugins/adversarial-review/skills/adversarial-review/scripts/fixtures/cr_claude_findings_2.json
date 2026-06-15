@@ -1,0 +1,32 @@
+[
+  {
+    "id": "C-301",
+    "path": "src/auth.py",
+    "line": 10,
+    "severity": "critical",
+    "category": "security",
+    "title": "Small sample finding one",
+    "rationale": "Rationale for small sample finding one.",
+    "origin": "claude",
+    "claude_verdict": null,
+    "gemini_verdict": null,
+    "status": null,
+    "killed_by": null,
+    "kill_reason": null
+  },
+  {
+    "id": "C-302",
+    "path": "src/auth.py",
+    "line": 20,
+    "severity": "important",
+    "category": "bug",
+    "title": "Small sample finding two",
+    "rationale": "Rationale for small sample finding two.",
+    "origin": "claude",
+    "claude_verdict": null,
+    "gemini_verdict": null,
+    "status": null,
+    "killed_by": null,
+    "kill_reason": null
+  }
+]

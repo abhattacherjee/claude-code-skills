@@ -21,6 +21,7 @@ Synced 7 skills from local source.
 
 ### Added
 - adversarial-review: regression fixture + extractor test for the fenced-JSON-inside-`.response` envelope shape in gemini-review.sh (#41)
+- adversarial-review: judge passes now apply refutation pressure (default-to-refute-unless-grounded prompt hardening for both Gemini `--mode judge` and Claude's cross-examiner) and `synthesize.py` surfaces a per-direction confirm-rate with a `low_signal` flag that detects a rubber-stamping (near-unanimous) judge. (#31)
 
 ### Fixed
 - adversarial-review: `synthesize.py` now recovers cross-examiner verdicts keyed by a descriptive slug — or via a `file:line` token in the verdict reason — instead of the canonical `G-NNN`/`C-NNN` id, so a refuted finding is reported as **rejected** rather than silently mis-filed as **unconfirmed**; truly-unmatched verdict ids now emit a loud stderr warning. The `adversarial-cross-examiner` agent contract is hardened to echo the canonical id verbatim. (#30)
