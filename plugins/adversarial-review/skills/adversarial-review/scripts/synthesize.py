@@ -107,11 +107,19 @@ def _warn(msg):
 
 
 def reconcile_verdict_map(verdicts, findings, verdict_field):
-    """Map finding-id -> verdict, with conservative fallback when a verdict's
-    'id' is a slug instead of the canonical C-NNN/G-NNN id. Fallback is
-    EXACT-KEY only (slugified title, then file:line token in the reason) so
-    it never mis-associates. Emits stderr warnings on every recovery and
-    every truly-unmatched verdict."""
+    """Map finding-id -> verdict, recovering verdicts whose 'id' is a slug or
+    other non-canonical value instead of the orchestrator's C-NNN/G-NNN id.
+
+    Matching is layered and conservative:
+      1. exact finding-id,
+      2. slugified-title equality (ambiguous title slugs are dropped),
+      3. a single unambiguous file:line token in the verdict's reason.
+    A candidate already claimed by another verdict is never overwritten, and the
+    reason-location heuristic abstains when the reason points at more than one
+    finding. Recovery is heuristic, so every recovery and every unrecoverable
+    verdict is logged to stderr for audit. Returns (resolved_map, unmatched_ids).
+    """
+    findings = [f for f in findings if f.get("id")]
     finding_ids = {f["id"] for f in findings}
     resolved = {}
     leftover = []
@@ -119,8 +127,13 @@ def reconcile_verdict_map(verdicts, findings, verdict_field):
         vid = v.get("id")
         if not vid:
             continue
-        if vid in finding_ids and vid not in resolved:
-            resolved[vid] = v
+        if vid in finding_ids:
+            if vid in resolved:
+                _warn(f"duplicate verdict for finding id '{vid}'; keeping first "
+                      f"({resolved[vid].get(verdict_field)!r}), ignoring later "
+                      f"({v.get(verdict_field)!r})")
+            else:
+                resolved[vid] = v
         else:
             leftover.append(v)
 
@@ -144,6 +157,7 @@ def reconcile_verdict_map(verdicts, findings, verdict_field):
         if f.get("path") and f.get("line") is not None else None
     )
 
+    unmatched = []
     for v in leftover:
         vid = v["id"]
         target, method = None, None
@@ -152,19 +166,23 @@ def reconcile_verdict_map(verdicts, findings, verdict_field):
             target, method = cand, "title-slug"
         if target is None:
             reason = v.get("reason", "") or ""
-            for tok in re.findall(r"[\w./-]+:\d+", reason):
-                cand2 = loc_index.get(tok)
-                if cand2 and cand2 not in resolved:
-                    target, method = cand2, f"reason-location ({tok})"
-                    break
+            loc_cands = {
+                loc_index[tok]
+                for tok in re.findall(r"[\w./-]+:\d+", reason)
+                if tok in loc_index and loc_index[tok] not in resolved
+            }
+            if len(loc_cands) == 1:
+                target, method = next(iter(loc_cands)), "reason-location"
         if target is not None:
             resolved[target] = v
-            _warn(f"verdict id '{vid}' did not match any finding id; "
-                  f"recovered via {method} -> '{target}'")
+            _warn(f"verdict id '{vid}' did not match any finding id; recovered "
+                  f"(heuristic) via {method} -> '{target}' — verify this association")
         else:
-            _warn(f"verdict id '{vid}' did not match any finding id and could "
-                  f"not be recovered; its {verdict_field} will be ignored")
-    return resolved
+            unmatched.append(vid)
+            _warn(f"verdict id '{vid}' did not match any finding id and could not "
+                  f"be recovered; the targeted finding stays 'unconfirmed' "
+                  f"(its {verdict_field} is ignored)")
+    return resolved, unmatched
 
 
 def classify_findings(
@@ -175,15 +193,16 @@ def classify_findings(
 ) -> list[dict]:
     """Apply symmetric convergence and return findings with status filled in."""
 
-    # Build verdict lookup maps with slug/location fallback matching (bug #30)
-    # gemini_verdict_map: Gemini's verdicts on Claude findings (keyed by C-NNN)
-    # -> reconcile against claude_findings
-    gemini_verdict_map: dict[str, dict] = reconcile_verdict_map(
+    # Build verdict lookup maps with slug/location fallback matching (bug #30).
+    # gemini_verdict_map: Gemini's verdicts on Claude findings, keyed by the
+    # resolved Claude finding id (C-NNN); reconcile recovers slug/location-keyed
+    # verdicts back to that id.
+    gemini_verdict_map, _ = reconcile_verdict_map(
         gemini_verdicts_raw.get("verdicts", []), claude_findings, "gemini_verdict"
     )
-    # claude_verdict_map: Claude's verdicts on Gemini findings (keyed by G-NNN)
-    # -> reconcile against gemini_findings
-    claude_verdict_map: dict[str, dict] = reconcile_verdict_map(
+    # claude_verdict_map: Claude's verdicts on Gemini findings, keyed by the
+    # resolved Gemini finding id (G-NNN); same recovery applies.
+    claude_verdict_map, _ = reconcile_verdict_map(
         claude_verdicts_raw.get("verdicts", []), gemini_findings, "claude_verdict"
     )
 

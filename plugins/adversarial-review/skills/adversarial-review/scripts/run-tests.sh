@@ -42,6 +42,13 @@ Tests:
   - synthesize.py: slug-keyed claude verdict still rejects (G-### recovery)
   - synthesize.py: reason-location recovery for unmatched verdict id
   - synthesize.py: truly-unmatched verdict id warns on stderr
+  - synthesize.py: ambiguous slug does NOT mis-match (both stay unconfirmed)
+  - synthesize.py: exact-id verdict wins over contending slug fallback
+  - synthesize.py: id-less finding is skipped, not fatal (no KeyError)
+  - synthesize.py: duplicate canonical verdict id warns accurately
+  - synthesize.py: empty findings lists exit cleanly
+  - synthesize.py: multi-location reason abstains (no mis-match)
+  - synthesize.py: exact-id confirm not clobbered by reason-location refute
 
 Exit codes:
   0  All tests pass
@@ -1192,6 +1199,500 @@ if [[ -n "$SLUG_C_WARN_CHECK" ]]; then
 else
   fail "synthesize.py: truly-unmatched verdict id warns on stderr (WARNING present)" "expected 'WARNING' in stderr output; got: $SLUG_C_OUT"
 fi
+
+# ---- Test D: ambiguous slug does NOT mis-match (both stay unconfirmed) ----
+# Two gemini findings share the slug "duplicate-title". A claude-verdict keyed
+# by that slug (and no file:line anchor) must NOT be assigned to either finding.
+# Both G-101 and G-102 must stay "unconfirmed" and stderr must mention recovery failure.
+DTEST_GEMINI_FINDINGS="$TMP_DIR/d_gemini_findings.json"
+DTEST_CLAUDE_VERDICTS="$TMP_DIR/d_claude_verdicts.json"
+DTEST_CLAUDE_FINDINGS="$TMP_DIR/d_claude_findings.json"
+DTEST_GEMINI_VERDICTS="$TMP_DIR/d_gemini_verdicts.json"
+DTEST_OUT_JSON="$TMP_DIR/d_synthesis.json"
+
+cat >"$DTEST_GEMINI_FINDINGS" <<'JSON'
+{
+  "findings": [
+    {"id":"G-101","title":"Duplicate Title","path":"a.py","line":1,"severity":"minor","category":"bug","rationale":"first"},
+    {"id":"G-102","title":"Duplicate Title","path":"b.py","line":2,"severity":"minor","category":"bug","rationale":"second"}
+  ]
+}
+JSON
+
+cat >"$DTEST_CLAUDE_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {"id":"duplicate-title","claude_verdict":"refute","reason":"no location anchor in this reason text at all"}
+  ]
+}
+JSON
+
+cat >"$DTEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+
+cat >"$DTEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+DTEST_OUT=""
+DTEST_EXIT=0
+run_capture DTEST_OUT DTEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$DTEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$DTEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$DTEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$DTEST_CLAUDE_VERDICTS" \
+  --json "$DTEST_OUT_JSON"
+
+assert_exit_code "Test D: ambiguous slug synthesize exits 0" 0 "$DTEST_EXIT"
+
+DTEST_CHECK=""
+DTEST_CHECK_EXIT=0
+run_capture DTEST_CHECK DTEST_CHECK_EXIT python3 - "$DTEST_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+errors = []
+g101 = findings.get("G-101", {})
+g102 = findings.get("G-102", {})
+if g101.get("status") == "rejected":
+    errors.append(f"G-101.status='{g101.get('status')}' but expected NOT rejected (ambiguous slug must not mis-match)")
+if g102.get("status") == "rejected":
+    errors.append(f"G-102.status='{g102.get('status')}' but expected NOT rejected (ambiguous slug must not mis-match)")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$DTEST_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: ambiguous slug does NOT mis-match (both stay unconfirmed)"
+else
+  fail "synthesize.py: ambiguous slug does NOT mis-match (both stay unconfirmed)" "$DTEST_CHECK"
+fi
+
+assert_contains "Test D: ambiguous slug stderr mentions could not be recovered" \
+  "could not be recovered" "$DTEST_OUT"
+
+# ---- Test E: exact-id verdict wins over contending slug fallback ----
+# G-201 (title "Alpha") has an exact-id confirm verdict AND a slug-keyed refute.
+# The exact-id confirm must win; G-201 must be "survivor".
+ETEST_GEMINI_FINDINGS="$TMP_DIR/e_gemini_findings.json"
+ETEST_CLAUDE_VERDICTS="$TMP_DIR/e_claude_verdicts.json"
+ETEST_CLAUDE_FINDINGS="$TMP_DIR/e_claude_findings.json"
+ETEST_GEMINI_VERDICTS="$TMP_DIR/e_gemini_verdicts.json"
+ETEST_OUT_JSON="$TMP_DIR/e_synthesis.json"
+
+cat >"$ETEST_GEMINI_FINDINGS" <<'JSON'
+{
+  "findings": [
+    {"id":"G-201","title":"Alpha","path":"a.py","line":1,"severity":"minor","category":"bug","rationale":"alpha finding"}
+  ]
+}
+JSON
+
+cat >"$ETEST_CLAUDE_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {"id":"G-201","claude_verdict":"confirm","reason":"ok"},
+    {"id":"alpha","claude_verdict":"refute","reason":"no loc here"}
+  ]
+}
+JSON
+
+cat >"$ETEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+
+cat >"$ETEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+ETEST_OUT=""
+ETEST_EXIT=0
+run_capture ETEST_OUT ETEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$ETEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$ETEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$ETEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$ETEST_CLAUDE_VERDICTS" \
+  --json "$ETEST_OUT_JSON"
+
+assert_exit_code "Test E: exact-id wins synthesize exits 0" 0 "$ETEST_EXIT"
+
+ETEST_CHECK=""
+ETEST_CHECK_EXIT=0
+run_capture ETEST_CHECK ETEST_CHECK_EXIT python3 - "$ETEST_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+g201 = findings.get("G-201", {})
+errors = []
+if g201.get("status") != "survivor":
+    errors.append(f"G-201.status='{g201.get('status')}' expected='survivor' (exact-id confirm must win over slug refute)")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$ETEST_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: exact-id verdict wins over contending slug fallback"
+else
+  fail "synthesize.py: exact-id verdict wins over contending slug fallback" "$ETEST_CHECK"
+fi
+
+assert_contains "Test E: slug refute could not be recovered (exact-id claimed the slot)" \
+  "could not be recovered" "$ETEST_OUT"
+
+# ---- Test F: id-less finding is skipped, not fatal (no KeyError) ----
+# A findings list with one entry missing "id" must not cause a KeyError;
+# exit code must be 0 and the valid finding G-301 must appear as survivor.
+FTEST_GEMINI_FINDINGS="$TMP_DIR/f_gemini_findings.json"
+FTEST_CLAUDE_VERDICTS="$TMP_DIR/f_claude_verdicts.json"
+FTEST_CLAUDE_FINDINGS="$TMP_DIR/f_claude_findings.json"
+FTEST_GEMINI_VERDICTS="$TMP_DIR/f_gemini_verdicts.json"
+FTEST_OUT_JSON="$TMP_DIR/f_synthesis.json"
+
+cat >"$FTEST_GEMINI_FINDINGS" <<'JSON'
+{
+  "findings": [
+    {"id":"G-301","title":"Real","path":"r.py","line":1,"severity":"minor","category":"bug","rationale":"real finding"},
+    {"title":"No Id","path":"n.py","line":2,"severity":"minor","category":"bug","rationale":"id-less finding"}
+  ]
+}
+JSON
+
+cat >"$FTEST_CLAUDE_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {"id":"G-301","claude_verdict":"confirm","reason":"ok"}
+  ]
+}
+JSON
+
+cat >"$FTEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+
+cat >"$FTEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+FTEST_OUT=""
+FTEST_EXIT=0
+run_capture FTEST_OUT FTEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$FTEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$FTEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$FTEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$FTEST_CLAUDE_VERDICTS" \
+  --json "$FTEST_OUT_JSON"
+
+assert_exit_code "synthesize.py: id-less finding is skipped, not fatal (no KeyError)" 0 "$FTEST_EXIT"
+
+FTEST_CHECK=""
+FTEST_CHECK_EXIT=0
+run_capture FTEST_CHECK FTEST_CHECK_EXIT python3 - "$FTEST_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"] if f.get("id")}
+g301 = findings.get("G-301", {})
+errors = []
+if g301.get("status") != "survivor":
+    errors.append(f"G-301.status='{g301.get('status')}' expected='survivor'")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$FTEST_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: id-less finding skipped cleanly, G-301 is survivor"
+else
+  fail "synthesize.py: id-less finding skipped cleanly, G-301 is survivor" "$FTEST_CHECK"
+fi
+
+# ---- Test G: duplicate canonical verdict id warns accurately ----
+# G-401 receives two verdicts with the exact same id "G-401". The first (confirm)
+# must win, G-401 must be "survivor", and stderr must mention "duplicate verdict for finding id 'G-401'".
+GTEST_GEMINI_FINDINGS="$TMP_DIR/g_gemini_findings.json"
+GTEST_CLAUDE_VERDICTS="$TMP_DIR/g_claude_verdicts.json"
+GTEST_CLAUDE_FINDINGS="$TMP_DIR/g_claude_findings.json"
+GTEST_GEMINI_VERDICTS="$TMP_DIR/g_gemini_verdicts.json"
+GTEST_OUT_JSON="$TMP_DIR/g_synthesis.json"
+
+cat >"$GTEST_GEMINI_FINDINGS" <<'JSON'
+{
+  "findings": [
+    {"id":"G-401","title":"X","path":"x.py","line":1,"severity":"minor","category":"bug","rationale":"x finding"}
+  ]
+}
+JSON
+
+cat >"$GTEST_CLAUDE_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {"id":"G-401","claude_verdict":"confirm","reason":"a"},
+    {"id":"G-401","claude_verdict":"refute","reason":"b"}
+  ]
+}
+JSON
+
+cat >"$GTEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+
+cat >"$GTEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+GTEST_OUT=""
+GTEST_EXIT=0
+run_capture GTEST_OUT GTEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$GTEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$GTEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$GTEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$GTEST_CLAUDE_VERDICTS" \
+  --json "$GTEST_OUT_JSON"
+
+assert_exit_code "Test G: duplicate verdict id synthesize exits 0" 0 "$GTEST_EXIT"
+
+assert_contains "synthesize.py: duplicate canonical verdict id warns accurately" \
+  "duplicate verdict for finding id 'G-401'" "$GTEST_OUT"
+
+GTEST_CHECK=""
+GTEST_CHECK_EXIT=0
+run_capture GTEST_CHECK GTEST_CHECK_EXIT python3 - "$GTEST_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+g401 = findings.get("G-401", {})
+errors = []
+if g401.get("status") != "survivor":
+    errors.append(f"G-401.status='{g401.get('status')}' expected='survivor' (first/confirm must win)")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$GTEST_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: duplicate canonical verdict id warns accurately (first/confirm wins, G-401 is survivor)"
+else
+  fail "synthesize.py: duplicate canonical verdict id warns accurately (first/confirm wins, G-401 is survivor)" "$GTEST_CHECK"
+fi
+
+# ---- Test H: empty findings lists exit cleanly ----
+HTEST_CLAUDE_FINDINGS="$TMP_DIR/h_claude_findings.json"
+HTEST_GEMINI_FINDINGS="$TMP_DIR/h_gemini_findings.json"
+HTEST_GEMINI_VERDICTS="$TMP_DIR/h_gemini_verdicts.json"
+HTEST_CLAUDE_VERDICTS="$TMP_DIR/h_claude_verdicts.json"
+
+cat >"$HTEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+cat >"$HTEST_GEMINI_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+cat >"$HTEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+cat >"$HTEST_CLAUDE_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+HTEST_OUT=""
+HTEST_EXIT=0
+run_capture HTEST_OUT HTEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$HTEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$HTEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$HTEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$HTEST_CLAUDE_VERDICTS"
+
+assert_exit_code "synthesize.py: empty findings lists exit cleanly" 0 "$HTEST_EXIT"
+assert_contains "synthesize.py: empty findings lists summary line correct" \
+  "survivors=0 unconfirmed=0 rejected=0" "$HTEST_OUT"
+
+# ====================================================================
+# SECTION 12: synthesize.py — multi-location reason abstains (bug #30 regression)
+# ====================================================================
+section "synthesize.py — multi-location reason abstains (bug #30 regression)"
+
+# Two gemini findings at distinct locations.
+# A single claude-verdict with a gibberish id whose reason cites BOTH locations
+# must NOT be applied to either finding — the loc_cands set has len>1, so
+# reconcile_verdict_map must abstain (no recovery) and both findings stay
+# "unconfirmed". If the guard were replaced by first-token-wins, G-501 would
+# be incorrectly rejected.
+
+ITEST_GEMINI_FINDINGS="$TMP_DIR/i_gemini_findings.json"
+ITEST_CLAUDE_VERDICTS="$TMP_DIR/i_claude_verdicts.json"
+ITEST_CLAUDE_FINDINGS="$TMP_DIR/i_claude_findings.json"
+ITEST_GEMINI_VERDICTS="$TMP_DIR/i_gemini_verdicts.json"
+ITEST_OUT_JSON="$TMP_DIR/i_synthesis.json"
+
+cat >"$ITEST_GEMINI_FINDINGS" <<'JSON'
+{
+  "findings": [
+    {"id":"G-501","title":"First","path":"a.py","line":10,"severity":"minor","category":"bug","rationale":"first finding"},
+    {"id":"G-502","title":"Second","path":"b.py","line":20,"severity":"minor","category":"bug","rationale":"second finding"}
+  ]
+}
+JSON
+
+cat >"$ITEST_CLAUDE_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {
+      "id": "totally-unrelated-xyz",
+      "claude_verdict": "refute",
+      "reason": "compare a.py:10 against b.py:20 — both look suspicious"
+    }
+  ]
+}
+JSON
+
+cat >"$ITEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+
+cat >"$ITEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+ITEST_OUT=""
+ITEST_EXIT=0
+run_capture ITEST_OUT ITEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$ITEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$ITEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$ITEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$ITEST_CLAUDE_VERDICTS" \
+  --json "$ITEST_OUT_JSON"
+
+assert_exit_code "Test I: multi-location reason synthesize exits 0" 0 "$ITEST_EXIT"
+
+ITEST_CHECK=""
+ITEST_CHECK_EXIT=0
+run_capture ITEST_CHECK ITEST_CHECK_EXIT python3 - "$ITEST_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+g501 = findings.get("G-501", {})
+g502 = findings.get("G-502", {})
+errors = []
+if g501.get("status") == "rejected":
+    errors.append(f"G-501.status='rejected' but expected NOT rejected (multi-location must abstain)")
+if g502.get("status") == "rejected":
+    errors.append(f"G-502.status='rejected' but expected NOT rejected (multi-location must abstain)")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$ITEST_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: multi-location reason abstains (no mis-match)"
+else
+  fail "synthesize.py: multi-location reason abstains (no mis-match)" "$ITEST_CHECK"
+fi
+
+assert_contains "Test I: multi-location reason stderr mentions could not be recovered" \
+  "could not be recovered" "$ITEST_OUT"
+
+# ====================================================================
+# SECTION 13: synthesize.py — exact-id confirm not clobbered by reason-location refute (bug #30 regression)
+# ====================================================================
+section "synthesize.py — exact-id confirm not clobbered by reason-location refute (bug #30 regression)"
+
+# ---- Test J: exact-id confirm not clobbered by reason-location refute ----
+# G-601 has a confirmed exact-id verdict AND a second verdict whose gibberish id
+# would otherwise recover via reason-location (its reason references "c.py:30",
+# which is G-601's location). The guard `loc_index[tok] not in resolved` at
+# synthesize.py:172 must prevent the location-recovered refute from clobbering
+# the already-resolved exact-id confirm. G-601 must remain "survivor".
+JTEST_GEMINI_FINDINGS="$TMP_DIR/j_gemini_findings.json"
+JTEST_CLAUDE_VERDICTS="$TMP_DIR/j_claude_verdicts.json"
+JTEST_CLAUDE_FINDINGS="$TMP_DIR/j_claude_findings.json"
+JTEST_GEMINI_VERDICTS="$TMP_DIR/j_gemini_verdicts.json"
+JTEST_OUT_JSON="$TMP_DIR/j_synthesis.json"
+
+cat >"$JTEST_GEMINI_FINDINGS" <<'JSON'
+{
+  "findings": [
+    {"id":"G-601","title":"Solo","path":"c.py","line":30,"severity":"minor","category":"bug","rationale":"solo finding"}
+  ]
+}
+JSON
+
+cat >"$JTEST_CLAUDE_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {"id":"G-601","claude_verdict":"confirm","reason":"verified ok"},
+    {"id":"unrelated-gibberish-id","claude_verdict":"refute","reason":"see c.py:30 for the problem"}
+  ]
+}
+JSON
+
+cat >"$JTEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+
+cat >"$JTEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+JTEST_OUT=""
+JTEST_EXIT=0
+run_capture JTEST_OUT JTEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$JTEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$JTEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$JTEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$JTEST_CLAUDE_VERDICTS" \
+  --json "$JTEST_OUT_JSON"
+
+assert_exit_code "Test J: exact-id confirm not clobbered by reason-location refute exits 0" 0 "$JTEST_EXIT"
+
+JTEST_CHECK=""
+JTEST_CHECK_EXIT=0
+run_capture JTEST_CHECK JTEST_CHECK_EXIT python3 - "$JTEST_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+g601 = findings.get("G-601", {})
+errors = []
+if g601.get("status") != "survivor":
+    errors.append(f"G-601.status='{g601.get('status')}' expected='survivor' (exact-id confirm must not be clobbered by location-recovered refute)")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$JTEST_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: exact-id confirm not clobbered by reason-location refute"
+else
+  fail "synthesize.py: exact-id confirm not clobbered by reason-location refute" "$JTEST_CHECK"
+fi
+
+assert_contains "Test J: location-recovered refute could not be recovered (exact-id claimed the slot)" \
+  "could not be recovered" "$JTEST_OUT"
 
 # ====================================================================
 # FINAL SUMMARY
