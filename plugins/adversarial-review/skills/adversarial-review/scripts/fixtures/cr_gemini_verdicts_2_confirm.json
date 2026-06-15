@@ -1,0 +1,16 @@
+{
+  "verdicts": [
+    {
+      "id": "C-301",
+      "gemini_verdict": "confirm",
+      "reason": "Small sample finding one is valid.",
+      "confidence": 0.9
+    },
+    {
+      "id": "C-302",
+      "gemini_verdict": "confirm",
+      "reason": "Small sample finding two is valid.",
+      "confidence": 0.9
+    }
+  ]
+}

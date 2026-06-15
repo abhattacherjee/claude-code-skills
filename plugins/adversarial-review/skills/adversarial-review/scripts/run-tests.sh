@@ -1774,6 +1774,262 @@ assert_contains "Test K: conflicting signals warns on stderr" \
   "conflicting recovery signals" "$KTEST_OUT"
 
 # ====================================================================
+# SECTION 15: synthesize.py — confirm-rate guard (rubber-stamp / rubber-reject detection)
+# ====================================================================
+section "synthesize.py — confirm-rate guard"
+
+# Shared: empty Gemini findings + empty Claude verdicts so the claude_on_gemini
+# direction is always zero and doesn't interfere with gemini_on_claude assertions.
+CR_EMPTY_GEMINI_FINDINGS="$TMP_DIR/cr_empty_gemini_findings.json"
+CR_EMPTY_CLAUDE_VERDICTS="$TMP_DIR/cr_empty_claude_verdicts.json"
+cat >"$CR_EMPTY_GEMINI_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+cat >"$CR_EMPTY_CLAUDE_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+# Fixtures in the fixtures/ dir
+CR_CLAUDE_5="$FIXTURES_DIR/cr_claude_findings_5.json"
+CR_CLAUDE_7="$FIXTURES_DIR/cr_claude_findings_7.json"
+CR_CLAUDE_2="$FIXTURES_DIR/cr_claude_findings_2.json"
+CR_GEM_ALL_CONFIRM="$FIXTURES_DIR/cr_gemini_verdicts_all_confirm.json"
+CR_GEM_ALL_REFUTE="$FIXTURES_DIR/cr_gemini_verdicts_all_refute.json"
+CR_GEM_MIXED="$FIXTURES_DIR/cr_gemini_verdicts_mixed_4c3r.json"
+
+# ---- Test 1: guard fires (all-confirm rubber-stamp) ----
+# 5 Claude findings, all confirmed by Gemini -> confirm_rate=1.000, judged=5 >= MIN -> low_signal=true
+CR_T1_OUT=""
+CR_T1_EXIT=0
+run_capture CR_T1_OUT CR_T1_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_5" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_ALL_CONFIRM" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T1: all-confirm (5) exits 0" 0 "$CR_T1_EXIT"
+# Anchor assertion to the specific gemini_on_claude direction line
+CR_T1_GEM_LINE="$(echo "$CR_T1_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate T1: gemini_on_claude low_signal=true (anchored)" \
+  "gemini_on_claude: confirmed=5 refuted=0 judged=5 confirm_rate=1.000 low_signal=true" "$CR_T1_GEM_LINE"
+
+# ---- Test 2: no false alarm (mixed 4 confirm / 3 refute) ----
+# confirm_rate = 4/7 ≈ 0.571 — not near 1.0 or 0.0 -> low_signal=false
+CR_T2_OUT=""
+CR_T2_EXIT=0
+run_capture CR_T2_OUT CR_T2_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_7" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_MIXED" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T2: mixed exits 0" 0 "$CR_T2_EXIT"
+CR_T2_GEM_LINE="$(echo "$CR_T2_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate T2: gemini_on_claude low_signal=false (no false alarm, anchored)" \
+  "low_signal=false" "$CR_T2_GEM_LINE"
+
+# ---- Test 3: below min sample (2 findings, both confirmed) ----
+# confirm_rate=1.000 but judged=2 < RUBBER_STAMP_MIN_JUDGED=5 -> low_signal=false
+CR_GEM_2_CONFIRM_FILE="$FIXTURES_DIR/cr_gemini_verdicts_2_confirm.json"
+
+CR_T3_OUT=""
+CR_T3_EXIT=0
+run_capture CR_T3_OUT CR_T3_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_2" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_2_CONFIRM_FILE" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T3: below-min-sample exits 0" 0 "$CR_T3_EXIT"
+CR_T3_GEM_LINE="$(echo "$CR_T3_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate T3: gemini_on_claude low_signal=false (below min sample, anchored)" \
+  "low_signal=false" "$CR_T3_GEM_LINE"
+
+# ---- Test 4: all-refute extreme (rubber-reject) ----
+# 5 Claude findings, all refuted by Gemini -> confirm_rate=0.000, judged=5 >= MIN -> low_signal=true
+CR_T4_OUT=""
+CR_T4_EXIT=0
+run_capture CR_T4_OUT CR_T4_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_5" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_ALL_REFUTE" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T4: all-refute (5) exits 0" 0 "$CR_T4_EXIT"
+CR_T4_GEM_LINE="$(echo "$CR_T4_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate T4: gemini_on_claude low_signal=true fires (rubber-reject, anchored)" \
+  "gemini_on_claude: confirmed=0 refuted=5 judged=5 confirm_rate=0.000 low_signal=true" "$CR_T4_GEM_LINE"
+
+# ---- Test 5: ratio correctness — exact confirmed=, refuted=, confirm_rate= values (3 decimals) ----
+# 7 Claude findings, 4 confirm / 3 refute -> confirmed=4 refuted=3 judged=7 confirm_rate=0.571
+CR_T5_OUT=""
+CR_T5_EXIT=0
+run_capture CR_T5_OUT CR_T5_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_7" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_MIXED" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate T5: ratio correctness exits 0" 0 "$CR_T5_EXIT"
+CR_T5_GEM_LINE="$(echo "$CR_T5_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate T5: confirmed=4 refuted=3" \
+  "confirmed=4 refuted=3" "$CR_T5_GEM_LINE"
+assert_contains  "confirm-rate T5: confirm_rate=0.571 (3 decimals)" \
+  "confirm_rate=0.571" "$CR_T5_GEM_LINE"
+
+# ---- Boundary-edge tests (Fix C) ----
+
+CR_CLAUDE_20="$FIXTURES_DIR/cr_claude_findings_20.json"
+CR_CLAUDE_4="$FIXTURES_DIR/cr_claude_findings_4.json"
+CR_GEM_19C1R="$FIXTURES_DIR/cr_gemini_verdicts_19c1r.json"
+CR_GEM_18C2R="$FIXTURES_DIR/cr_gemini_verdicts_18c2r.json"
+CR_GEM_1C19R="$FIXTURES_DIR/cr_gemini_verdicts_1c19r.json"
+CR_GEM_4C0R="$FIXTURES_DIR/cr_gemini_verdicts_4c0r.json"
+
+# ---- Boundary T6: 0.95 high edge — 19 confirm / 1 refute (rate=0.950) -> low_signal=true ----
+# Proves the >= boundary is inclusive (if > were used, 0.950 would not fire)
+CR_B6_OUT=""
+CR_B6_EXIT=0
+run_capture CR_B6_OUT CR_B6_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_20" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_19C1R" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate boundary T6: 0.950 high edge exits 0" 0 "$CR_B6_EXIT"
+CR_B6_GEM_LINE="$(echo "$CR_B6_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate boundary T6: rate=0.950 -> low_signal=true (proves >= inclusive)" \
+  "confirmed=19 refuted=1 judged=20 confirm_rate=0.950 low_signal=true" "$CR_B6_GEM_LINE"
+
+# ---- Boundary T7: 0.90 near-miss — 18 confirm / 2 refute (rate=0.900) -> low_signal=false ----
+# Proves the guard does NOT fire below the 0.95 threshold
+CR_B7_OUT=""
+CR_B7_EXIT=0
+run_capture CR_B7_OUT CR_B7_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_20" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_18C2R" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate boundary T7: 0.900 near-miss exits 0" 0 "$CR_B7_EXIT"
+CR_B7_GEM_LINE="$(echo "$CR_B7_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate boundary T7: rate=0.900 -> low_signal=false (does not fire below 0.95)" \
+  "confirmed=18 refuted=2 judged=20 confirm_rate=0.900 low_signal=false" "$CR_B7_GEM_LINE"
+
+# ---- Boundary T8: 0.05 low edge — 1 confirm / 19 refute (rate=0.050) -> low_signal=true ----
+# Proves the low-end <= boundary is inclusive
+CR_B8_OUT=""
+CR_B8_EXIT=0
+run_capture CR_B8_OUT CR_B8_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_20" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_1C19R" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate boundary T8: 0.050 low edge exits 0" 0 "$CR_B8_EXIT"
+CR_B8_GEM_LINE="$(echo "$CR_B8_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate boundary T8: rate=0.050 -> low_signal=true (proves <= inclusive)" \
+  "confirmed=1 refuted=19 judged=20 confirm_rate=0.050 low_signal=true" "$CR_B8_GEM_LINE"
+
+# ---- Boundary T9: 4-judged all-confirm — 4 confirm / 0 refute (rate=1.000, judged=4 < 5) -> low_signal=false ----
+# Proves the MIN_JUDGED=5 boundary is exclusive at 4 (guard must NOT fire at 4)
+CR_B9_OUT=""
+CR_B9_EXIT=0
+run_capture CR_B9_OUT CR_B9_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_CLAUDE_4" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_GEM_4C0R" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate boundary T9: 4-judged all-confirm exits 0" 0 "$CR_B9_EXIT"
+CR_B9_GEM_LINE="$(echo "$CR_B9_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate boundary T9: judged=4 -> low_signal=false (proves MIN_JUDGED=5 exclusive at 4)" \
+  "confirmed=4 refuted=0 judged=4 confirm_rate=1.000 low_signal=false" "$CR_B9_GEM_LINE"
+
+# ---- Fix D: unrecognized verdict detection ----
+# 5 confirm + 3 "reject" verdicts (unrecognized) -> unrecognized=3, judged=5, low_signal=true
+# Use a fresh 8-finding fixture and inline verdicts
+CR_D_CLAUDE_FINDINGS="$TMP_DIR/cr_d_claude_findings.json"
+cat >"$CR_D_CLAUDE_FINDINGS" <<'JSON'
+[
+  {"id":"C-D1","path":"src/a.py","line":1,"severity":"minor","category":"bug","title":"F1","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D2","path":"src/a.py","line":2,"severity":"minor","category":"bug","title":"F2","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D3","path":"src/a.py","line":3,"severity":"minor","category":"bug","title":"F3","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D4","path":"src/a.py","line":4,"severity":"minor","category":"bug","title":"F4","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D5","path":"src/a.py","line":5,"severity":"minor","category":"bug","title":"F5","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D6","path":"src/a.py","line":6,"severity":"minor","category":"bug","title":"F6","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D7","path":"src/a.py","line":7,"severity":"minor","category":"bug","title":"F7","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D8","path":"src/a.py","line":8,"severity":"minor","category":"bug","title":"F8","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}
+]
+JSON
+
+CR_D_VERDICTS="$TMP_DIR/cr_d_verdicts.json"
+cat >"$CR_D_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {"id":"C-D1","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D2","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D3","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D4","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D5","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D6","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9},
+    {"id":"C-D7","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9},
+    {"id":"C-D8","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9}
+  ]
+}
+JSON
+
+CR_D_OUT=""
+CR_D_EXIT=0
+run_capture CR_D_OUT CR_D_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$CR_D_CLAUDE_FINDINGS" \
+  --gemini-findings "$CR_EMPTY_GEMINI_FINDINGS" \
+  --gemini-verdicts "$CR_D_VERDICTS" \
+  --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
+
+assert_exit_code "confirm-rate Fix-D: unrecognized verdicts exits 0" 0 "$CR_D_EXIT"
+CR_D_GEM_LINE="$(echo "$CR_D_OUT" | grep '^gemini_on_claude:')"
+assert_contains  "confirm-rate Fix-D: confirmed=5 judged=5 low_signal=true" \
+  "confirmed=5 refuted=0 judged=5 confirm_rate=1.000 low_signal=true" "$CR_D_GEM_LINE"
+assert_contains  "confirm-rate Fix-D: unrecognized=3 in output line" \
+  "unrecognized=3" "$CR_D_GEM_LINE"
+assert_contains  "confirm-rate Fix-D: unrecognized warn on stderr" \
+  "unrecognized verdict value" "$CR_D_OUT"
+
+# ---- Fix E: low_signal _warn on stderr ----
+# T1 (all-confirm) should already emit the warn; verify it appears in T1 output
+assert_contains  "confirm-rate Fix-E: low_signal warn in T1 stderr" \
+  "confirm-rate guard FIRED" "$CR_T1_OUT"
+
+# ---- Presence P1: gemini-review.sh contains strict judge prompt phrase ----
+# (gemini-review.sh must contain the hardened default-to-refute instruction)
+GEMINI_REVIEW_CONTENT="$(cat "$GEMINI_REVIEW")"
+assert_contains "presence P1: gemini-review.sh has default-to-refute phrase" \
+  "Default to refute unless the finding is incontrovertibly grounded" \
+  "$GEMINI_REVIEW_CONTENT"
+
+# ---- Presence P2: gemini-review.sh contains forced-refute escalation phrase ----
+assert_contains "presence P2: gemini-review.sh has quote-offending-line phrase" \
+  "Quote the exact offending line from the diff verbatim" \
+  "$GEMINI_REVIEW_CONTENT"
+
+# ---- Presence P3: gemini-review.sh has --strict flag ----
+# Note: avoid passing --strict as the grep pattern directly (ugrep interprets it
+# as a flag). Test for the FORCE_STRICT variable name instead, which is set only
+# when --strict is parsed, and for the usage line suffix that contains the flag.
+assert_contains "presence P3: gemini-review.sh has FORCE_STRICT (--strict implementation)" \
+  "FORCE_STRICT" \
+  "$GEMINI_REVIEW_CONTENT"
+
+# ---- Presence P4: adversarial-cross-examiner.md contains cannot-point phrase ----
+# Path: scripts/ -> (skill)adversarial-review/ -> skills/ -> (plugin)adversarial-review/ -> agents/
+CROSS_EXAMINER_FILE="$SCRIPT_DIR/../../../agents/adversarial-cross-examiner.md"
+CROSS_EXAMINER_CONTENT="$(cat "$CROSS_EXAMINER_FILE")"
+assert_contains "presence P4: cross-examiner.md has cannot-point-to-proving-line phrase" \
+  "cannot point to the proving line" \
+  "$CROSS_EXAMINER_CONTENT"
+
+# ====================================================================
 # FINAL SUMMARY
 # ====================================================================
 echo ""

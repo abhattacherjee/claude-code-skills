@@ -1,0 +1,24 @@
+{
+  "verdicts": [
+    {"id":"C-201","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-202","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-203","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-204","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-205","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-206","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-207","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-208","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-209","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-210","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-211","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-212","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-213","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-214","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-215","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-216","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-217","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-218","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-219","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-220","gemini_verdict":"refute","reason":"not supported","confidence":0.9}
+  ]
+}
