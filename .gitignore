@@ -4,3 +4,7 @@
 .claude/settings.local.json
 plugins/obsidian-brain/.coverage
 *.adversarial-review.md
+
+# Python bytecode
+__pycache__/
+*.pyc

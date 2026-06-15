@@ -98,15 +98,15 @@ def unwrap_findings(raw: Any, label: str) -> list[dict]:
     return raw
 
 
-def _slugify(text):
+def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
 
 
-def _warn(msg):
+def _warn(msg: str) -> None:
     print(f"[synthesize] WARNING: {msg}", file=sys.stderr)
 
 
-def reconcile_verdict_map(verdicts, findings, verdict_field):
+def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_field: str) -> dict[str, dict]:
     """Map finding-id -> verdict, recovering verdicts whose 'id' is a slug or
     other non-canonical value instead of the orchestrator's C-NNN/G-NNN id.
 
@@ -117,7 +117,9 @@ def reconcile_verdict_map(verdicts, findings, verdict_field):
     A candidate already claimed by another verdict is never overwritten, and the
     reason-location heuristic abstains when the reason points at more than one
     finding. Recovery is heuristic, so every recovery and every unrecoverable
-    verdict is logged to stderr for audit. Returns (resolved_map, unmatched_ids).
+    verdict is logged to stderr for audit. Returns a finding-id -> verdict dict;
+    recovered verdicts are keyed by the resolved finding id. Every recovery and
+    every unrecoverable verdict is logged to stderr for audit.
     """
     findings = [f for f in findings if f.get("id")]
     finding_ids = {f["id"] for f in findings}
@@ -157,32 +159,35 @@ def reconcile_verdict_map(verdicts, findings, verdict_field):
         if f.get("path") and f.get("line") is not None else None
     )
 
-    unmatched = []
     for v in leftover:
         vid = v["id"]
-        target, method = None, None
-        cand = slug_index.get(_slugify(vid))
-        if cand and cand not in resolved:
-            target, method = cand, "title-slug"
-        if target is None:
-            reason = v.get("reason", "") or ""
-            loc_cands = {
-                loc_index[tok]
-                for tok in re.findall(r"[\w./-]+:\d+", reason)
-                if tok in loc_index and loc_index[tok] not in resolved
-            }
-            if len(loc_cands) == 1:
-                target, method = next(iter(loc_cands)), "reason-location"
-        if target is not None:
+        candidates = set()
+        slug_cand = slug_index.get(_slugify(vid))
+        if slug_cand and slug_cand not in resolved:
+            candidates.add(slug_cand)
+        reason = v.get("reason", "") or ""
+        loc_cands = {
+            loc_index[tok]
+            for tok in re.findall(r"[\w./-]+:\d+", reason)
+            if tok in loc_index and loc_index[tok] not in resolved
+        }
+        if len(loc_cands) == 1:
+            candidates.add(next(iter(loc_cands)))
+        if len(candidates) == 1:
+            target = next(iter(candidates))
             resolved[target] = v
             _warn(f"verdict id '{vid}' did not match any finding id; recovered "
-                  f"(heuristic) via {method} -> '{target}' — verify this association")
+                  f"(heuristic) -> '{target}' — verify this association")
+        elif len(candidates) > 1:
+            _warn(f"verdict id '{vid}' has conflicting recovery signals "
+                  f"(slug and reason-location point to different findings: "
+                  f"{sorted(candidates)}); abstaining — the targeted finding stays "
+                  f"'unconfirmed' (its {verdict_field} is ignored)")
         else:
-            unmatched.append(vid)
             _warn(f"verdict id '{vid}' did not match any finding id and could not "
                   f"be recovered; the targeted finding stays 'unconfirmed' "
                   f"(its {verdict_field} is ignored)")
-    return resolved, unmatched
+    return resolved
 
 
 def classify_findings(
@@ -197,12 +202,12 @@ def classify_findings(
     # gemini_verdict_map: Gemini's verdicts on Claude findings, keyed by the
     # resolved Claude finding id (C-NNN); reconcile recovers slug/location-keyed
     # verdicts back to that id.
-    gemini_verdict_map, _ = reconcile_verdict_map(
+    gemini_verdict_map: dict[str, dict] = reconcile_verdict_map(
         gemini_verdicts_raw.get("verdicts", []), claude_findings, "gemini_verdict"
     )
     # claude_verdict_map: Claude's verdicts on Gemini findings, keyed by the
     # resolved Gemini finding id (G-NNN); same recovery applies.
-    claude_verdict_map, _ = reconcile_verdict_map(
+    claude_verdict_map: dict[str, dict] = reconcile_verdict_map(
         claude_verdicts_raw.get("verdicts", []), gemini_findings, "claude_verdict"
     )
 

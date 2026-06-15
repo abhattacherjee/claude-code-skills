@@ -49,6 +49,7 @@ Tests:
   - synthesize.py: empty findings lists exit cleanly
   - synthesize.py: multi-location reason abstains (no mis-match)
   - synthesize.py: exact-id confirm not clobbered by reason-location refute
+  - synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)
 
 Exit codes:
   0  All tests pass
@@ -1184,21 +1185,10 @@ assert_exit_code "truly-unmatched verdict: synthesize exits 0" 0 "$SLUG_C_EXIT"
 
 # The fix will emit: [synthesize] WARNING: verdict id 'no-such-finding-zzz' ...
 # on stderr (captured via run_capture's 2>&1 merge).
-# Case-insensitive check: look for both the id and "WARNING" in the combined output.
-SLUG_C_ID_CHECK="$(echo "$SLUG_C_OUT" | grep -i 'no-such-finding-zzz' | head -1 || true)"
-SLUG_C_WARN_CHECK="$(echo "$SLUG_C_OUT" | grep -i 'warning' | head -1 || true)"
-
-if [[ -n "$SLUG_C_ID_CHECK" ]]; then
-  pass "synthesize.py: truly-unmatched verdict id warns on stderr (id present)"
-else
-  fail "synthesize.py: truly-unmatched verdict id warns on stderr (id present)" "expected 'no-such-finding-zzz' in stderr output; got: $SLUG_C_OUT"
-fi
-
-if [[ -n "$SLUG_C_WARN_CHECK" ]]; then
-  pass "synthesize.py: truly-unmatched verdict id warns on stderr (WARNING present)"
-else
-  fail "synthesize.py: truly-unmatched verdict id warns on stderr (WARNING present)" "expected 'WARNING' in stderr output; got: $SLUG_C_OUT"
-fi
+assert_contains "synthesize.py: truly-unmatched verdict id warns on stderr (id present)" \
+  "no-such-finding-zzz" "$SLUG_C_OUT"
+assert_contains "synthesize.py: truly-unmatched verdict id warns on stderr (WARNING present)" \
+  "WARNING" "$SLUG_C_OUT"
 
 # ---- Test D: ambiguous slug does NOT mis-match (both stay unconfirmed) ----
 # Two gemini findings share the slug "duplicate-title". A claude-verdict keyed
@@ -1693,6 +1683,95 @@ fi
 
 assert_contains "Test J: location-recovered refute could not be recovered (exact-id claimed the slot)" \
   "could not be recovered" "$JTEST_OUT"
+
+# ====================================================================
+# SECTION 14: synthesize.py — conflicting slug vs reason-location signals abstain
+# ====================================================================
+section "synthesize.py — conflicting slug vs reason-location signals abstain (no mis-match)"
+
+# ---- Test K: conflicting slug vs reason-location signals must abstain ----
+# G-A (title "Alpha", path "a.py", line 1) and G-B (title "Beta", path "b.py", line 2).
+# A single claude-verdict whose id slugifies to G-A's title ("alpha" -> "alpha" slug
+# matches "Alpha") AND whose reason cites G-B's location ("b.py:2") must NOT be
+# applied to either finding. Slug points to G-A; reason-location points to G-B —
+# the signals conflict (candidates set has len>1). The code must abstain: both
+# findings stay "unconfirmed" and stderr must mention "conflicting recovery signals".
+KTEST_GEMINI_FINDINGS="$TMP_DIR/k_gemini_findings.json"
+KTEST_CLAUDE_VERDICTS="$TMP_DIR/k_claude_verdicts.json"
+KTEST_CLAUDE_FINDINGS="$TMP_DIR/k_claude_findings.json"
+KTEST_GEMINI_VERDICTS="$TMP_DIR/k_gemini_verdicts.json"
+KTEST_OUT_JSON="$TMP_DIR/k_synthesis.json"
+
+cat >"$KTEST_GEMINI_FINDINGS" <<'JSON'
+{
+  "findings": [
+    {"id":"G-A","title":"Alpha","path":"a.py","line":1,"severity":"minor","category":"bug","rationale":"alpha finding"},
+    {"id":"G-B","title":"Beta","path":"b.py","line":2,"severity":"minor","category":"bug","rationale":"beta finding"}
+  ]
+}
+JSON
+
+cat >"$KTEST_CLAUDE_VERDICTS" <<'JSON'
+{
+  "verdicts": [
+    {
+      "id": "alpha",
+      "claude_verdict": "refute",
+      "reason": "the real problem is at b.py:2"
+    }
+  ]
+}
+JSON
+
+cat >"$KTEST_CLAUDE_FINDINGS" <<'JSON'
+{"findings":[]}
+JSON
+
+cat >"$KTEST_GEMINI_VERDICTS" <<'JSON'
+{"verdicts":[]}
+JSON
+
+KTEST_OUT=""
+KTEST_EXIT=0
+run_capture KTEST_OUT KTEST_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$KTEST_CLAUDE_FINDINGS" \
+  --gemini-findings "$KTEST_GEMINI_FINDINGS" \
+  --gemini-verdicts "$KTEST_GEMINI_VERDICTS" \
+  --claude-verdicts "$KTEST_CLAUDE_VERDICTS" \
+  --json "$KTEST_OUT_JSON"
+
+assert_exit_code "Test K: conflicting signals synthesize exits 0" 0 "$KTEST_EXIT"
+
+KTEST_CHECK=""
+KTEST_CHECK_EXIT=0
+run_capture KTEST_CHECK KTEST_CHECK_EXIT python3 - "$KTEST_OUT_JSON" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+findings = {f["id"]: f for f in data["findings"]}
+ga = findings.get("G-A", {})
+gb = findings.get("G-B", {})
+errors = []
+if ga.get("status") == "rejected":
+    errors.append(f"G-A.status='rejected' but expected NOT rejected (conflicting signals must abstain)")
+if gb.get("status") == "rejected":
+    errors.append(f"G-B.status='rejected' but expected NOT rejected (conflicting signals must abstain)")
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}")
+    sys.exit(1)
+else:
+    print("OK")
+    sys.exit(0)
+PYEOF
+
+if [[ "$KTEST_CHECK_EXIT" -eq 0 ]]; then
+  pass "synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)"
+else
+  fail "synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)" "$KTEST_CHECK"
+fi
+
+assert_contains "Test K: conflicting signals warns on stderr" \
+  "conflicting recovery signals" "$KTEST_OUT"
 
 # ====================================================================
 # FINAL SUMMARY
