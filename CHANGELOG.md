@@ -19,6 +19,8 @@ Synced 7 skills from local source.
 
 ## [Unreleased]
 
+## [3.14.0] - 2026-06-15
+
 ### Added
 - adversarial-review: regression fixture + extractor test for the fenced-JSON-inside-`.response` envelope shape in gemini-review.sh (#41)
 - adversarial-review: judge passes now apply refutation pressure (default-to-refute-unless-grounded prompt hardening for both Gemini `--mode judge` and Claude's cross-examiner) and `synthesize.py` surfaces a per-direction confirm-rate with a `low_signal` flag that detects a rubber-stamping (near-unanimous) judge. (#31)
