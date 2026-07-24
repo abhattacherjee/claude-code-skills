@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Changed
+
+- **deep-review** 1.0.0 -> 1.1.0: synced skill from maintainer live copy — delegated-verification wiring (Story 1.4) + gemini-review.sh usage corrections. (#55)
+
 ## [3.14.0] - 2026-06-15
 
 ### Added
