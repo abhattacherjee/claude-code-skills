@@ -108,6 +108,13 @@ copy_file() {
     return
   fi
 
+  # Source and destination are the same file (in-repo source directory):
+  # `cp a a` fails, and under `set -e` that aborts the whole sync. `-ef`
+  # compares device + inode, so symlink and hardlink aliases are caught too.
+  if [[ "$src" -ef "$dst" ]]; then
+    return
+  fi
+
   if $DRY_RUN; then
     if [[ -f "$dst" ]]; then
       echo "  WOULD UPDATE  $label"
@@ -172,9 +179,15 @@ resolve_tilde() {
 #   $2 = the directory containing the manifest
 # A leading ~ expands to $HOME. An absolute path is returned unchanged. A
 # relative path resolves against the MANIFEST's directory, not the caller's
-# cwd, so in-repo-source manifests work from anywhere.
+# cwd, so in-repo-source manifests work from anywhere. An empty source stays
+# empty so callers report "source not found" rather than silently assembling
+# the manifest's own directory.
 resolve_source_path() {
   local raw="$1" manifest_dir="$2" expanded
+  if [[ -z "$raw" ]]; then
+    echo ""
+    return
+  fi
   expanded="$(resolve_tilde "$raw")"
   case "$expanded" in
     /*) echo "$expanded" ;;

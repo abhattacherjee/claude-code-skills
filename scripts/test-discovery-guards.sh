@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # test-discovery-guards.sh — Regression harness for the discovery scripts'
-# glob/existence guards (spec-creator's discover-conventions.sh, and
-# discover-project-architecture.sh once its cases are appended).
+# glob/existence guards. Both scripts are covered: spec-creator's
+# discover-conventions.sh and spec-review's discover-project-architecture.sh.
 #
 # Each script under test gets its own fixtures + assertions section below.
 # `assert_eq` records a PASS/FAIL line and tracks a running failure count;
@@ -16,6 +16,22 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISCOVER_CONVENTIONS_SCRIPT="${DISCOVER_CONVENTIONS_SCRIPT:-$REPO_ROOT/spec-creator/scripts/discover-conventions.sh}"
 DISCOVER_ARCHITECTURE_SCRIPT="${DISCOVER_ARCHITECTURE_SCRIPT:-$REPO_ROOT/spec-review/scripts/discover-project-architecture.sh}"
+
+# The harness runs under `set -euo pipefail`, so an unusable script under test
+# would die with rc=127 and no summary — unhelpful for the documented
+# "point this at a pre-fix build" workflow. Fail loudly instead.
+for _script_var in DISCOVER_CONVENTIONS_SCRIPT DISCOVER_ARCHITECTURE_SCRIPT; do
+    _script_path="${!_script_var}"
+    if [[ ! -f "$_script_path" ]]; then
+        echo "FATAL: $_script_var points at a nonexistent file: $_script_path" >&2
+        exit 1
+    fi
+    if [[ ! -x "$_script_path" ]]; then
+        echo "FATAL: $_script_var is not executable: $_script_path" >&2
+        exit 1
+    fi
+done
+unset _script_var _script_path
 
 FAIL_COUNT=0
 
@@ -91,25 +107,12 @@ assert_eq "empty specs/: epicStructure == flat" "flat" "$EMPTY_STRUCTURE"
 # discover-project-architecture.sh
 # ============================================================
 
-# --- Fixture: this repo (real-world negative — no package.json anywhere,
-# no .ts/.js/.tsx files anywhere, so the i18n and security detectors — which
-# only scan package.json/*.ts/*.js/*.tsx — cannot match). Note: dataFlow is
-# deliberately NOT asserted against this fixture: this monorepo's Python
-# hook/plugin scripts contain a genuine `fetch(...)` call (an inline JS
-# snippet inside a .py file) and the substring "bull" inside the English
-# word "bullets", both of which are real (if imprecise) matches for
-# detect_data_flow's *.py-scanning patterns — unrelated to the always-true
-# guard bug this task fixes, and out of scope to tighten here. The
-# markdown-only scratch fixture below covers the dataFlow-empty case
-# cleanly instead. ---
-THIS_REPO_JSON=$("$DISCOVER_ARCHITECTURE_SCRIPT" "$REPO_ROOT" --json)
-THIS_REPO_I18N=$(echo "$THIS_REPO_JSON" | jq -r '.i18n')
-THIS_REPO_SECURITY=$(echo "$THIS_REPO_JSON" | jq -r '.security')
-
-assert_eq "this repo (no package.json/.ts/.js/.tsx): i18n empty" "" "$THIS_REPO_I18N"
-assert_eq "this repo (no package.json/.ts/.js/.tsx): security empty" "" "$THIS_REPO_SECURITY"
-
 # --- Fixture: markdown-only scratch project (negative) ---
+# Hermetic: every negative case is asserted against scratch fixtures, never
+# against the live monorepo, whose real content can flip a detector at any
+# time (a single committed .js file calling `app.use(cors())` would turn a
+# live-repo `security empty` assertion red for reasons unrelated to guard
+# logic).
 MARKDOWN_ONLY_DIR="$SCRATCH_DIR/markdown-only-project"
 mkdir -p "$MARKDOWN_ONLY_DIR"
 cat > "$MARKDOWN_ONLY_DIR/README.md" <<'EOF'
@@ -134,7 +137,7 @@ assert_eq "markdown-only scratch project: security empty" "" "$MARKDOWN_ONLY_SEC
 # `if false && grep …`) is indistinguishable from a correctly-empty one
 # unless some fixture proves it can also report "present".
 POSITIVE_DIR="$SCRATCH_DIR/positive-architecture-project"
-mkdir -p "$POSITIVE_DIR/src"
+mkdir -p "$POSITIVE_DIR/src" "$POSITIVE_DIR/src/locales"
 cat > "$POSITIVE_DIR/package.json" <<'EOF'
 {
   "name": "positive-architecture-project",
@@ -189,10 +192,12 @@ assert_contains "positive control: dataFlow contains Database" "Database" "$POSI
 assert_contains "positive control: dataFlow contains GraphQL" "GraphQL" "$POSITIVE_DATA_FLOW"
 assert_contains "positive control: dataFlow contains REST-API" "REST-API" "$POSITIVE_DATA_FLOW"
 
-# detect_i18n — all 3 guards (LocaleFiles is the correct sibling, not under test here)
+# detect_i18n — all 4 markers, including LocaleFiles (already correct, but it
+# needs a positive control like every other marker)
 assert_contains "positive control: i18n contains i18next" "i18next" "$POSITIVE_I18N"
 assert_contains "positive control: i18n contains vue-i18n" "vue-i18n" "$POSITIVE_I18N"
 assert_contains "positive control: i18n contains BilingualText" "BilingualText" "$POSITIVE_I18N"
+assert_contains "positive control: i18n contains LocaleFiles" "LocaleFiles" "$POSITIVE_I18N"
 
 # detect_security_patterns — all 4 guards
 assert_contains "positive control: security contains CSRF" "CSRF" "$POSITIVE_SECURITY"
@@ -205,7 +210,8 @@ assert_contains "positive control: security contains CORS" "CORS" "$POSITIVE_SEC
 # guard-logic fix; the naive fix `grep -rl … | grep -qv node_modules` must
 # still exclude vendored matches) ---
 NODE_MODULES_ONLY_DIR="$SCRATCH_DIR/node-modules-only-project"
-mkdir -p "$NODE_MODULES_ONLY_DIR/node_modules/some-pkg/src"
+mkdir -p "$NODE_MODULES_ONLY_DIR/node_modules/some-pkg/src" \
+         "$NODE_MODULES_ONLY_DIR/node_modules/some-vite-pkg"
 cat > "$NODE_MODULES_ONLY_DIR/node_modules/package.json" <<'EOF'
 {
   "name": "some-pkg",
@@ -219,6 +225,11 @@ cat > "$NODE_MODULES_ONLY_DIR/node_modules/some-pkg/src/server.ts" <<'EOF'
 import helmet from "helmet";
 import csurf from "csurf";
 EOF
+# Published packages ship their own vite.config.* — the Dev-proxy guard must
+# filter node_modules like every other guard.
+cat > "$NODE_MODULES_ONLY_DIR/node_modules/some-vite-pkg/vite.config.ts" <<'EOF'
+export default { server: { proxy: { "/api": "http://localhost:3000" } } }
+EOF
 
 NODE_MODULES_ONLY_JSON=$("$DISCOVER_ARCHITECTURE_SCRIPT" "$NODE_MODULES_ONLY_DIR" --json)
 NODE_MODULES_ONLY_DATA_FLOW=$(echo "$NODE_MODULES_ONLY_JSON" | jq -r '.dataFlow')
@@ -228,6 +239,21 @@ NODE_MODULES_ONLY_SECURITY=$(echo "$NODE_MODULES_ONLY_JSON" | jq -r '.security')
 assert_eq "node_modules-only project (negative control): dataFlow empty" "" "$NODE_MODULES_ONLY_DATA_FLOW"
 assert_eq "node_modules-only project (negative control): i18n empty" "" "$NODE_MODULES_ONLY_I18N"
 assert_eq "node_modules-only project (negative control): security empty" "" "$NODE_MODULES_ONLY_SECURITY"
+
+# ============================================================
+# plugin copies
+# ============================================================
+
+# The assertions above exercise the top-level source scripts, but the
+# plugins/** copies are what actually ship to installers. A guard fix that
+# never reached the plugin copy is a fix nobody receives.
+for _rel in spec-review/scripts/discover-project-architecture.sh \
+            spec-creator/scripts/discover-conventions.sh; do
+    _skill="${_rel%%/*}"
+    _plugin_copy="$REPO_ROOT/plugins/$_skill/skills/$_skill/${_rel#*/}"
+    assert_eq "plugin copy in sync: $_rel" "" \
+        "$(diff -q "$REPO_ROOT/$_rel" "$_plugin_copy" >/dev/null 2>&1 || echo DIFFERS)"
+done
 
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then

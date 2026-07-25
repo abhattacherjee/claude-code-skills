@@ -16,6 +16,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 ### Added
 
 - `scripts/test-discovery-guards.sh` — regression harness for the `spec-creator`/`spec-review` discovery-guard fixes above, with positive and negative controls. (#62)
+- CI job `discovery-guards` in `.github/workflows/validate-skill.yml` runs the harness unconditionally on every PR — the existing path filters never matched `scripts/test-discovery-guards.sh`, and the detectors scan the whole tree, so path-filtering it would miss regressions. (#62)
 
 ## [3.15.0] - 2026-07-25
 

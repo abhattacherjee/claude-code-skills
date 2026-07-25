@@ -311,11 +311,12 @@ detect_data_flow() {
         patterns="${patterns}HTTP-inter-service,"
     fi
 
-    # Proxy configuration (Vite, webpack, etc.) — no node_modules stage: these
-    # config filenames never live under node_modules/
+    # Proxy configuration (Vite, webpack, etc.). Published packages do ship
+    # their own vite.config.js/webpack.config.js, so this needs the same
+    # node_modules filter as every other guard.
     if grep -rl "proxy.*localhost\|proxy.*127.0.0.1" . \
         --include="vite.config.*" --include="webpack.config.*" --include="next.config.*" \
-        2>/dev/null | grep -q .; then
+        2>/dev/null | grep -qv node_modules; then
         patterns="${patterns}Dev-proxy,"
     fi
 

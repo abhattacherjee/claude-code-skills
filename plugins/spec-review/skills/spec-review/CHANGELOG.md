@@ -14,6 +14,9 @@ All notable changes to spec-review are documented here.
   Helmet/CSP, GraphQL, REST-API` among others. The fabricated JSON is pasted verbatim into
   the Architecture Reviewer's prompt, so reviewers were being fed invented architecture on
   every run. (#62)
+- `detect_data_flow`'s `Dev-proxy` guard was the only one without a `node_modules` filter,
+  so a project whose sole `vite.config.*` was a vendored one under `node_modules/` reported
+  `Dev-proxy`. It now filters vendored matches like the other twelve guards. (#62)
 
 ## [2.2.1] - 2026-07-25
 

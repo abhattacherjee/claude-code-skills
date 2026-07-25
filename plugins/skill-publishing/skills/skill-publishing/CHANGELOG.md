@@ -16,10 +16,23 @@ All notable changes to this project will be documented in this file.
   undetected and the plugin quietly served stale content while the source looked updated.
   Discovery, auto-build and drift-resync now fall back to `$MONOREPO_DIR/<name>`, and a
   same-directory source is skipped rather than copied onto itself. (#61)
+- `copy_file` now returns early when source and destination are the same file (device +
+  inode comparison, so symlink/hardlink aliases count too). Previously `cp a a` failed and,
+  under `set -e`, aborted the entire sync mid-run — reachable for an in-repo skill whose
+  manifest declares agents, since the agents-copy block runs for in-place sources. (#61)
+- `resolve_source_path` no longer resolves an empty `"source": ""` to the manifest's own
+  directory; it returns empty so callers report "source not found" as they did before the
+  relative-source change. (#61)
 
 ### Added
 
 - Manifest-schema documentation for the in-repo `source` form and its resolution rule. (#61)
+
+### Changed
+
+- `sync-monorepo.sh` skips the `git-flow` manifest during plugin discovery: that plugin is
+  distributed via its own standalone marketplace (`abhattacherjee/git-flow`), not this
+  monorepo. Previously shipped but undocumented.
 
 ## [4.1.0] - 2026-03-17
 
