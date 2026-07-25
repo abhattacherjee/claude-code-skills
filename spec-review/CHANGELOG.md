@@ -9,6 +9,12 @@ All notable changes to spec-review are documented here.
 - Replaced hardcoded `~/.claude/skills/spec-review/scripts/` invocations with
   bare-relative `scripts/` paths so the skill resolves from the plugin cache (#59).
 - README install step no longer instructs copying from `~/.claude/skills/`.
+- Prefixed skill-owned script invocations with `./` and added a "Path
+  convention" note distinguishing them from the bare `scripts/` target-project
+  reference in the Automation Integration checklist item (#59).
+- Corrected the stale `implement-story` companion-skill name to
+  `spec-implement` and dropped the non-working `/review-spec` alias in favor
+  of `/spec-review` in the README (#59).
 
 ### Changed
 

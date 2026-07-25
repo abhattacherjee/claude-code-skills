@@ -26,12 +26,6 @@ All 4 agents run simultaneously in ~30 seconds total.
 ## Usage
 
 ```
-/review-spec specs/stories/epic-16/story-16.10-feature-name.md
-```
-
-Or use the alias:
-
-```
 /spec-review specs/stories/epic-16/story-16.10-feature-name.md
 ```
 
@@ -104,7 +98,7 @@ Bruno **cannot** simulate: [list of non-API scenarios]
 | Skill | Relationship |
 |-------|-------------|
 | `spec-creator` | Creates specs → `spec-review` validates them (upstream) |
-| `implement-story` | Implements reviewed specs (downstream) |
+| `spec-implement` | Implements reviewed specs (downstream) |
 | `project-code-review` | Reviews code after implementation (post-implementation) |
 
 ## Install

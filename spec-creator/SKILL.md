@@ -7,6 +7,8 @@ metadata:
 
 # Spec Creator
 
+> **Path convention:** `./scripts/…` and `references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+
 ## Problem
 
 Writing story specs from scratch is error-prone: incorrect file paths, wrong function
@@ -17,8 +19,8 @@ formatting. Each project has its own spec conventions that must be discovered an
 
 ```bash
 # Discover project spec conventions
-scripts/discover-conventions.sh .           # Report
-scripts/discover-conventions.sh . --json    # JSON
+./scripts/discover-conventions.sh .           # Report
+./scripts/discover-conventions.sh . --json    # JSON
 ```
 
 ## Progress Tracking (MANDATORY)
@@ -26,8 +28,8 @@ scripts/discover-conventions.sh . --json    # JSON
 Before starting, determine the workflow and create the task checklist:
 
 ```bash
-scripts/task-manifest.sh single-story    # Default
-scripts/task-manifest.sh vertical-split   # If splitting
+./scripts/task-manifest.sh single-story    # Default
+./scripts/task-manifest.sh vertical-split   # If splitting
 ```
 
 **Single-story workflow (default):**
@@ -77,7 +79,7 @@ scripts/task-manifest.sh vertical-split   # If splitting
 **1.2 Discover project conventions** by running the discovery script:
 
 ```bash
-CONVENTIONS=$(scripts/discover-conventions.sh "$(git rev-parse --show-toplevel)" --json)
+CONVENTIONS=$(./scripts/discover-conventions.sh "$(git rev-parse --show-toplevel)" --json)
 ```
 
 This returns: spec directory, naming pattern, epic structure, next available story
@@ -457,7 +459,7 @@ Also update the summary table at the top of the tracking file with the new epic 
 
 After writing the spec, ask the user:
 
-1. **Run `/review-spec`** — Full 4-agent review (codebase verification, architecture,
+1. **Run `/spec-review`** — Full 4-agent review (codebase verification, architecture,
    simplification, Bruno test plan). Recommended for complex stories (M/L).
 2. **Run `/simplify`** — Quick simplification pass on the spec's design.
 3. **Done** — Spec is ready as-is.
@@ -500,4 +502,4 @@ If user selects option 1 or 2, invoke the corresponding skill with the spec file
 
 - `spec-review` — reviews and enriches existing specs (post-creation step)
 - `skill-authoring` — how this skill was built
-- `implement-story` — implements a spec (the next step after creation + review)
+- `spec-implement` — implements a spec (the next step after creation + review)

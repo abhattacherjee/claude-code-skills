@@ -7,6 +7,8 @@ metadata:
 
 # Spec Implement
 
+> **Path convention:** `./scripts/…` and `references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+
 Implements a reviewed story spec end-to-end — from branch creation to PR.
 
 ## Usage
@@ -21,8 +23,8 @@ Implements a reviewed story spec end-to-end — from branch creation to PR.
 Before starting, determine workflow and create the task checklist:
 
 ```bash
-scripts/task-manifest.sh standard    # Default
-scripts/task-manifest.sh ui-heavy    # If spec adds new DS components or pages
+./scripts/task-manifest.sh standard    # Default
+./scripts/task-manifest.sh ui-heavy    # If spec adds new DS components or pages
 ```
 
 **Standard workflow (7 tasks):**
@@ -80,8 +82,8 @@ Branch name: `feature/story-{epic}.{story}-{kebab-slug}` (e.g., `feature/story-0
 **TaskUpdate: task 3 `in_progress`** (ui-heavy only)
 
 If the spec involves:
-- **New pages with significant UI** — invoke `Skill(brainstorming)` or `Skill(frontend-design:frontend-design)` for aesthetic direction before coding
-- **New DS components + pages + data** — invoke `Skill(ui-from-requirements)` for full pipeline
+- **New pages with significant UI** — invoke `Skill(superpowers:brainstorming)` or `Skill(frontend-design:frontend-design)` for aesthetic direction before coding
+- **New DS components + pages + data** — invoke `Skill(ui-from-requirements)` for full pipeline (requires the separate `ui-from-requirements` skill; skip if not installed)
 - **Incremental fixes to existing pages** — skip, implement directly
 
 Most Epic 0 (compliance) stories are standard. Epics 1-5 (new features) are more likely UI-heavy.
@@ -239,8 +241,8 @@ gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body
 
 | Spec characteristic | Delegate to | When |
 |-------------------|------------|------|
-| New pages with creative UI | `Skill(brainstorming)` | Before coding, to align on design direction |
-| New DS components + full page build | `Skill(ui-from-requirements)` | When spec describes a complete new UI surface |
+| New pages with creative UI | `Skill(superpowers:brainstorming)` | Before coding, to align on design direction |
+| New DS components + full page build | `Skill(ui-from-requirements)` | When spec describes a complete new UI surface (requires the separate `ui-from-requirements` skill; skip if not installed) |
 | Frontend aesthetic decisions | `Skill(frontend-design:frontend-design)` | When spec says "design a new page" without specific wireframes |
 | Multiple independent sub-tasks | `Agent` (parallel) | When sub-tasks touch different files with no overlap |
 | Post-implementation code review | `Skill(superpowers:verification-before-completion)` | Before claiming work is done |

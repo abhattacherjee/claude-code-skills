@@ -14,7 +14,7 @@ case "${1:-}" in
   {"subject":"Research codebase","activeForm":"Researching codebase","description":"Launch parallel agents: Feature Scout (code-explorer) for existing code/paths/signatures, Convention Scanner (haiku) for spec formatting style"},
   {"subject":"Brainstorm approaches with user","activeForm":"Brainstorming approaches","description":"Assess scope, check splitting triggers, present options via AskUserQuestion, get user selection"},
   {"subject":"Generate spec file","activeForm":"Generating spec file","description":"Build spec content from template + research + user selection, run simplification self-check, write to spec directory"},
-  {"subject":"Post-creation review","activeForm":"Running post-creation review","description":"Ask user: run /review-spec, /simplify, or done. Invoke selected skill if applicable"}
+  {"subject":"Post-creation review","activeForm":"Running post-creation review","description":"Ask user: run /spec-review, /simplify, or done. Invoke selected skill if applicable"}
 ]
 JSON
     ;;
@@ -26,7 +26,7 @@ JSON
   {"subject":"Brainstorm approaches with user","activeForm":"Brainstorming approaches","description":"Assess scope, check splitting triggers, present vertical split options via AskUserQuestion, get user selection"},
   {"subject":"Generate spec files for all slices","activeForm":"Generating spec files","description":"Create epic directory, write each slice spec with cross-references and dependency order, run simplification self-check per slice"},
   {"subject":"Update tracking file","activeForm":"Updating tracking file","description":"Add new epic section to tracking file (post-mvp-tracking.md or equivalent), update summary table"},
-  {"subject":"Post-creation review","activeForm":"Running post-creation review","description":"Ask user: run /review-spec, /simplify, or done. Invoke selected skill if applicable"}
+  {"subject":"Post-creation review","activeForm":"Running post-creation review","description":"Ask user: run /spec-review, /simplify, or done. Invoke selected skill if applicable"}
 ]
 JSON
     ;;

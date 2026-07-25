@@ -9,6 +9,13 @@ All notable changes to spec-creator are documented here.
 - Replaced hardcoded `~/.claude/skills/spec-creator/scripts/` invocations with
   bare-relative `scripts/` paths so the skill resolves from the plugin cache
   instead of the maintainer's local skills directory (#59).
+- Prefixed skill-owned script invocations with `./` and added a "Path
+  convention" note clarifying that bare `scripts/`/`tests/` references (e.g. in
+  the dependency-upgrade compat search) mean the target project, not this
+  skill — the two conventions used the same bare token ambiguously (#59).
+- Corrected the stale `/review-spec` command reference to `/spec-review` and
+  the stale `implement-story` skill name to `spec-implement` in the "See Also"
+  section (#59).
 
 ### Changed
 

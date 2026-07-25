@@ -7,6 +7,8 @@ metadata:
 
 # Spec Review
 
+> **Path convention:** `./scripts/…` and `references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+
 Comprehensive spec review combining codebase verification and implementation planning.
 Discovers project architecture at runtime — works with any codebase structure.
 
@@ -98,20 +100,20 @@ After applying the checklist, the spec should have:
 
 ```bash
 # Discover project architecture (layers, services, test tools)
-scripts/discover-project-architecture.sh "$(git rev-parse --show-toplevel)"
-scripts/discover-project-architecture.sh "$(git rev-parse --show-toplevel)" --json
+./scripts/discover-project-architecture.sh "$(git rev-parse --show-toplevel)"
+./scripts/discover-project-architecture.sh "$(git rev-parse --show-toplevel)" --json
 
 # Extract spec sections for analysis
-scripts/extract-spec-sections.sh <spec-file>
-scripts/extract-spec-sections.sh <spec-file> --json
+./scripts/extract-spec-sections.sh <spec-file>
+./scripts/extract-spec-sections.sh <spec-file> --json
 
 # Task checklist for full review
-scripts/task-manifest.sh full-review
+./scripts/task-manifest.sh full-review
 ```
 
 ### Progress Tracking (MANDATORY)
 
-Before starting a full review, create the task checklist from `scripts/task-manifest.sh full-review`:
+Before starting a full review, create the task checklist from `./scripts/task-manifest.sh full-review`:
 
 | # | subject | activeForm |
 |---|---------|------------|
@@ -133,7 +135,7 @@ Before starting a full review, create the task checklist from `scripts/task-mani
 **1.1 Discover project architecture:**
 ```bash
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-ARCH=$(scripts/discover-project-architecture.sh "$PROJECT_ROOT" --json)
+ARCH=$(./scripts/discover-project-architecture.sh "$PROJECT_ROOT" --json)
 ```
 
 This returns: packages with layer classification (frontend/backend/mcp/tooling),
@@ -142,7 +144,7 @@ E2E framework, data flow patterns, i18n approach, and security patterns.
 
 **1.2 Extract spec sections:**
 ```bash
-SPEC_DATA=$(scripts/extract-spec-sections.sh "$SPEC_FILE" --json)
+SPEC_DATA=$(./scripts/extract-spec-sections.sh "$SPEC_FILE" --json)
 ```
 
 This returns: title, acceptance criteria counts, referenced files and endpoints,

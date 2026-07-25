@@ -25,8 +25,8 @@ Creates detailed story specification files from various inputs (Claude plan, req
 
 ```bash
 # Discover project spec conventions
-scripts/discover-conventions.sh .           # Report
-scripts/discover-conventions.sh . --json    # JSON
+./scripts/discover-conventions.sh .           # Report
+./scripts/discover-conventions.sh . --json    # JSON
 ```
 
 ## Contents
@@ -81,7 +81,7 @@ rm -rf /tmp/ccs
 
 - `spec-review` — reviews and enriches existing specs (post-creation step)
 - `skill-authoring` — how this skill was built
-- `implement-story` — implements a spec (the next step after creation + review)
+- `spec-implement` — implements a spec (the next step after creation + review)
 
 ## Compatibility
 
