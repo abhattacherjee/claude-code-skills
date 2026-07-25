@@ -92,7 +92,7 @@ dimension** AND the previous round's fixes introduced nothing new.
    noise. The implementer must **verify empirically** — run the tests, and for any new guard/check,
    **prove it fails-first** (a planted-regression that would pass even when the code is broken is a
    silent defect; see Red Flags). Do not commit per-round by default — checkpoint at phase end to
-   avoid preflight churn. Before advancing to the re-review, verify the implementer's claims against ground truth in *your own* context per `~/.claude/skills/ship/references/delegated-verification.md` — a sub-agent can report "done" without writing, or "committed" with only a subset of files. A failed verification is a failure, not a silent retry.
+   avoid preflight churn. Before advancing to the re-review, verify the implementer's claims against ground truth in *your own* context per `references/delegated-verification.md` — a sub-agent can report "done" without writing, or "committed" with only a subset of files. A failed verification is a failure, not a silent retry.
 4. **Re-review (next round).** Re-query the same reviewers (continuing them via SendMessage
    preserves their codebase context) with TWO asks: (a) verify each prior finding is *actually*
    resolved against the new diff — not assumed; (b) check whether the fixes **introduced** any new
@@ -192,7 +192,7 @@ by hand and print `survivors / unconfirmed / rejected` counts.
 ### Step 2.5 — Fix survivors + finalize
 
 Fix all survivors via an implementer sub-agent (same verify-empirically discipline as Phase 1).
-Before finalizing, verify the implementer's fixes against ground truth in *your own* context per `~/.claude/skills/ship/references/delegated-verification.md` — never trust the sub-agent's narration that the survivors were fixed.
+Before finalizing, verify the implementer's fixes against ground truth in *your own* context per `references/delegated-verification.md` — never trust the sub-agent's narration that the survivors were fixed.
 Then finalize:
 - Re-run the full test/build suite; confirm green.
 - **Sync any deployed/derived artifacts** the change affects (e.g. re-run an installer that copies

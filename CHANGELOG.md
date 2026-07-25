@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Fixed
+
+- **deep-review** 1.1.0 -> 1.1.1: bundled `delegated-verification.md` into the plugin + relative reference path, so the verification step resolves for third-party installers (no longer a dangling `~/.claude/...` pointer). (#57)
+
 ### Changed
 
 - **deep-review** 1.0.0 -> 1.1.0: synced skill from maintainer live copy — delegated-verification wiring (Story 1.4) + gemini-review.sh usage corrections. (#55)
