@@ -81,6 +81,7 @@ if [[ ! -f "$MANIFEST_FILE" ]]; then
   echo "Error: manifest file not found: $MANIFEST_FILE" >&2
   exit 1
 fi
+MANIFEST_DIR="$(cd "$(dirname "$MANIFEST_FILE")" && pwd)"
 
 PLUGIN_NAME=$(jq -r '.name // empty' "$MANIFEST_FILE")
 PLUGIN_VERSION=$(jq -r '.version // empty' "$MANIFEST_FILE")
@@ -158,7 +159,7 @@ if [[ $SKILL_COUNT -gt 0 ]]; then
   for ((i=0; i<SKILL_COUNT; i++)); do
     SKILL_NAME_I=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
     SKILL_SRC=$(jq -r ".skills[$i].source" "$MANIFEST_FILE")
-    SKILL_SRC=$(resolve_tilde "$SKILL_SRC")
+    SKILL_SRC=$(resolve_source_path "$SKILL_SRC" "$MANIFEST_DIR")
 
     if [[ ! -d "$SKILL_SRC" ]]; then
       echo "  ERROR: skill source not found: $SKILL_SRC" >&2
@@ -192,7 +193,7 @@ if [[ $CMD_COUNT -gt 0 ]]; then
   for ((i=0; i<CMD_COUNT; i++)); do
     CMD_NAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
     CMD_SRC=$(jq -r ".commands[$i].source" "$MANIFEST_FILE")
-    CMD_SRC=$(resolve_tilde "$CMD_SRC")
+    CMD_SRC=$(resolve_source_path "$CMD_SRC" "$MANIFEST_DIR")
 
     if [[ ! -f "$CMD_SRC" ]]; then
       echo "  ERROR: command source not found: $CMD_SRC" >&2
@@ -216,7 +217,7 @@ if [[ $AGENT_COUNT -gt 0 ]]; then
   for ((i=0; i<AGENT_COUNT; i++)); do
     AGENT_NAME=$(jq -r ".agents[$i].name" "$MANIFEST_FILE")
     AGENT_SRC=$(jq -r ".agents[$i].source" "$MANIFEST_FILE")
-    AGENT_SRC=$(resolve_tilde "$AGENT_SRC")
+    AGENT_SRC=$(resolve_source_path "$AGENT_SRC" "$MANIFEST_DIR")
 
     if [[ ! -f "$AGENT_SRC" ]]; then
       echo "  ERROR: agent source not found: $AGENT_SRC" >&2
@@ -239,7 +240,7 @@ if [[ $HOOK_COUNT -gt 0 ]]; then
   echo "--- Hooks ---"
   HOOKS_SRC=$(jq -r '.hooks.source' "$MANIFEST_FILE")
   if [[ -n "$HOOKS_SRC" ]] && [[ "$HOOKS_SRC" != "null" ]]; then
-    HOOKS_SRC=$(resolve_tilde "$HOOKS_SRC")
+    HOOKS_SRC=$(resolve_source_path "$HOOKS_SRC" "$MANIFEST_DIR")
     if [[ -d "$HOOKS_SRC" ]]; then
       if $DRY_RUN; then
         echo "  WOULD COPY  hooks/"
@@ -292,7 +293,7 @@ write_file "$OUTPUT_DIR/LICENSE" "$LICENSE_CONTENT" "LICENSE"
 # CHANGELOG.md — copy from source skill if available, else generate template
 # The first skill's directory is the canonical source for the plugin's changelog
 FIRST_SKILL_SOURCE=$(jq -r '.skills[0].source' "$MANIFEST_FILE")
-FIRST_SKILL_SOURCE=$(resolve_tilde "$FIRST_SKILL_SOURCE")
+FIRST_SKILL_SOURCE=$(resolve_source_path "$FIRST_SKILL_SOURCE" "$MANIFEST_DIR")
 SOURCE_CHANGELOG="$FIRST_SKILL_SOURCE/CHANGELOG.md"
 
 if [[ -f "$SOURCE_CHANGELOG" ]]; then
@@ -328,7 +329,7 @@ fi
 # README.md — enriched extraction from SKILL.md, commands, agents
 # Primary skill provides What It Does, Key Features, Usage, See Also
 PRIMARY_SKILL_SRC=$(jq -r '.skills[0].source' "$MANIFEST_FILE")
-PRIMARY_SKILL_SRC=$(resolve_tilde "$PRIMARY_SKILL_SRC")
+PRIMARY_SKILL_SRC=$(resolve_source_path "$PRIMARY_SKILL_SRC" "$MANIFEST_DIR")
 PRIMARY_SKILL_MD="$PRIMARY_SKILL_SRC/SKILL.md"
 
 # --- Extract data from primary skill ---
@@ -381,7 +382,7 @@ SKILL_LIST=""
 for ((i=0; i<SKILL_COUNT; i++)); do
   SNAME=$(jq -r ".skills[$i].name" "$MANIFEST_FILE")
   SSRC=$(jq -r ".skills[$i].source" "$MANIFEST_FILE")
-  SSRC=$(resolve_tilde "$SSRC")
+  SSRC=$(resolve_source_path "$SSRC" "$MANIFEST_DIR")
   SDESC=$(extract_field "$SSRC/SKILL.md" "description" 2>/dev/null || echo "")
   SDESC_SHORT=$(short_desc "$SDESC")
   if [[ -n "$SDESC_SHORT" && "$SDESC_SHORT" != "." ]]; then
@@ -400,7 +401,7 @@ if [[ $CMD_COUNT -gt 0 ]]; then
   for ((i=0; i<CMD_COUNT; i++)); do
     CNAME=$(jq -r ".commands[$i].name" "$MANIFEST_FILE")
     CSRC=$(jq -r ".commands[$i].source" "$MANIFEST_FILE")
-    CSRC=$(resolve_tilde "$CSRC")
+    CSRC=$(resolve_source_path "$CSRC" "$MANIFEST_DIR")
     CDESC=$(extract_field "$CSRC" "description" 2>/dev/null || echo "")
     if [[ -n "$CDESC" ]]; then
       CMD_LIST="${CMD_LIST}
@@ -421,7 +422,7 @@ if [[ $AGENT_COUNT -gt 0 ]]; then
   for ((i=0; i<AGENT_COUNT; i++)); do
     ANAME=$(jq -r ".agents[$i].name" "$MANIFEST_FILE")
     ASRC=$(jq -r ".agents[$i].source" "$MANIFEST_FILE")
-    ASRC=$(resolve_tilde "$ASRC")
+    ASRC=$(resolve_source_path "$ASRC" "$MANIFEST_DIR")
     ADESC=$(extract_field "$ASRC" "description" 2>/dev/null || echo "")
     ADESC_SHORT=$(short_desc "$ADESC")
     if [[ -n "$ADESC_SHORT" && "$ADESC_SHORT" != "." ]]; then

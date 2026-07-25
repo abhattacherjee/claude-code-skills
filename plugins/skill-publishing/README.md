@@ -1,106 +1,69 @@
 # skill-publishing
 
-Makes any Claude Code skill shareable on GitHub. Supports three distribution models: individual repos, a monorepo, and plugins (bundles of skills + commands).
+Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos
 
 ## What It Does
 
-This skill handles the entire lifecycle of publishing Claude Code skills to GitHub:
+Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos.
 
-1. **Individual repos** — generates README, LICENSE, CHANGELOG, .gitignore, initializes git, and pushes to a standalone GitHub repo per skill
-2. **Monorepo** — syncs all your skills into a single `claude-code-skills` repository with an auto-generated catalog README
-3. **Plugins** — assembles skills + commands into installable plugin packages with marketplace support
-4. **Interactive flow** — detects what's already published and lets you choose targets with `multiSelect`, including safe removal of deselected targets
+**Use when:**
+- user says 'publish', 'share', or 'sync' a skill, 
+- a skill needs to be made installable by others, 
+- syncing skills/plugins to the monorepo, 
+- creating a versioned monorepo release, 
+- assembling a plugin from skills + commands, 
+- user says 'publish plugin' or 'package plugin'.
 
 ## Key Features
 
-### Plugin Assembly Pipeline
-
-Bundles skills and slash commands into the official Claude Code Plugin format:
-
-```
-plugin-manifest.json → prepare-plugin.sh → validate-plugin.sh → sync-monorepo.sh
-```
-
-Output:
-```
-plugin-name/
-├── .claude-plugin/plugin.json    # Required manifest
-├── skills/skill-name/SKILL.md    # Skills with scripts/ and references/
-├── commands/cmd-name.md          # Slash commands
-└── README.md                     # Auto-generated with install instructions
-```
-
-### Monorepo with Marketplace
-
-The monorepo generates a `.claude-plugin/marketplace.json` enabling plugin discovery:
-
-```shell
-# Users can install plugins with two commands
-/plugin marketplace add your-username/claude-code-skills
-/plugin install git-flow@claude-code-skills
-```
-
-### Interactive Publishing
-
-When invoked, the skill:
-- Detects current state (which targets each skill is already published to)
-- Presents options with state labels: `Individual repo (published)`, `Monorepo (synced)`, `Plugin (synced)`
-- Handles additions AND removals (deselecting a target removes the skill from that location)
-- Confirms destructive operations before executing
-- Auto-syncs to monorepo, commits, and pushes when Monorepo/Plugin targets are selected
-
-### Included Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `prepare-skill-repo.sh` | Generate scaffolding for individual GitHub repos |
-| `sync-monorepo.sh` | Sync skills + plugins to the monorepo, generate README catalog |
-| `sync-individual-repos.sh` | Push updates to all individual repos at once |
-| `prepare-plugin.sh` | Assemble a plugin from a build manifest |
-| `validate-plugin.sh` | Validate plugin structure and contents |
-| `install-plugin.sh` | Install/uninstall a plugin to `~/.claude/` |
-| `release-monorepo.sh` | Create versioned releases with tags |
-
-All scripts support `--dry-run` and `--help`.
-
-## Contents
-
-- **1** skill(s)
-- **0** command(s)
-
-### Skills
-
-- `skill-publishing` — SKILL.md with publishing workflows + 10 automation scripts
+- **Architecture**
+- **Interactive Publishing Flow**
+- **Workflow A: Publish a New Skill (Individual Repo)**
+- **Workflow B: Sync to Monorepo**
+- **Workflow C: Sync Individual Repos**
+- **Workflow D: Monorepo Release (Version Tag)**
+- **Workflow E: Publish a Plugin (Manual Fallback)**
 
 ## Usage
 
 ```bash
-# Invoke the skill
-"Publish my git-flow skill"
-"Sync skills to the monorepo"
-"Share this skill on GitHub"
-
-# Or use scripts directly
 SCRIPTS=~/.claude/skills/skill-publishing/scripts
 
-# Publish a new skill as individual repo
+# --- Monorepo sync (auto-discovers plugins) ---
+$SCRIPTS/validate-pre-sync.sh ~/dev/claude-code-skills        # Pre-sync gate (MANDATORY)
+$SCRIPTS/sync-monorepo.sh --dry-run ~/dev/claude-code-skills   # Preview
+$SCRIPTS/sync-monorepo.sh ~/dev/claude-code-skills             # Sync (auto-builds plugins)
+
+# --- Monorepo (add a new skill) ---
+$SCRIPTS/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
+
+# --- Monorepo (initialize) ---
+$SCRIPTS/sync-monorepo.sh --init ~/dev/claude-code-skills
+
+# --- Monorepo release (version tag) ---
+$SCRIPTS/release-monorepo.sh patch ~/dev/claude-code-skills   # Bug fixes
+$SCRIPTS/release-monorepo.sh minor ~/dev/claude-code-skills   # New skill/plugin
+$SCRIPTS/release-monorepo.sh major ~/dev/claude-code-skills   # Breaking change
+
+# --- Plugin (manual assemble + validate) ---
+$SCRIPTS/prepare-plugin.sh /path/to/plugin-manifest.json      # Build plugin
+$SCRIPTS/validate-plugin.sh ./build/plugin-name                # Validate
+$SCRIPTS/install-plugin.sh ./build/plugin-name                 # Install locally
+
+# --- Individual repo (first-time publish) ---
 $SCRIPTS/prepare-skill-repo.sh /path/to/skill
 
-# Sync everything to monorepo
-$SCRIPTS/sync-monorepo.sh ~/dev/claude-code-skills
-
-# Assemble a plugin
-$SCRIPTS/prepare-plugin.sh /path/to/plugin-manifest.json
-
-# Create a versioned release
-$SCRIPTS/release-monorepo.sh minor ~/dev/claude-code-skills
+# --- Individual repos (sync all published) ---
+$SCRIPTS/sync-individual-repos.sh --all --push
 ```
 
-## Prerequisites
+## Contents
 
-- **GitHub CLI** (`gh`) — for repo creation, releases, and user detection
-- **jq** — for plugin manifest parsing (plugin features only)
-- **rsync** — for directory syncing (available by default on macOS/Linux)
+- **1** skill(s), **0** command(s)
+
+### Skills
+
+- `skill-publishing` — Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos.
 
 ## Installation
 
@@ -125,7 +88,9 @@ rm -rf /tmp/ccs
 ### Manual
 
 ```bash
+# Copy skills
 cp -r plugins/skill-publishing/skills/* ~/.claude/skills/
+
 ```
 
 ## Uninstall
@@ -140,10 +105,11 @@ git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
 rm -rf /tmp/ccs
 ```
 
-## Companion Skills
+## See Also
 
-- **[skill-authoring](../skill-authoring/)** — how to write skills (the content); this skill handles distribution (the packaging)
-- **[claudeception](../../claudeception/)** — extracts knowledge into skills, which can then be published with this skill
+- `skill-authoring` — how to structure and write skills (the content)
+- This skill handles the distribution packaging (the container)
+- **GitHub**: https://github.com/abhattacherjee/claude-code-skills/tree/main/skill-publishing — install instructions, changelog, license
 
 ## Compatibility
 

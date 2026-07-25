@@ -5,7 +5,7 @@
   "skills": [
     {
       "name": "spec-creator",
-      "source": "spec-creator"
+      "source": "."
     }
   ],
   "commands": []

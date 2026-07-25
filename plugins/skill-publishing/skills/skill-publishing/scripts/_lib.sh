@@ -166,3 +166,18 @@ resolve_github_user() {
 resolve_tilde() {
   echo "${1/#\~/$HOME}"
 }
+
+# Resolve a manifest-declared source path.
+#   $1 = the raw source string from the manifest
+#   $2 = the directory containing the manifest
+# A leading ~ expands to $HOME. An absolute path is returned unchanged. A
+# relative path resolves against the MANIFEST's directory, not the caller's
+# cwd, so in-repo-source manifests work from anywhere.
+resolve_source_path() {
+  local raw="$1" manifest_dir="$2" expanded
+  expanded="$(resolve_tilde "$raw")"
+  case "$expanded" in
+    /*) echo "$expanded" ;;
+    *)  echo "${manifest_dir%/}/$expanded" ;;
+  esac
+}

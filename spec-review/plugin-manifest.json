@@ -5,7 +5,7 @@
   "skills": [
     {
       "name": "spec-review",
-      "source": "spec-review"
+      "source": "."
     }
   ],
   "commands": []
