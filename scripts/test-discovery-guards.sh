@@ -15,6 +15,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISCOVER_CONVENTIONS_SCRIPT="${DISCOVER_CONVENTIONS_SCRIPT:-$REPO_ROOT/spec-creator/scripts/discover-conventions.sh}"
+DISCOVER_ARCHITECTURE_SCRIPT="${DISCOVER_ARCHITECTURE_SCRIPT:-$REPO_ROOT/spec-review/scripts/discover-project-architecture.sh}"
 
 FAIL_COUNT=0
 
@@ -77,8 +78,99 @@ EMPTY_STRUCTURE=$(echo "$EMPTY_JSON" | jq -r '.epicStructure')
 assert_eq "empty specs/: epicStructure == flat" "flat" "$EMPTY_STRUCTURE"
 
 # ============================================================
-# (discover-project-architecture.sh cases appended here by a later task)
+# discover-project-architecture.sh
 # ============================================================
+
+# --- Fixture: this repo (real-world negative — no package.json anywhere,
+# no .ts/.js/.tsx files anywhere, so the i18n and security detectors — which
+# only scan package.json/*.ts/*.js/*.tsx — cannot match). Note: dataFlow is
+# deliberately NOT asserted against this fixture: this monorepo's Python
+# hook/plugin scripts contain a genuine `fetch(...)` call (an inline JS
+# snippet inside a .py file) and the substring "bull" inside the English
+# word "bullets", both of which are real (if imprecise) matches for
+# detect_data_flow's *.py-scanning patterns — unrelated to the always-true
+# guard bug this task fixes, and out of scope to tighten here. The
+# markdown-only scratch fixture below covers the dataFlow-empty case
+# cleanly instead. ---
+THIS_REPO_JSON=$("$DISCOVER_ARCHITECTURE_SCRIPT" "$REPO_ROOT" --json)
+THIS_REPO_I18N=$(echo "$THIS_REPO_JSON" | jq -r '.i18n')
+THIS_REPO_SECURITY=$(echo "$THIS_REPO_JSON" | jq -r '.security')
+
+assert_eq "this repo (no package.json/.ts/.js/.tsx): i18n empty" "" "$THIS_REPO_I18N"
+assert_eq "this repo (no package.json/.ts/.js/.tsx): security empty" "" "$THIS_REPO_SECURITY"
+
+# --- Fixture: markdown-only scratch project (negative) ---
+MARKDOWN_ONLY_DIR="$SCRATCH_DIR/markdown-only-project"
+mkdir -p "$MARKDOWN_ONLY_DIR"
+cat > "$MARKDOWN_ONLY_DIR/README.md" <<'EOF'
+# Markdown-only project
+
+No package.json, no source files — just docs.
+EOF
+
+MARKDOWN_ONLY_JSON=$("$DISCOVER_ARCHITECTURE_SCRIPT" "$MARKDOWN_ONLY_DIR" --json)
+MARKDOWN_ONLY_DATA_FLOW=$(echo "$MARKDOWN_ONLY_JSON" | jq -r '.dataFlow')
+MARKDOWN_ONLY_I18N=$(echo "$MARKDOWN_ONLY_JSON" | jq -r '.i18n')
+MARKDOWN_ONLY_SECURITY=$(echo "$MARKDOWN_ONLY_JSON" | jq -r '.security')
+
+assert_eq "markdown-only scratch project: dataFlow empty" "" "$MARKDOWN_ONLY_DATA_FLOW"
+assert_eq "markdown-only scratch project: i18n empty" "" "$MARKDOWN_ONLY_I18N"
+assert_eq "markdown-only scratch project: security empty" "" "$MARKDOWN_ONLY_SECURITY"
+
+# --- Fixture: real markers outside node_modules (positive control) ---
+POSITIVE_DIR="$SCRATCH_DIR/positive-architecture-project"
+mkdir -p "$POSITIVE_DIR/src"
+cat > "$POSITIVE_DIR/package.json" <<'EOF'
+{
+  "name": "positive-architecture-project",
+  "dependencies": {
+    "i18next": "^23.0.0",
+    "graphql": "^16.0.0"
+  }
+}
+EOF
+cat > "$POSITIVE_DIR/src/server.ts" <<'EOF'
+import helmet from "helmet";
+import csurf from "csurf";
+EOF
+
+POSITIVE_JSON=$("$DISCOVER_ARCHITECTURE_SCRIPT" "$POSITIVE_DIR" --json)
+POSITIVE_DATA_FLOW=$(echo "$POSITIVE_JSON" | jq -r '.dataFlow')
+POSITIVE_I18N=$(echo "$POSITIVE_JSON" | jq -r '.i18n')
+POSITIVE_SECURITY=$(echo "$POSITIVE_JSON" | jq -r '.security')
+
+assert_eq "positive control: dataFlow contains GraphQL" "GraphQL" "$POSITIVE_DATA_FLOW"
+assert_eq "positive control: i18n contains i18next" "i18next" "$POSITIVE_I18N"
+assert_eq "positive control: security contains CSRF and Helmet/CSP" "CSRF,Helmet/CSP" "$POSITIVE_SECURITY"
+
+# --- Fixture: same markers, but the sole copy lives under node_modules/
+# (negative control — proves the node_modules filter still works after the
+# guard-logic fix; the naive fix `grep -rl … | grep -qv node_modules` must
+# still exclude vendored matches) ---
+NODE_MODULES_ONLY_DIR="$SCRATCH_DIR/node-modules-only-project"
+mkdir -p "$NODE_MODULES_ONLY_DIR/node_modules/some-pkg/src"
+cat > "$NODE_MODULES_ONLY_DIR/node_modules/package.json" <<'EOF'
+{
+  "name": "some-pkg",
+  "dependencies": {
+    "i18next": "^23.0.0",
+    "graphql": "^16.0.0"
+  }
+}
+EOF
+cat > "$NODE_MODULES_ONLY_DIR/node_modules/some-pkg/src/server.ts" <<'EOF'
+import helmet from "helmet";
+import csurf from "csurf";
+EOF
+
+NODE_MODULES_ONLY_JSON=$("$DISCOVER_ARCHITECTURE_SCRIPT" "$NODE_MODULES_ONLY_DIR" --json)
+NODE_MODULES_ONLY_DATA_FLOW=$(echo "$NODE_MODULES_ONLY_JSON" | jq -r '.dataFlow')
+NODE_MODULES_ONLY_I18N=$(echo "$NODE_MODULES_ONLY_JSON" | jq -r '.i18n')
+NODE_MODULES_ONLY_SECURITY=$(echo "$NODE_MODULES_ONLY_JSON" | jq -r '.security')
+
+assert_eq "node_modules-only project (negative control): dataFlow empty" "" "$NODE_MODULES_ONLY_DATA_FLOW"
+assert_eq "node_modules-only project (negative control): i18n empty" "" "$NODE_MODULES_ONLY_I18N"
+assert_eq "node_modules-only project (negative control): security empty" "" "$NODE_MODULES_ONLY_SECURITY"
 
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then

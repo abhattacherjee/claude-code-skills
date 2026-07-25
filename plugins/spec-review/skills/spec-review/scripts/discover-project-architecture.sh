@@ -305,40 +305,47 @@ detect_data_flow() {
     local patterns=""
 
     # HTTP client calls between services
-    grep -rlq "fetch\|axios\|got\|node-fetch\|HttpClient" . \
+    if grep -rl "fetch\|axios\|got\|node-fetch\|HttpClient" . \
         --include="*.ts" --include="*.js" --include="*.py" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -qv node_modules; then
         patterns="${patterns}HTTP-inter-service,"
+    fi
 
-    # Proxy configuration (Vite, webpack, etc.)
-    grep -rlq "proxy.*localhost\|proxy.*127.0.0.1" . \
+    # Proxy configuration (Vite, webpack, etc.) — no node_modules stage: these
+    # config filenames never live under node_modules/
+    if grep -rl "proxy.*localhost\|proxy.*127.0.0.1" . \
         --include="vite.config.*" --include="webpack.config.*" --include="next.config.*" \
-        2>/dev/null | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -q .; then
         patterns="${patterns}Dev-proxy,"
+    fi
 
     # Message queue / event system
-    grep -rlq "amqp\|rabbitmq\|redis.*pub\|kafka\|bull\|EventEmitter" . \
+    if grep -rl "amqp\|rabbitmq\|redis.*pub\|kafka\|bull\|EventEmitter" . \
         --include="*.ts" --include="*.js" --include="*.py" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -qv node_modules; then
         patterns="${patterns}Event-messaging,"
+    fi
 
     # Database
-    grep -rlq "prisma\|sequelize\|typeorm\|mongoose\|knex\|drizzle\|pg\|mysql" . \
+    if grep -rl "prisma\|sequelize\|typeorm\|mongoose\|knex\|drizzle\|pg\|mysql" . \
         --include="package.json" --include="*.toml" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -qv node_modules; then
         patterns="${patterns}Database,"
+    fi
 
     # GraphQL
-    grep -rlq "graphql\|apollo\|@graphql" . \
+    if grep -rl "graphql\|apollo\|@graphql" . \
         --include="package.json" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -qv node_modules; then
         patterns="${patterns}GraphQL,"
+    fi
 
     # REST
-    grep -rlq "router\.\(get\|post\|put\|delete\)\|@Get\|@Post\|app\.\(get\|post\)" . \
+    if grep -rl "router\.\(get\|post\|put\|delete\)\|@Get\|@Post\|app\.\(get\|post\)" . \
         --include="*.ts" --include="*.js" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -qv node_modules; then
         patterns="${patterns}REST-API,"
+    fi
 
     echo "$patterns" | sed 's/,$//'
 }
@@ -346,19 +353,22 @@ detect_data_flow() {
 detect_i18n() {
     local i18n=""
     # React i18next
-    grep -rlq "i18next\|react-i18next\|useTranslation" . \
+    if grep -rl "i18next\|react-i18next\|useTranslation" . \
         --include="package.json" --include="*.ts" --include="*.tsx" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -qv node_modules; then
         i18n="${i18n}i18next,"
+    fi
     # Vue i18n
-    grep -rlq "vue-i18n" . --include="package.json" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+    if grep -rl "vue-i18n" . --include="package.json" \
+        2>/dev/null | grep -qv node_modules; then
         i18n="${i18n}vue-i18n,"
+    fi
     # Bilingual text patterns
-    grep -rlq "BilingualText\|{ en:.*pt:\|{ en:.*es:" . \
+    if grep -rl "BilingualText\|{ en:.*pt:\|{ en:.*es:" . \
         --include="*.ts" --include="*.js" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+        2>/dev/null | grep -qv node_modules; then
         i18n="${i18n}BilingualText,"
+    fi
     # Locale directories
     find . -maxdepth 5 -type d -name "locales" -not -path "*/node_modules/*" 2>/dev/null | \
         head -1 | grep -q . && i18n="${i18n}LocaleFiles,"
@@ -368,18 +378,22 @@ detect_i18n() {
 
 detect_security_patterns() {
     local sec=""
-    grep -rlq "csrf\|csurf\|double.submit" . --include="*.ts" --include="*.js" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+    if grep -rl "csrf\|csurf\|double.submit" . --include="*.ts" --include="*.js" \
+        2>/dev/null | grep -qv node_modules; then
         sec="${sec}CSRF,"
-    grep -rlq "helmet\|csp\|Content-Security-Policy" . --include="*.ts" --include="*.js" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+    fi
+    if grep -rl "helmet\|csp\|Content-Security-Policy" . --include="*.ts" --include="*.js" \
+        2>/dev/null | grep -qv node_modules; then
         sec="${sec}Helmet/CSP,"
-    grep -rlq "rate.limit\|rateLimit\|express-rate-limit" . --include="*.ts" --include="*.js" --include="package.json" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+    fi
+    if grep -rl "rate.limit\|rateLimit\|express-rate-limit" . --include="*.ts" --include="*.js" --include="package.json" \
+        2>/dev/null | grep -qv node_modules; then
         sec="${sec}RateLimit,"
-    grep -rlq "cors\|CORS\|Access-Control" . --include="*.ts" --include="*.js" \
-        2>/dev/null | grep -v node_modules | head -1 > /dev/null 2>&1 && \
+    fi
+    if grep -rl "cors\|CORS\|Access-Control" . --include="*.ts" --include="*.js" \
+        2>/dev/null | grep -qv node_modules; then
         sec="${sec}CORS,"
+    fi
 
     echo "$sec" | sed 's/,$//'
 }

@@ -2,6 +2,19 @@
 
 All notable changes to spec-review are documented here.
 
+## [2.2.2] - 2026-07-25
+
+### Fixed
+
+- `discover-project-architecture.sh`: 13 detectors in `detect_data_flow`, `detect_i18n`,
+  and `detect_security_patterns` combined `grep -rlq` (where `-q` suppresses the `-l`
+  output) with a `| head -1 > /dev/null &&` guard that tests `head`'s exit status — always
+  zero. Every data-flow, i18n and security pattern was reported as present for every
+  project. This repository, which is markdown-only, reported `i18next, vue-i18n, CSRF,
+  Helmet/CSP, GraphQL, REST-API` among others. The fabricated JSON is pasted verbatim into
+  the Architecture Reviewer's prompt, so reviewers were being fed invented architecture on
+  every run. (#62)
+
 ## [2.2.1] - 2026-07-25
 
 ### Fixed
