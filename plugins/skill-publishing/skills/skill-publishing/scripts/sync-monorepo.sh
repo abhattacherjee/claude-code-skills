@@ -43,7 +43,7 @@ Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
   sync-monorepo.sh ~/dev/claude-code-skills
   sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
-  sync-monorepo.sh --add-plugin git-flow ~/dev/claude-code-skills
+  sync-monorepo.sh --add-plugin obsidian-brain ~/dev/claude-code-skills
   sync-monorepo.sh --dry-run ~/dev/claude-code-skills
 EOF
   exit 0
@@ -70,6 +70,26 @@ if [[ -z "$MONOREPO_DIR" ]]; then
   echo "Usage: sync-monorepo.sh [options] <monorepo-dir>" >&2
   exit 1
 fi
+
+# Resolve a skill's authoring source: the local skills home if present, else an
+# in-repo top-level directory (the arrangement introduced when skills moved into
+# the monorepo). Local-first precedence keeps behaviour identical while both
+# copies exist, and hands over automatically once the local copy is removed.
+# Echoes nothing when the skill has no source anywhere.
+skill_source_dir() {
+  local name="$1"
+  if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
+    echo "$SKILLS_HOME/$name"
+  elif [[ -f "$MONOREPO_DIR/$name/SKILL.md" ]]; then
+    echo "$MONOREPO_DIR/$name"
+  fi
+}
+
+# Canonicalise a directory path for identity comparison. Non-existent paths are
+# returned unchanged (nothing can be identical to them that matters here).
+canonical_dir() {
+  if [[ -d "$1" ]]; then (cd "$1" && pwd -P); else echo "$1"; fi
+}
 
 # --- Resolve GitHub user (via shared _lib.sh) ---
 resolve_github_user
@@ -153,16 +173,26 @@ echo ""
 CATALOG_ROWS=""
 
 for SKILL_NAME in $SKILLS_TO_SYNC; do
-  SKILL_SRC="$SKILLS_HOME/$SKILL_NAME"
+  SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
   SKILL_DST="$MONOREPO_DIR/$SKILL_NAME"
-  SKILL_MD="$SKILL_SRC/SKILL.md"
 
   echo "--- $SKILL_NAME ---"
 
-  if [[ ! -f "$SKILL_MD" ]]; then
-    echo "  ERROR: $SKILL_MD not found, skipping"
+  if [[ -z "$SKILL_SRC" ]]; then
+    echo "  ERROR: no SKILL.md in $SKILLS_HOME/$SKILL_NAME or $SKILL_DST, skipping"
     echo ""
     continue
+  fi
+  SKILL_MD="$SKILL_SRC/SKILL.md"
+
+  # When the source IS the destination (in-repo source directory), every copy
+  # below would be a directory-onto-itself operation: `cp a a` fails and
+  # `rsync -a --delete src/ src/` risks destroying the tree. Nothing needs
+  # copying — the content is already where the monorepo wants it.
+  SKILL_IN_PLACE=false
+  if [[ "$(canonical_dir "$SKILL_SRC")" == "$(canonical_dir "$SKILL_DST")" ]]; then
+    SKILL_IN_PLACE=true
+    echo "  in-repo source — already in place, nothing to copy"
   fi
 
   # Extract metadata
@@ -191,21 +221,23 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
   CATALOG_ROWS="${CATALOG_ROWS}| [$SKILL_NAME](./$SKILL_NAME/) | $VERSION | $SHORT | $REPO_LINK |
 "
 
-  # Copy SKILL.md
-  copy_file "$SKILL_MD" "$SKILL_DST/SKILL.md" "$SKILL_NAME/SKILL.md"
+  if ! $SKILL_IN_PLACE; then
+    # Copy SKILL.md
+    copy_file "$SKILL_MD" "$SKILL_DST/SKILL.md" "$SKILL_NAME/SKILL.md"
 
-  # Copy scripts/
-  if [[ -d "$SKILL_SRC/scripts" ]]; then
-    copy_dir "$SKILL_SRC/scripts" "$SKILL_DST/scripts" "$SKILL_NAME/scripts/"
-    # Preserve execute permissions
-    if ! $DRY_RUN; then
-      find "$SKILL_DST/scripts" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+    # Copy scripts/
+    if [[ -d "$SKILL_SRC/scripts" ]]; then
+      copy_dir "$SKILL_SRC/scripts" "$SKILL_DST/scripts" "$SKILL_NAME/scripts/"
+      # Preserve execute permissions
+      if ! $DRY_RUN; then
+        find "$SKILL_DST/scripts" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+      fi
     fi
-  fi
 
-  # Copy references/
-  if [[ -d "$SKILL_SRC/references" ]]; then
-    copy_dir "$SKILL_SRC/references" "$SKILL_DST/references" "$SKILL_NAME/references/"
+    # Copy references/
+    if [[ -d "$SKILL_SRC/references" ]]; then
+      copy_dir "$SKILL_SRC/references" "$SKILL_DST/references" "$SKILL_NAME/references/"
+    fi
   fi
 
   # Copy agents declared in plugin-manifest.json (if any)
@@ -230,16 +262,21 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
     fi
   fi
 
-  # Copy CHANGELOG.md if it exists
-  copy_file "$SKILL_SRC/CHANGELOG.md" "$SKILL_DST/CHANGELOG.md" "$SKILL_NAME/CHANGELOG.md"
+  if ! $SKILL_IN_PLACE; then
+    # Copy CHANGELOG.md if it exists
+    copy_file "$SKILL_SRC/CHANGELOG.md" "$SKILL_DST/CHANGELOG.md" "$SKILL_NAME/CHANGELOG.md"
 
-  # Copy LICENSE if it exists
-  copy_file "$SKILL_SRC/LICENSE" "$SKILL_DST/LICENSE" "$SKILL_NAME/LICENSE"
+    # Copy LICENSE if it exists
+    copy_file "$SKILL_SRC/LICENSE" "$SKILL_DST/LICENSE" "$SKILL_NAME/LICENSE"
+  fi
 
-  # Per-skill README.md: copy local if it exists, otherwise generate
+  # Per-skill README.md: copy local if it exists, otherwise generate.
+  # An in-place source needs no copy — its own README is already the destination.
   if [[ -f "$SKILL_SRC/README.md" ]]; then
-    # Use the skill's own README (preserves fork context, custom sections, etc.)
-    copy_file "$SKILL_SRC/README.md" "$SKILL_DST/README.md" "$SKILL_NAME/README.md"
+    if ! $SKILL_IN_PLACE; then
+      # Use the skill's own README (preserves fork context, custom sections, etc.)
+      copy_file "$SKILL_SRC/README.md" "$SKILL_DST/README.md" "$SKILL_NAME/README.md"
+    fi
   else
     # Generate a default README with monorepo install instructions
     SKILL_README="# $NAME
@@ -328,11 +365,34 @@ PREPARE_SCRIPT="$SCRIPT_DIR/prepare-plugin.sh"
 AUTO_BUILT_PLUGINS=""
 
 if [[ -x "$PREPARE_SCRIPT" ]]; then
-  for _MANIFEST in "$SKILLS_HOME"/*/plugin-manifest.json; do
+  # Manifests live either in the local skills home or in an in-repo top-level
+  # skill directory. Local ones are scanned first so they take precedence.
+  # Records "<plugin-name><TAB><manifest-path>" for each name already claimed.
+  _SEEN_MANIFESTS=""
+
+  for _MANIFEST in "$SKILLS_HOME"/*/plugin-manifest.json "$MONOREPO_DIR"/*/plugin-manifest.json; do
     [[ ! -f "$_MANIFEST" ]] && continue
     _MANIFEST_SKILL=$(basename "$(dirname "$_MANIFEST")")
     _MANIFEST_NAME=$(jq -r '.name // ""' "$_MANIFEST" 2>/dev/null)
     [[ -z "$_MANIFEST_NAME" ]] && _MANIFEST_NAME="$_MANIFEST_SKILL"
+
+    # Local-first precedence. Announce every shadowed manifest by name — a
+    # silent skip here is exactly what makes a stale source invisible.
+    _SHADOWED_BY=$(printf '%s' "$_SEEN_MANIFESTS" | awk -F'\t' -v n="$_MANIFEST_NAME" '$1==n {print $2; exit}')
+    if [[ -n "$_SHADOWED_BY" ]]; then
+      echo "  SKIP (shadowed)  $_MANIFEST  —  already claimed by $_SHADOWED_BY"
+      continue
+    fi
+    _SEEN_MANIFESTS="${_SEEN_MANIFESTS}${_MANIFEST_NAME}"$'\t'"${_MANIFEST}"$'\n'
+
+    # Standalone plugins — distributed via their own marketplace, not this monorepo.
+    # Add new entries here when migrating other plugins out.
+    case "$_MANIFEST_NAME" in
+      git-flow)
+        echo "  SKIP (standalone marketplace: abhattacherjee/git-flow)  $_MANIFEST_NAME"
+        continue
+        ;;
+    esac
 
     # Skip if --add-plugin targets this same plugin (handled below)
     [[ "$ADD_PLUGIN" == "$_MANIFEST_NAME" ]] && continue
@@ -348,7 +408,8 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       # Quick drift check: compare SKILL.md versions
       _FIRST_SKILL=$(jq -r '.skills[0].name // ""' "$_MANIFEST" 2>/dev/null)
       if [[ -n "$_FIRST_SKILL" ]]; then
-        _SRC_MD="$SKILLS_HOME/$_FIRST_SKILL/SKILL.md"
+        _FIRST_SRC_DIR=$(skill_source_dir "$_FIRST_SKILL")
+        _SRC_MD="${_FIRST_SRC_DIR:+$_FIRST_SRC_DIR/SKILL.md}"
         _DST_MD="$_PLUGIN_DST/skills/$_FIRST_SKILL/SKILL.md"
         if [[ -f "$_SRC_MD" && -f "$_DST_MD" ]]; then
           if ! diff -q "$_SRC_MD" "$_DST_MD" >/dev/null 2>&1; then
@@ -466,7 +527,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
     for _PSKILL_MD in "$_PLUGIN_DIR"skills/*/SKILL.md; do
       [[ ! -f "$_PSKILL_MD" ]] && continue
       _SNAME=$(basename "$(dirname "$_PSKILL_MD")")
-      _SRC_MD="$SKILLS_HOME/$_SNAME/SKILL.md"
+      _SNAME_SRC=$(skill_source_dir "$_SNAME")
+      _SRC_MD="${_SNAME_SRC:+$_SNAME_SRC/SKILL.md}"
       if [[ -f "$_SRC_MD" ]] && ! diff -q "$_PSKILL_MD" "$_SRC_MD" >/dev/null 2>&1; then
         _PLUGIN_DRIFTED=true; break
       fi
@@ -477,8 +539,9 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PSCRIPTS in "$_PLUGIN_DIR"skills/*/scripts; do
         [[ ! -d "$_PSCRIPTS" ]] && continue
         _SNAME=$(basename "$(dirname "$_PSCRIPTS")")
-        _SRC_SCRIPTS="$SKILLS_HOME/$_SNAME/scripts"
-        if [[ -d "$_SRC_SCRIPTS" ]]; then
+        _SNAME_SRC=$(skill_source_dir "$_SNAME")
+        _SRC_SCRIPTS="${_SNAME_SRC:+$_SNAME_SRC/scripts}"
+        if [[ -n "$_SRC_SCRIPTS" && -d "$_SRC_SCRIPTS" ]]; then
           _SDIFF=$(diff -rq "$_PSCRIPTS" "$_SRC_SCRIPTS" 2>/dev/null | grep -v '.DS_Store' || true)
           if [[ -n "$_SDIFF" ]]; then _PLUGIN_DRIFTED=true; break; fi
         fi
@@ -502,7 +565,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PCL in "$_PLUGIN_DIR"skills/*/CHANGELOG.md; do
         [[ ! -f "$_PCL" ]] && continue
         _SNAME=$(basename "$(dirname "$_PCL")")
-        _SRC_CL="$SKILLS_HOME/$_SNAME/CHANGELOG.md"
+        _SNAME_SRC=$(skill_source_dir "$_SNAME")
+        _SRC_CL="${_SNAME_SRC:+$_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_SRC_CL" ]] && ! diff -q "$_PCL" "$_SRC_CL" >/dev/null 2>&1; then
           _PLUGIN_DRIFTED=true; break
         fi
@@ -517,7 +581,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PSKILL_DIR in "$_PLUGIN_DIR"skills/*/; do
         [[ ! -d "$_PSKILL_DIR" ]] && continue
         _SNAME=$(basename "$_PSKILL_DIR")
-        _SRC="$SKILLS_HOME/$_SNAME"
+        _SRC=$(skill_source_dir "$_SNAME")
+        [[ -z "$_SRC" ]] && continue
 
         # SKILL.md
         if [[ -f "$_SRC/SKILL.md" ]] && ! diff -q "$_PSKILL_DIR/SKILL.md" "$_SRC/SKILL.md" >/dev/null 2>&1; then
@@ -574,7 +639,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       _FIRST_SKILL_DIR=$(ls -d "$_PLUGIN_DIR"skills/*/ 2>/dev/null | head -1)
       if [[ -n "$_FIRST_SKILL_DIR" ]]; then
         _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
-        _FIRST_SRC_CL="$SKILLS_HOME/$_FIRST_SNAME/CHANGELOG.md"
+        _FIRST_SNAME_SRC=$(skill_source_dir "$_FIRST_SNAME")
+        _FIRST_SRC_CL="${_FIRST_SNAME_SRC:+$_FIRST_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_FIRST_SRC_CL" && -f "$_PLUGIN_DIR/CHANGELOG.md" ]]; then
           if ! diff -q "$_PLUGIN_DIR/CHANGELOG.md" "$_FIRST_SRC_CL" >/dev/null 2>&1; then
             if $DRY_RUN; then
@@ -769,7 +835,8 @@ Format: Monorepo-level events only. For per-skill change details, see \`<skill>/
 # Build a compact skill inventory: name + version
 SKILL_INVENTORY=""
 for SKILL_NAME in $SKILLS_TO_SYNC; do
-  SKILL_MD="$SKILLS_HOME/$SKILL_NAME/SKILL.md"
+  SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
+  SKILL_MD="${SKILL_SRC:+$SKILL_SRC/SKILL.md}"
   if [[ -f "$SKILL_MD" ]]; then
     VERSION=$(extract_version "$SKILL_MD")
     SHORT_DESC=$(extract_field "$SKILL_MD" "description" | sed 's/\. Use when:.*//')
