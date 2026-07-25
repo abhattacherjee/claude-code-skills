@@ -16,7 +16,8 @@
 - `prepare-plugin.sh` must be invoked from the monorepo root so the relative `source` in each `plugin-manifest.json` resolves.
 - Do NOT delete anything under `~/.claude/skills/` in these tasks. Deletion is a destructive step handled by the orchestrator after merge-time verification.
 - Final versions: `spec-creator` **2.4.1**, `spec-review` **2.2.1**, `spec-implement` **1.0.0**. (2.4.0/2.2.0 were written into the CHANGELOGs by `69b0d65` but never published — marketplace still served 2.3.0/2.1.0. The patch bump carries the path fix and reconciles every version field at once.)
-- Every version must agree across four places: `<skill>/plugin-manifest.json`, `plugins/<name>/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, and the CHANGELOG top entry.
+- Every version must agree across four places: `<skill>/plugin-manifest.json`, `plugins/<name>/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, and the CHANGELOG top entry. `SKILL.md`'s `metadata.version` frontmatter is a fifth place and must match too — `validate-skill.sh` errors on a mismatch against the CHANGELOG.
+- `validate-skill.sh` errors when a SKILL.md body exceeds **500 lines**, and `commit-preflight.sh` hard-blocks on any validator ERROR. Current bodies: `spec-review` 390, `spec-implement` 264 — both already under the limit, so no restructuring is expected. If a body does exceed it, extract a self-contained section into `references/` and link to it rather than deleting content, and say so in the report.
 
 ---
 
@@ -140,8 +141,15 @@ git commit -m "feat(spec-creator): move source in-repo, relative script paths (2
 
 - [ ] **Step 1: Write the failing assertion**
 
+The CHANGELOG entry added in Step 6 quotes the old path verbatim as prose
+describing the fix, and the generated plugin README carries a
+`cp -r … ~/.claude/skills/` manual-install line. Both are legitimate, so the
+assertion covers the executable surfaces only.
+
 ```bash
-test -d spec-review && ! grep -rq '~/\.claude/skills' spec-review/ && echo PASS || echo FAIL
+test -d spec-review \
+  && ! grep -rq '~/\.claude/skills' spec-review/SKILL.md spec-review/README.md spec-review/scripts/ spec-review/references/ \
+  && echo PASS || echo FAIL
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -219,8 +227,11 @@ Prepend to `spec-review/CHANGELOG.md`, above `## [2.2.0]`:
 - [ ] **Step 8: Verify**
 
 ```bash
-test -d spec-review && ! grep -rq '~/\.claude/skills' spec-review/ && echo PASS || echo FAIL
-! grep -rq '~/\.claude/skills' plugins/spec-review/ && echo PLUGIN-PASS || echo PLUGIN-FAIL
+test -d spec-review \
+  && ! grep -rq '~/\.claude/skills' spec-review/SKILL.md spec-review/README.md spec-review/scripts/ spec-review/references/ \
+  && echo PASS || echo FAIL
+! grep -rq '~/\.claude/skills' plugins/spec-review/skills/spec-review/SKILL.md plugins/spec-review/skills/spec-review/scripts/ \
+  && echo PLUGIN-PASS || echo PLUGIN-FAIL
 jq -r .version plugins/spec-review/.claude-plugin/plugin.json   # expect 2.2.1
 test -f plugins/spec-review/skills/spec-review/scripts/extract-spec-sections.sh && echo SCRIPTS-OK
 ./scripts/validate-skill.sh spec-review
@@ -251,8 +262,14 @@ git commit -m "feat(spec-review): move source in-repo, relative script paths (2.
 
 - [ ] **Step 1: Write the failing assertion**
 
+The CHANGELOG entry added in Step 6 quotes the old path verbatim as prose
+describing the fix, and the generated plugin README carries a
+`cp -r … ~/.claude/skills/` manual-install line. Both are legitimate, so the
+assertion covers the executable surfaces only.
+
 ```bash
-test -d spec-implement && ! grep -rq '~/\.claude/skills' spec-implement/ \
+test -d spec-implement \
+  && ! grep -rq '~/\.claude/skills' spec-implement/SKILL.md spec-implement/scripts/ spec-implement/references/ \
   && test -f spec-implement/references/delegated-verification.md \
   && echo PASS || echo FAIL
 ```
@@ -341,8 +358,11 @@ leave the artifact in the committed README.
 - [ ] **Step 8: Verify**
 
 ```bash
-test -d spec-implement && ! grep -rq '~/\.claude/skills' spec-implement/ && echo PASS || echo FAIL
-! grep -rq '~/\.claude/skills' plugins/spec-implement/ && echo PLUGIN-PASS || echo PLUGIN-FAIL
+test -d spec-implement \
+  && ! grep -rq '~/\.claude/skills' spec-implement/SKILL.md spec-implement/scripts/ spec-implement/references/ \
+  && echo PASS || echo FAIL
+! grep -rq '~/\.claude/skills' plugins/spec-implement/skills/spec-implement/ \
+  && echo PLUGIN-PASS || echo PLUGIN-FAIL
 jq -r .version plugins/spec-implement/.claude-plugin/plugin.json   # expect 1.0.0
 test -f plugins/spec-implement/skills/spec-implement/scripts/task-manifest.sh && echo SCRIPTS-OK
 test -f plugins/spec-implement/skills/spec-implement/references/delegated-verification.md && echo REFS-OK
@@ -433,8 +453,17 @@ for p in spec-creator spec-review spec-implement; do
   [ "$m" = "$j" ] && echo "$p OK $m" || echo "$p MISMATCH marketplace=$m plugin=$j"
 done
 
-# whole-repo sweep: no spec-* path may point at the local skills dir
-grep -rn '~/\.claude/skills/spec-' spec-creator spec-review spec-implement plugins/spec-* && echo SWEEP-FAIL || echo SWEEP-PASS
+# whole-repo sweep over EXECUTABLE surfaces only: no spec-* path may point at
+# the local skills dir. CHANGELOG prose quotes the old path when describing the
+# fix, and generated plugin READMEs carry a `cp -r … ~/.claude/skills/`
+# manual-install line — both legitimate, both excluded.
+grep -rn '~/\.claude/skills/spec-' \
+  spec-creator/SKILL.md spec-review/SKILL.md spec-implement/SKILL.md \
+  spec-creator/scripts/ spec-review/scripts/ spec-implement/scripts/ \
+  spec-creator/references/ spec-review/references/ spec-implement/references/ \
+  spec-review/README.md \
+  plugins/spec-creator/skills/ plugins/spec-review/skills/ plugins/spec-implement/skills/ \
+  && echo SWEEP-FAIL || echo SWEEP-PASS
 ```
 
 Expected: `PASS`, three `OK` lines, `SWEEP-PASS`.
