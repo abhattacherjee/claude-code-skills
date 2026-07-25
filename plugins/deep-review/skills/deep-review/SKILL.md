@@ -58,7 +58,7 @@ silently skip a phase.
 1. Establish repo + change scope:
    - `git branch --show-current`; find an open PR for the branch (`gh pr list --head <branch>`).
    - Default base = the PR base, else the repo default branch (`develop`/`main`).
-   - Build the diff: `git diff <base>...HEAD` (PR mode) or `git diff <base>` (local mode).
+   - Build the diff: `git diff <base>...HEAD` (PR mode) or `git diff <base>` (local mode). Exclude generated/derived artifacts (e.g. rendered `*.html`, lockfiles, build output) from the diff handed to reviewers — review their source instead, as a single-line source change can inflate the diff with hundreds of KB of generated output and waste reviewer budget.
 2. Enumerate changed files and classify (code / tests / docs / config). This drives which
    reviewers are applicable.
 3. **Include out-of-tree artifacts that are part of the same change-set** if the user mentions
@@ -92,7 +92,7 @@ dimension** AND the previous round's fixes introduced nothing new.
    noise. The implementer must **verify empirically** — run the tests, and for any new guard/check,
    **prove it fails-first** (a planted-regression that would pass even when the code is broken is a
    silent defect; see Red Flags). Do not commit per-round by default — checkpoint at phase end to
-   avoid preflight churn.
+   avoid preflight churn. Before advancing to the re-review, verify the implementer's claims against ground truth in *your own* context per `references/delegated-verification.md` — a sub-agent can report "done" without writing, or "committed" with only a subset of files. A failed verification is a failure, not a silent retry.
 4. **Re-review (next round).** Re-query the same reviewers (continuing them via SendMessage
    preserves their codebase context) with TWO asks: (a) verify each prior finding is *actually*
    resolved against the new diff — not assumed; (b) check whether the fixes **introduced** any new
@@ -138,8 +138,11 @@ headless calls need an API key.
 In one message, launch (none seeing the others):
 - Claude bug-hunter (opus) — bugs/security/perf/correctness, grounded in source.
 - Claude convention-reviewer (sonnet) — convention/maintainability/doc-drift.
-- Gemini finder — `gemini-review.sh --diff <DIFF> --mode find` (or a direct
-  `gemini -p ... -o json -m gemini-2.5-pro` with the same brief).
+- Gemini finder — run a direct `gemini -m gemini-2.5-pro -p "<brief + diff>"` call (build a
+  prompt file combining the review brief and the diff; parse the JSON findings array from stdout).
+  NOTE: `scripts/gemini-review.sh` is R2-**judge-only** (`--diff <file> --findings <r1.json>
+  [--model <m>] [--out <r2.json>]`) — it has NO discovery/`--mode find` mode, so do NOT use it for
+  R1.
 
 Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`;
 Gemini -> `G-001..`. Emit an R1 digest (counts by severity/category). An empty findings array is a
@@ -150,7 +153,12 @@ respectable, valid answer.
 In one message:
 - Claude cross-examiner (opus) judges every Gemini finding -> `confirm|refute` with reason,
   grounded in the **current** source (findings can be stale if Phase 1 already fixed them).
-- Gemini judges every Claude finding (`gemini-review.sh --mode judge`).
+- Gemini judges every Claude finding (`gemini-review.sh --diff <DIFF> --findings <claude-r1.json> [--out <r2.json>]`).
+  - **Reliability note:** the wrapper fails open to nothing if Gemini's JSON lacks `verdicts`
+    (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key` -> empty result). Fall back to a
+    direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
+    verdict:confirm|refute, reason}>"` call (same approach R1 uses) and parse it yourself; treat
+    the direct call as primary, the wrapper as convenience.
 
 Emit an R2 digest (confirmed/refuted/unjudged each direction).
 
@@ -184,6 +192,7 @@ by hand and print `survivors / unconfirmed / rejected` counts.
 ### Step 2.5 — Fix survivors + finalize
 
 Fix all survivors via an implementer sub-agent (same verify-empirically discipline as Phase 1).
+Before finalizing, verify the implementer's fixes against ground truth in *your own* context per `references/delegated-verification.md` — never trust the sub-agent's narration that the survivors were fixed.
 Then finalize:
 - Re-run the full test/build suite; confirm green.
 - **Sync any deployed/derived artifacts** the change affects (e.g. re-run an installer that copies

@@ -1,0 +1,5 @@
+{
+  "name": "spec-implement",
+  "version": "1.0.0",
+  "description": "Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation."
+}

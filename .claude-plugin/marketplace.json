@@ -11,7 +11,7 @@
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
-      "description": "Adversarial PR review — Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable.",
+      "description": "Adversarial PR review \u2014 Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable.",
       "version": "0.1.0"
     },
     {
@@ -36,7 +36,7 @@
       "name": "deep-review",
       "source": "./plugins/deep-review",
       "description": "Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.",
-      "version": "1.0.0"
+      "version": "1.1.1"
     },
     {
       "name": "figma-ui-designer",
@@ -78,13 +78,19 @@
       "name": "spec-creator",
       "source": "./plugins/spec-creator",
       "description": "Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).",
-      "version": "2.3.0"
+      "version": "2.4.1"
+    },
+    {
+      "name": "spec-implement",
+      "source": "./plugins/spec-implement",
+      "description": "Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation.",
+      "version": "1.0.0"
     },
     {
       "name": "spec-review",
       "source": "./plugins/spec-review",
       "description": "Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.",
-      "version": "2.1.0"
+      "version": "2.2.1"
     },
     {
       "name": "statusline-creator",

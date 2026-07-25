@@ -2,6 +2,41 @@
 
 All notable changes to spec-creator are documented here.
 
+## [2.4.1] - 2026-07-25
+
+### Fixed
+
+- Replaced hardcoded `~/.claude/skills/spec-creator/scripts/` invocations with
+  skill-relative `./scripts/` paths, and added a "Path convention" note
+  recording that a leading `./` means this skill's base directory while a
+  bare path means the target project — the two conventions used the same
+  bare token ambiguously before this note (#59).
+- Corrected the stale `/review-spec` command reference to `/spec-review` and
+  the stale `implement-story` skill name to `spec-implement` in the "See Also"
+  section (#59).
+- Tightened the "Path convention" note to also cover `./references/…` paths
+  explicitly (previously only `./scripts/…` was called out, leaving bare
+  `references/...` ambiguous between skill-relative and target-project
+  meanings), and prefixed all skill-owned `references/spec-template.md` and
+  `references/codebase-verification.md` links accordingly (#60).
+- Noted that the `feature-dev:*` agent types (Feature Scout in Phase 2, and
+  the `feature-dev:code-explorer` row in the Integration table) require the
+  separately-installed `feature-dev` plugin, with `general-purpose` as the
+  documented fallback; added the same conditional escape hatch to the
+  Phase 4.4 Figma mockup gate for when `figma-ui-designer` isn't installed;
+  and removed the `excursion-pipeline` and `test-engineering` Integration
+  rows, which named private project skills that don't exist in this
+  marketplace or anywhere else (#59).
+
+### Changed
+
+- Authoring source now lives in the `claude-code-skills` monorepo at
+  `spec-creator/`; `plugin-manifest.json` sources from the repo, not `~/.claude/skills`.
+- Extracted the Phase 4.3/4.3b codebase-verification and dependency-upgrade
+  pre-flight detail out of `SKILL.md` into `references/codebase-verification.md`
+  to bring the skill body under the 500-line validator limit (pre-existing
+  overage, unrelated to #59, surfaced by `commit-preflight.sh`'s validation gate).
+
 ## [2.4.0] - 2026-03-17
 
 ### Added
