@@ -7,13 +7,21 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Added
+
+- `spec-implement` published as a marketplace plugin (#59).
+
 ### Fixed
 
 - **deep-review** 1.1.0 -> 1.1.1: bundled `delegated-verification.md` into the plugin + relative reference path, so the verification step resolves for third-party installers (no longer a dangling `~/.claude/...` pointer). (#57)
+- `spec-creator`, `spec-review`, and `spec-implement` no longer reference
+  `~/.claude/skills/` paths; all three resolve their scripts and references
+  relative to the skill directory, making them installable by third parties (#59).
 
 ### Changed
 
 - **deep-review** 1.0.0 -> 1.1.0: synced skill from maintainer live copy — delegated-verification wiring (Story 1.4) + gemini-review.sh usage corrections. (#55)
+- Authoring source for the `spec-*` family moved into the monorepo.
 
 ## [3.14.0] - 2026-06-15
 

@@ -78,13 +78,19 @@
       "name": "spec-creator",
       "source": "./plugins/spec-creator",
       "description": "Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).",
-      "version": "2.3.0"
+      "version": "2.4.1"
+    },
+    {
+      "name": "spec-implement",
+      "source": "./plugins/spec-implement",
+      "description": "Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation.",
+      "version": "1.0.0"
     },
     {
       "name": "spec-review",
       "source": "./plugins/spec-review",
       "description": "Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.",
-      "version": "2.1.0"
+      "version": "2.2.1"
     },
     {
       "name": "statusline-creator",
