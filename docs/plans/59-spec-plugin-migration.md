@@ -457,13 +457,20 @@ done
 # the local skills dir. CHANGELOG prose quotes the old path when describing the
 # fix, and generated plugin READMEs carry a `cp -r … ~/.claude/skills/`
 # manual-install line — both legitimate, both excluded.
-grep -rn '~/\.claude/skills/spec-' \
-  spec-creator/SKILL.md spec-review/SKILL.md spec-implement/SKILL.md \
-  spec-creator/scripts/ spec-review/scripts/ spec-implement/scripts/ \
-  spec-creator/references/ spec-review/references/ spec-implement/references/ \
-  spec-review/README.md \
-  plugins/spec-creator/skills/ plugins/spec-review/skills/ plugins/spec-implement/skills/ \
-  && echo SWEEP-FAIL || echo SWEEP-PASS
+#
+# NOTE: `prepare-plugin.sh` copies CHANGELOG.md into the assembled
+# `plugins/<name>/skills/<name>/` directory, so that path cannot be swept
+# wholesale either — name the executable files explicitly on both sides.
+for s in spec-creator spec-review spec-implement; do
+  grep -rn '~/\.claude/skills/spec-' \
+    "$s/SKILL.md" "$s/scripts/" "$s/references/" \
+    "plugins/$s/skills/$s/SKILL.md" \
+    "plugins/$s/skills/$s/scripts/" \
+    "plugins/$s/skills/$s/references/" 2>/dev/null
+done && echo SWEEP-FAIL || echo SWEEP-PASS
+# spec-review/README.md is the one README that is hand-authored rather than
+# generated, so it is swept too:
+grep -n '~/\.claude/skills/spec-' spec-review/README.md && echo README-FAIL || echo README-PASS
 ```
 
 Expected: `PASS`, three `OK` lines, `SWEEP-PASS`.
