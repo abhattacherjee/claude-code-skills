@@ -4,7 +4,7 @@ Implements a previously created and reviewed story spec end-to-end: feature bran
 
 ## What It Does
 
-Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Delegates to brainstorming/frontend-design/ui-from-requirements for complex UI work.
+Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Optionally delegates to separately-installed brainstorming, frontend-design, and ui-from-requirements skills for complex UI work.
 
 **Use when:**
 - user says /spec-implement or 'implement this spec', 
@@ -25,7 +25,7 @@ Implements a previously created and reviewed story spec end-to-end: reads the sp
 
 ### Skills
 
-- `spec-implement` — Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Delegates to brainstorming/frontend-design/ui-from-requirements for complex UI work.
+- `spec-implement` — Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Optionally delegates to separately-installed brainstorming, frontend-design, and ui-from-requirements skills for complex UI work.
 
 ## Installation
 
@@ -68,6 +68,8 @@ rm -rf /tmp/ccs
 ```
 
 ## See Also
+
+> These are separate skills that may not be installed alongside this plugin.
 
 - `spec-creator` — creates the specs this skill implements
 - `spec-review` — reviews specs for accuracy before implementation

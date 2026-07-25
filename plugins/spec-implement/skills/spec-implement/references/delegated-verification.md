@@ -53,7 +53,7 @@ sub-agent that finishes without sending its result leaves you with an idle notif
 and no deliverable.
 
 - Every background-agent dispatch prompt MUST end with:
-  **"SendMessage your final result to main; your idle-completion notification is not a
-  deliverable."**
+  **"SendMessage your final result to the orchestrator that dispatched you; your
+  idle-completion notification is not a deliverable."**
 - The orchestrator re-requests the payload on any idle-without-payload notification, and
   never treats "the agent stopped" as "the work was delivered".

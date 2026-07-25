@@ -7,7 +7,7 @@ metadata:
 
 # Spec Creator
 
-> **Path convention:** `./scripts/…` and `references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+> **Path convention:** `./scripts/…` and `./references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
 
 ## Problem
 
@@ -280,7 +280,7 @@ After user selects an approach, generate the spec file(s).
 #### Path A: Single Story (user chose a single-story option)
 
 **4.1 Build spec content** using:
-- The template structure from **[references/spec-template.md](references/spec-template.md)**
+- The template structure from **[./references/spec-template.md](./references/spec-template.md)**
 - The formatting style extracted by Convention Scanner (Phase 2)
 - The codebase facts from Feature Scout (Phase 2)
 - The scope/approach from user selection (Phase 3)
@@ -305,13 +305,13 @@ After user selects an approach, generate the spec file(s).
 every name in the "Current Codebase State" section against the actual codebase — this
 prevents the #1 spec quality issue, fabricated module names. Verification commands,
 common fabrication patterns, and the "don't include unverifiable claims" rule are in
-**[references/codebase-verification.md](references/codebase-verification.md)**.
+**[./references/codebase-verification.md](./references/codebase-verification.md)**.
 
 **4.3b Dependency Upgrade Pre-Flight** (MANDATORY for dependency upgrade stories):
 before writing a spec for a major-version package upgrade, verify module system
 compatibility (CJS vs ESM) — this catches the #2 spec quality issue, assuming a major
 bump is a drop-in replacement. Compatibility check commands and the decision matrix are
-in **[references/codebase-verification.md](references/codebase-verification.md#43b-dependency-upgrade-pre-flight-mandatory-for-dependency-upgrade-stories)**.
+in **[./references/codebase-verification.md](./references/codebase-verification.md#43b-dependency-upgrade-pre-flight-mandatory-for-dependency-upgrade-stories)**.
 
 **4.4 UX design gate** — if the story touches frontend UI (new screens, layout changes,
 visual components), the first implementation task MUST be a Figma mockup step:
@@ -348,7 +348,7 @@ Break into **bite-sized TDD steps** (2-5 minutes each) following this pattern:
 - **Checkbox syntax** (`- [ ]`) for each step so implementers track progress
 - **TDD sequence** — test first, run to confirm fail, implement, run to confirm pass
 
-See **[references/spec-template.md](references/spec-template.md)** Section 8 for the
+See **[./references/spec-template.md](./references/spec-template.md)** Section 8 for the
 full task structure template with examples.
 
 **4.6 Simplification self-check** before writing:

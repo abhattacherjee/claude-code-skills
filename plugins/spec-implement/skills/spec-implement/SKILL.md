@@ -1,13 +1,13 @@
 ---
 name: spec-implement
-description: "Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Delegates to brainstorming/frontend-design/ui-from-requirements for complex UI work. Use when: (1) user says /spec-implement or 'implement this spec', (2) a story spec has been created and reviewed and is ready for implementation, (3) user provides a spec file path to implement."
+description: "Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Optionally delegates to separately-installed brainstorming, frontend-design, and ui-from-requirements skills for complex UI work. Use when: (1) user says /spec-implement or 'implement this spec', (2) a story spec has been created and reviewed and is ready for implementation, (3) user provides a spec file path to implement."
 metadata:
   version: 1.0.0
 ---
 
 # Spec Implement
 
-> **Path convention:** `./scripts/…` and `references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+> **Path convention:** `./scripts/…` and `./references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
 
 Implements a reviewed story spec end-to-end — from branch creation to PR.
 
@@ -83,7 +83,7 @@ Branch name: `feature/story-{epic}.{story}-{kebab-slug}` (e.g., `feature/story-0
 
 If the spec involves:
 - **New pages with significant UI** — invoke `Skill(superpowers:brainstorming)` or `Skill(frontend-design:frontend-design)` for aesthetic direction before coding
-- **New DS components + pages + data** — invoke `Skill(ui-from-requirements)` for full pipeline (requires the separate `ui-from-requirements` skill; skip if not installed)
+- **New DS components + pages + data** — invoke `Skill(ui-from-requirements)` for full pipeline
 - **Incremental fixes to existing pages** — skip, implement directly
 
 Most Epic 0 (compliance) stories are standard. Epics 1-5 (new features) are more likely UI-heavy.
@@ -113,7 +113,7 @@ For each sub-task in the spec:
 - All user-facing strings via `import { t } from '@/i18n'` (never hardcoded)
 - Use `cn()` from `@/lib/utils` for conditional classnames
 
-**Parallelization:** If sub-tasks modify independent files with no shared state, use parallel `Agent` calls to implement 2-3 sub-tasks simultaneously. Only parallelize when files don't overlap. **Verify each dispatched sub-task's claims before advancing (MANDATORY).** A parallel `Agent` narrates its result back to you; that narration is a claim, not evidence. Verify each against ground truth in *your own* context per `references/delegated-verification.md` — a Write/Edit sub-agent can return "done" without writing the file (`test -f <path> && grep -Fc "<change-unique sentinel>" <path>`), and background agents must be told to SendMessage their result (an idle-completion notification is not a deliverable). Self-implemented sub-tasks don't narrate a claim and are covered by Phase 6's existing verification — do not duplicate this step there.
+**Parallelization:** If sub-tasks modify independent files with no shared state, use parallel `Agent` calls to implement 2-3 sub-tasks simultaneously. Only parallelize when files don't overlap. **Verify each dispatched sub-task's claims before advancing (MANDATORY).** A parallel `Agent` narrates its result back to you; that narration is a claim, not evidence. Verify each against ground truth in *your own* context per `./references/delegated-verification.md` — a Write/Edit sub-agent can return "done" without writing the file (`test -f <path> && grep -Fc "<change-unique sentinel>" <path>`), and background agents must be told to SendMessage their result (an idle-completion notification is not a deliverable). Self-implemented sub-tasks don't narrate a claim and are covered by Phase 6's existing verification — do not duplicate this step there.
 
 **TaskUpdate: task 3/4 `completed`**
 
@@ -239,10 +239,12 @@ gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body
 
 ## Skill Delegation Matrix
 
+> All skills in this matrix are optional external plugins that ship separately from this one. If a skill is not installed, implement that step directly and note the skip.
+
 | Spec characteristic | Delegate to | When |
 |-------------------|------------|------|
 | New pages with creative UI | `Skill(superpowers:brainstorming)` | Before coding, to align on design direction |
-| New DS components + full page build | `Skill(ui-from-requirements)` | When spec describes a complete new UI surface (requires the separate `ui-from-requirements` skill; skip if not installed) |
+| New DS components + full page build | `Skill(ui-from-requirements)` | When spec describes a complete new UI surface |
 | Frontend aesthetic decisions | `Skill(frontend-design:frontend-design)` | When spec says "design a new page" without specific wireframes |
 | Multiple independent sub-tasks | `Agent` (parallel) | When sub-tasks touch different files with no overlap |
 | Post-implementation code review | `Skill(superpowers:verification-before-completion)` | Before claiming work is done |
@@ -258,6 +260,8 @@ gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body
 | Acceptance criterion can't be met | Report to user with explanation; don't skip silently |
 
 ## See Also
+
+> These are separate skills that may not be installed alongside this plugin.
 
 - `spec-creator` — creates the specs this skill implements
 - `spec-review` — reviews specs for accuracy before implementation

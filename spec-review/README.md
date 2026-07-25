@@ -35,10 +35,10 @@ All 4 agents run simultaneously in ~30 seconds total.
 
 ```bash
 # Auto-discovers project architecture
-scripts/discover-project-architecture.sh .
+./scripts/discover-project-architecture.sh .
 
 # Extracts spec sections for targeted agent prompts
-scripts/extract-spec-sections.sh specs/stories/epic-16/story-16.10-feature-name.md
+./scripts/extract-spec-sections.sh specs/stories/epic-16/story-16.10-feature-name.md
 ```
 
 ### Phase 2: Parallel 4-Agent Review

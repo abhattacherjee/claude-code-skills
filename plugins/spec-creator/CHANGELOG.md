@@ -16,6 +16,11 @@ All notable changes to spec-creator are documented here.
 - Corrected the stale `/review-spec` command reference to `/spec-review` and
   the stale `implement-story` skill name to `spec-implement` in the "See Also"
   section (#59).
+- Tightened the "Path convention" note to also cover `./references/…` paths
+  explicitly (previously only `./scripts/…` was called out, leaving bare
+  `references/...` ambiguous between skill-relative and target-project
+  meanings), and prefixed all skill-owned `references/spec-template.md` and
+  `references/codebase-verification.md` links accordingly (#60).
 
 ### Changed
 

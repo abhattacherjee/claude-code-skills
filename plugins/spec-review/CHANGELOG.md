@@ -15,6 +15,15 @@ All notable changes to spec-review are documented here.
 - Corrected the stale `implement-story` companion-skill name to
   `spec-implement` and dropped the non-working `/review-spec` alias in favor
   of `/spec-review` in the README (#59).
+- Tightened the "Path convention" note to also cover `./references/…` paths
+  explicitly (previously only `./scripts/…` was called out, leaving bare
+  `references/...` ambiguous between skill-relative and target-project
+  meanings); prefixed the README's `scripts/…` invocations with `./` to match (#60).
+- The Design Simplifier agent prompt template referenced
+  `references/design-simplification-checklist.md` by path, but a spawned
+  sub-agent cannot resolve a path relative to the parent skill's base
+  directory — replaced with an instruction to inline the file's full contents
+  into the prompt instead of passing the path (#60).
 
 ### Changed
 

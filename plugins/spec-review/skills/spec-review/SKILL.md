@@ -7,7 +7,7 @@ metadata:
 
 # Spec Review
 
-> **Path convention:** `./scripts/…` and `references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+> **Path convention:** `./scripts/…` and `./references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
 
 Comprehensive spec review combining codebase verification and implementation planning.
 Discovers project architecture at runtime — works with any codebase structure.
@@ -236,7 +236,7 @@ SUB-TASK COUNT: [N]
 NEW FILES PROPOSED: [list]
 
 SIMPLIFICATION PATTERNS:
-[Include the 15 patterns from references/design-simplification-checklist.md]
+[Paste the full contents of ./references/design-simplification-checklist.md here — inline the content; do not pass the file path to the sub-agent]
 
 YOUR TASK:
 1. For each sub-task, ask: "Can this be done more simply?"

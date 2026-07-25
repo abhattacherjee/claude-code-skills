@@ -20,6 +20,18 @@ Initial plugin release.
   convention" note after the title clarifying they resolve against this
   skill's base directory, not the Bash tool's working directory (#59).
 - Delegation matrix and Phase 3 now reference `Skill(superpowers:brainstorming)`
-  (its real registered name) instead of the unqualified `Skill(brainstorming)`,
-  and flag `Skill(ui-from-requirements)` as requiring a separately installed
-  skill (#59).
+  (its real registered name) instead of the unqualified `Skill(brainstorming)` (#59).
+- Tightened the "Path convention" note to also cover `./references/…` paths
+  explicitly (previously only `./scripts/…` was called out, leaving bare
+  `references/...` references ambiguous between skill-relative and
+  target-project meanings) and prefixed the `references/delegated-verification.md`
+  reference in Phase 4 accordingly (#59).
+- Replaced the per-row `ui-from-requirements` "requires a separately installed
+  skill" caveats in the Skill Delegation Matrix and Phase 3 with a single
+  blanket note above the matrix and in See Also, and reworded the frontmatter
+  description to say the skill "optionally delegates" to separately-installed
+  skills — the per-row caveats had landed inconsistently, appearing at some
+  call sites but not others (#59, #60).
+- Reworded a hardcoded `SendMessage your final result to main` instruction in
+  `references/delegated-verification.md` to `the orchestrator that dispatched
+  you`, since `main` is one workspace's orchestrator name, not universal (#60).
