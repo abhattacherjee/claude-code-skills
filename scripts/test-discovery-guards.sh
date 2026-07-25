@@ -32,6 +32,16 @@ assert_eq() {
     fi
 }
 
+assert_contains() {
+    local description="$1" needle="$2" haystack="$3"
+    if [[ "$haystack" == *"$needle"* ]]; then
+        echo "PASS: $description"
+    else
+        echo "FAIL: $description (expected [$haystack] to contain [$needle])"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+}
+
 # ============================================================
 # discover-conventions.sh
 # ============================================================
@@ -118,6 +128,11 @@ assert_eq "markdown-only scratch project: i18n empty" "" "$MARKDOWN_ONLY_I18N"
 assert_eq "markdown-only scratch project: security empty" "" "$MARKDOWN_ONLY_SECURITY"
 
 # --- Fixture: real markers outside node_modules (positive control) ---
+# Covers all 13 previously-defective guards (plus the 4 that were already
+# covered) so every guard has a fixture where its pattern is genuinely
+# present and must fire — a guard hardcoded to report "nothing" (e.g.
+# `if false && grep …`) is indistinguishable from a correctly-empty one
+# unless some fixture proves it can also report "present".
 POSITIVE_DIR="$SCRATCH_DIR/positive-architecture-project"
 mkdir -p "$POSITIVE_DIR/src"
 cat > "$POSITIVE_DIR/package.json" <<'EOF'
@@ -125,13 +140,40 @@ cat > "$POSITIVE_DIR/package.json" <<'EOF'
   "name": "positive-architecture-project",
   "dependencies": {
     "i18next": "^23.0.0",
-    "graphql": "^16.0.0"
+    "vue-i18n": "^9.0.0",
+    "graphql": "^16.0.0",
+    "pg": "^8.11.0"
   }
 }
 EOF
 cat > "$POSITIVE_DIR/src/server.ts" <<'EOF'
 import helmet from "helmet";
 import csurf from "csurf";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
+import { EventEmitter } from "events";
+
+const bilingual: BilingualText = { en: "Hello", es: "Hola" };
+
+app.use(helmet());
+app.use(csurf());
+app.use(cors());
+app.use(rateLimit({ windowMs: 900000 }));
+
+app.get("/health", (req, res) => {
+  res.send("ok");
+});
+
+async function loadRemote() {
+  return fetch("https://example.com/data");
+}
+EOF
+cat > "$POSITIVE_DIR/vite.config.ts" <<'EOF'
+export default {
+  server: {
+    proxy: { "/api": "http://localhost:3000" }
+  }
+}
 EOF
 
 POSITIVE_JSON=$("$DISCOVER_ARCHITECTURE_SCRIPT" "$POSITIVE_DIR" --json)
@@ -139,9 +181,24 @@ POSITIVE_DATA_FLOW=$(echo "$POSITIVE_JSON" | jq -r '.dataFlow')
 POSITIVE_I18N=$(echo "$POSITIVE_JSON" | jq -r '.i18n')
 POSITIVE_SECURITY=$(echo "$POSITIVE_JSON" | jq -r '.security')
 
-assert_eq "positive control: dataFlow contains GraphQL" "GraphQL" "$POSITIVE_DATA_FLOW"
-assert_eq "positive control: i18n contains i18next" "i18next" "$POSITIVE_I18N"
-assert_eq "positive control: security contains CSRF and Helmet/CSP" "CSRF,Helmet/CSP" "$POSITIVE_SECURITY"
+# detect_data_flow — all 6 guards
+assert_contains "positive control: dataFlow contains HTTP-inter-service" "HTTP-inter-service" "$POSITIVE_DATA_FLOW"
+assert_contains "positive control: dataFlow contains Dev-proxy" "Dev-proxy" "$POSITIVE_DATA_FLOW"
+assert_contains "positive control: dataFlow contains Event-messaging" "Event-messaging" "$POSITIVE_DATA_FLOW"
+assert_contains "positive control: dataFlow contains Database" "Database" "$POSITIVE_DATA_FLOW"
+assert_contains "positive control: dataFlow contains GraphQL" "GraphQL" "$POSITIVE_DATA_FLOW"
+assert_contains "positive control: dataFlow contains REST-API" "REST-API" "$POSITIVE_DATA_FLOW"
+
+# detect_i18n — all 3 guards (LocaleFiles is the correct sibling, not under test here)
+assert_contains "positive control: i18n contains i18next" "i18next" "$POSITIVE_I18N"
+assert_contains "positive control: i18n contains vue-i18n" "vue-i18n" "$POSITIVE_I18N"
+assert_contains "positive control: i18n contains BilingualText" "BilingualText" "$POSITIVE_I18N"
+
+# detect_security_patterns — all 4 guards
+assert_contains "positive control: security contains CSRF" "CSRF" "$POSITIVE_SECURITY"
+assert_contains "positive control: security contains Helmet/CSP" "Helmet/CSP" "$POSITIVE_SECURITY"
+assert_contains "positive control: security contains RateLimit" "RateLimit" "$POSITIVE_SECURITY"
+assert_contains "positive control: security contains CORS" "CORS" "$POSITIVE_SECURITY"
 
 # --- Fixture: same markers, but the sole copy lives under node_modules/
 # (negative control — proves the node_modules filter still works after the
