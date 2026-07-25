@@ -2,6 +2,18 @@
 
 All notable changes to spec-review are documented here.
 
+## [2.2.1] - 2026-07-25
+
+### Fixed
+
+- Replaced hardcoded `~/.claude/skills/spec-review/scripts/` invocations with
+  bare-relative `scripts/` paths so the skill resolves from the plugin cache (#59).
+- README install step no longer instructs copying from `~/.claude/skills/`.
+
+### Changed
+
+- Authoring source now lives in the monorepo at `spec-review/`.
+
 ## [2.2.0] - 2026-03-17
 
 ### Added
