@@ -1,0 +1,12 @@
+{
+  "name": "spec-creator",
+  "version": "2.4.1",
+  "description": "Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).",
+  "skills": [
+    {
+      "name": "spec-creator",
+      "source": "spec-creator"
+    }
+  ],
+  "commands": []
+}

@@ -34,8 +34,9 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 | [skill-authoring](./plugins/skill-authoring/) | 2.3.0 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |
 | [skill-publishing](./plugins/skill-publishing/) | 4.0.0 | 1 | 0 | Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos |
 | [smart-screen-recorder](./plugins/smart-screen-recorder/) | 4.3.0 | 1 | 0 | AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos. |
-| [spec-creator](./plugins/spec-creator/) | 2.3.0 | 1 | 0 | Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues). |
-| [spec-review](./plugins/spec-review/) | 2.1.0 | 1 | 0 | Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans. |
+| [spec-creator](./plugins/spec-creator/) | 2.4.1 | 1 | 0 | Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues). |
+| [spec-implement](./plugins/spec-implement/) | 1.0.0 | 1 | 0 | Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation. |
+| [spec-review](./plugins/spec-review/) | 2.2.1 | 1 | 0 | Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans. |
 | [statusline-creator](./plugins/statusline-creator/) | 1.0.0 | 1 | 0 | Creates and customizes Claude Code statusline scripts from composable items |
 
 > **Note:** The `git-flow` plugin moved to its own repository — install via `/plugin marketplace add abhattacherjee/git-flow`.
