@@ -251,8 +251,10 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
       for (( ai=0; ai<AGENT_COUNT; ai++ )); do
         AGENT_NAME=$(jq -r ".agents[$ai].name" "$MANIFEST")
         AGENT_SRC=$(jq -r ".agents[$ai].source" "$MANIFEST")
-        # Resolve ~ to $HOME
-        AGENT_SRC_RESOLVED="${AGENT_SRC/#\~/$HOME}"
+        # Resolve ~ and relative paths against the manifest's own directory
+        # (SKILL_SRC, since MANIFEST is "$SKILL_SRC/plugin-manifest.json") —
+        # matches prepare-plugin.sh's resolve_source_path for agents[].source.
+        AGENT_SRC_RESOLVED=$(resolve_source_path "$AGENT_SRC" "$SKILL_SRC")
         if [[ -f "$AGENT_SRC_RESOLVED" ]]; then
           copy_file "$AGENT_SRC_RESOLVED" "$SKILL_DST/agents/$AGENT_NAME.md" "$SKILL_NAME/agents/$AGENT_NAME.md"
         else
