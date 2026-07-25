@@ -2,6 +2,23 @@
 
 All notable changes to spec-creator are documented here.
 
+## [2.4.1] - 2026-07-25
+
+### Fixed
+
+- Replaced hardcoded `~/.claude/skills/spec-creator/scripts/` invocations with
+  bare-relative `scripts/` paths so the skill resolves from the plugin cache
+  instead of the maintainer's local skills directory (#59).
+
+### Changed
+
+- Authoring source now lives in the `claude-code-skills` monorepo at
+  `spec-creator/`; `plugin-manifest.json` sources from the repo, not `~/.claude/skills`.
+- Extracted the Phase 4.3/4.3b codebase-verification and dependency-upgrade
+  pre-flight detail out of `SKILL.md` into `references/codebase-verification.md`
+  to bring the skill body under the 500-line validator limit (pre-existing
+  overage, unrelated to #59, surfaced by `commit-preflight.sh`'s validation gate).
+
 ## [2.4.0] - 2026-03-17
 
 ### Added

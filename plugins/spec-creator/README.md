@@ -25,8 +25,8 @@ Creates detailed story specification files from various inputs (Claude plan, req
 
 ```bash
 # Discover project spec conventions
-~/.claude/skills/spec-creator/scripts/discover-conventions.sh .           # Report
-~/.claude/skills/spec-creator/scripts/discover-conventions.sh . --json    # JSON
+scripts/discover-conventions.sh .           # Report
+scripts/discover-conventions.sh . --json    # JSON
 ```
 
 ## Contents
