@@ -7,12 +7,10 @@ All notable changes to spec-creator are documented here.
 ### Fixed
 
 - Replaced hardcoded `~/.claude/skills/spec-creator/scripts/` invocations with
-  bare-relative `scripts/` paths so the skill resolves from the plugin cache
-  instead of the maintainer's local skills directory (#59).
-- Prefixed skill-owned script invocations with `./` and added a "Path
-  convention" note clarifying that bare `scripts/`/`tests/` references (e.g. in
-  the dependency-upgrade compat search) mean the target project, not this
-  skill — the two conventions used the same bare token ambiguously (#59).
+  skill-relative `./scripts/` paths, and added a "Path convention" note
+  recording that a leading `./` means this skill's base directory while a
+  bare path means the target project — the two conventions used the same
+  bare token ambiguously before this note (#59).
 - Corrected the stale `/review-spec` command reference to `/spec-review` and
   the stale `implement-story` skill name to `spec-implement` in the "See Also"
   section (#59).
@@ -21,6 +19,14 @@ All notable changes to spec-creator are documented here.
   `references/...` ambiguous between skill-relative and target-project
   meanings), and prefixed all skill-owned `references/spec-template.md` and
   `references/codebase-verification.md` links accordingly (#60).
+- Noted that the `feature-dev:*` agent types (Feature Scout in Phase 2, and
+  the `feature-dev:code-explorer` row in the Integration table) require the
+  separately-installed `feature-dev` plugin, with `general-purpose` as the
+  documented fallback; added the same conditional escape hatch to the
+  Phase 4.4 Figma mockup gate for when `figma-ui-designer` isn't installed;
+  and removed the `excursion-pipeline` and `test-engineering` Integration
+  rows, which named private project skills that don't exist in this
+  marketplace or anywhere else (#59).
 
 ### Changed
 

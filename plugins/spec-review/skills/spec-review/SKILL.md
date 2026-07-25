@@ -162,6 +162,8 @@ These provide project-specific context that the discovery script can't capture
 
 Launch ALL four agents in a SINGLE Task tool message.
 
+> The `feature-dev:*` agent types below require the separately-installed `feature-dev` plugin. If it is not available, dispatch `general-purpose` instead and note the substitution in your output.
+
 | Agent | Type | Purpose | Key Output |
 |-------|------|---------|------------|
 | **Codebase Verifier** | `feature-dev:code-explorer` | Verify every file path, function name, and data shape | Verified/corrected paths, signatures, shapes |
@@ -376,8 +378,8 @@ Ask the user whether to:
 ## Notes
 
 - This skill is a PRE-implementation review. It enriches specs, not code.
-- Feature-dev's code-explorer agents are reused for codebase verification.
-- Feature-dev's code-architect agents are reused for design analysis.
+- Feature-dev's code-explorer agents are reused for codebase verification when the `feature-dev` plugin is installed; otherwise `general-purpose` agents are substituted.
+- Feature-dev's code-architect agents are reused for design analysis when the `feature-dev` plugin is installed; otherwise `general-purpose` agents are substituted.
 - The test plan produced here is a SPECIFICATION — use appropriate tooling
   during implementation to create actual test files.
 - Always verify spec claims with `grep`/`read` — never trust assumed file paths.

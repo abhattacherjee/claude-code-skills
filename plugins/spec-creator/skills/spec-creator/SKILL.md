@@ -100,6 +100,7 @@ infer from the requirement's domain or ask. Use the `nextStory` value from disco
 
 Launch 3 agents in a SINGLE Task tool message:
 
+> `feature-dev:code-explorer` requires the separately-installed `feature-dev` plugin; substitute `general-purpose` if unavailable.
 **Agent 1: Feature Scout** (`feature-dev:code-explorer`)
 > Research the codebase to find: (1) existing code related to [requirement],
 > (2) services, utilities, and patterns that should be reused, (3) relevant file
@@ -314,7 +315,7 @@ bump is a drop-in replacement. Compatibility check commands and the decision mat
 in **[./references/codebase-verification.md](./references/codebase-verification.md#43b-dependency-upgrade-pre-flight-mandatory-for-dependency-upgrade-stories)**.
 
 **4.4 UX design gate** — if the story touches frontend UI (new screens, layout changes,
-visual components), the first implementation task MUST be a Figma mockup step:
+visual components), the first implementation task MUST be a Figma mockup step. Skip this step and note the skip if `figma-ui-designer` is not installed.
 
 ```markdown
 ### Task X.Y.0: Create Figma Mockups (UX Design)
@@ -495,8 +496,6 @@ If user selects option 1 or 2, invoke the corresponding skill with the spec file
 | `simplify` | Phase 5 — optional simplification pass |
 | `feature-dev:code-explorer` | Phase 2 — codebase research for accurate paths |
 | `figma-ui-designer` | Phase 4.4 — Figma mockup as Task 0 for UI-touching stories |
-| `excursion-pipeline` | Referenced in sub-tasks if spec touches the pipeline |
-| `test-engineering` | Bruno test plan conventions used in Testing Checklist |
 
 ## See Also
 

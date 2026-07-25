@@ -73,8 +73,7 @@ rm -rf /tmp/ccs
 
 - `spec-creator` — creates the specs this skill implements
 - `spec-review` — reviews specs for accuracy before implementation
-- `finish` — merges the feature branch after PR approval
-- `ui-pr-review` — reviews the PR for design system compliance
+- `git-flow:finish` — merges the feature branch after PR approval
 - `ui-from-requirements` — full UI build pipeline for complex specs
 
 ## Compatibility

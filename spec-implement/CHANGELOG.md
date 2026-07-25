@@ -14,11 +14,11 @@ Initial plugin release.
 
 ### Fixed
 
-- Script invocations use bare-relative `scripts/` paths rather than
-  `~/.claude/skills/spec-implement/scripts/`.
-- Prefixed skill-owned script invocations with `./` and added a "Path
-  convention" note after the title clarifying they resolve against this
-  skill's base directory, not the Bash tool's working directory (#59).
+- Replaced hardcoded `~/.claude/skills/spec-implement/scripts/` invocations with
+  skill-relative `./scripts/` paths, and added a "Path convention" note after
+  the title clarifying that a leading `./` means this skill's base directory
+  while a bare path means the target project, not the Bash tool's working
+  directory (#59).
 - Delegation matrix and Phase 3 now reference `Skill(superpowers:brainstorming)`
   (its real registered name) instead of the unqualified `Skill(brainstorming)` (#59).
 - Tightened the "Path convention" note to also cover `./references/…` paths
@@ -41,3 +41,7 @@ Initial plugin release.
   note's wording from "All skills in this matrix" to "Every `Skill(...)`
   referenced in this matrix" so it no longer implies the built-in `Agent`
   tool (also a matrix row) is an optional external plugin (#59, #60).
+- Renamed the See Also entry for `finish` to `git-flow:finish`, its real
+  registered name from the separately-installed `git-flow` plugin, and
+  removed the `ui-pr-review` entry, which named a skill that doesn't exist
+  anywhere in this repo or marketplace (#59).
