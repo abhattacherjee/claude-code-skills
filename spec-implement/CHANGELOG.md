@@ -35,3 +35,9 @@ Initial plugin release.
 - Reworded a hardcoded `SendMessage your final result to main` instruction in
   `references/delegated-verification.md` to `the orchestrator that dispatched
   you`, since `main` is one workspace's orchestrator name, not universal (#60).
+- Restored the optional-external-plugin caveat at the Phase 3 execution site
+  (the previous round's blanket note above the matrix left Phase 3, the actual
+  invocation point, with no caveat of its own), and narrowed the matrix-level
+  note's wording from "All skills in this matrix" to "Every `Skill(...)`
+  referenced in this matrix" so it no longer implies the built-in `Agent`
+  tool (also a matrix row) is an optional external plugin (#59, #60).

@@ -81,6 +81,8 @@ Branch name: `feature/story-{epic}.{story}-{kebab-slug}` (e.g., `feature/story-0
 
 **TaskUpdate: task 3 `in_progress`** (ui-heavy only)
 
+> Each `Skill(...)` below is an optional external plugin. If it is not installed, implement that step directly and note the skip.
+
 If the spec involves:
 - **New pages with significant UI** — invoke `Skill(superpowers:brainstorming)` or `Skill(frontend-design:frontend-design)` for aesthetic direction before coding
 - **New DS components + pages + data** — invoke `Skill(ui-from-requirements)` for full pipeline
@@ -239,7 +241,7 @@ gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body
 
 ## Skill Delegation Matrix
 
-> All skills in this matrix are optional external plugins that ship separately from this one. If a skill is not installed, implement that step directly and note the skip.
+> Every `Skill(...)` referenced in this matrix is an optional external plugin that ships separately from this one. If one is not installed, implement that step directly and note the skip.
 
 | Spec characteristic | Delegate to | When |
 |-------------------|------------|------|
