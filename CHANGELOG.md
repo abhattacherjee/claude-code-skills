@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-07-25
+
 ### Added
 
 - `spec-implement` published as a marketplace plugin (#59).
