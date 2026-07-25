@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.2.0] - 2026-07-25
+
+### Fixed
+
+- `prepare-plugin.sh` resolved a relative manifest `source` against the caller's working
+  directory, so a manifest whose source lives beside it — the in-repo arrangement #59
+  introduced — only assembled when invoked from exactly the right cwd. Relative sources now
+  resolve against the manifest file's own directory. `~`-prefixed and absolute sources are
+  unchanged. (#61)
+- `sync-monorepo.sh` looked for every skill's source under `$SKILLS_HOME` only. Once a
+  skill's local copy is removed in favour of an in-repo source directory, drift went
+  undetected and the plugin quietly served stale content while the source looked updated.
+  Discovery, auto-build and drift-resync now fall back to `$MONOREPO_DIR/<name>`, and a
+  same-directory source is skipped rather than copied onto itself. (#61)
+
+### Added
+
+- Manifest-schema documentation for the in-repo `source` form and its resolution rule. (#61)
+
 ## [4.1.0] - 2026-03-17
 
 ### Added
