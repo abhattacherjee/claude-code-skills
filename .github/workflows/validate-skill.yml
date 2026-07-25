@@ -129,3 +129,16 @@ jobs:
       - name: Skip message
         if: steps.changed.outputs.plugins == ''
         run: echo "No plugin directories were modified — skipping validation"
+
+  discovery-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      # Runs unconditionally, not path-filtered: the discovery detectors scan
+      # the whole tree, so any file in the repo can change their output.
+      - name: Run discovery-guard regression harness
+        run: ./scripts/test-discovery-guards.sh

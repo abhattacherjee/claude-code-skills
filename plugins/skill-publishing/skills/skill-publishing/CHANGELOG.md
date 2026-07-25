@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.2.0] - 2026-07-25
+
+### Fixed
+
+- `prepare-plugin.sh` resolved a relative manifest `source` against the caller's working
+  directory, so a manifest whose source lives beside it — the in-repo arrangement #59
+  introduced — only assembled when invoked from exactly the right cwd. Relative sources now
+  resolve against the manifest file's own directory. `~`-prefixed and absolute sources are
+  unchanged. (#61)
+- `sync-monorepo.sh` looked for every skill's source under `$SKILLS_HOME` only. Once a
+  skill's local copy is removed in favour of an in-repo source directory, drift went
+  undetected and the plugin quietly served stale content while the source looked updated.
+  Discovery, auto-build and drift-resync now fall back to `$MONOREPO_DIR/<name>`, and a
+  same-directory source is skipped rather than copied onto itself. (#61)
+- `copy_file` now returns early when source and destination are the same file (device +
+  inode comparison, so symlink/hardlink aliases count too). Previously `cp a a` failed and,
+  under `set -e`, aborted the entire sync mid-run — reachable for an in-repo skill whose
+  manifest declares agents, since the agents-copy block runs for in-place sources. (#61)
+- `resolve_source_path` no longer resolves an empty `"source": ""` to the manifest's own
+  directory; it returns empty so callers report "source not found" as they did before the
+  relative-source change. (#61)
+
+### Added
+
+- Manifest-schema documentation for the in-repo `source` form and its resolution rule. (#61)
+- Reversion guard in `sync-monorepo.sh`: source resolution is local-first, so a stale local
+  copy left behind after a skill moved into the monorepo silently overwrote newer in-repo
+  content with older content — and then rebuilt the plugin from the reverted source, exiting
+  0. A skill whose in-repo `SKILL.md` version is strictly newer than the local one (semver
+  comparison via `sort -V`) is now REFUSED with both paths and both versions named, skipped
+  in both the main sync loop and the plugin auto-build, and reported in a closing summary
+  with exit status 3. Equal versions with differing content still sync forward (with a
+  note); an unknown or unparseable version never refuses. `--force-local` overrides. (#61)
+- Reversion guard now covers the plugin auto-resync stage as well, closing the path that
+  mattered most: the resync resolved its own sources through the same local-first lookup and
+  copied `SKILL.md`, `scripts/`, `references/`, the skill `CHANGELOG.md` and the plugin-root
+  `CHANGELOG.md` of a refused skill straight into `plugins/<name>/` — the copy installers
+  actually receive — so a run announced its refusal and then reverted the shipped plugin
+  anyway, leaving `marketplace.json` advertising a version the artifact no longer was. Its
+  drift detection is guarded too, so a refused skill alone no longer opens a resync at all,
+  and the root-CHANGELOG skill inventory is now read from the in-repo copy rather than
+  recording a version the monorepo never received. Refused skills are skipped individually,
+  so a plugin whose other skills legitimately drifted still resyncs those. (#61)
+
+### Changed
+
+- `sync-monorepo.sh` skips the `git-flow` manifest during plugin discovery: that plugin is
+  distributed via its own standalone marketplace (`abhattacherjee/git-flow`), not this
+  monorepo. Previously shipped but undocumented.
+
 ## [4.1.0] - 2026-03-17
 
 ### Added

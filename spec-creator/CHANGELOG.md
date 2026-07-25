@@ -2,6 +2,17 @@
 
 All notable changes to spec-creator are documented here.
 
+## [2.4.2] - 2026-07-25
+
+### Fixed
+
+- `discover-conventions.sh`: `detect_epic_structure` used `ls -d … | head -1 > /dev/null`
+  as its test, which evaluates `head`'s exit status and is therefore always true. Every
+  project with a spec directory — including an empty one — was reported as `epic-subdirs`,
+  which made `find_epics`' flat-layout branch unreachable and silently dropped every epic
+  in a `story-X.Y-name.md` project. Both the `epic-*` and the `numbered-subdirs` guard are
+  now direct glob tests. (#62)
+
 ## [2.4.1] - 2026-07-25
 
 ### Fixed
