@@ -7,6 +7,16 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Fixed
+
+- **spec-creator** 2.4.1 -> 2.4.2: `detect_epic_structure`'s `| head -1 > /dev/null &&` guard always exited `0`, so every project was reported as using `epic-subdirs` regardless of actual layout, silently losing epics for flat-layout `story-*.md` projects. `discover-conventions.sh` now tests the glob directly and a regression harness covers both layouts. (#62)
+- **spec-review** 2.2.1 -> 2.2.2: `detect_data_flow`, `detect_i18n`, and `detect_security_patterns` used the same broken `grep -rlq PATTERN | head -1 > /dev/null &&` idiom, so every one of the 14 patterns reported present on every project, including this one. All three detectors now test the pipeline's real result; positive controls added for all 9 previously-uncovered guards. (#62)
+- **skill-publishing** 4.0.0 -> 4.2.0: `prepare-plugin.sh` resolved a relative in-repo manifest `source` against the caller's cwd instead of the manifest's own directory, so assembling `spec-creator`/`spec-review`/`spec-implement` failed from any directory other than the monorepo root; `sync-monorepo.sh` now falls back to an in-repo top-level source directory when `$SKILLS_HOME/<name>` is absent, so drift detection and auto-rebuild cover the in-repo-source arrangement. The in-repo-source manifest form is now documented in the SKILL.md manifest schema. (#61)
+
+### Added
+
+- `scripts/test-discovery-guards.sh` — regression harness for the `spec-creator`/`spec-review` discovery-guard fixes above, with positive and negative controls. (#62)
+
 ## [3.15.0] - 2026-07-25
 
 ### Added
