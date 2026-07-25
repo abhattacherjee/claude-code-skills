@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.1] - 2026-07-25
+
+### Fixed
+
+- Made the `deep-review` skill self-contained: bundled `references/delegated-verification.md` into the plugin and rewrote the Phase 1 Step 3 / Phase 2 Step 2.5 verification steps to reference it by the relative path `references/delegated-verification.md` (was an absolute `~/.claude/skills/ship/...` path that only resolved in the maintainer environment — a dangling pointer for third-party installers).
+
 ## [1.1.0] - 2026-07-24
 
 ### Changed
