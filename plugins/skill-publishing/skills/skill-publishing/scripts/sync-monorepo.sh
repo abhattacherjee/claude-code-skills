@@ -124,6 +124,16 @@ version_gt() {
 REFUSED_SKILLS=""
 REFUSED_COUNT=0
 
+# True when the reversion guard refused this skill, i.e. its local source is
+# stale. EVERY writer that copies from skill_source_dir() must consult this
+# before writing — the plugin build and plugin resync stages read the same
+# local-first source, so an unguarded writer reverts exactly the content the
+# guard just protected. Consulted only after the main sync loop has run.
+skill_refused() {
+  [[ -n "$REFUSED_SKILLS" ]] || return 1
+  printf '%s' "$REFUSED_SKILLS" | grep -qxF "$1"
+}
+
 # --- Resolve GitHub user (via shared _lib.sh) ---
 resolve_github_user
 
@@ -484,7 +494,7 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     if [[ -n "$REFUSED_SKILLS" ]]; then
       _REFUSED_IN_PLUGIN=""
       for _PLUGIN_SKILL in $(jq -r '.skills[]?.name // empty' "$_MANIFEST" 2>/dev/null); do
-        if printf '%s' "$REFUSED_SKILLS" | grep -qxF "$_PLUGIN_SKILL"; then
+        if skill_refused "$_PLUGIN_SKILL"; then
           _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
         fi
       done
@@ -620,10 +630,29 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
     _PLUGIN_NAME=$(basename "$_PLUGIN_DIR")
     _PLUGIN_DRIFTED=false
 
+    # Every copy below resolves its source through the same local-first
+    # skill_source_dir() the main loop refused, so without this the resync
+    # reverts plugins/<name>/ — the copy installers actually receive — right
+    # after the sync announced it had refused to. Announce the skipped skills
+    # once per plugin, then skip them individually in each stage: a plugin
+    # whose OTHER skills legitimately drifted must still resync those.
+    _PLUGIN_REFUSED=""
+    for _PREF_DIR in "$_PLUGIN_DIR"skills/*/; do
+      [[ ! -d "$_PREF_DIR" ]] && continue
+      _PREF_NAME=$(basename "$_PREF_DIR")
+      if skill_refused "$_PREF_NAME"; then
+        _PLUGIN_REFUSED="${_PLUGIN_REFUSED:+$_PLUGIN_REFUSED }$_PREF_NAME"
+      fi
+    done
+    if [[ -n "$_PLUGIN_REFUSED" ]]; then
+      echo "  SKIP (reversion guard)  plugins/$_PLUGIN_NAME resync  —  stale local source for: $_PLUGIN_REFUSED"
+    fi
+
     # Check each skill in the plugin against its source
     for _PSKILL_MD in "$_PLUGIN_DIR"skills/*/SKILL.md; do
       [[ ! -f "$_PSKILL_MD" ]] && continue
       _SNAME=$(basename "$(dirname "$_PSKILL_MD")")
+      if skill_refused "$_SNAME"; then continue; fi
       _SNAME_SRC=$(skill_source_dir "$_SNAME")
       _SRC_MD="${_SNAME_SRC:+$_SNAME_SRC/SKILL.md}"
       if [[ -f "$_SRC_MD" ]] && ! diff -q "$_PSKILL_MD" "$_SRC_MD" >/dev/null 2>&1; then
@@ -636,6 +665,7 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PSCRIPTS in "$_PLUGIN_DIR"skills/*/scripts; do
         [[ ! -d "$_PSCRIPTS" ]] && continue
         _SNAME=$(basename "$(dirname "$_PSCRIPTS")")
+        if skill_refused "$_SNAME"; then continue; fi
         _SNAME_SRC=$(skill_source_dir "$_SNAME")
         _SRC_SCRIPTS="${_SNAME_SRC:+$_SNAME_SRC/scripts}"
         if [[ -n "$_SRC_SCRIPTS" && -d "$_SRC_SCRIPTS" ]]; then
@@ -662,6 +692,7 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PCL in "$_PLUGIN_DIR"skills/*/CHANGELOG.md; do
         [[ ! -f "$_PCL" ]] && continue
         _SNAME=$(basename "$(dirname "$_PCL")")
+        if skill_refused "$_SNAME"; then continue; fi
         _SNAME_SRC=$(skill_source_dir "$_SNAME")
         _SRC_CL="${_SNAME_SRC:+$_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_SRC_CL" ]] && ! diff -q "$_PCL" "$_SRC_CL" >/dev/null 2>&1; then
@@ -678,6 +709,9 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PSKILL_DIR in "$_PLUGIN_DIR"skills/*/; do
         [[ ! -d "$_PSKILL_DIR" ]] && continue
         _SNAME=$(basename "$_PSKILL_DIR")
+        # Guards SKILL.md, scripts/, references/ and CHANGELOG.md below in one
+        # place — all four copy from the same refused local source.
+        if skill_refused "$_SNAME"; then continue; fi
         _SRC=$(skill_source_dir "$_SNAME")
         [[ -z "$_SRC" ]] && continue
 
@@ -734,8 +768,11 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       # CHANGELOG.md — also sync to plugin root (top-level CHANGELOG)
       # Use the first skill's CHANGELOG as the plugin-level CHANGELOG
       _FIRST_SKILL_DIR=$(ls -d "$_PLUGIN_DIR"skills/*/ 2>/dev/null | head -1)
-      if [[ -n "$_FIRST_SKILL_DIR" ]]; then
-        _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
+      _FIRST_SNAME=""
+      [[ -n "$_FIRST_SKILL_DIR" ]] && _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
+      # A refused first skill would drag the plugin-root CHANGELOG backwards too,
+      # leaving the plugin advertising a version its files no longer are.
+      if [[ -n "$_FIRST_SNAME" ]] && ! skill_refused "$_FIRST_SNAME"; then
         _FIRST_SNAME_SRC=$(skill_source_dir "$_FIRST_SNAME")
         _FIRST_SRC_CL="${_FIRST_SNAME_SRC:+$_FIRST_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_FIRST_SRC_CL" && -f "$_PLUGIN_DIR/CHANGELOG.md" ]]; then
@@ -934,6 +971,12 @@ SKILL_INVENTORY=""
 for SKILL_NAME in $SKILLS_TO_SYNC; do
   SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
   SKILL_MD="${SKILL_SRC:+$SKILL_SRC/SKILL.md}"
+  # Refused skills were not copied, so describe them by what the repo actually
+  # holds — reading the stale local copy here would record a version the
+  # monorepo never received. Mirrors the catalog-row handling in the main loop.
+  if skill_refused "$SKILL_NAME" && [[ -f "$MONOREPO_DIR/$SKILL_NAME/SKILL.md" ]]; then
+    SKILL_MD="$MONOREPO_DIR/$SKILL_NAME/SKILL.md"
+  fi
   if [[ -f "$SKILL_MD" ]]; then
     VERSION=$(extract_version "$SKILL_MD")
     SHORT_DESC=$(extract_field "$SKILL_MD" "description" | sed 's/\. Use when:.*//')

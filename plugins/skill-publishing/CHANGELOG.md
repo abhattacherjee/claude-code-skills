@@ -35,6 +35,16 @@ All notable changes to this project will be documented in this file.
   in both the main sync loop and the plugin auto-build, and reported in a closing summary
   with exit status 3. Equal versions with differing content still sync forward (with a
   note); an unknown or unparseable version never refuses. `--force-local` overrides. (#61)
+- Reversion guard now covers the plugin auto-resync stage as well, closing the path that
+  mattered most: the resync resolved its own sources through the same local-first lookup and
+  copied `SKILL.md`, `scripts/`, `references/`, the skill `CHANGELOG.md` and the plugin-root
+  `CHANGELOG.md` of a refused skill straight into `plugins/<name>/` — the copy installers
+  actually receive — so a run announced its refusal and then reverted the shipped plugin
+  anyway, leaving `marketplace.json` advertising a version the artifact no longer was. Its
+  drift detection is guarded too, so a refused skill alone no longer opens a resync at all,
+  and the root-CHANGELOG skill inventory is now read from the in-repo copy rather than
+  recording a version the monorepo never received. Refused skills are skipped individually,
+  so a plugin whose other skills legitimately drifted still resyncs those. (#61)
 
 ### Changed
 

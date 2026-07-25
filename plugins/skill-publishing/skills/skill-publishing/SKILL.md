@@ -154,6 +154,15 @@ Use `AskUserQuestion` with `multiSelect: true`. **Default: Plugin is pre-selecte
 `$SKILLS_HOME/<name>` wins over an in-repo source directory, and the sync log records a
 `SKIP (shadowed)` note naming both paths when it dedupes.
 
+**Reversion guard** — local-first is *not* unconditional. A stale local copy left behind after a
+skill moved into the monorepo would otherwise overwrite newer in-repo content. When the in-repo
+`SKILL.md` version is strictly newer than the local one, that skill is **REFUSED**: the skill
+sync, the plugin auto-build, and the plugin resync all skip it (logging `SKIP (reversion guard)`),
+its catalog/CHANGELOG metadata is read from the in-repo copy instead, the rest of the sync still
+runs, and the script exits **3** (0 = success, 1 = usage/setup error). Resolve it by deleting the
+stale local copy so the in-repo copy becomes the source, or re-run with `--force-local` to let
+the local copy win deliberately.
+
 If user agrees, create the manifest and proceed with plugin publishing.
 
 ### Team Mode: Parallel Skill Publishing
