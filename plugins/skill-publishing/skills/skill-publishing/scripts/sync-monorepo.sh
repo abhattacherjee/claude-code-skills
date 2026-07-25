@@ -15,6 +15,7 @@ source "$SCRIPT_DIR/_lib.sh"
 # Defaults
 DRY_RUN=false
 INIT_MODE=false
+FORCE_LOCAL=false
 GITHUB_USER=""
 SKILLS_LIST=""
 ADD_SKILL=""
@@ -37,7 +38,21 @@ Options:
   --github-user NAME     GitHub username (default: auto-detect via gh api)
   --author NAME          Name for LICENSE copyright (default: Abhishek)
   --init                 Initialize monorepo (create repo, first commit)
+  --force-local          Sync even when the local ~/.claude/skills copy is OLDER
+                         than the copy already in the monorepo (by default such a
+                         skill is refused and skipped, see "Reversion guard")
   -h, --help             Show this help
+
+Reversion guard:
+  A skill's source is the local ~/.claude/skills copy when one exists, else the
+  in-repo directory. If a stale local copy lingers after the skill has moved
+  into the monorepo, syncing would silently overwrite newer in-repo content with
+  older local content. Any skill whose in-repo SKILL.md version is strictly
+  newer than the local one is therefore REFUSED and skipped; the rest of the
+  sync still runs and the script exits 3. Use --force-local to override.
+
+Exit status:
+  0  success   1  usage/setup error   3  completed, but skills were refused
 
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
@@ -59,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --add-plugin)   ADD_PLUGIN="$2"; shift 2 ;;
     --github-user)  GITHUB_USER="$2"; shift 2 ;;
     --author)       AUTHOR="$2"; shift 2 ;;
+    --force-local)  FORCE_LOCAL=true; shift ;;
     -h|--help)      usage ;;
     -*)             echo "Error: Unknown option: $1" >&2; exit 1 ;;
     *)              MONOREPO_DIR="$1"; shift ;;
@@ -90,6 +106,23 @@ skill_source_dir() {
 canonical_dir() {
   if [[ -d "$1" ]]; then (cd "$1" && pwd -P); else echo "$1"; fi
 }
+
+# True when version $1 is strictly newer than version $2. Semver-aware via
+# `sort -V`, so 2.4.10 correctly beats 2.4.9 (a string compare would not).
+# Either side empty/unparseable => false, so an unknown version never triggers
+# a refusal.
+version_gt() {
+  local a="$1" b="$2"
+  [[ -z "$a" || -z "$b" ]] && return 1
+  [[ "$a" =~ ^[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+  [[ "$b" =~ ^[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+  [[ "$a" == "$b" ]] && return 1
+  [[ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -1)" == "$a" ]]
+}
+
+# Skills refused by the reversion guard (newline-separated) and their count.
+REFUSED_SKILLS=""
+REFUSED_COUNT=0
 
 # --- Resolve GitHub user (via shared _lib.sh) ---
 resolve_github_user
@@ -195,6 +228,45 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
     echo "  in-repo source — already in place, nothing to copy"
   fi
 
+  # --- Reversion guard ---
+  # skill_source_dir() is local-first, so a stale local copy left behind after a
+  # skill moved into the monorepo still wins and this loop would copy it
+  # backwards over newer in-repo content. Distinguish the two directions by
+  # version: for a normal skill the in-repo copy is just the previous sync's
+  # output, so it is older or equal — that is a legitimate forward sync.
+  # Only a strictly newer in-repo version means the local copy is behind.
+  SKILL_REVERTED=false
+  if ! $SKILL_IN_PLACE && [[ -f "$SKILL_DST/SKILL.md" ]]; then
+    SRC_VER=$(extract_version "$SKILL_MD")
+    DST_VER=$(extract_version "$SKILL_DST/SKILL.md")
+    if version_gt "$DST_VER" "$SRC_VER"; then
+      if $FORCE_LOCAL; then
+        echo "  WARNING: in-repo copy is NEWER (v$DST_VER) than the local source (v$SRC_VER)"
+        echo "           --force-local given — overwriting it with the local copy."
+      else
+        echo "  REFUSED: syncing would revert newer in-repo content"
+        echo "    local source: $SKILL_SRC (v$SRC_VER)"
+        echo "    in-repo dest: $SKILL_DST (v$DST_VER)"
+        echo "    The local copy is stale; copying it would downgrade the monorepo."
+        echo "    To proceed deliberately, either:"
+        echo "      - remove the stale local copy so the in-repo copy becomes the source:"
+        echo "          rm -rf $SKILL_SRC"
+        echo "      - or re-run with --force-local to let the local copy win."
+        SKILL_REVERTED=true
+        REFUSED_SKILLS="${REFUSED_SKILLS}${SKILL_NAME}"$'\n'
+        REFUSED_COUNT=$((REFUSED_COUNT + 1))
+        # Describe the skill by what the repo actually holds, so the catalog row
+        # built below (and the root README generated from it) is not rewritten
+        # with the stale local metadata of a skill we are declining to sync.
+        SKILL_MD="$SKILL_DST/SKILL.md"
+      fi
+    elif [[ -n "$SRC_VER" && "$SRC_VER" == "$DST_VER" ]] \
+         && ! diff -q "$SKILL_MD" "$SKILL_DST/SKILL.md" >/dev/null 2>&1; then
+      echo "  NOTE: same version (v$SRC_VER) but content differs — treating as an"
+      echo "        un-bumped local edit and syncing forward."
+    fi
+  fi
+
   # Extract metadata
   NAME=$(extract_field "$SKILL_MD" "name")
   DESCRIPTION=$(extract_field "$SKILL_MD" "description")
@@ -220,6 +292,13 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
   fi
   CATALOG_ROWS="${CATALOG_ROWS}| [$SKILL_NAME](./$SKILL_NAME/) | $VERSION | $SHORT | $REPO_LINK |
 "
+
+  # Refused above: the catalog row is kept (from the in-repo metadata) so the
+  # root README is unchanged, but nothing is copied for this skill.
+  if $SKILL_REVERTED; then
+    echo ""
+    continue
+  fi
 
   if ! $SKILL_IN_PLACE; then
     # Copy SKILL.md
@@ -398,6 +477,22 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
 
     # Skip if --add-plugin targets this same plugin (handled below)
     [[ "$ADD_PLUGIN" == "$_MANIFEST_NAME" ]] && continue
+
+    # A skill refused by the reversion guard must not be rebuilt into a plugin
+    # either: prepare-plugin.sh reads the same stale local source, so the rsync
+    # below would revert plugins/<name>/ exactly as the main loop would have.
+    if [[ -n "$REFUSED_SKILLS" ]]; then
+      _REFUSED_IN_PLUGIN=""
+      for _PLUGIN_SKILL in $(jq -r '.skills[]?.name // empty' "$_MANIFEST" 2>/dev/null); do
+        if printf '%s' "$REFUSED_SKILLS" | grep -qxF "$_PLUGIN_SKILL"; then
+          _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
+        fi
+      done
+      if [[ -n "$_REFUSED_IN_PLUGIN" ]]; then
+        echo "  SKIP (reversion guard)  plugins/$_MANIFEST_NAME  —  stale local source for: $_REFUSED_IN_PLUGIN"
+        continue
+      fi
+    fi
 
     # Check if source skill content has changed vs the monorepo plugin copy.
     # Build if: (a) plugin doesn't exist in monorepo yet, or (b) source has drifted.
@@ -1095,7 +1190,7 @@ echo ""
 if $DRY_RUN; then
   echo "Dry run complete. No files were written."
 else
-  echo "Sync complete. $SKILL_COUNT skills synced to $MONOREPO_DIR"
+  echo "Sync complete. $((SKILL_COUNT - REFUSED_COUNT)) skills synced to $MONOREPO_DIR"
   if [[ -n "$AUTO_BUILT_PLUGINS" ]]; then
     echo "Auto-built plugins: $AUTO_BUILT_PLUGINS"
   fi
@@ -1107,4 +1202,15 @@ else
     echo "  git commit -m \"Sync skills ($TODAY)\""
     echo "  git push"
   fi
+fi
+
+# A run that declined to sync part of its input has not succeeded, so exit
+# non-zero (3, distinct from the exit-1 usage/setup errors) after doing all the
+# work it safely could. Callers and CI then see the skip instead of a clean 0.
+if [[ "$REFUSED_COUNT" -gt 0 ]]; then
+  echo ""
+  echo "REFUSED $REFUSED_COUNT skill(s) — stale local source would have reverted newer in-repo content:"
+  printf '%s' "$REFUSED_SKILLS" | sed 's/^/  - /'
+  echo "Remove the stale local copies, or re-run with --force-local to override."
+  exit 3
 fi

@@ -27,6 +27,14 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Manifest-schema documentation for the in-repo `source` form and its resolution rule. (#61)
+- Reversion guard in `sync-monorepo.sh`: source resolution is local-first, so a stale local
+  copy left behind after a skill moved into the monorepo silently overwrote newer in-repo
+  content with older content — and then rebuilt the plugin from the reverted source, exiting
+  0. A skill whose in-repo `SKILL.md` version is strictly newer than the local one (semver
+  comparison via `sort -V`) is now REFUSED with both paths and both versions named, skipped
+  in both the main sync loop and the plugin auto-build, and reported in a closing summary
+  with exit status 3. Equal versions with differing content still sync forward (with a
+  note); an unknown or unparseable version never refuses. `--force-local` overrides. (#61)
 
 ### Changed
 
