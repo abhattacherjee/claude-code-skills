@@ -45,3 +45,13 @@ Initial plugin release.
   registered name from the separately-installed `git-flow` plugin, and
   removed the `ui-pr-review` entry, which named a skill that doesn't exist
   anywhere in this repo or marketplace (#59).
+- Relabeled the hardcoded "Implementation rules" list in Phase 4 as an
+  example drawn from the authoring project's CLAUDE.md rather than
+  unattributed defaults, since a reading agent could otherwise apply
+  another codebase's design system as if the installer had authored it;
+  Phase 5's build/lint step now points at the tooling discovered in Phase 1
+  instead of hardcoding `npm run build` / `npm run lint` (#59).
+- Phase 2's branch-creation commands and Phase 8's `gh pr create --base
+  develop` now explicitly reference the integration branch discovered in
+  Phase 1, so a single-trunk repo with no `develop` branch doesn't dead-end
+  on a Git-Flow-only assumption (#59).

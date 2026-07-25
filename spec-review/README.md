@@ -103,17 +103,17 @@ Bruno **cannot** simulate: [list of non-API scenarios]
 
 ## Install
 
-### From Monorepo (Recommended)
+### Via Marketplace (Recommended)
+
+Install via the marketplace: `/plugin install spec-review@claude-code-skills`.
+
+### From Monorepo (Manual)
 
 ```bash
 git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
 /tmp/ccs/scripts/install-plugin.sh /tmp/ccs/plugins/spec-review
 rm -rf /tmp/ccs
 ```
-
-### Manual
-
-Install via the marketplace: `/plugin install spec-review@claude-code-skills`.
 
 ## License
 

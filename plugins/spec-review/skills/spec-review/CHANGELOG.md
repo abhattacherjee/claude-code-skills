@@ -29,6 +29,10 @@ All notable changes to spec-review are documented here.
   `feature-dev` plugin, with `general-purpose` as the documented fallback;
   softened the "Notes" section's unconditional claim that feature-dev's
   agents are reused into a conditional statement covering that fallback (#59).
+- README's `### Manual` install heading contained only a marketplace
+  one-liner, contradicting its own title; retitled to `### Via Marketplace`
+  and reordered ahead of the monorepo clone steps so the simpler
+  marketplace path reads as the recommended install method (#59).
 
 ### Changed
 

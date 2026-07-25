@@ -67,6 +67,8 @@ Before starting, determine workflow and create the task checklist:
 
 **TaskUpdate: task 2 `in_progress`**
 
+> Branch from the integration branch identified in Phase 1 — `develop` under Git Flow, `main` on a single-trunk repo. The commands below assume Git Flow; substitute the discovered branch name.
+
 ```bash
 git checkout develop
 git pull origin develop
@@ -107,7 +109,8 @@ For each sub-task in the spec:
    ```
 4. **Run `npm run lint`** after each sub-task if changes are substantial (catch errors early)
 
-**Implementation rules (from CLAUDE.md):**
+**Implementation rules — EXAMPLE ONLY, from the authoring project's CLAUDE.md:**
+> Replace these with the rules you actually read from the target project's CLAUDE.md in Phase 1. They are shown as an illustration of the KIND of rule to extract, not as defaults to apply.
 - Import DS components from `@/design-system` (never direct paths)
 - Use `th-*` tokens for colors (never `text-white`, `bg-black`)
 - Use `font-[Orbitron]` or `font-[Rajdhani]` only (never `font-sans`)
@@ -133,12 +136,7 @@ If any new DS component was added to `packages/design-system/src/components.tsx`
 
 **TaskUpdate: task 4/6 `in_progress`**
 
-```bash
-npm run build    # TypeScript check + Vite build
-npm run lint     # ESLint
-```
-
-Both must pass with zero errors. If either fails:
+Run the target project's build and lint commands (discovered in Phase 1; `npm run build` / `npm run lint` on a typical npm project). Both must pass with zero errors. If either fails:
 - Read the error output
 - Fix the issue
 - Re-run until clean
@@ -226,7 +224,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 2. **Push and create PR:**
 ```bash
 git push -u origin feature/<story-slug>
-gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body "..."
+gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body "..." # use the integration branch identified in Phase 1
 ```
 
 3. **PR body must include:**
