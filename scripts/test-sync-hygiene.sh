@@ -51,6 +51,7 @@ if [[ ! -x "$SYNC_SCRIPT" ]]; then
 fi
 
 FAIL_COUNT=0
+SKIPPED_COUNT=0
 
 SCRATCH_DIR="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH_DIR"' EXIT
@@ -113,7 +114,8 @@ assert_line_absent() {
 # ============================================================
 #
 #   skills-home/demo-skill/{SKILL.md,plugin-manifest.json}   the authoring source
-#   monorepo/demo-skill/                                     a real skill (positive control)
+#   monorepo/demo-skill/                                     local-source skill (positive control)
+#   monorepo/inrepo-skill/SKILL.md                           in-repo-source-only skill (positive control)
 #   monorepo/docs/                                           non-skill dir, must be filtered
 #   monorepo/build/                                          non-skill dir, must be filtered
 #   run-cwd/                                                 the sync is invoked from here
@@ -121,6 +123,15 @@ assert_line_absent() {
 # monorepo/ deliberately has no .gitignore, so the sync CREATEs one and the
 # embedded template is what gets asserted (write_file does not overwrite an
 # existing .gitignore).
+#
+# The two positive-control skills are not redundant: skill_source_dir() has two
+# branches, and demo-skill (which exists under BOTH skills-home/ and monorepo/)
+# only ever exercises the first. inrepo-skill exists in the monorepo alone, so it
+# is the only fixture that reaches the `elif [[ -f "$MONOREPO_DIR/$name/SKILL.md" ]]`
+# fallback. That branch is load-bearing in the real repo — github-board-move and
+# the three spec-* skills have no local copy and resolve through it exclusively —
+# and losing it would drop all four from every sync behind a reassuring
+# "SKIP (not a skill: no SKILL.md)" line.
 
 SKILLS_HOME_FIXTURE="$SCRATCH_DIR/skills-home"
 MONOREPO_FIXTURE="$SCRATCH_DIR/monorepo"
@@ -128,6 +139,7 @@ RUN_CWD="$SCRATCH_DIR/run-cwd"
 
 mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$MONOREPO_FIXTURE/demo-skill" \
+         "$MONOREPO_FIXTURE/inrepo-skill" \
          "$MONOREPO_FIXTURE/docs" \
          "$MONOREPO_FIXTURE/build" \
          "$RUN_CWD"
@@ -160,6 +172,21 @@ cat > "$SKILLS_HOME_FIXTURE/demo-skill/plugin-manifest.json" <<'EOF'
   ],
   "commands": []
 }
+EOF
+
+# No skills-home counterpart — this skill's only source is the monorepo itself,
+# which is what forces skill_source_dir() down its in-repo branch. The sync loop
+# then takes its SKILL_IN_PLACE path (source == destination, nothing to copy).
+cat > "$MONOREPO_FIXTURE/inrepo-skill/SKILL.md" <<'EOF'
+---
+name: inrepo-skill
+description: Throwaway fixture skill sourced from the monorepo only — exercises skill_source_dir()'s in-repo branch.
+version: 0.1.0
+---
+
+# In-repo Skill
+
+Fixture content.
 EOF
 
 echo "fixture" > "$MONOREPO_FIXTURE/docs/notes.md"
@@ -200,7 +227,8 @@ SYNCED_NAMES=$(printf '%s\n' "$SYNC_STDOUT" \
     | awk '/^Skills to sync /{f=1; next} f && /^$/{exit} f{print}' \
     | sed 's/^  - //')
 
-assert_line_present "positive control: a real skill is still synced" "demo-skill" "$SYNCED_NAMES"
+assert_line_present "positive control: a local-source skill is still synced" "demo-skill" "$SYNCED_NAMES"
+assert_line_present "positive control: an in-repo-source-only skill is still synced" "inrepo-skill" "$SYNCED_NAMES"
 assert_line_absent "docs/ is not in the \"Skills to sync\" list" "docs" "$SYNCED_NAMES"
 assert_line_absent "build/ is not in the \"Skills to sync\" list" "build" "$SYNCED_NAMES"
 
@@ -266,12 +294,21 @@ if [[ -f "$LIVE_SYNC_SCRIPT" ]]; then
     assert_eq "live authoring copy is byte-identical to the in-repo copy" "" \
         "$(diff -q "$LIVE_SYNC_SCRIPT" "$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/scripts/sync-monorepo.sh" >/dev/null 2>&1 || echo DIFFERS)"
 else
-    echo "INFO: live authoring copy not present, parity check skipped: $LIVE_SYNC_SCRIPT"
+    echo "SKIP: live authoring copy not present, parity check skipped: $LIVE_SYNC_SCRIPT"
+    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
 fi
 
+# The summary reports skips explicitly: without the count, a run where an
+# assertion was skipped and a run where it passed both print the same
+# "All assertions passed." line, so a check that silently stopped running looks
+# exactly like a check that is green.
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
-    echo "All assertions passed."
+    if [[ "$SKIPPED_COUNT" -eq 0 ]]; then
+        echo "All assertions passed."
+    else
+        echo "All assertions passed ($SKIPPED_COUNT skipped)."
+    fi
     exit 0
 else
     echo "$FAIL_COUNT assertion(s) failed."
