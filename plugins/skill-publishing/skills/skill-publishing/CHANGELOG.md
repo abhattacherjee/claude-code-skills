@@ -52,6 +52,34 @@ All notable changes to this project will be documented in this file.
   checks for that empty result itself and exits with `Error: --add produced no skill
   names from: '<value>'` naming the offending argument, instead of letting `grep`'s exit
   status propagate unexplained. (#74)
+- A failed plugin auto-build was undiagnosable. `prepare-plugin.sh` ran under
+  `>/dev/null 2>&1`, and on failure the only output was
+  `Warning: prepare-plugin.sh failed for <manifest>`. That was survivable while the build
+  stage was `./build/<name>/` in the caller's cwd — the partial tree stayed behind to
+  inspect and re-run by hand — but the temp-stage fix above deletes the stage on every
+  path including this one, leaving the discarded child output as the only evidence a
+  failure ever produced. The child's stdout and stderr are now captured to a log and
+  echoed to stderr, prefixed, when the build fails. The log lives in the stage root
+  rather than inside the build directory, which `prepare-plugin.sh` `rm -rf`s on entry —
+  a log written there would be unlinked out from under the open descriptor and read back
+  empty. The run still exits 0: that is a separate defect, tracked as #73, and is
+  deliberately unchanged here. (#74)
+- The `.gitignore` template fix above reaches a freshly `--init`-ed monorepo only.
+  `write_file` does not overwrite, so every already-published monorepo takes the
+  `SKIP    .gitignore (already exists)` branch instead — a line that reads exactly the
+  same whether the existing file carries the rule or not, so the fix reached nobody who
+  already had a monorepo and said nothing about it. A non-fatal `NOTE` now names the
+  missing `/build/` pattern and why it matters (the `git add -A` in the script's own
+  Next-steps banner). Advisory only: the file belongs to the monorepo, and refusing to
+  sync over a hand-edited `.gitignore` would be a worse failure than the untracked
+  `build/` tree it warns about. (#74)
+- The manifest-shadowing lookup read `$_SEEN_MANIFESTS` through an `awk` that `exit`s on
+  first match — the same early-exiting-reader shape as the `| head -1` removed above, and
+  likewise evaluated with the auto-build EXIT trap already registered, the condition that
+  turns a silent SIGPIPE into a reported `write error: Broken pipe`. The payload is a few
+  KiB at this repo's scale, far below the 64 KiB pipe buffer, so it could not fire; the
+  reader now drains its input (`$1==n && !f {print $2; f=1}`, first-match-wins preserved)
+  so it cannot start to. (#74)
 
 ## [4.2.0] - 2026-07-25
 

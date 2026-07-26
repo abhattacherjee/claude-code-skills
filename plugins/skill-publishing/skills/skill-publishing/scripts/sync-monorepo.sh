@@ -533,7 +533,14 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
 
     # Local-first precedence. Announce every shadowed manifest by name — a
     # silent skip here is exactly what makes a stale source invisible.
-    _SHADOWED_BY=$(printf '%s' "$_SEEN_MANIFESTS" | awk -F'\t' -v n="$_MANIFEST_NAME" '$1==n {print $2; exit}')
+    # No `exit` in the awk body: an early-exiting reader is the same shape as the
+    # `echo … | head -1` removed from the CHANGELOG stage below, and it is
+    # likewise evaluated with the EXIT trap already registered — the condition
+    # that turns a silent SIGPIPE into a visible "write error: Broken pipe".
+    # $_SEEN_MANIFESTS is a few KiB at this repo's scale, far under the 64 KiB
+    # pipe buffer, so it cannot fire today; keeping the reader draining its input
+    # means it cannot start to. `!f` keeps first-match-wins semantics.
+    _SHADOWED_BY=$(printf '%s' "$_SEEN_MANIFESTS" | awk -F'\t' -v n="$_MANIFEST_NAME" '$1==n && !f {print $2; f=1}')
     if [[ -n "$_SHADOWED_BY" ]]; then
       echo "  SKIP (shadowed)  $_MANIFEST  —  already claimed by $_SHADOWED_BY"
       continue
@@ -597,9 +604,18 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       if $DRY_RUN; then
         echo "  WOULD BUILD + SYNC  plugins/$_MANIFEST_NAME/"
       else
-        # Build the plugin via prepare-plugin.sh, into the temp stage dir
+        # Build the plugin via prepare-plugin.sh, into the temp stage dir.
+        # The child's output is captured rather than discarded: on the failure
+        # path below it holds the only actionable line (e.g.
+        # "ERROR: skill source not found: <path>"), and since the stage is a
+        # mktemp -d removed by the EXIT trap, there is no longer a partial
+        # ./build/<name>/ tree left in the caller's cwd to post-mortem instead.
+        # The log lives in the stage root, NOT in $_BUILD_DIR: prepare-plugin.sh
+        # starts with `rm -rf "$OUTPUT_DIR"`, which would unlink the log out from
+        # under the open descriptor and leave it reading empty.
         _BUILD_DIR="$_AUTO_BUILD_TMP/$_MANIFEST_NAME"
-        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" "$_MANIFEST" >/dev/null 2>&1; then
+        _BUILD_LOG="$_AUTO_BUILD_TMP/$_MANIFEST_NAME.log"
+        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" "$_MANIFEST" >"$_BUILD_LOG" 2>&1; then
           if [[ -d "$_BUILD_DIR/.claude-plugin" ]]; then
             # Preserve hand-written README if it exists in destination
             _PRESERVED_README=""
@@ -626,7 +642,13 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
             echo "  Warning: build produced no plugin at $_BUILD_DIR"
           fi
         else
+          # Surface the child's own diagnosis. Without it the operator gets a
+          # bare "failed" line, an exit status of 0, and no artifact left on
+          # disk to look at — the failure becomes undiagnosable. The exit-0
+          # behaviour itself is deliberate here and tracked separately (#73);
+          # this is only about not destroying the evidence.
           echo "  Warning: prepare-plugin.sh failed for $_MANIFEST"
+          sed 's/^/    | /' "$_BUILD_LOG" >&2
         fi
       fi
       echo ""
@@ -1113,6 +1135,23 @@ GITIGNORE=".DS_Store
 /build/"
 
 write_file "$MONOREPO_DIR/.gitignore" "$GITIGNORE" ".gitignore"
+
+# write_file does not overwrite, so the template above only ever reaches a
+# freshly --init-ed monorepo. An already-published one keeps whatever .gitignore
+# it has and gets a bare "SKIP    .gitignore (already exists)" line, which reads
+# exactly like "already correct" — so the fix above would reach nobody who
+# already has a monorepo, silently. Say so instead.
+#
+# Advisory, never fatal: the file belongs to the monorepo, not to this script,
+# and refusing to sync over a hand-edited .gitignore would be a far worse
+# failure than the untracked build/ tree this warns about. The test is for the
+# literal root-anchored line, matching what the template writes; a monorepo
+# ignoring build/ some other way gets a NOTE it can ignore.
+if [[ -f "$MONOREPO_DIR/.gitignore" ]] && ! grep -qxF '/build/' "$MONOREPO_DIR/.gitignore"; then
+  echo "  NOTE: .gitignore exists but has no '/build/' line — prepare-plugin.sh"
+  echo "        writes ./build/<name>/ by default, and the 'git add -A' in the"
+  echo "        Next steps below would commit it. Add: /build/"
+fi
 
 # --- LICENSE ---
 LICENSE_CONTENT="MIT License

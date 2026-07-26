@@ -45,7 +45,24 @@ set -euo pipefail
 #      does not have it — with no `--add`, an empty result there is just the
 #      ordinary "0 skills to sync" case (defect 5) and exits 0 by design.
 #
-# The whole run is hermetic: a throwaway SKILLS_HOME and seven throwaway
+#   8. The plugin auto-build ran prepare-plugin.sh under `>/dev/null 2>&1` and,
+#      on failure, printed only "Warning: prepare-plugin.sh failed for <manifest>".
+#      That was survivable while the build stage was `./build/<name>/` in the
+#      caller's cwd — the partial tree stayed behind to inspect and re-run by
+#      hand. Defect 2's fix moved the stage into a mktemp -d that the EXIT trap
+#      deletes on every path including this one, so the child's own diagnosis
+#      (e.g. "ERROR: skill source not found: …") became the only evidence that
+#      ever existed, and it was the thing being discarded. It is now captured to
+#      a log in the stage root — not inside the build dir, which prepare-plugin.sh
+#      `rm -rf`s on entry — and echoed to stderr on failure. The run still exits
+#      0: that is a separate defect, tracked as #73, deliberately unchanged here.
+#   9. The .gitignore template fix (defect 3) reaches freshly --init-ed monorepos
+#      only. write_file does not overwrite, so an already-published monorepo gets
+#      "SKIP    .gitignore (already exists)" — indistinguishable from "already
+#      correct" — and no signal that it lacks the rule. A non-fatal NOTE now says
+#      so, naming the pattern to add.
+#
+# The whole run is hermetic: two throwaway SKILLS_HOMEs and nine throwaway
 # monorepos are built under mktemp, the syncs are invoked from a throwaway cwd,
 # and `gh` is shimmed off PATH so nothing reaches the network. The live repo is
 # never passed to sync-monorepo.sh.
@@ -67,7 +84,12 @@ SYNC_SCRIPT="${SYNC_SCRIPT:-$REPO_ROOT/plugins/skill-publishing/skills/skill-pub
 
 # The authoring source of truth for skill-publishing lives outside the repo.
 # Checked when present (developer machines), reported as unavailable in CI.
-LIVE_SYNC_SCRIPT="${LIVE_SYNC_SCRIPT:-$HOME/.claude/skills/skill-publishing/scripts/sync-monorepo.sh}"
+# The whole skill directory, not just the script: a change to this skill lands in
+# SKILL.md (metadata.version, which drives the reversion guard), CHANGELOG.md and
+# scripts/ alike, and a parity check narrower than the publish relationship it
+# describes lets the rest drift unnoticed.
+LIVE_SKILL_DIR="${LIVE_SKILL_DIR:-$HOME/.claude/skills/skill-publishing}"
+IN_REPO_SKILL_DIR="$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing"
 
 # The harness runs under `set -euo pipefail`, so an unusable script under test
 # would die with rc=127 and no summary — unhelpful for the documented
@@ -232,11 +254,21 @@ chmod +x "$GH_SHIM_DIR/gh"
 #   monorepo-skillsn/                                        empty; -n reaches it via --skills -n
 #   monorepo-addn/                                           empty; -n reaches it via --add -n
 #   monorepo-addcomma/                                       empty; --add , must fail loudly, not silently abort
+#   skills-home-buildfail/broken-plugin/plugin-manifest.json  manifest naming a source that does not exist
+#   monorepo-buildfail/                                      empty; target of the failing-auto-build run
+#   monorepo-gitignore/.gitignore                            pre-existing .gitignore with no /build/ line
 #   run-cwd/                                                 every sync is invoked from here
 #
-# The monorepos deliberately have no .gitignore, so the sync CREATEs one and the
-# embedded template is what gets asserted (write_file does not overwrite an
-# existing .gitignore).
+# Every monorepo but monorepo-gitignore/ deliberately has no .gitignore, so the
+# sync CREATEs one and the embedded template is what gets asserted. That is also
+# why monorepo-gitignore/ has to be a tree of its own: write_file does not
+# overwrite, so the "already exists" branch — the one an already-published
+# monorepo always takes — is only reachable with a file already in place.
+#
+# skills-home-buildfail/ is a second SKILLS_HOME rather than one more manifest in
+# the shared one because the auto-build stage scans $SKILLS_HOME/*/ on every run:
+# a deliberately broken manifest living there would print its failure into all
+# nine runs and leave every other assertion reading around it.
 #
 # The two positive-control skills are not redundant: skill_source_dir() has two
 # branches, and demo-skill (which exists under BOTH skills-home/ and monorepo/)
@@ -258,7 +290,15 @@ MONOREPO_DASHN_FIXTURE="$SCRATCH_DIR/monorepo-dashn"
 MONOREPO_SKILLSN_FIXTURE="$SCRATCH_DIR/monorepo-skillsn"
 MONOREPO_ADDN_FIXTURE="$SCRATCH_DIR/monorepo-addn"
 MONOREPO_ADDCOMMA_FIXTURE="$SCRATCH_DIR/monorepo-addcomma"
+SKILLS_HOME_BUILDFAIL_FIXTURE="$SCRATCH_DIR/skills-home-buildfail"
+MONOREPO_BUILDFAIL_FIXTURE="$SCRATCH_DIR/monorepo-buildfail"
+MONOREPO_GITIGNORE_FIXTURE="$SCRATCH_DIR/monorepo-gitignore"
 RUN_CWD="$SCRATCH_DIR/run-cwd"
+
+# The source path the broken manifest names. Absolute, so resolve_source_path
+# returns it untouched and the error text is fixed rather than carrying this
+# run's scratch path — the assertion below can then match the whole line.
+BROKEN_SKILL_SOURCE="/nonexistent/sync-hygiene-harness-no-such-skill-source"
 
 # The auto-built plugin's name, carrying this run's PID. The temp-stage leak
 # assertion below identifies a leaked stage by looking for this name inside it,
@@ -284,6 +324,9 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$MONOREPO_SKILLSN_FIXTURE" \
          "$MONOREPO_ADDN_FIXTURE" \
          "$MONOREPO_ADDCOMMA_FIXTURE" \
+         "$SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin" \
+         "$MONOREPO_BUILDFAIL_FIXTURE" \
+         "$MONOREPO_GITIGNORE_FIXTURE" \
          "$RUN_CWD"
 
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
@@ -371,6 +414,38 @@ version: 0.1.0
 Fixture content.
 EOF
 
+# A manifest whose skill source does not exist, so prepare-plugin.sh exits 1
+# with "  ERROR: skill source not found: <path>" on stderr. That line is the
+# whole point of the fixture: it is the actionable text the auto-build used to
+# throw away, and with the build stage now a mktemp -d that the EXIT trap
+# removes, there is no partial build tree left to recover it from either.
+# No SKILL.md beside it — the auto-build stage keys off the manifest alone, and
+# this SKILLS_HOME is never used for a skill sync.
+cat > "$SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin/plugin-manifest.json" <<EOF
+{
+  "name": "broken-plugin-$$",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin whose skill source deliberately does not exist.",
+  "skills": [
+    {
+      "name": "missing-skill",
+      "source": "$BROKEN_SKILL_SOURCE"
+    }
+  ],
+  "commands": []
+}
+EOF
+
+# An already-published monorepo's .gitignore: plausible, and without /build/.
+# The template written into a fresh monorepo cannot reach this file — write_file
+# skips it — so the only thing that can tell the operator is an advisory line.
+cat > "$MONOREPO_GITIGNORE_FIXTURE/.gitignore" <<'EOF'
+.DS_Store
+*.swp
+*~
+.claude/
+EOF
+
 # A deliberately oversized CHANGELOG: 157,576 bytes of extracted entry text
 # (measured; ~154 KiB), well past the 64 KiB pipe buffer. Two separate defects
 # key off its shape.
@@ -423,7 +498,7 @@ EOF
 # Sync invocations
 # ============================================================
 #
-# Seven runs, all from the same throwaway cwd:
+# Nine runs, all from the same throwaway cwd:
 #   1. plain sync of monorepo/            — the main hygiene surface
 #   2. --add added-skill on monorepo-add/ — the SECOND filter site (line ~197)
 #   3. plain sync of monorepo-empty/      — the empty-skill-list branch
@@ -431,6 +506,8 @@ EOF
 #   5. --skills -n on monorepo-skillsn/   — the same name, through --skills
 #   6. --add -n on monorepo-addn/         — the same name, through --add
 #   7. --add , on monorepo-addcomma/      — must fail loudly, not silently abort
+#   8. plain sync of monorepo-buildfail/  — a failing auto-build must stay diagnosable
+#   9. plain sync of monorepo-gitignore/  — a pre-existing .gitignore with no /build/
 #
 # Run 2 exists because sync-monorepo.sh filters at two independent sites and a
 # single no-`--add` invocation executes only one of them. Reverting the filter
@@ -453,15 +530,30 @@ EOF
 # same shape and does not have it: with no `--add`, an empty result there is
 # just the ordinary "0 skills to sync" case (defect 5, above) and the run exits
 # 0 by design, so it gets no separate assertion.
+#
+# Run 8 is the only one using the second SKILLS_HOME. It is a separate run and a
+# separate home so the deliberate build failure stays confined to it: the
+# auto-build stage scans $SKILLS_HOME/*/plugin-manifest.json on every invocation,
+# so a broken manifest in the shared home would print into all nine runs.
+#
+# Run 9 is the only monorepo that starts with a .gitignore already on disk, which
+# is the only way to reach write_file's "already exists" branch — the branch an
+# already-published monorepo takes on every sync, and the one the template fix
+# cannot reach.
+#
+# SKILLS_HOME is an explicit first argument rather than an environment prefix on
+# the call (`VAR=x run_sync …`): whether such an assignment persists past a shell
+# *function* differs between bash's default and POSIX modes, and a home that
+# leaked into the following run would be a silent cross-run contamination.
 
 run_sync() {
-    local monorepo="$1" stdout_log="$2" stderr_log="$3"
-    shift 3
+    local skills_home="$1" monorepo="$2" stdout_log="$3" stderr_log="$4"
+    shift 4
     local rc=0
     (
         cd "$RUN_CWD"
         PATH="$GH_SHIM_DIR:$PATH" \
-        SKILLS_HOME="$SKILLS_HOME_FIXTURE" \
+        SKILLS_HOME="$skills_home" \
             "$SYNC_SCRIPT" --github-user harness-fixture-user "$@" "$monorepo"
     ) >"$stdout_log" 2>"$stderr_log" || rc=$?
     return "$rc"
@@ -491,26 +583,26 @@ snapshot_mktemp_parent > "$TMP_BEFORE"
 STDOUT_LOG="$SCRATCH_DIR/sync.stdout"
 STDERR_LOG="$SCRATCH_DIR/sync.stderr"
 SYNC_RC=0
-run_sync "$MONOREPO_FIXTURE" "$STDOUT_LOG" "$STDERR_LOG" || SYNC_RC=$?
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_FIXTURE" "$STDOUT_LOG" "$STDERR_LOG" || SYNC_RC=$?
 SYNC_STDOUT="$(cat "$STDOUT_LOG")"
 SYNC_STDERR="$(cat "$STDERR_LOG")"
 
 ADD_STDOUT_LOG="$SCRATCH_DIR/add.stdout"
 ADD_STDERR_LOG="$SCRATCH_DIR/add.stderr"
 ADD_RC=0
-run_sync "$MONOREPO_ADD_FIXTURE" "$ADD_STDOUT_LOG" "$ADD_STDERR_LOG" --add added-skill || ADD_RC=$?
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADD_FIXTURE" "$ADD_STDOUT_LOG" "$ADD_STDERR_LOG" --add added-skill || ADD_RC=$?
 ADD_STDOUT="$(cat "$ADD_STDOUT_LOG")"
 
 EMPTY_STDOUT_LOG="$SCRATCH_DIR/empty.stdout"
 EMPTY_STDERR_LOG="$SCRATCH_DIR/empty.stderr"
 EMPTY_RC=0
-run_sync "$MONOREPO_EMPTY_FIXTURE" "$EMPTY_STDOUT_LOG" "$EMPTY_STDERR_LOG" || EMPTY_RC=$?
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_EMPTY_FIXTURE" "$EMPTY_STDOUT_LOG" "$EMPTY_STDERR_LOG" || EMPTY_RC=$?
 EMPTY_STDOUT="$(cat "$EMPTY_STDOUT_LOG")"
 
 DASHN_STDOUT_LOG="$SCRATCH_DIR/dashn.stdout"
 DASHN_STDERR_LOG="$SCRATCH_DIR/dashn.stderr"
 DASHN_RC=0
-run_sync "$MONOREPO_DASHN_FIXTURE" "$DASHN_STDOUT_LOG" "$DASHN_STDERR_LOG" || DASHN_RC=$?
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_DASHN_FIXTURE" "$DASHN_STDOUT_LOG" "$DASHN_STDERR_LOG" || DASHN_RC=$?
 DASHN_STDOUT="$(cat "$DASHN_STDOUT_LOG")"
 
 # Runs 5 and 6: the same -n name arriving through the two paths that bypass
@@ -524,13 +616,13 @@ DASHN_STDOUT="$(cat "$DASHN_STDOUT_LOG")"
 SKILLSN_STDOUT_LOG="$SCRATCH_DIR/skillsn.stdout"
 SKILLSN_STDERR_LOG="$SCRATCH_DIR/skillsn.stderr"
 SKILLSN_RC=0
-run_sync "$MONOREPO_SKILLSN_FIXTURE" "$SKILLSN_STDOUT_LOG" "$SKILLSN_STDERR_LOG" --skills -n || SKILLSN_RC=$?
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSN_FIXTURE" "$SKILLSN_STDOUT_LOG" "$SKILLSN_STDERR_LOG" --skills -n || SKILLSN_RC=$?
 SKILLSN_STDOUT="$(cat "$SKILLSN_STDOUT_LOG")"
 
 ADDN_STDOUT_LOG="$SCRATCH_DIR/addn.stdout"
 ADDN_STDERR_LOG="$SCRATCH_DIR/addn.stderr"
 ADDN_RC=0
-run_sync "$MONOREPO_ADDN_FIXTURE" "$ADDN_STDOUT_LOG" "$ADDN_STDERR_LOG" --add -n || ADDN_RC=$?
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDN_FIXTURE" "$ADDN_STDOUT_LOG" "$ADDN_STDERR_LOG" --add -n || ADDN_RC=$?
 ADDN_STDOUT="$(cat "$ADDN_STDOUT_LOG")"
 
 # Run 7: an ADD_SKILL that is itself nothing but separators. Expected to fail —
@@ -539,8 +631,27 @@ ADDN_STDOUT="$(cat "$ADDN_STDOUT_LOG")"
 ADDCOMMA_STDOUT_LOG="$SCRATCH_DIR/addcomma.stdout"
 ADDCOMMA_STDERR_LOG="$SCRATCH_DIR/addcomma.stderr"
 ADDCOMMA_RC=0
-run_sync "$MONOREPO_ADDCOMMA_FIXTURE" "$ADDCOMMA_STDOUT_LOG" "$ADDCOMMA_STDERR_LOG" --add , || ADDCOMMA_RC=$?
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMA_FIXTURE" "$ADDCOMMA_STDOUT_LOG" "$ADDCOMMA_STDERR_LOG" --add , || ADDCOMMA_RC=$?
 ADDCOMMA_STDERR="$(cat "$ADDCOMMA_STDERR_LOG")"
+
+# Run 8: the only run pointed at the second SKILLS_HOME, whose single manifest
+# names a skill source that does not exist. prepare-plugin.sh exits 1; the sync
+# warns and carries on to a clean exit 0 (that part is #73's, not this harness's).
+BUILDFAIL_STDOUT_LOG="$SCRATCH_DIR/buildfail.stdout"
+BUILDFAIL_STDERR_LOG="$SCRATCH_DIR/buildfail.stderr"
+BUILDFAIL_RC=0
+run_sync "$SKILLS_HOME_BUILDFAIL_FIXTURE" "$MONOREPO_BUILDFAIL_FIXTURE" "$BUILDFAIL_STDOUT_LOG" "$BUILDFAIL_STDERR_LOG" || BUILDFAIL_RC=$?
+BUILDFAIL_STDOUT="$(cat "$BUILDFAIL_STDOUT_LOG")"
+BUILDFAIL_STDERR="$(cat "$BUILDFAIL_STDERR_LOG")"
+
+# Run 9: a monorepo whose .gitignore already exists and lacks /build/ — the shape
+# every already-published monorepo has, and the one the embedded template can
+# never reach.
+GITIGNORE_STDOUT_LOG="$SCRATCH_DIR/gitignore.stdout"
+GITIGNORE_STDERR_LOG="$SCRATCH_DIR/gitignore.stderr"
+GITIGNORE_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_GITIGNORE_FIXTURE" "$GITIGNORE_STDOUT_LOG" "$GITIGNORE_STDERR_LOG" || GITIGNORE_RC=$?
+GITIGNORE_STDOUT="$(cat "$GITIGNORE_STDOUT_LOG")"
 
 snapshot_mktemp_parent > "$TMP_AFTER"
 
@@ -557,6 +668,8 @@ assert_eq "empty-monorepo run exits 0 on the fixture" "0" "$EMPTY_RC"
 assert_eq "dash-named-skill run exits 0 on the fixture" "0" "$DASHN_RC"
 assert_eq "--skills -n run exits 0 on the fixture" "0" "$SKILLSN_RC"
 assert_eq "--add -n run exits 0 on the fixture" "0" "$ADDN_RC"
+assert_eq "failing-auto-build run exits 0 on the fixture" "0" "$BUILDFAIL_RC"
+assert_eq "pre-existing-.gitignore run exits 0 on the fixture" "0" "$GITIGNORE_RC"
 
 assert_contains "control: the plugin auto-build stage actually ran" \
     "AUTO-SYNCED  plugins/$DEMO_PLUGIN_NAME/" "$SYNC_STDOUT"
@@ -699,6 +812,28 @@ assert_eq "no auto-build temp stage left behind under $MKTEMP_PARENT" \
     "" "${LEAKED_BUILD_STAGES% }"
 
 # ============================================================
+# Defect 8 — a failing auto-build must stay diagnosable
+# ============================================================
+#
+# Cleaning up the stage (above) is what made this urgent: with the partial
+# ./build/<name>/ tree gone from the caller's cwd, the child's own error line is
+# the only evidence a failure ever produces — and it was being sent to
+# /dev/null. Asserted on that line's *content*: a Warning that says "failed" and
+# nothing else is precisely the undiagnosable state this closes.
+
+assert_contains "control: the auto-build failure path actually ran" \
+    "Warning: prepare-plugin.sh failed for" "$BUILDFAIL_STDOUT"
+
+assert_line_present "the failing child's own error line reaches the operator" \
+    "    |   ERROR: skill source not found: $BROKEN_SKILL_SOURCE" "$BUILDFAIL_STDERR"
+
+# The other half of the control pair: proves the run took the failure branch
+# rather than somehow succeeding, so the assertion above cannot be satisfied by a
+# build that worked and printed the line for some unrelated reason.
+assert_not_contains "a failed build is not also reported as synced" \
+    "AUTO-SYNCED" "$BUILDFAIL_STDOUT"
+
+# ============================================================
 # Defect 3 — build/ must be gitignored, in both .gitignore sites
 # ============================================================
 
@@ -751,6 +886,30 @@ NESTED_BUILD_RC=0
 git -C "$REPO_ROOT" check-ignore -q "plugins/placeholder/build/" || NESTED_BUILD_RC=$?
 
 assert_eq "this repo's .gitignore does NOT ignore a nested build/" "1" "$NESTED_BUILD_RC"
+
+# ============================================================
+# Defect 9 — an already-published monorepo must be told, not skipped past
+# ============================================================
+#
+# Site A above only covers monorepos that do not have a .gitignore yet, because
+# write_file does not overwrite: every monorepo that already exists — including
+# this one — takes the "already exists" branch and receives the template's fix
+# never. All that branch printed was a SKIP line, which reads identically whether
+# the existing file carries the rule or not. A non-fatal NOTE now distinguishes
+# them.
+
+assert_contains "control: the .gitignore stage reached its \"already exists\" branch" \
+    "SKIP    .gitignore (already exists)" "$GITIGNORE_STDOUT"
+
+assert_contains "an existing .gitignore with no /build/ line is called out" \
+    "NOTE: .gitignore exists but has no '/build/' line" "$GITIGNORE_STDOUT"
+
+# …and the NOTE is conditional, not decoration. Run 1's monorepo started with no
+# .gitignore, so the sync wrote the template — which carries /build/ — and there
+# is nothing left to advise about. Without this, an advisory printed
+# unconditionally would satisfy the assertion above just as well.
+assert_not_contains "a .gitignore that carries /build/ draws no NOTE" \
+    "NOTE: .gitignore" "$SYNC_STDOUT"
 
 # ============================================================
 # Defect 4 — the CHANGELOG's top entry must survive a sync
@@ -853,11 +1012,28 @@ assert_contains "--add , explains itself on stderr, naming the offending argumen
 # A fix applied to only one copy is a fix that either nobody receives or the
 # next sync silently reverts. The live copy does not exist in CI.
 
-if [[ -f "$LIVE_SYNC_SCRIPT" ]]; then
-    assert_eq "live authoring copy is byte-identical to the in-repo copy" "" \
-        "$(diff -q "$LIVE_SYNC_SCRIPT" "$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/scripts/sync-monorepo.sh" >/dev/null 2>&1 || echo DIFFERS)"
+# Compared as a tree. The single-file form this replaced diffed scripts/
+# sync-monorepo.sh alone while describing the whole publish relationship, so
+# SKILL.md and CHANGELOG.md — two of the three files a typical change to this
+# skill touches — could drift with the check still green. SKILL.md is the
+# load-bearing one: its metadata.version is what the reversion guard compares, so
+# a live copy left behind on the older version is exactly the stale-source shape
+# that guard exists to catch.
+#
+# The live copy is its own git repo and carries repo scaffolding the published
+# copy has no business containing (verified: these seven names are the entire
+# delta). Filtered by anchored whole-line match on diff's own "Only in <live>:"
+# form, so the exclusion applies to those top-level entries and nothing nested.
+#
+# `diff -rq` for the message's sake: one line per differing or missing file
+# instead of every changed line of a 1300-line script.
+if [[ -d "$LIVE_SKILL_DIR" ]]; then
+    LIVE_ONLY_SCAFFOLD="^Only in $LIVE_SKILL_DIR: (\.git|\.github|\.gitignore|CONTRIBUTING\.md|LICENSE|README\.md|plugin-manifest\.json)\$"
+    PARITY_DIFF="$(diff -rq "$LIVE_SKILL_DIR" "$IN_REPO_SKILL_DIR" 2>&1 | grep -vE "$LIVE_ONLY_SCAFFOLD" || true)"
+    assert_eq "live authoring copy is byte-identical to the in-repo copy (whole skill tree)" \
+        "" "$PARITY_DIFF"
 else
-    echo "SKIP: live authoring copy not present, parity check skipped: $LIVE_SYNC_SCRIPT"
+    echo "SKIP: live authoring copy not present, parity check skipped: $LIVE_SKILL_DIR"
     SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
 fi
 
