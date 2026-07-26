@@ -157,18 +157,41 @@ if $INIT_MODE; then
   fi
 fi
 
+# Filters a newline-separated list of top-level monorepo directory names down to
+# those that are actually skills — same condition skill_source_dir() applies (a
+# SKILL.md under either $SKILLS_HOME/<name> or $MONOREPO_DIR/<name>), so discovery
+# can never disagree with sourcing. A directory the monorepo has for other reasons
+# (docs, build) fails this test and is announced (not silently dropped) at
+# non-error severity on stderr, so it never enters the sync loop and never
+# produces the loop's "no SKILL.md" ERROR. Written to stderr, not stdout, because
+# stdout here is captured by discover_skills()'s callers as the skill list itself.
+filter_skill_candidates() {
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    if [[ -n "$(skill_source_dir "$name")" ]]; then
+      echo "$name"
+    else
+      echo "  SKIP (not a skill: no SKILL.md)  $name" >&2
+    fi
+  done
+}
+
 # --- Determine which skills to sync ---
 discover_skills() {
   # If --add specified, add it to existing skills
   if [[ -n "$ADD_SKILL" ]]; then
-    # Get existing skill dirs in monorepo (exclude plugins/, scripts/, .git, .github)
+    # Get existing skill dirs in monorepo (exclude plugins/, scripts/, .git, .github,
+    # and any top-level directory that isn't a skill, e.g. docs/, build/)
     local existing=""
     if [[ -d "$MONOREPO_DIR" ]]; then
       existing=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
         ! -name '.git' ! -name '.github' ! -name '.*' \
         ! -name 'plugins' ! -name 'scripts' \
-        -exec basename {} \; 2>/dev/null | sort | tr '\n' ',')
+        -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort | tr '\n' ',')
     fi
+    # ADD_SKILL itself is a user-typed name, like --skills below — kept unfiltered
+    # so a genuine typo still surfaces the loop's existing ERROR, not a silent SKIP.
     echo "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$'
     return
   fi
@@ -188,12 +211,13 @@ discover_skills() {
     return
   fi
 
-  # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git, .github)
+  # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git,
+  # .github, and any top-level directory that isn't a skill, e.g. docs/, build/)
   if [[ -d "$MONOREPO_DIR" ]]; then
     find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
       ! -name '.git' ! -name '.github' ! -name '.*' \
       ! -name 'plugins' ! -name 'scripts' \
-      -exec basename {} \; 2>/dev/null | sort
+      -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort
     return
   fi
 
