@@ -9,23 +9,31 @@ All notable changes to this project will be documented in this file.
 - `sync-monorepo.sh` treated every top-level directory in the monorepo as a skill, so
   directories that exist for other reasons — `docs/`, `build/` — entered the sync loop and
   produced a spurious `ERROR: no SKILL.md ...` line on every run. Both directory-scan sites
-  in `discover_skills()` now filter through `filter_skill_candidates()`, which applies the
-  same test `skill_source_dir()` does and announces what it dropped on stderr instead of
-  discarding it silently. (#74)
+  in `discover_skills()` now filter through `filter_skill_candidates()` — the plain scan,
+  and the `--add` branch's `existing=` scan, which runs only when `--add` is passed — each
+  applying the same test `skill_source_dir()` does and announcing what it dropped on stderr
+  instead of discarding it silently. The filter emits through `printf` rather than `echo`,
+  so a directory named `-n`/`-e`/`-E` cannot be eaten by `echo`'s option parsing and vanish
+  without even a SKIP line. (#74)
 - The plugin auto-build stage assembled each plugin into `./build/<name>` in the *caller's*
   working directory, so a sync run from the monorepo root left an untracked `build/` tree
   behind — which the script's own "Next steps: `git add -A`" banner would then commit.
   Builds now go into a `mktemp -d` stage removed by an EXIT trap, passed through to
   `prepare-plugin.sh` via `--output-dir`. (#74)
 - The `.gitignore` template written into a freshly `--init`-ed monorepo did not list
-  `build/`, so every newly generated monorepo shipped with the same defect. (#74)
+  `build/`, so every newly generated monorepo shipped with the same defect. The pattern is
+  written root-anchored as `/build/`: unanchored, it matches at every depth, so a plugin
+  that legitimately ships a `build/` subdirectory would be silently excluded from the very
+  `git add -A` the ignore rule exists to protect. (#74)
 - The CHANGELOG-parsing step read its first line via `echo "$ALL_ENTRIES" | head -1`.
-  `head` exits after one line, so `echo` took EPIPE on any CHANGELOG whose entry text
-  exceeded the 64 KiB pipe buffer; with the auto-build EXIT trap now installed, bash
-  keeps the subshell alive to run the trap and `echo` reports the failed write instead
-  of dying silently on SIGPIPE — printing `echo: write error: Broken pipe` to stderr on
-  every run against a large CHANGELOG. Replaced with a parameter expansion; generated
-  output is byte-identical. (#74)
+  `head` exits after one line, so `echo` races it and takes EPIPE once the entry text is
+  well past the 64 KiB pipe buffer. With the auto-build EXIT trap now registered, bash no
+  longer leaves SIGPIPE at its default disposition in the command-substitution subshell —
+  the trap does not itself run there — so `echo`'s failed write is reported rather than
+  silently killing it: `echo: write error: Broken pipe` on stderr. It is a write/reader
+  race, not a hard threshold: measured 0/50 reproductions below 64 KiB, ~53% at 84 KiB and
+  10/10 at 154 KiB, so it reproduces reliably well past the buffer. Replaced with a
+  parameter expansion; generated output is byte-identical. (#74)
 - `Skills to sync (N)` counted an empty list as 1 and printed a bare `  - ` bullet,
   because `echo ""` emits a newline for `wc -l` to count. Newly reachable now that
   discovery filters non-skill directories: a monorepo holding only `docs/` and `build/`

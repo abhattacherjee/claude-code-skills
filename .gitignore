@@ -11,5 +11,7 @@ __pycache__/
 
 # Plugin build staging output — prepare-plugin.sh's default --output-dir is
 # ./build/<plugin-name>/, so any invocation from the repo root drops a build
-# tree here that must never be committed.
-build/
+# tree here that must never be committed. Root-anchored: an unanchored `build/`
+# matches at every depth, which would silently exclude a plugin that ships its
+# own plugins/<name>/build/ directory.
+/build/

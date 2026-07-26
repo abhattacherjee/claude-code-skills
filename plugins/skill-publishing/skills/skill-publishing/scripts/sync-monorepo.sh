@@ -169,10 +169,13 @@ filter_skill_candidates() {
   local name
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
+    # printf, not echo: bash's echo eats a leading -n/-e/-E, so a directory so
+    # named would vanish from the list with no SKIP line either. Absurd in
+    # practice, but not dropping things silently is this function's whole job.
     if [[ -n "$(skill_source_dir "$name")" ]]; then
-      echo "$name"
+      printf '%s\n' "$name"
     else
-      echo "  SKIP (not a skill: no SKILL.md)  $name" >&2
+      printf '%s\n' "  SKIP (not a skill: no SKILL.md)  $name" >&2
     fi
   done
 }
@@ -1042,10 +1045,11 @@ if [[ -f "$MONOREPO_DIR/CHANGELOG.md" ]]; then
   # Extract all ## entries
   ALL_ENTRIES=$(awk '/^## \[/{found=1} found{print}' "$MONOREPO_DIR/CHANGELOG.md")
   # Parameter expansion, not `echo … | head -1`. `head` exits after the first
-  # line, so `echo` takes EPIPE on any CHANGELOG whose entry text exceeds the
-  # 64 KiB pipe buffer. Normally the SIGPIPE kills echo silently, but once an
-  # EXIT trap is installed bash keeps the command-substitution subshell alive to
-  # run it, and echo reports the failed write instead:
+  # line, so `echo` races it and takes EPIPE once the entry text is well past
+  # the 64 KiB pipe buffer. Normally the SIGPIPE kills echo silently; with an
+  # EXIT trap registered, bash no longer leaves SIGPIPE at its default
+  # disposition in the command-substitution subshell — the trap does not run
+  # there, but echo's write() now returns EPIPE and gets reported:
   #   sync-monorepo.sh: line NNNN: echo: write error: Broken pipe
   # Stripping from the first newline is equivalent for every input, allocates
   # no subshell, and cannot race a reader.
@@ -1077,15 +1081,18 @@ fi
 write_file "$MONOREPO_DIR/CHANGELOG.md" "$ROOT_CHANGELOG" "CHANGELOG.md" "true"
 
 # --- .gitignore ---
-# build/ is here because prepare-plugin.sh's default --output-dir is
+# /build/ is here because prepare-plugin.sh's default --output-dir is
 # ./build/<plugin-name>/: any plugin build run from the monorepo root drops a
 # tree there, and the "Next steps" banner this script prints ends in
 # `git add -A`. A monorepo generated without this line would commit it.
+# Root-anchored deliberately: an unanchored `build/` matches at every depth, so
+# a plugin that legitimately ships plugins/<name>/build/ would be silently
+# excluded from that same `git add -A`.
 GITIGNORE=".DS_Store
 *.swp
 *~
 .claude/
-build/"
+/build/"
 
 write_file "$MONOREPO_DIR/.gitignore" "$GITIGNORE" ".gitignore"
 
