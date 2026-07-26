@@ -19,6 +19,17 @@ All notable changes to this project will be documented in this file.
   `prepare-plugin.sh` via `--output-dir`. (#74)
 - The `.gitignore` template written into a freshly `--init`-ed monorepo did not list
   `build/`, so every newly generated monorepo shipped with the same defect. (#74)
+- The CHANGELOG-parsing step read its first line via `echo "$ALL_ENTRIES" | head -1`.
+  `head` exits after one line, so `echo` took EPIPE on any CHANGELOG whose entry text
+  exceeded the 64 KiB pipe buffer; with the auto-build EXIT trap now installed, bash
+  keeps the subshell alive to run the trap and `echo` reports the failed write instead
+  of dying silently on SIGPIPE — printing `echo: write error: Broken pipe` to stderr on
+  every run against a large CHANGELOG. Replaced with a parameter expansion; generated
+  output is byte-identical. (#74)
+- `Skills to sync (N)` counted an empty list as 1 and printed a bare `  - ` bullet,
+  because `echo ""` emits a newline for `wc -l` to count. Newly reachable now that
+  discovery filters non-skill directories: a monorepo holding only `docs/` and `build/`
+  yields an empty list. (#74)
 
 ## [4.2.0] - 2026-07-25
 

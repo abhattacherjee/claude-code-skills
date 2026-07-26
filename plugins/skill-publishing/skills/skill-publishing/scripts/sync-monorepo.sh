@@ -228,10 +228,22 @@ discover_skills() {
 }
 
 SKILLS_TO_SYNC=$(discover_skills)
-SKILL_COUNT=$(echo "$SKILLS_TO_SYNC" | wc -l | tr -d ' ')
+
+# An empty list needs its own branch both times: `echo ""` emits a newline, so
+# `wc -l` reports 1 skill that does not exist, and the `sed` below renders it as
+# a bare "  - " bullet. Newly reachable — before discovery filtered non-skill
+# directories, docs/ and build/ kept the list non-empty; a monorepo containing
+# only those now yields nothing.
+if [[ -z "$SKILLS_TO_SYNC" ]]; then
+  SKILL_COUNT=0
+else
+  SKILL_COUNT=$(printf '%s\n' "$SKILLS_TO_SYNC" | wc -l | tr -d ' ')
+fi
 
 echo "Skills to sync ($SKILL_COUNT):"
-echo "$SKILLS_TO_SYNC" | sed 's/^/  - /'
+if [[ -n "$SKILLS_TO_SYNC" ]]; then
+  printf '%s\n' "$SKILLS_TO_SYNC" | sed 's/^/  - /'
+fi
 echo ""
 
 # write_file, copy_file, copy_dir from _lib.sh
@@ -1029,7 +1041,15 @@ SKIP_SYNC_ENTRY=false
 if [[ -f "$MONOREPO_DIR/CHANGELOG.md" ]]; then
   # Extract all ## entries
   ALL_ENTRIES=$(awk '/^## \[/{found=1} found{print}' "$MONOREPO_DIR/CHANGELOG.md")
-  FIRST_ENTRY=$(echo "$ALL_ENTRIES" | head -1)
+  # Parameter expansion, not `echo … | head -1`. `head` exits after the first
+  # line, so `echo` takes EPIPE on any CHANGELOG whose entry text exceeds the
+  # 64 KiB pipe buffer. Normally the SIGPIPE kills echo silently, but once an
+  # EXIT trap is installed bash keeps the command-substitution subshell alive to
+  # run it, and echo reports the failed write instead:
+  #   sync-monorepo.sh: line NNNN: echo: write error: Broken pipe
+  # Stripping from the first newline is equivalent for every input, allocates
+  # no subshell, and cannot race a reader.
+  FIRST_ENTRY="${ALL_ENTRIES%%$'\n'*}"
 
   if echo "$FIRST_ENTRY" | grep -q "## \[$TODAY\] — Monorepo sync"; then
     # Today's sync entry exists — replace it with fresh one

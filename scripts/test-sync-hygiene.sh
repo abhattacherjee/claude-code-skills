@@ -192,6 +192,26 @@ EOF
 echo "fixture" > "$MONOREPO_FIXTURE/docs/notes.md"
 echo "fixture" > "$MONOREPO_FIXTURE/build/stale-artifact.txt"
 
+# A deliberately oversized CHANGELOG (~115 KiB of extracted entry text, well past
+# the 64 KiB pipe buffer). The sync reads it to decide whether today's entry
+# already exists; any `cmd | head -1` on that text makes the writer take EPIPE,
+# which an installed EXIT trap turns from a silent SIGPIPE death into a visible
+# "write error: Broken pipe" on stderr. A small fixture cannot catch that class
+# at all — the pipe buffer swallows the whole payload and nothing ever blocks.
+{
+    echo "# Changelog"
+    echo ""
+    for ((_i = 1; _i <= 900; _i++)); do
+        echo "## [0.0.$_i] - 2026-01-01"
+        echo ""
+        echo "### Fixed"
+        echo ""
+        echo "- Padding entry $_i, present only to push the extracted entry text"
+        echo "  past the 64 KiB pipe buffer. See the broken-pipe assertions below."
+        echo ""
+    done
+} > "$MONOREPO_FIXTURE/CHANGELOG.md"
+
 STDOUT_LOG="$SCRATCH_DIR/sync.stdout"
 STDERR_LOG="$SCRATCH_DIR/sync.stderr"
 
@@ -217,6 +237,15 @@ assert_eq "sync run exits 0 on the fixture" "0" "$SYNC_RC"
 
 assert_contains "control: the plugin auto-build stage actually ran" \
     "AUTO-SYNCED  plugins/demo-plugin/" "$SYNC_STDOUT"
+
+# A clean run writes nothing to stderr but its own SKIP notices. Broken-pipe
+# noise is worth its own assertion rather than a blanket "stderr is empty"
+# check: it appears only under an EXIT trap, only above a 64 KiB payload, and it
+# is invisible in the exit status — the run still succeeds. This branch exists to
+# remove spurious error output, so emitting a line containing "error" on every
+# run would defeat its own purpose.
+assert_not_contains "no 'Broken pipe' on stderr" "Broken pipe" "$SYNC_STDERR"
+assert_not_contains "no 'write error' on stderr" "write error" "$SYNC_STDERR"
 
 # ============================================================
 # Defect 1 — non-skill directories must not enter the sync loop
