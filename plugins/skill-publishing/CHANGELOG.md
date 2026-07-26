@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.2.1] - 2026-07-26
+
+### Fixed
+
+- `sync-monorepo.sh` treated every top-level directory in the monorepo as a skill, so
+  directories that exist for other reasons — `docs/`, `build/` — entered the sync loop and
+  produced a spurious `ERROR: no SKILL.md ...` line on every run. Both directory-scan sites
+  in `discover_skills()` now filter through `filter_skill_candidates()`, which applies the
+  same test `skill_source_dir()` does and announces what it dropped on stderr instead of
+  discarding it silently. (#74)
+- The plugin auto-build stage assembled each plugin into `./build/<name>` in the *caller's*
+  working directory, so a sync run from the monorepo root left an untracked `build/` tree
+  behind — which the script's own "Next steps: `git add -A`" banner would then commit.
+  Builds now go into a `mktemp -d` stage removed by an EXIT trap, passed through to
+  `prepare-plugin.sh` via `--output-dir`. (#74)
+- The `.gitignore` template written into a freshly `--init`-ed monorepo did not list
+  `build/`, so every newly generated monorepo shipped with the same defect. (#74)
+
 ## [4.2.0] - 2026-07-25
 
 ### Fixed

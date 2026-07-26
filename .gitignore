@@ -8,3 +8,8 @@ plugins/obsidian-brain/.coverage
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Plugin build staging output — prepare-plugin.sh's default --output-dir is
+# ./build/<plugin-name>/, so any invocation from the repo root drops a build
+# tree here that must never be committed.
+build/

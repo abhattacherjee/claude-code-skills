@@ -1057,10 +1057,15 @@ fi
 write_file "$MONOREPO_DIR/CHANGELOG.md" "$ROOT_CHANGELOG" "CHANGELOG.md" "true"
 
 # --- .gitignore ---
+# build/ is here because prepare-plugin.sh's default --output-dir is
+# ./build/<plugin-name>/: any plugin build run from the monorepo root drops a
+# tree there, and the "Next steps" banner this script prints ends in
+# `git add -A`. A monorepo generated without this line would commit it.
 GITIGNORE=".DS_Store
 *.swp
 *~
-.claude/"
+.claude/
+build/"
 
 write_file "$MONOREPO_DIR/.gitignore" "$GITIGNORE" ".gitignore"
 
