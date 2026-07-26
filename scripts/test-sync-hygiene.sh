@@ -34,8 +34,18 @@ set -euo pipefail
 #      into a monorepo with no skills yet emitted nothing, so the trailing
 #      `grep -v '^$'` exited 1 and killed the run with an empty stderr. All three
 #      now emit through `printf`, and each has its own sync run below.
+#   7. `--add -n`'s fix above cured the cause (echo eating the argument) but not
+#      the shape: any ADD_SKILL that reduces to nothing after comma-splitting
+#      (the literal argument `,` is the simplest case) still leaves the same
+#      trailing `grep -v '^$'` with nothing to match, so it still exits 1 and
+#      still kills the run under `set -e` with an empty stderr. discover_skills()
+#      now detects an empty combined result itself and exits with a message
+#      naming the offending argument, rather than letting grep's exit code
+#      propagate unexplained. `--skills ,` was checked for the same shape and
+#      does not have it — with no `--add`, an empty result there is just the
+#      ordinary "0 skills to sync" case (defect 5) and exits 0 by design.
 #
-# The whole run is hermetic: a throwaway SKILLS_HOME and six throwaway
+# The whole run is hermetic: a throwaway SKILLS_HOME and seven throwaway
 # monorepos are built under mktemp, the syncs are invoked from a throwaway cwd,
 # and `gh` is shimmed off PATH so nothing reaches the network. The live repo is
 # never passed to sync-monorepo.sh.
@@ -221,6 +231,7 @@ chmod +x "$GH_SHIM_DIR/gh"
 #   monorepo-dashn/-n/                                       skill dir named -n, reached by discovery
 #   monorepo-skillsn/                                        empty; -n reaches it via --skills -n
 #   monorepo-addn/                                           empty; -n reaches it via --add -n
+#   monorepo-addcomma/                                       empty; --add , must fail loudly, not silently abort
 #   run-cwd/                                                 every sync is invoked from here
 #
 # The monorepos deliberately have no .gitignore, so the sync CREATEs one and the
@@ -246,6 +257,7 @@ MONOREPO_EMPTY_FIXTURE="$SCRATCH_DIR/monorepo-empty"
 MONOREPO_DASHN_FIXTURE="$SCRATCH_DIR/monorepo-dashn"
 MONOREPO_SKILLSN_FIXTURE="$SCRATCH_DIR/monorepo-skillsn"
 MONOREPO_ADDN_FIXTURE="$SCRATCH_DIR/monorepo-addn"
+MONOREPO_ADDCOMMA_FIXTURE="$SCRATCH_DIR/monorepo-addcomma"
 RUN_CWD="$SCRATCH_DIR/run-cwd"
 
 # The auto-built plugin's name, carrying this run's PID. The temp-stage leak
@@ -271,6 +283,7 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$MONOREPO_DASHN_FIXTURE/-n" \
          "$MONOREPO_SKILLSN_FIXTURE" \
          "$MONOREPO_ADDN_FIXTURE" \
+         "$MONOREPO_ADDCOMMA_FIXTURE" \
          "$RUN_CWD"
 
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
@@ -410,13 +423,14 @@ EOF
 # Sync invocations
 # ============================================================
 #
-# Six runs, all from the same throwaway cwd:
+# Seven runs, all from the same throwaway cwd:
 #   1. plain sync of monorepo/            — the main hygiene surface
 #   2. --add added-skill on monorepo-add/ — the SECOND filter site (line ~197)
 #   3. plain sync of monorepo-empty/      — the empty-skill-list branch
 #   4. plain sync of monorepo-dashn/      — a -n skill reached through discovery
 #   5. --skills -n on monorepo-skillsn/   — the same name, through --skills
 #   6. --add -n on monorepo-addn/         — the same name, through --add
+#   7. --add , on monorepo-addcomma/      — must fail loudly, not silently abort
 #
 # Run 2 exists because sync-monorepo.sh filters at two independent sites and a
 # single no-`--add` invocation executes only one of them. Reverting the filter
@@ -427,6 +441,18 @@ EOF
 # emits names from three independent expressions, and each one had its own copy
 # of the `echo`-eats-`-n` defect. Reverting any single one leaves the other two
 # green — verified, one revert at a time.
+#
+# Run 7 is the only one expected to exit non-zero. An ADD_SKILL that reduces to
+# nothing after comma-splitting (e.g. the literal argument `,`) used to leave
+# the discovery pipeline's trailing `grep -v '^$'` with no line to match: it
+# exited 1 and `set -e` killed the run with rc=1 and empty stderr — no
+# explanation. discover_skills() now checks for that empty result itself and
+# exits with a message naming the offending argument. run_sync()'s `|| rc=$?`
+# already tolerates a non-zero sync, so capturing this run does not require
+# touching the harness's own `set -e` posture. `--skills ,` was checked for the
+# same shape and does not have it: with no `--add`, an empty result there is
+# just the ordinary "0 skills to sync" case (defect 5, above) and the run exits
+# 0 by design, so it gets no separate assertion.
 
 run_sync() {
     local monorepo="$1" stdout_log="$2" stderr_log="$3"
@@ -506,6 +532,15 @@ ADDN_STDERR_LOG="$SCRATCH_DIR/addn.stderr"
 ADDN_RC=0
 run_sync "$MONOREPO_ADDN_FIXTURE" "$ADDN_STDOUT_LOG" "$ADDN_STDERR_LOG" --add -n || ADDN_RC=$?
 ADDN_STDOUT="$(cat "$ADDN_STDOUT_LOG")"
+
+# Run 7: an ADD_SKILL that is itself nothing but separators. Expected to fail —
+# see the note above run_sync's definition. Captured the same way as every
+# other run so a dying `run_sync` cannot take the harness down with it.
+ADDCOMMA_STDOUT_LOG="$SCRATCH_DIR/addcomma.stdout"
+ADDCOMMA_STDERR_LOG="$SCRATCH_DIR/addcomma.stderr"
+ADDCOMMA_RC=0
+run_sync "$MONOREPO_ADDCOMMA_FIXTURE" "$ADDCOMMA_STDOUT_LOG" "$ADDCOMMA_STDERR_LOG" --add , || ADDCOMMA_RC=$?
+ADDCOMMA_STDERR="$(cat "$ADDCOMMA_STDERR_LOG")"
 
 snapshot_mktemp_parent > "$TMP_AFTER"
 
@@ -703,13 +738,19 @@ assert_eq "this repo's .gitignore matches build/" "IGNORED" "$REPO_IGNORES_BUILD
 # `plugins/placeholder/` is a path no plugin occupies, so no nested plugin
 # .gitignore can decide the answer instead.
 #
-# `git check-ignore -q` exits 1 for a non-ignored path, which is the expected
-# outcome here — hence the `&&` form rather than a bare call, which `set -e`
-# would treat as a fatal error.
-NESTED_BUILD_IGNORED="NOT-IGNORED"
-git -C "$REPO_ROOT" check-ignore -q "plugins/placeholder/build/" && NESTED_BUILD_IGNORED="IGNORED"
+# `git check-ignore -q` exits 0 = ignored, 1 = not-ignored, 128 = error (e.g.
+# bad repo path). The `&&`-into-a-string form used above for the positive
+# assertion collapses 1 and 128 into the same default value here, and that
+# default happens to equal this assertion's *expected* value — so a genuine
+# git error would read as a clean NOT-IGNORED pass instead of failing loudly.
+# Capture the literal exit status instead and assert on that, so 1 and 128
+# are distinguishable. The `|| VAR=$?` form (not a bare call) is required for
+# `set -e` safety: check-ignore's expected-for-this-path exit of 1 must not be
+# treated as a fatal error by the harness itself.
+NESTED_BUILD_RC=0
+git -C "$REPO_ROOT" check-ignore -q "plugins/placeholder/build/" || NESTED_BUILD_RC=$?
 
-assert_eq "this repo's .gitignore does NOT ignore a nested build/" "NOT-IGNORED" "$NESTED_BUILD_IGNORED"
+assert_eq "this repo's .gitignore does NOT ignore a nested build/" "1" "$NESTED_BUILD_RC"
 
 # ============================================================
 # Defect 4 — the CHANGELOG's top entry must survive a sync
@@ -787,6 +828,22 @@ assert_line_present "--add -n into a monorepo with no existing skills names it" 
     "-n" "$ADDN_SYNCED_NAMES"
 assert_file_exists "--add -n wrote the -n skill to disk" \
     "$MONOREPO_ADDN_FIXTURE/-n/SKILL.md"
+
+# ============================================================
+# --add with a separator-only argument must fail loudly, not silently
+# ============================================================
+#
+# `--add ,` reduces to nothing after comma-splitting: with no existing skills
+# in the target monorepo, there is no line left for the discovery pipeline's
+# trailing `grep -v '^$'` to match, so it used to exit 1 and take the whole
+# run down under `set -e` with an empty stderr — rc=1 and no clue why. This is
+# the only run in this harness expected to fail; the assertions are about the
+# run's rc and its stderr content; a failure of "no skill(s) synced" would be
+# the wrong kind of green here, since the run must not silently succeed either.
+assert_eq "--add , fails with a deliberate, explained exit rather than an unexplained abort" \
+    "1" "$ADDCOMMA_RC"
+assert_contains "--add , explains itself on stderr, naming the offending argument" \
+    "Error: --add produced no skill names from: ','" "$ADDCOMMA_STDERR"
 
 # ============================================================
 # Authoring-source parity

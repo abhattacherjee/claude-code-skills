@@ -199,9 +199,21 @@ discover_skills() {
     # printf, not echo, in both branches: bash's echo consumes a leading -n/-e/-E
     # as its own option. Here that bites only when $existing is empty (an --add
     # into a monorepo with no skills yet), where the argument is the bare name and
-    # `--add -n` produced no output at all — the trailing `grep -v` then exited 1
-    # and killed the run under `set -e`, with nothing on stderr to say why.
-    printf '%s\n' "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$'
+    # `--add -n` produced no output at all.
+    #
+    # The trailing `grep -v '^$'` drops blank lines, which is also what's left
+    # when ADD_SKILL is itself nothing but separators (e.g. `--add ,`): grep has
+    # nothing to match, exits 1, and under `set -e` that killed the run with
+    # rc=1 and empty stderr — no explanation. Capture the combined list first
+    # and, if it comes back empty, fail loudly and explain why instead of
+    # letting grep's exit status propagate as an unexplained abort.
+    local combined
+    combined=$(printf '%s\n' "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$' || true)
+    if [[ -z "$combined" ]]; then
+      echo "Error: --add produced no skill names from: '$ADD_SKILL'" >&2
+      exit 1
+    fi
+    printf '%s\n' "$combined"
     return
   fi
 

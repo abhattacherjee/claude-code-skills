@@ -45,6 +45,13 @@ All notable changes to this project will be documented in this file.
   name as the whole argument) produced no output at all, so the trailing `grep -v '^$'`
   exited 1 and aborted the run under `set -e` with nothing on stderr to explain it. Both
   now emit through `printf`. (#74)
+- The `--add -n` fix above cured the cause, not the shape: an `--add` argument that
+  reduces to nothing after comma-splitting (e.g. the literal argument `,`) still left the
+  trailing `grep -v '^$'` with nothing to match, so it still exited 1 and still aborted
+  the run under `set -e` — rc=1, empty stderr, no explanation. `discover_skills()` now
+  checks for that empty result itself and exits with `Error: --add produced no skill
+  names from: '<value>'` naming the offending argument, instead of letting `grep`'s exit
+  status propagate unexplained. (#74)
 
 ## [4.2.0] - 2026-07-25
 
