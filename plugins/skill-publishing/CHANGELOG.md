@@ -38,6 +38,13 @@ All notable changes to this project will be documented in this file.
   because `echo ""` emits a newline for `wc -l` to count. Newly reachable now that
   discovery filters non-skill directories: a monorepo holding only `docs/` and `build/`
   yields an empty list. (#74)
+- The two remaining `echo` sites in `discover_skills()` ate a skill whose name begins
+  `-n`/`-e`/`-E`, the same class the filter fix above closed. `--skills -n` printed
+  `Skills to sync (0):`, synced nothing and still exited 0 — a silent no-op; `--add -n`
+  into a monorepo with no skills yet (the only case where the comma-join leaves the bare
+  name as the whole argument) produced no output at all, so the trailing `grep -v '^$'`
+  exited 1 and aborted the run under `set -e` with nothing on stderr to explain it. Both
+  now emit through `printf`. (#74)
 
 ## [4.2.0] - 2026-07-25
 

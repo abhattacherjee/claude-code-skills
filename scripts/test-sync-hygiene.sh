@@ -27,11 +27,15 @@ set -euo pipefail
 # confirmed red. An assertion that passes against unfixed code is worse than no
 # assertion.
 #
-#   6. filter_skill_candidates emitted surviving names through `echo`, which
-#      would consume a directory named -n/-e/-E as its own option and drop it
-#      with no SKIP line — the one thing an announcing filter must not do.
+#   6. All three name-emitting sites in discovery used `echo`, which consumes a
+#      leading -n/-e/-E as its own option. filter_skill_candidates dropped such a
+#      directory with no SKIP line — the one thing an announcing filter must not
+#      do — while `--skills -n` synced nothing and still exited 0, and `--add -n`
+#      into a monorepo with no skills yet emitted nothing, so the trailing
+#      `grep -v '^$'` exited 1 and killed the run with an empty stderr. All three
+#      now emit through `printf`, and each has its own sync run below.
 #
-# The whole run is hermetic: a throwaway SKILLS_HOME and four throwaway
+# The whole run is hermetic: a throwaway SKILLS_HOME and six throwaway
 # monorepos are built under mktemp, the syncs are invoked from a throwaway cwd,
 # and `gh` is shimmed off PATH so nothing reaches the network. The live repo is
 # never passed to sync-monorepo.sh.
@@ -125,7 +129,10 @@ assert_not_contains() {
 # very defect it is testing for. `grep -q` exits at the first match, so on the
 # ~154 KiB CHANGELOG haystack the writer takes EPIPE, and under `pipefail` the
 # pipeline reports 141 even though grep matched: a present line reported ABSENT.
-# A herestring is backed by a temp file, so there is no reader to race.
+# A herestring is fully written before the reader starts, so there is no reader
+# to race: bash materialises small content into a pipe (5.1+) and larger content
+# into a temp file, but it only takes the pipe when the content fits in the pipe
+# buffer, so the write completes either way before grep is exec'd.
 assert_line_present() {
     local description="$1" needle="$2" haystack="$3"
     if grep -qxF -- "$needle" <<< "$haystack"; then
@@ -211,6 +218,9 @@ chmod +x "$GH_SHIM_DIR/gh"
 #   monorepo/build/                                          non-skill dir, must be filtered
 #   monorepo-add/                                            same shape; target of the --add run
 #   monorepo-empty/docs/                                     only a non-skill dir: empty skill list
+#   monorepo-dashn/-n/                                       skill dir named -n, reached by discovery
+#   monorepo-skillsn/                                        empty; -n reaches it via --skills -n
+#   monorepo-addn/                                           empty; -n reaches it via --add -n
 #   run-cwd/                                                 every sync is invoked from here
 #
 # The monorepos deliberately have no .gitignore, so the sync CREATEs one and the
@@ -234,7 +244,17 @@ MONOREPO_FIXTURE="$SCRATCH_DIR/monorepo"
 MONOREPO_ADD_FIXTURE="$SCRATCH_DIR/monorepo-add"
 MONOREPO_EMPTY_FIXTURE="$SCRATCH_DIR/monorepo-empty"
 MONOREPO_DASHN_FIXTURE="$SCRATCH_DIR/monorepo-dashn"
+MONOREPO_SKILLSN_FIXTURE="$SCRATCH_DIR/monorepo-skillsn"
+MONOREPO_ADDN_FIXTURE="$SCRATCH_DIR/monorepo-addn"
 RUN_CWD="$SCRATCH_DIR/run-cwd"
+
+# The auto-built plugin's name, carrying this run's PID. The temp-stage leak
+# assertion below identifies a leaked stage by looking for this name inside it,
+# so the name has to be unique to the run: with a fixed "demo-plugin", a second
+# concurrent copy of this harness has an in-flight stage that looks exactly like
+# a leak to the first, and the first fails. That is measured, not hypothetical —
+# 10 sequential solo runs never failed, while 3 of 3 concurrent pairs did.
+DEMO_PLUGIN_NAME="demo-plugin-$$"
 
 mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$SKILLS_HOME_FIXTURE/added-skill" \
@@ -249,6 +269,8 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$MONOREPO_EMPTY_FIXTURE/docs" \
          "$SKILLS_HOME_FIXTURE/-n" \
          "$MONOREPO_DASHN_FIXTURE/-n" \
+         "$MONOREPO_SKILLSN_FIXTURE" \
+         "$MONOREPO_ADDN_FIXTURE" \
          "$RUN_CWD"
 
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
@@ -280,9 +302,9 @@ EOF
 # A plugin-manifest.json is what triggers the auto-build stage — the stage whose
 # build directory used to land in the caller's cwd. Without it, the "no build/
 # left behind" assertion would pass vacuously.
-cat > "$SKILLS_HOME_FIXTURE/demo-skill/plugin-manifest.json" <<'EOF'
+cat > "$SKILLS_HOME_FIXTURE/demo-skill/plugin-manifest.json" <<EOF
 {
-  "name": "demo-plugin",
+  "name": "$DEMO_PLUGIN_NAME",
   "version": "0.1.0",
   "description": "Throwaway fixture plugin used only by the sync-hygiene regression harness.",
   "skills": [
@@ -388,15 +410,23 @@ EOF
 # Sync invocations
 # ============================================================
 #
-# Three runs, all from the same throwaway cwd:
-#   1. plain sync of monorepo/         — the main hygiene surface
-#   2. --add added-skill on monorepo-add/ — the SECOND filter site (line ~191)
-#   3. plain sync of monorepo-empty/   — the empty-skill-list branch
+# Six runs, all from the same throwaway cwd:
+#   1. plain sync of monorepo/            — the main hygiene surface
+#   2. --add added-skill on monorepo-add/ — the SECOND filter site (line ~197)
+#   3. plain sync of monorepo-empty/      — the empty-skill-list branch
+#   4. plain sync of monorepo-dashn/      — a -n skill reached through discovery
+#   5. --skills -n on monorepo-skillsn/   — the same name, through --skills
+#   6. --add -n on monorepo-addn/         — the same name, through --add
 #
 # Run 2 exists because sync-monorepo.sh filters at two independent sites and a
 # single no-`--add` invocation executes only one of them. Reverting the filter
 # on the --add branch alone reproduces #74 verbatim while every run-1 assertion
 # stays green.
+#
+# Runs 4-6 are three runs rather than one for the same reason: discover_skills()
+# emits names from three independent expressions, and each one had its own copy
+# of the `echo`-eats-`-n` defect. Reverting any single one leaves the other two
+# green — verified, one revert at a time.
 
 run_sync() {
     local monorepo="$1" stdout_log="$2" stderr_log="$3"
@@ -421,8 +451,11 @@ _MKTEMP_PROBE="$(mktemp -d)"
 MKTEMP_PARENT="$(dirname "$_MKTEMP_PROBE")"
 rmdir "$_MKTEMP_PROBE"
 
+# LC_ALL=C so the two snapshots are ordered identically byte-wise whatever the
+# ambient locale is — `comm` requires its inputs in the collation order it
+# itself uses, and a locale-dependent `sort` is the classic way to violate that.
 snapshot_mktemp_parent() {
-    find "$MKTEMP_PARENT" -maxdepth 1 -mindepth 1 2>/dev/null | sort
+    LC_ALL=C find "$MKTEMP_PARENT" -maxdepth 1 -mindepth 1 2>/dev/null | LC_ALL=C sort
 }
 
 TMP_BEFORE="$SCRATCH_DIR/mktemp-parent.before"
@@ -454,6 +487,26 @@ DASHN_RC=0
 run_sync "$MONOREPO_DASHN_FIXTURE" "$DASHN_STDOUT_LOG" "$DASHN_STDERR_LOG" || DASHN_RC=$?
 DASHN_STDOUT="$(cat "$DASHN_STDOUT_LOG")"
 
+# Runs 5 and 6: the same -n name arriving through the two paths that bypass
+# discovery's filter entirely, so run 4 above cannot stand in for either.
+# --skills feeds the name straight to `printf … | tr`, and --add concatenates it
+# onto the comma-joined existing set — where an *empty* existing set leaves the
+# bare name as the sole argument. Both went through `echo` before, which eats a
+# leading -n: --skills reported "Skills to sync (0):" and synced nothing while
+# still exiting 0, and --add emitted nothing at all, so its trailing `grep -v`
+# exited 1 and aborted the run with an empty stderr.
+SKILLSN_STDOUT_LOG="$SCRATCH_DIR/skillsn.stdout"
+SKILLSN_STDERR_LOG="$SCRATCH_DIR/skillsn.stderr"
+SKILLSN_RC=0
+run_sync "$MONOREPO_SKILLSN_FIXTURE" "$SKILLSN_STDOUT_LOG" "$SKILLSN_STDERR_LOG" --skills -n || SKILLSN_RC=$?
+SKILLSN_STDOUT="$(cat "$SKILLSN_STDOUT_LOG")"
+
+ADDN_STDOUT_LOG="$SCRATCH_DIR/addn.stdout"
+ADDN_STDERR_LOG="$SCRATCH_DIR/addn.stderr"
+ADDN_RC=0
+run_sync "$MONOREPO_ADDN_FIXTURE" "$ADDN_STDOUT_LOG" "$ADDN_STDERR_LOG" --add -n || ADDN_RC=$?
+ADDN_STDOUT="$(cat "$ADDN_STDOUT_LOG")"
+
 snapshot_mktemp_parent > "$TMP_AFTER"
 
 # ============================================================
@@ -467,9 +520,11 @@ assert_eq "sync run exits 0 on the fixture" "0" "$SYNC_RC"
 assert_eq "--add run exits 0 on the fixture" "0" "$ADD_RC"
 assert_eq "empty-monorepo run exits 0 on the fixture" "0" "$EMPTY_RC"
 assert_eq "dash-named-skill run exits 0 on the fixture" "0" "$DASHN_RC"
+assert_eq "--skills -n run exits 0 on the fixture" "0" "$SKILLSN_RC"
+assert_eq "--add -n run exits 0 on the fixture" "0" "$ADDN_RC"
 
 assert_contains "control: the plugin auto-build stage actually ran" \
-    "AUTO-SYNCED  plugins/demo-plugin/" "$SYNC_STDOUT"
+    "AUTO-SYNCED  plugins/$DEMO_PLUGIN_NAME/" "$SYNC_STDOUT"
 
 # Proves the offline claim in this file's header is live rather than asserted in
 # prose: if the shim ever falls off PATH, these calls go to the real gh and this
@@ -577,16 +632,33 @@ assert_eq "no build/ left in the directory the sync was run from" "ABSENT" "$BUI
 
 # Moving the build out of the caller's cwd only relocates the mess unless the
 # EXIT trap fires: without it every sync leaks a full plugin build tree into the
-# temp directory. Leaks are attributed by content (a surviving stage holds
-# demo-plugin/) rather than by name, so an unrelated process creating a temp
-# directory mid-run cannot turn this red.
+# temp directory. A stage is claimed as this run's leak only if it holds
+# $DEMO_PLUGIN_NAME, which carries this run's PID — so neither a stale stage from
+# an earlier run nor a *concurrent* copy of this harness (whose in-flight stage is
+# alive under the same temp parent for the duration) can turn this red. A fixed
+# plugin name could not distinguish those, and did not: 3 of 3 concurrent pairs
+# had one side report the other's live stage as its own leak.
+#
+# comm's output is captured to a file rather than consumed through a process
+# substitution, whose exit status is unobservable: GNU comm exits 1 on
+# "input is not in sorted order", and a silently-empty read would make the leak
+# assertion pass vacuously — green through failure, the one shape worth ruling
+# out here. LC_ALL=C in snapshot_mktemp_parent keeps both snapshots in the byte
+# order comm expects regardless of locale, so the trigger is gone too.
+TMP_NEW_ENTRIES="$SCRATCH_DIR/mktemp-parent.new"
+COMM_RC=0
+LC_ALL=C comm -13 "$TMP_BEFORE" "$TMP_AFTER" > "$TMP_NEW_ENTRIES" || COMM_RC=$?
+
+assert_eq "comm compared the temp-parent snapshots successfully (leak scan is not vacuous)" \
+    "0" "$COMM_RC"
+
 LEAKED_BUILD_STAGES=""
 while IFS= read -r _entry; do
     [[ -z "$_entry" ]] && continue
-    if [[ -d "$_entry/demo-plugin" ]]; then
+    if [[ -d "$_entry/$DEMO_PLUGIN_NAME" ]]; then
         LEAKED_BUILD_STAGES="${LEAKED_BUILD_STAGES}${_entry} "
     fi
-done < <(comm -13 "$TMP_BEFORE" "$TMP_AFTER")
+done < "$TMP_NEW_ENTRIES"
 
 assert_eq "no auto-build temp stage left behind under $MKTEMP_PARENT" \
     "" "${LEAKED_BUILD_STAGES% }"
@@ -623,6 +695,22 @@ fi
 
 assert_eq "this repo's .gitignore matches build/" "IGNORED" "$REPO_IGNORES_BUILD"
 
+# …and that it matches *only* at the root. The assertion above is anchoring-blind:
+# it reads IGNORED under `/build/` and under a bare `build/` alike, so on its own
+# it only catches the pattern being deleted, not the anchor being lost. The
+# generated-.gitignore assertion above covers anchoring for what the script emits;
+# this covers the same property for this repo's own file, which nothing else does.
+# `plugins/placeholder/` is a path no plugin occupies, so no nested plugin
+# .gitignore can decide the answer instead.
+#
+# `git check-ignore -q` exits 1 for a non-ignored path, which is the expected
+# outcome here — hence the `&&` form rather than a bare call, which `set -e`
+# would treat as a fatal error.
+NESTED_BUILD_IGNORED="NOT-IGNORED"
+git -C "$REPO_ROOT" check-ignore -q "plugins/placeholder/build/" && NESTED_BUILD_IGNORED="IGNORED"
+
+assert_eq "this repo's .gitignore does NOT ignore a nested build/" "NOT-IGNORED" "$NESTED_BUILD_IGNORED"
+
 # ============================================================
 # Defect 4 — the CHANGELOG's top entry must survive a sync
 # ============================================================
@@ -643,6 +731,12 @@ assert_line_present "the CHANGELOG's pre-existing top entry survives the sync" \
 # the fixture itself and stay green even if the sync never wrote the file at all.
 CHANGELOG_TOP_ENTRY="$(grep -m1 '^## \[' "$MONOREPO_FIXTURE/CHANGELOG.md" || true)"
 
+# Known ~1-in-86,400 window: $TODAY is computed once when this harness starts and
+# again inside each sync, so a run that straddles midnight compares yesterday's
+# expectation against today's written entry and this goes red. Left as-is
+# deliberately — the failure is loud and self-evident from the two dates in the
+# message, and threading the harness's clock into the child sync would couple the
+# test to an implementation detail to buy nothing but that one second.
 assert_eq "the sync wrote its own entry at the top of the CHANGELOG" \
     "## [$TODAY] — Monorepo sync" "$CHANGELOG_TOP_ENTRY"
 
@@ -675,6 +769,24 @@ assert_line_present "a skill directory named -n survives filter_skill_candidates
     "-n" "$DASHN_SYNCED_NAMES"
 assert_file_exists "the -n skill was written to disk" \
     "$MONOREPO_DASHN_FIXTURE/-n/SKILL.md"
+
+# The other two writers of the same name list. Each is checked on both the
+# printed list and disk: "Skills to sync (0):" followed by a full root-files
+# sync and a clean exit 0 is exactly what the --skills defect produced, so an
+# exit-status control alone would not have caught it.
+SKILLSN_SYNCED_NAMES="$(synced_names "$SKILLSN_STDOUT")"
+assert_line_present "--skills -n names the -n skill rather than eating it" \
+    "-n" "$SKILLSN_SYNCED_NAMES"
+assert_eq "--skills -n reports a count of 1, not 0" \
+    "1" "$(printed_skill_count "$SKILLSN_STDOUT")"
+assert_file_exists "--skills -n wrote the -n skill to disk" \
+    "$MONOREPO_SKILLSN_FIXTURE/-n/SKILL.md"
+
+ADDN_SYNCED_NAMES="$(synced_names "$ADDN_STDOUT")"
+assert_line_present "--add -n into a monorepo with no existing skills names it" \
+    "-n" "$ADDN_SYNCED_NAMES"
+assert_file_exists "--add -n wrote the -n skill to disk" \
+    "$MONOREPO_ADDN_FIXTURE/-n/SKILL.md"
 
 # ============================================================
 # Authoring-source parity

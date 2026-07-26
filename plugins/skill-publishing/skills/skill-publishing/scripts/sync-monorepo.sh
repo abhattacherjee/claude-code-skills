@@ -195,13 +195,19 @@ discover_skills() {
     fi
     # ADD_SKILL itself is a user-typed name, like --skills below — kept unfiltered
     # so a genuine typo still surfaces the loop's existing ERROR, not a silent SKIP.
-    echo "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$'
+    #
+    # printf, not echo, in both branches: bash's echo consumes a leading -n/-e/-E
+    # as its own option. Here that bites only when $existing is empty (an --add
+    # into a monorepo with no skills yet), where the argument is the bare name and
+    # `--add -n` produced no output at all — the trailing `grep -v` then exited 1
+    # and killed the run under `set -e`, with nothing on stderr to say why.
+    printf '%s\n' "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$'
     return
   fi
 
   # If --skills specified, use that list
   if [[ -n "$SKILLS_LIST" ]]; then
-    echo "$SKILLS_LIST" | tr ',' '\n' | sort
+    printf '%s\n' "$SKILLS_LIST" | tr ',' '\n' | sort
     return
   fi
 
