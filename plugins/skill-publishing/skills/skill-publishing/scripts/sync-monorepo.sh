@@ -480,6 +480,13 @@ PREPARE_SCRIPT="$SCRIPT_DIR/prepare-plugin.sh"
 AUTO_BUILT_PLUGINS=""
 
 if [[ -x "$PREPARE_SCRIPT" ]]; then
+  # Auto-built plugins are assembled into a throwaway temp directory, never the
+  # caller's cwd — otherwise a sync run from the monorepo root leaves an
+  # untracked ./build/ tree that a routine `git add -A` would commit. One temp
+  # dir covers the whole auto-build stage; each plugin gets its own subdir.
+  _AUTO_BUILD_TMP="$(mktemp -d)"
+  trap 'rm -rf "$_AUTO_BUILD_TMP"' EXIT
+
   # Manifests live either in the local skills home or in an in-repo top-level
   # skill directory. Local ones are scanned first so they take precedence.
   # Records "<plugin-name><TAB><manifest-path>" for each name already claimed.
@@ -557,9 +564,9 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       if $DRY_RUN; then
         echo "  WOULD BUILD + SYNC  plugins/$_MANIFEST_NAME/"
       else
-        # Build the plugin via prepare-plugin.sh
-        if "$PREPARE_SCRIPT" "$_MANIFEST" >/dev/null 2>&1; then
-          _BUILD_DIR="./build/$_MANIFEST_NAME"
+        # Build the plugin via prepare-plugin.sh, into the temp stage dir
+        _BUILD_DIR="$_AUTO_BUILD_TMP/$_MANIFEST_NAME"
+        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" "$_MANIFEST" >/dev/null 2>&1; then
           if [[ -d "$_BUILD_DIR/.claude-plugin" ]]; then
             # Preserve hand-written README if it exists in destination
             _PRESERVED_README=""
