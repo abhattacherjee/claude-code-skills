@@ -157,25 +157,69 @@ if $INIT_MODE; then
   fi
 fi
 
+# Filters a newline-separated list of top-level monorepo directory names down to
+# those that are actually skills — same condition skill_source_dir() applies (a
+# SKILL.md under either $SKILLS_HOME/<name> or $MONOREPO_DIR/<name>), so discovery
+# can never disagree with sourcing. A directory the monorepo has for other reasons
+# (docs, build) fails this test and is announced (not silently dropped) at
+# non-error severity on stderr, so it never enters the sync loop and never
+# produces the loop's "no SKILL.md" ERROR. Written to stderr, not stdout, because
+# stdout here is captured by discover_skills()'s callers as the skill list itself.
+filter_skill_candidates() {
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    # printf, not echo: bash's echo eats a leading -n/-e/-E, so a directory so
+    # named would vanish from the list with no SKIP line either. Absurd in
+    # practice, but not dropping things silently is this function's whole job.
+    if [[ -n "$(skill_source_dir "$name")" ]]; then
+      printf '%s\n' "$name"
+    else
+      printf '%s\n' "  SKIP (not a skill: no SKILL.md)  $name" >&2
+    fi
+  done
+}
+
 # --- Determine which skills to sync ---
 discover_skills() {
   # If --add specified, add it to existing skills
   if [[ -n "$ADD_SKILL" ]]; then
-    # Get existing skill dirs in monorepo (exclude plugins/, scripts/, .git, .github)
+    # Get existing skill dirs in monorepo (exclude plugins/, scripts/, .git, .github,
+    # and any top-level directory that isn't a skill, e.g. docs/, build/)
     local existing=""
     if [[ -d "$MONOREPO_DIR" ]]; then
       existing=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
         ! -name '.git' ! -name '.github' ! -name '.*' \
         ! -name 'plugins' ! -name 'scripts' \
-        -exec basename {} \; 2>/dev/null | sort | tr '\n' ',')
+        -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort | tr '\n' ',')
     fi
-    echo "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$'
+    # ADD_SKILL itself is a user-typed name, like --skills below — kept unfiltered
+    # so a genuine typo still surfaces the loop's existing ERROR, not a silent SKIP.
+    #
+    # printf, not echo, in both branches: bash's echo consumes a leading -n/-e/-E
+    # as its own option. Here that bites only when $existing is empty (an --add
+    # into a monorepo with no skills yet), where the argument is the bare name and
+    # `--add -n` produced no output at all.
+    #
+    # The trailing `grep -v '^$'` drops blank lines, which is also what's left
+    # when ADD_SKILL is itself nothing but separators (e.g. `--add ,`): grep has
+    # nothing to match, exits 1, and under `set -e` that killed the run with
+    # rc=1 and empty stderr — no explanation. Capture the combined list first
+    # and, if it comes back empty, fail loudly and explain why instead of
+    # letting grep's exit status propagate as an unexplained abort.
+    local combined
+    combined=$(printf '%s\n' "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$' || true)
+    if [[ -z "$combined" ]]; then
+      echo "Error: --add produced no skill names from: '$ADD_SKILL'" >&2
+      exit 1
+    fi
+    printf '%s\n' "$combined"
     return
   fi
 
   # If --skills specified, use that list
   if [[ -n "$SKILLS_LIST" ]]; then
-    echo "$SKILLS_LIST" | tr ',' '\n' | sort
+    printf '%s\n' "$SKILLS_LIST" | tr ',' '\n' | sort
     return
   fi
 
@@ -188,12 +232,13 @@ discover_skills() {
     return
   fi
 
-  # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git, .github)
+  # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git,
+  # .github, and any top-level directory that isn't a skill, e.g. docs/, build/)
   if [[ -d "$MONOREPO_DIR" ]]; then
     find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
       ! -name '.git' ! -name '.github' ! -name '.*' \
       ! -name 'plugins' ! -name 'scripts' \
-      -exec basename {} \; 2>/dev/null | sort
+      -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort
     return
   fi
 
@@ -204,10 +249,22 @@ discover_skills() {
 }
 
 SKILLS_TO_SYNC=$(discover_skills)
-SKILL_COUNT=$(echo "$SKILLS_TO_SYNC" | wc -l | tr -d ' ')
+
+# An empty list needs its own branch both times: `echo ""` emits a newline, so
+# `wc -l` reports 1 skill that does not exist, and the `sed` below renders it as
+# a bare "  - " bullet. Newly reachable — before discovery filtered non-skill
+# directories, docs/ and build/ kept the list non-empty; a monorepo containing
+# only those now yields nothing.
+if [[ -z "$SKILLS_TO_SYNC" ]]; then
+  SKILL_COUNT=0
+else
+  SKILL_COUNT=$(printf '%s\n' "$SKILLS_TO_SYNC" | wc -l | tr -d ' ')
+fi
 
 echo "Skills to sync ($SKILL_COUNT):"
-echo "$SKILLS_TO_SYNC" | sed 's/^/  - /'
+if [[ -n "$SKILLS_TO_SYNC" ]]; then
+  printf '%s\n' "$SKILLS_TO_SYNC" | sed 's/^/  - /'
+fi
 echo ""
 
 # write_file, copy_file, copy_dir from _lib.sh
@@ -456,6 +513,13 @@ PREPARE_SCRIPT="$SCRIPT_DIR/prepare-plugin.sh"
 AUTO_BUILT_PLUGINS=""
 
 if [[ -x "$PREPARE_SCRIPT" ]]; then
+  # Auto-built plugins are assembled into a throwaway temp directory, never the
+  # caller's cwd — otherwise a sync run from the monorepo root leaves an
+  # untracked ./build/ tree that a routine `git add -A` would commit. One temp
+  # dir covers the whole auto-build stage; each plugin gets its own subdir.
+  _AUTO_BUILD_TMP="$(mktemp -d)"
+  trap 'rm -rf "$_AUTO_BUILD_TMP"' EXIT
+
   # Manifests live either in the local skills home or in an in-repo top-level
   # skill directory. Local ones are scanned first so they take precedence.
   # Records "<plugin-name><TAB><manifest-path>" for each name already claimed.
@@ -469,7 +533,14 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
 
     # Local-first precedence. Announce every shadowed manifest by name — a
     # silent skip here is exactly what makes a stale source invisible.
-    _SHADOWED_BY=$(printf '%s' "$_SEEN_MANIFESTS" | awk -F'\t' -v n="$_MANIFEST_NAME" '$1==n {print $2; exit}')
+    # No `exit` in the awk body: an early-exiting reader is the same shape as the
+    # `echo … | head -1` removed from the CHANGELOG stage below, and it is
+    # likewise evaluated with the EXIT trap already registered — the condition
+    # that turns a silent SIGPIPE into a visible "write error: Broken pipe".
+    # $_SEEN_MANIFESTS is a few KiB at this repo's scale, far under the 64 KiB
+    # pipe buffer, so it cannot fire today; keeping the reader draining its input
+    # means it cannot start to. `!f` keeps first-match-wins semantics.
+    _SHADOWED_BY=$(printf '%s' "$_SEEN_MANIFESTS" | awk -F'\t' -v n="$_MANIFEST_NAME" '$1==n && !f {print $2; f=1}')
     if [[ -n "$_SHADOWED_BY" ]]; then
       echo "  SKIP (shadowed)  $_MANIFEST  —  already claimed by $_SHADOWED_BY"
       continue
@@ -533,9 +604,18 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       if $DRY_RUN; then
         echo "  WOULD BUILD + SYNC  plugins/$_MANIFEST_NAME/"
       else
-        # Build the plugin via prepare-plugin.sh
-        if "$PREPARE_SCRIPT" "$_MANIFEST" >/dev/null 2>&1; then
-          _BUILD_DIR="./build/$_MANIFEST_NAME"
+        # Build the plugin via prepare-plugin.sh, into the temp stage dir.
+        # The child's output is captured rather than discarded: on the failure
+        # path below it holds the only actionable line (e.g.
+        # "ERROR: skill source not found: <path>"), and since the stage is a
+        # mktemp -d removed by the EXIT trap, there is no longer a partial
+        # ./build/<name>/ tree left in the caller's cwd to post-mortem instead.
+        # The log lives in the stage root, NOT in $_BUILD_DIR: prepare-plugin.sh
+        # starts with `rm -rf "$OUTPUT_DIR"`, which would unlink the log out from
+        # under the open descriptor and leave it reading empty.
+        _BUILD_DIR="$_AUTO_BUILD_TMP/$_MANIFEST_NAME"
+        _BUILD_LOG="$_AUTO_BUILD_TMP/$_MANIFEST_NAME.log"
+        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" "$_MANIFEST" >"$_BUILD_LOG" 2>&1; then
           if [[ -d "$_BUILD_DIR/.claude-plugin" ]]; then
             # Preserve hand-written README if it exists in destination
             _PRESERVED_README=""
@@ -562,7 +642,13 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
             echo "  Warning: build produced no plugin at $_BUILD_DIR"
           fi
         else
+          # Surface the child's own diagnosis. Without it the operator gets a
+          # bare "failed" line, an exit status of 0, and no artifact left on
+          # disk to look at — the failure becomes undiagnosable. The exit-0
+          # behaviour itself is deliberate here and tracked separately (#73);
+          # this is only about not destroying the evidence.
           echo "  Warning: prepare-plugin.sh failed for $_MANIFEST"
+          sed 's/^/    | /' "$_BUILD_LOG" >&2
         fi
       fi
       echo ""
@@ -998,7 +1084,16 @@ SKIP_SYNC_ENTRY=false
 if [[ -f "$MONOREPO_DIR/CHANGELOG.md" ]]; then
   # Extract all ## entries
   ALL_ENTRIES=$(awk '/^## \[/{found=1} found{print}' "$MONOREPO_DIR/CHANGELOG.md")
-  FIRST_ENTRY=$(echo "$ALL_ENTRIES" | head -1)
+  # Parameter expansion, not `echo … | head -1`. `head` exits after the first
+  # line, so `echo` races it and takes EPIPE once the entry text is well past
+  # the 64 KiB pipe buffer. Normally the SIGPIPE kills echo silently; with an
+  # EXIT trap registered, bash no longer leaves SIGPIPE at its default
+  # disposition in the command-substitution subshell — the trap does not run
+  # there, but echo's write() now returns EPIPE and gets reported:
+  #   sync-monorepo.sh: line NNNN: echo: write error: Broken pipe
+  # Stripping from the first newline is equivalent for every input, allocates
+  # no subshell, and cannot race a reader.
+  FIRST_ENTRY="${ALL_ENTRIES%%$'\n'*}"
 
   if echo "$FIRST_ENTRY" | grep -q "## \[$TODAY\] — Monorepo sync"; then
     # Today's sync entry exists — replace it with fresh one
@@ -1026,12 +1121,37 @@ fi
 write_file "$MONOREPO_DIR/CHANGELOG.md" "$ROOT_CHANGELOG" "CHANGELOG.md" "true"
 
 # --- .gitignore ---
+# /build/ is here because prepare-plugin.sh's default --output-dir is
+# ./build/<plugin-name>/: any plugin build run from the monorepo root drops a
+# tree there, and the "Next steps" banner this script prints ends in
+# `git add -A`. A monorepo generated without this line would commit it.
+# Root-anchored deliberately: an unanchored `build/` matches at every depth, so
+# a plugin that legitimately ships plugins/<name>/build/ would be silently
+# excluded from that same `git add -A`.
 GITIGNORE=".DS_Store
 *.swp
 *~
-.claude/"
+.claude/
+/build/"
 
 write_file "$MONOREPO_DIR/.gitignore" "$GITIGNORE" ".gitignore"
+
+# write_file does not overwrite, so the template above only ever reaches a
+# freshly --init-ed monorepo. An already-published one keeps whatever .gitignore
+# it has and gets a bare "SKIP    .gitignore (already exists)" line, which reads
+# exactly like "already correct" — so the fix above would reach nobody who
+# already has a monorepo, silently. Say so instead.
+#
+# Advisory, never fatal: the file belongs to the monorepo, not to this script,
+# and refusing to sync over a hand-edited .gitignore would be a far worse
+# failure than the untracked build/ tree this warns about. The test is for the
+# literal root-anchored line, matching what the template writes; a monorepo
+# ignoring build/ some other way gets a NOTE it can ignore.
+if [[ -f "$MONOREPO_DIR/.gitignore" ]] && ! grep -qxF '/build/' "$MONOREPO_DIR/.gitignore"; then
+  echo "  NOTE: .gitignore exists but has no '/build/' line — prepare-plugin.sh"
+  echo "        writes ./build/<name>/ by default, and the 'git add -A' in the"
+  echo "        Next steps below would commit it. Add: /build/"
+fi
 
 # --- LICENSE ---
 LICENSE_CONTENT="MIT License

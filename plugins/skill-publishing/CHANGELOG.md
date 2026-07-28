@@ -2,6 +2,85 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.2.1] - 2026-07-26
+
+### Fixed
+
+- `sync-monorepo.sh` treated every top-level directory in the monorepo as a skill, so
+  directories that exist for other reasons — `docs/`, `build/` — entered the sync loop and
+  produced a spurious `ERROR: no SKILL.md ...` line on every run. Both directory-scan sites
+  in `discover_skills()` now filter through `filter_skill_candidates()` — the plain scan,
+  and the `--add` branch's `existing=` scan, which runs only when `--add` is passed — each
+  applying the same test `skill_source_dir()` does and announcing what it dropped on stderr
+  instead of discarding it silently. The filter emits through `printf` rather than `echo`,
+  so a directory named `-n`/`-e`/`-E` cannot be eaten by `echo`'s option parsing and vanish
+  without even a SKIP line. (#74)
+- The plugin auto-build stage assembled each plugin into `./build/<name>` in the *caller's*
+  working directory, so a sync run from the monorepo root left an untracked `build/` tree
+  behind — which the script's own "Next steps: `git add -A`" banner would then commit.
+  Builds now go into a `mktemp -d` stage removed by an EXIT trap, passed through to
+  `prepare-plugin.sh` via `--output-dir`. (#74)
+- The `.gitignore` template written into a freshly `--init`-ed monorepo did not list
+  `build/`, so every newly generated monorepo shipped with the same defect. The pattern is
+  written root-anchored as `/build/`: unanchored, it matches at every depth, so a plugin
+  that legitimately ships a `build/` subdirectory would be silently excluded from the very
+  `git add -A` the ignore rule exists to protect. (#74)
+- The CHANGELOG-parsing step read its first line via `echo "$ALL_ENTRIES" | head -1`.
+  `head` exits after one line, so `echo` races it and takes EPIPE once the entry text is
+  well past the 64 KiB pipe buffer. With the auto-build EXIT trap now registered, bash no
+  longer leaves SIGPIPE at its default disposition in the command-substitution subshell —
+  the trap does not itself run there — so `echo`'s failed write is reported rather than
+  silently killing it: `echo: write error: Broken pipe` on stderr. It is a write/reader
+  race, not a hard threshold: measured 0/50 reproductions below 64 KiB, ~53% at 84 KiB and
+  10/10 at 154 KiB, so it reproduces reliably well past the buffer. Replaced with a
+  parameter expansion; generated output is byte-identical. (#74)
+- `Skills to sync (N)` counted an empty list as 1 and printed a bare `  - ` bullet,
+  because `echo ""` emits a newline for `wc -l` to count. Newly reachable now that
+  discovery filters non-skill directories: a monorepo holding only `docs/` and `build/`
+  yields an empty list. (#74)
+- The two remaining `echo` sites in `discover_skills()` ate a skill whose name begins
+  `-n`/`-e`/`-E`, the same class the filter fix above closed. `--skills -n` printed
+  `Skills to sync (0):`, synced nothing and still exited 0 — a silent no-op; `--add -n`
+  into a monorepo with no skills yet (the only case where the comma-join leaves the bare
+  name as the whole argument) produced no output at all, so the trailing `grep -v '^$'`
+  exited 1 and aborted the run under `set -e` with nothing on stderr to explain it. Both
+  now emit through `printf`. (#74)
+- The `--add -n` fix above cured the cause, not the shape: an `--add` argument that
+  reduces to nothing after comma-splitting (e.g. the literal argument `,`) still left the
+  trailing `grep -v '^$'` with nothing to match, so it still exited 1 and still aborted
+  the run under `set -e` — rc=1, empty stderr, no explanation. `discover_skills()` now
+  checks for that empty result itself and exits with `Error: --add produced no skill
+  names from: '<value>'` naming the offending argument, instead of letting `grep`'s exit
+  status propagate unexplained. (#74)
+- A failed plugin auto-build was undiagnosable. `prepare-plugin.sh` ran under
+  `>/dev/null 2>&1`, and on failure the only output was
+  `Warning: prepare-plugin.sh failed for <manifest>`. That was survivable while the build
+  stage was `./build/<name>/` in the caller's cwd — the partial tree stayed behind to
+  inspect and re-run by hand — but the temp-stage fix above deletes the stage on every
+  path including this one, leaving the discarded child output as the only evidence a
+  failure ever produced. The child's stdout and stderr are now captured to a log and
+  echoed to stderr, prefixed, when the build fails. The log lives in the stage root
+  rather than inside the build directory, which `prepare-plugin.sh` `rm -rf`s on entry —
+  a log written there would be unlinked out from under the open descriptor and read back
+  empty. The run still exits 0: that is a separate defect, tracked as #73, and is
+  deliberately unchanged here. (#74)
+- The `.gitignore` template fix above reaches a freshly `--init`-ed monorepo only.
+  `write_file` does not overwrite, so every already-published monorepo takes the
+  `SKIP    .gitignore (already exists)` branch instead — a line that reads exactly the
+  same whether the existing file carries the rule or not, so the fix reached nobody who
+  already had a monorepo and said nothing about it. A non-fatal `NOTE` now names the
+  missing `/build/` pattern and why it matters (the `git add -A` in the script's own
+  Next-steps banner). Advisory only: the file belongs to the monorepo, and refusing to
+  sync over a hand-edited `.gitignore` would be a worse failure than the untracked
+  `build/` tree it warns about. (#74)
+- The manifest-shadowing lookup read `$_SEEN_MANIFESTS` through an `awk` that `exit`s on
+  first match — the same early-exiting-reader shape as the `| head -1` removed above, and
+  likewise evaluated with the auto-build EXIT trap already registered, the condition that
+  turns a silent SIGPIPE into a reported `write error: Broken pipe`. The payload is a few
+  KiB at this repo's scale, far below the 64 KiB pipe buffer, so it could not fire; the
+  reader now drains its input (`$1==n && !f {print $2; f=1}`, first-match-wins preserved)
+  so it cannot start to. (#74)
+
 ## [4.2.0] - 2026-07-25
 
 ### Fixed

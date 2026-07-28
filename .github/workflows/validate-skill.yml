@@ -142,3 +142,19 @@ jobs:
       # the whole tree, so any file in the repo can change their output.
       - name: Run discovery-guard regression harness
         run: ./scripts/test-discovery-guards.sh
+
+  sync-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq and rsync
+        run: sudo apt-get install -y jq rsync
+
+      # Unconditional for the same reason as discovery-guards: the changed-path
+      # filters in the jobs above match skill and plugin directories, never
+      # scripts/**, so a path-filtered job here would never run on a change to
+      # the harness itself. The harness also asserts against the repo's own
+      # .gitignore, which no skill/plugin filter covers either.
+      - name: Run sync-hygiene regression harness
+        run: ./scripts/test-sync-hygiene.sh

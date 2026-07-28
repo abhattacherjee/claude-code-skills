@@ -66,7 +66,7 @@
       "name": "skill-publishing",
       "source": "./plugins/skill-publishing",
       "description": "Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos",
-      "version": "4.2.0"
+      "version": "4.2.1"
     },
     {
       "name": "smart-screen-recorder",
