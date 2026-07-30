@@ -1277,8 +1277,16 @@ assert_not_contains "root README does not fall back to USERNAME" \
 # Globbed rather than the hardcoded four names used to build the fixture
 # (line ~532 above): a fifth manifest added to skills-home-hooks/ later must
 # not be able to escape this loop by simply not being named here.
+# `|| true` on the pipeline, not just the `find`: under `set -euo pipefail` (see
+# this file's top), a missing plugins/ dir makes `find` exit non-zero, which
+# propagates through the pipe into this assignment and kills the whole harness
+# right here — no summary line, no FAIL naming what happened, and everything
+# after this point (the count control below, all per-plugin README checks, and
+# the authoring-source-parity section at the end) silently never runs. `|| true`
+# turns that into an empty $HOOKS_PUBLISHED_PLUGINS, which the count control
+# below reports as an explained "expected [4] ... got [0]" instead.
 HOOKS_PUBLISHED_PLUGINS=$(find "$MONOREPO_HOOKS_FIXTURE/plugins" -maxdepth 1 -mindepth 1 -type d \
-    -exec basename {} \; 2>/dev/null | LC_ALL=C sort)
+    -exec basename {} \; 2>/dev/null | LC_ALL=C sort || true)
 
 # Control on the glob itself: without this, a run that silently built fewer
 # than four plugins (or somehow more) would just iterate the loop below over
