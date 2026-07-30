@@ -53,9 +53,18 @@ Reversion guard:
 
 Exit status:
   0  success
-  1  usage/setup error, or a plugin auto-build failed (the catalogue is then
-     deliberately left un-regenerated rather than describing an unbuilt plugin)
+  1  usage/setup error — bad/missing arguments, or a --skills value that
+     resolves to no valid skill — or a plugin auto-build failed (the
+     catalogue is then deliberately left un-regenerated rather than
+     describing an unbuilt plugin or an emptied one)
   3  completed, but skills were refused by the reversion guard
+
+  A --skills value that matches no real skill is a usage error, not a build
+  failure, but it deliberately shares exit 1 with one rather than mint a third
+  code: the unknown-option and missing-monorepo-directory errors above already
+  use 1 for "usage/setup error", and --add's identical no-names-matched case
+  has used 1 since PR #76. This keeps 1 to its existing two senses instead of
+  letting a third meaning accrete onto it silently.
 
   1 wins over 3: a run that both refused a skill and failed a build stops at the
   build failure, so the end-of-run REFUSED summary never prints — the refusal is
@@ -223,7 +232,18 @@ discover_skills() {
 
   # If --skills specified, use that list
   if [[ -n "$SKILLS_LIST" ]]; then
-    printf '%s\n' "$SKILLS_LIST" | tr ',' '\n' | sort
+    # Mirrors the --add branch above: a value that is nothing but separators
+    # (e.g. `--skills ,`) reduces to blank lines after comma-splitting, and a
+    # bare `grep -v '^$'` on an all-blank input exits 1 and would abort the
+    # whole run under `set -e` with empty stderr — no explanation. Capture the
+    # filtered result first and, if nothing survives, fail loudly and say why.
+    local skills_filtered
+    skills_filtered=$(printf '%s\n' "$SKILLS_LIST" | tr ',' '\n' | sort | grep -v '^$' || true)
+    if [[ -z "$skills_filtered" ]]; then
+      echo "Error: --skills produced no skill names from: '$SKILLS_LIST'" >&2
+      exit 1
+    fi
+    printf '%s\n' "$skills_filtered"
     return
   fi
 
@@ -276,6 +296,13 @@ echo ""
 # --- Sync each skill ---
 CATALOG_ROWS=""
 
+# Counts every SKILLS_TO_SYNC entry that resolved to a real skill (found a
+# SKILL.md), whether it was ultimately copied or refused by the reversion
+# guard further down — a refusal is a legitimate outcome (exit 3), not the
+# "no such skill" case this counter exists to catch. Read only by the
+# explicit --skills guard after the loop (#80).
+SKILLS_RESOLVED_COUNT=0
+
 for SKILL_NAME in $SKILLS_TO_SYNC; do
   SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
   SKILL_DST="$MONOREPO_DIR/$SKILL_NAME"
@@ -288,6 +315,7 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
     continue
   fi
   SKILL_MD="$SKILL_SRC/SKILL.md"
+  SKILLS_RESOLVED_COUNT=$((SKILLS_RESOLVED_COUNT + 1))
 
   # When the source IS the destination (in-repo source directory), every copy
   # below would be a directory-onto-itself operation: `cp a a` fails and
@@ -500,6 +528,29 @@ This skill follows the **Agent Skills** standard — a \`SKILL.md\` file with YA
 
   echo ""
 done
+
+# --- Guard: an explicit --skills value that matched no real skill must not
+# proceed to rebuild the catalogue (#80, second half). The discover_skills()
+# branch above already refuses a --skills value that produces no names at all
+# (e.g. `--skills ,`) before this loop ever runs; this catches the quieter
+# case where every named skill fails to resolve a SKILL.md (e.g. `--skills
+# nosuchskill`) — the loop only prints an inline "ERROR: no SKILL.md ..." per
+# name and `continue`s, so without this the run would still reach exit 0
+# having synced nothing and then regenerate the README/CHANGELOG/marketplace
+# from whatever was already on disk. Sited here — after the main sync loop,
+# before the plugin auto-build stage and every stage that follows it — so
+# nothing downstream runs on a wasted invocation.
+#
+# Discovery-driven runs (no --skills given) are deliberately exempt: a
+# monorepo that genuinely has no skills yet is a legitimate zero, not a usage
+# error, and must keep exiting 0 (see the "empty monorepo" fixture).
+if [[ -n "$SKILLS_LIST" && "$SKILLS_RESOLVED_COUNT" -eq 0 ]]; then
+  echo "" >&2
+  echo "Error: --skills matched no valid skills (no SKILL.md found) from: '$SKILLS_LIST'" >&2
+  echo "       Nothing was synced; the monorepo README, CHANGELOG and" >&2
+  echo "       marketplace catalogue are left untouched." >&2
+  exit 1
+fi
 
 # --- Discover and sync plugins ---
 discover_plugins() {

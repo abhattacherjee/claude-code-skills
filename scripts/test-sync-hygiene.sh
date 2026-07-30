@@ -253,6 +253,17 @@ listed_skill_count() {
     fi
 }
 
+# Counts SKILL catalogue rows in a generated README.md, distinguishing them
+# from plugin catalogue rows in the same file. Both are `| [name](path) | ... |`
+# table rows, but a skill row's link is `(./name/)` — a single path segment —
+# while a plugin row's is `(./plugins/name/)` — two segments. Requiring no
+# internal `/` inside the parens is what tells them apart; a plain
+# `grep -c '^| \['` would double-count once a plugin table exists in the same
+# README (issue #80 fixtures always trigger the demo-plugin auto-build).
+skill_catalog_row_count() {
+    grep -cE '^\| \[[^]]+\]\(\./[^/]+/\) \|' "$1" 2>/dev/null || true
+}
+
 # ============================================================
 # gh shim — keeps the run genuinely offline
 # ============================================================
@@ -338,6 +349,18 @@ MONOREPO_DASHN_FIXTURE="$SCRATCH_DIR/monorepo-dashn"
 MONOREPO_SKILLSN_FIXTURE="$SCRATCH_DIR/monorepo-skillsn"
 MONOREPO_ADDN_FIXTURE="$SCRATCH_DIR/monorepo-addn"
 MONOREPO_ADDCOMMA_FIXTURE="$SCRATCH_DIR/monorepo-addcomma"
+
+# Issue #80 (--skills resolving to zero real skills must refuse, not publish
+# an empty catalogue). Three separate monorepo trees, each pre-seeded with a
+# demo-skill/ directory so a first "populate" sync run (no --skills) gives it
+# a real, non-empty catalogue — the whole point of these fixtures is proving
+# that catalogue survives a subsequent bad --skills call, so each needs its
+# own tree: sharing MONOREPO_FIXTURE would let a still-broken guard corrupt
+# the state that MONOREPO_FIXTURE's own later assertions depend on.
+MONOREPO_SKILLSCOMMA_FIXTURE="$SCRATCH_DIR/monorepo-skillscomma"
+MONOREPO_SKILLSBAD_FIXTURE="$SCRATCH_DIR/monorepo-skillsbad"
+MONOREPO_SKILLSGOOD_FIXTURE="$SCRATCH_DIR/monorepo-skillsgood"
+
 SKILLS_HOME_BUILDFAIL_FIXTURE="$SCRATCH_DIR/skills-home-buildfail"
 MONOREPO_BUILDFAIL_FIXTURE="$SCRATCH_DIR/monorepo-buildfail"
 MONOREPO_GITIGNORE_FIXTURE="$SCRATCH_DIR/monorepo-gitignore"
@@ -447,6 +470,9 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$MONOREPO_SKILLSN_FIXTURE" \
          "$MONOREPO_ADDN_FIXTURE" \
          "$MONOREPO_ADDCOMMA_FIXTURE" \
+         "$MONOREPO_SKILLSCOMMA_FIXTURE/demo-skill" \
+         "$MONOREPO_SKILLSBAD_FIXTURE/demo-skill" \
+         "$MONOREPO_SKILLSGOOD_FIXTURE/demo-skill" \
          "$SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin" \
          "$MONOREPO_BUILDFAIL_FIXTURE" \
          "$MONOREPO_GITIGNORE_FIXTURE" \
@@ -1193,6 +1219,51 @@ ADDCOMMA_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMA_FIXTURE" "$ADDCOMMA_STDOUT_LOG" "$ADDCOMMA_STDERR_LOG" --add , || ADDCOMMA_RC=$?
 ADDCOMMA_STDERR="$(cat "$ADDCOMMA_STDERR_LOG")"
 
+# Runs 7a-7c: issue #80 — a --skills value that resolves to zero real skills
+# must refuse rather than silently republish the catalogue. Each of the three
+# fixtures below is first "populated" with a genuine sync (no --skills), which
+# writes a real, non-empty catalogue row for demo-skill; the populate run's own
+# rc/output is not asserted on (MONOREPO_FIXTURE's identical run already covers
+# that path) — it exists purely to give the guard-triggering run something to
+# protect or, in the positive control, to prove it still works.
+SKILLSCOMMA_POPULATE_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSCOMMA_FIXTURE" "$SCRATCH_DIR/skillscomma-populate.stdout" "$SCRATCH_DIR/skillscomma-populate.stderr" || SKILLSCOMMA_POPULATE_RC=$?
+SKILLSCOMMA_README_BEFORE="$(cat "$MONOREPO_SKILLSCOMMA_FIXTURE/README.md" 2>/dev/null || true)"
+SKILLSCOMMA_ROWS_BEFORE="$(skill_catalog_row_count "$MONOREPO_SKILLSCOMMA_FIXTURE/README.md")"
+
+SKILLSCOMMA_STDOUT_LOG="$SCRATCH_DIR/skillscomma.stdout"
+SKILLSCOMMA_STDERR_LOG="$SCRATCH_DIR/skillscomma.stderr"
+SKILLSCOMMA_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSCOMMA_FIXTURE" "$SKILLSCOMMA_STDOUT_LOG" "$SKILLSCOMMA_STDERR_LOG" --skills , || SKILLSCOMMA_RC=$?
+SKILLSCOMMA_STDERR="$(cat "$SKILLSCOMMA_STDERR_LOG")"
+SKILLSCOMMA_README_AFTER="$(cat "$MONOREPO_SKILLSCOMMA_FIXTURE/README.md" 2>/dev/null || true)"
+SKILLSCOMMA_ROWS_AFTER="$(skill_catalog_row_count "$MONOREPO_SKILLSCOMMA_FIXTURE/README.md")"
+
+SKILLSBAD_POPULATE_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSBAD_FIXTURE" "$SCRATCH_DIR/skillsbad-populate.stdout" "$SCRATCH_DIR/skillsbad-populate.stderr" || SKILLSBAD_POPULATE_RC=$?
+SKILLSBAD_README_BEFORE="$(cat "$MONOREPO_SKILLSBAD_FIXTURE/README.md" 2>/dev/null || true)"
+SKILLSBAD_ROWS_BEFORE="$(skill_catalog_row_count "$MONOREPO_SKILLSBAD_FIXTURE/README.md")"
+
+SKILLSBAD_STDOUT_LOG="$SCRATCH_DIR/skillsbad.stdout"
+SKILLSBAD_STDERR_LOG="$SCRATCH_DIR/skillsbad.stderr"
+SKILLSBAD_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSBAD_FIXTURE" "$SKILLSBAD_STDOUT_LOG" "$SKILLSBAD_STDERR_LOG" --skills nosuchskill || SKILLSBAD_RC=$?
+SKILLSBAD_STDERR="$(cat "$SKILLSBAD_STDERR_LOG")"
+SKILLSBAD_README_AFTER="$(cat "$MONOREPO_SKILLSBAD_FIXTURE/README.md" 2>/dev/null || true)"
+SKILLSBAD_ROWS_AFTER="$(skill_catalog_row_count "$MONOREPO_SKILLSBAD_FIXTURE/README.md")"
+
+# Positive control: without this, a guard that refuses every --skills
+# invocation (not just the zero-resolving ones) would pass both checks above.
+SKILLSGOOD_POPULATE_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSGOOD_FIXTURE" "$SCRATCH_DIR/skillsgood-populate.stdout" "$SCRATCH_DIR/skillsgood-populate.stderr" || SKILLSGOOD_POPULATE_RC=$?
+
+SKILLSGOOD_STDOUT_LOG="$SCRATCH_DIR/skillsgood.stdout"
+SKILLSGOOD_STDERR_LOG="$SCRATCH_DIR/skillsgood.stderr"
+SKILLSGOOD_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSGOOD_FIXTURE" "$SKILLSGOOD_STDOUT_LOG" "$SKILLSGOOD_STDERR_LOG" --skills demo-skill || SKILLSGOOD_RC=$?
+SKILLSGOOD_STDOUT="$(cat "$SKILLSGOOD_STDOUT_LOG")"
+SKILLSGOOD_README_AFTER="$(cat "$MONOREPO_SKILLSGOOD_FIXTURE/README.md" 2>/dev/null || true)"
+
 # Run 8: the only run pointed at the second SKILLS_HOME, whose single manifest
 # names a skill source that does not exist. prepare-plugin.sh exits 1, and as of
 # #73 the sync surfaces the child's diagnosis and then exits 1 itself rather than
@@ -1811,6 +1882,60 @@ assert_eq "--add , fails with a deliberate, explained exit rather than an unexpl
     "1" "$ADDCOMMA_RC"
 assert_contains "--add , explains itself on stderr, naming the offending argument" \
     "Error: --add produced no skill names from: ','" "$ADDCOMMA_STDERR"
+
+# ============================================================
+# Issue #80 — a --skills value resolving to zero real skills must refuse
+# rather than publish an empty (or silently unchanged-but-misleading) catalog
+# ============================================================
+#
+# Two entry points into the same defect, differing only in how quiet they
+# were: `--skills ,` resolves to zero names before the sync loop ever runs
+# (caught in discover_skills() itself); `--skills nosuchskill` resolves to one
+# name that then fails to find a SKILL.md inside the loop (caught by the
+# post-loop SKILLS_RESOLVED_COUNT guard). Both must leave the existing
+# catalogue untouched — the row count is the assertion, not the file's mere
+# presence, since the destructive version of this bug also leaves a file
+# behind (just an emptied one).
+
+# Sanity: the populate step must have actually succeeded and produced a real,
+# non-empty catalogue, or "the row count didn't change" would be trivially
+# true of two absent files and prove nothing.
+assert_eq "--skills , fixture: the populate run itself succeeded" \
+    "0" "$SKILLSCOMMA_POPULATE_RC"
+assert_eq "--skills , fixture: populate produced exactly one catalogue row" \
+    "1" "$SKILLSCOMMA_ROWS_BEFORE"
+assert_eq "--skills nosuchskill fixture: the populate run itself succeeded" \
+    "0" "$SKILLSBAD_POPULATE_RC"
+assert_eq "--skills nosuchskill fixture: populate produced exactly one catalogue row" \
+    "1" "$SKILLSBAD_ROWS_BEFORE"
+assert_eq "--skills demo-skill fixture: the populate run itself succeeded" \
+    "0" "$SKILLSGOOD_POPULATE_RC"
+
+assert_eq "--skills , fails with a deliberate, explained exit" \
+    "1" "$SKILLSCOMMA_RC"
+assert_contains "--skills , explains itself on stderr, naming the offending argument" \
+    "Error: --skills produced no skill names from: ','" "$SKILLSCOMMA_STDERR"
+assert_eq "--skills , leaves the catalogue row count unchanged" \
+    "$SKILLSCOMMA_ROWS_BEFORE" "$SKILLSCOMMA_ROWS_AFTER"
+assert_eq "--skills , leaves the README byte-for-byte unchanged" \
+    "$SKILLSCOMMA_README_BEFORE" "$SKILLSCOMMA_README_AFTER"
+
+assert_eq "--skills nosuchskill fails with a deliberate, explained exit" \
+    "1" "$SKILLSBAD_RC"
+assert_contains "--skills nosuchskill explains itself on stderr, naming the offending argument" \
+    "Error: --skills matched no valid skills (no SKILL.md found) from: 'nosuchskill'" "$SKILLSBAD_STDERR"
+assert_eq "--skills nosuchskill leaves the catalogue row count unchanged" \
+    "$SKILLSBAD_ROWS_BEFORE" "$SKILLSBAD_ROWS_AFTER"
+assert_eq "--skills nosuchskill leaves the README byte-for-byte unchanged" \
+    "$SKILLSBAD_README_BEFORE" "$SKILLSBAD_README_AFTER"
+
+# Positive control: --skills naming a real skill still succeeds and is synced.
+assert_eq "positive control: --skills demo-skill exits 0" \
+    "0" "$SKILLSGOOD_RC"
+assert_line_present "positive control: --skills demo-skill names it in the synced list" \
+    "demo-skill" "$(synced_names "$SKILLSGOOD_STDOUT")"
+assert_contains "positive control: --skills demo-skill's catalogue row is (re)written" \
+    "[demo-skill](./demo-skill/)" "$SKILLSGOOD_README_AFTER"
 
 # ============================================================
 # Issue #77 — a declared, non-empty hooks.source that does not resolve to a
