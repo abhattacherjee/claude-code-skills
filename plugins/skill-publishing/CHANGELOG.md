@@ -292,6 +292,64 @@ from those paths needs re-checking before upgrading.
   the same class of doc gap as the exit-code and manifest-shape ones closed earlier here.
   Documented in the sentence users actually skim. (#80)
 
+- **#77's fatal `else` covered one of two branches.** It sits inside
+  `[[ -n "$HOOKS_SRC" ]] && [[ != null ]]`, so it only caught a source that was PRESENT and
+  unresolvable. A `hooks` object carrying no `source` KEY — the plausible typo
+  `{"src": "./hooks"}` — makes `.hooks.source` yield null, fails that test, and fell off
+  the end with no `else`: exit 0, no hooks copied, `--- Hooks ---` printed anyway so the
+  log read as if they had been, and `rsync -a --delete` then removed the published
+  `hooks/`. Identical consequence to #77, through the neighbouring branch.
+  `.hooks | has("source")` separates the two intents `jq` collapses into one null:
+  `{"source": null}` and `{"source": ""}` remain legal no-ops — a deliberate design
+  decision this check does NOT reverse — while a missing key is refused. The type test also
+  covers a non-object `hooks`, where `has()` would be a jq type error. The header now
+  prints only for a branch that does something. Zero live manifests declare `hooks`, so the
+  blast radius is nil. (#77)
+
+- **#79 forwarded `--github-user` and not `--author`, on the same command line.**
+  `--author "Jane Doe"` produced `Copyright (c) 2026 Jane Doe` in the monorepo LICENSE and
+  in `marketplace.json`'s `owner.name`, and `Copyright (c) 2026 Abhishek` in every
+  auto-built plugin's own LICENSE — #79's "one run advertises two identities" verbatim, in
+  a distributed MIT licence sitting beside a marketplace entry that contradicts it. The
+  whole invocation was audited rather than assuming these two were all: `prepare-plugin.sh`
+  accepts exactly four flags, three are now forwarded, and `--dry-run` deliberately is not
+  because the child is never invoked under `--dry-run`. A manifest-level `.author` still
+  wins inside the child. (#79)
+
+- **#78 fixed skill RESOLUTION but not DISCOVERY.** `validate-pre-sync.sh` still enumerated
+  the monorepo only, so a skill living solely in `$SKILLS_HOME` was structurally invisible
+  — which is every `sync-monorepo.sh --add <new-skill>`, the highest-risk case for the
+  mismatch this gate exists to catch. Measured: a `brandnew` skill at v2.0.0 whose newest
+  CHANGELOG entry was 1.0.0 gave "Total: 1 | Pass: 1 | Fail: 0 … Safe to sync." at rc=0,
+  and the next command published that exact mismatch. It now accepts `--add`, mirroring the
+  sync flag whose shape it could not see. Named skills are unioned in rather than
+  enumerating all of `$SKILLS_HOME`: a gate that fails on unrelated local work is a gate
+  people stop running, and no sync shape corresponds to "everything in the home". (#78)
+
+- **`--add` round-tripped the machine-discovered list through a comma-joined string.**
+  Lossy for a directory name containing a comma — legal on both platforms, and exactly the
+  "names are unconstrained free text" premise #81 rests on. Measured on a monorepo holding
+  `alpha,beta/`: the name split into two, neither resolved, and the skill was deleted from
+  the published catalogue while staying on disk, at rc=0, every downstream figure agreeing
+  with the loss. The new per-name `--add` guard cannot catch it — it checks only
+  user-typed names and trusts the discovered list, correctly, since that list was intact
+  until the join mangled it. Only the user-typed value is comma-split now. (#81)
+
+- `validate-pre-sync.sh` printed its report with `printf "$RESULTS"`, treating accumulated
+  DATA as a format string: a directory named `pct%s-skill` was reported as `pct-skill`, so
+  the operator is told a name that is not on disk. Pre-existing, but #78 tripled what flows
+  through it. `printf '%b'` keeps the `\n` expansion and stops interpreting data as
+  format. (#78)
+
+- `_lib.sh`'s `skill_source_dir()` claimed "every current caller sets it before sourcing
+  this file" of `SKILLS_HOME`, and **contradicted the paragraph five lines below it**, which
+  correctly names three scripts that source the file without setting `MONOREPO_DIR`. Those
+  same three do not set `SKILLS_HOME` either; what is true is narrower — every caller of the
+  FUNCTION sets it, and those three never call it (verified, 0 references each). Sourcing is
+  not calling. The bare `set -u` abort also reported `_lib.sh: line NNN: SKILLS_HOME:
+  unbound variable`, blaming this file for a contract the caller broke; an explicit guard now
+  names the actual requirement. (#78)
+
 - **`SKILL.md`'s Quick Reference now states the `--skills`/`--add` asymmetry rather than
   asserting parity.** The fix for the "partial catalogue" overclaim above introduced a
   different false claim in its place — "both refuse an unresolvable name rather than

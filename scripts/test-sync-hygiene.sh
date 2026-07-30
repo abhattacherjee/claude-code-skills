@@ -77,8 +77,8 @@ set -euo pipefail
 #      plugin auto-build fails exits 1 rather than warning and going on to
 #      regenerate a catalogue describing a plugin it could not build.
 #
-# The whole run is hermetic: 14 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 29 throwaway monorepos, the syncs
+# The whole run is hermetic: 18 throwaway SKILLS_HOMEs, a fixture directory
+# that is deliberately never a SKILLS_HOME, 33 throwaway monorepos, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
@@ -2420,10 +2420,11 @@ presync_fail() {
 # instead of into a variable anything could assert against.
 run_presync() {
     local skills_home="$1" monorepo="$2" stdout_log="$3" stderr_log="$4"
+    shift 4
     local rc=0
     (
         cd "$RUN_CWD"
-        SKILLS_HOME="$skills_home" "$PRESYNC_SCRIPT" "$monorepo"
+        SKILLS_HOME="$skills_home" "$PRESYNC_SCRIPT" "$@" "$monorepo"
     ) >"$stdout_log" 2>"$stderr_log" || rc=$?
     return "$rc"
 }
@@ -3760,6 +3761,401 @@ assert_contains "…the per-manifest failure line still prints" \
     "ERROR: prepare-plugin.sh failed for $SLASHLOG_MANIFEST" "$SLASHLOG_STDERR"
 assert_contains "…and the collected-failure summary survives the sed that cannot read its own log" \
     "plugin build failed:        $SLASHLOG_MANIFEST" "$SLASHLOG_STDERR"
+
+# ============================================================
+# Adversarial round (#91 R1): incompleteness in the issues this PR closes
+# ============================================================
+#
+#  20. #77's fatal `else` covered one of two branches. It is nested inside
+#      `[[ -n "$HOOKS_SRC" ]] && [[ != null ]]`, so it only ever caught a source
+#      that was PRESENT and unresolvable. A `hooks` object with no `source` KEY
+#      — the plausible typo `{"src": "./hooks"}` — makes `.hooks.source` yield
+#      null, fails that test, and fell off the end with no else: exit 0, no
+#      hooks copied, `--- Hooks ---` printed anyway so the log read as if they
+#      had been, and `rsync -a --delete` then removed the published hooks/.
+#      `.hooks | has("source")` separates the two intents jq collapses into one
+#      null: `{"source": null}` and `{"source": ""}` stay legal no-ops (a
+#      deliberate design decision, not an oversight), while a missing key is
+#      refused. The header now prints only for a branch that does something.
+#
+#  21. #79 forwarded --github-user and not --author, on the same command line.
+#      `--author "Jane Doe"` put "Jane Doe" in the monorepo LICENSE and
+#      marketplace owner.name, and "Abhishek" in every auto-built plugin's own
+#      LICENSE — #79's "one run, two identities" verbatim, in a distributed MIT
+#      licence. prepare-plugin.sh accepts exactly four flags; three are now
+#      forwarded and --dry-run deliberately is not, because the child is never
+#      invoked under --dry-run at all.
+#
+#  22. #78 fixed skill RESOLUTION but not DISCOVERY: validate-pre-sync.sh still
+#      enumerated the monorepo only, so a skill living solely in $SKILLS_HOME
+#      was structurally invisible — which is every `sync-monorepo.sh --add
+#      <new-skill>`, the highest-risk case for the mismatch this gate exists to
+#      catch. It now accepts `--add`, mirroring the sync flag whose shape it
+#      cannot otherwise see. Named skills are unioned in rather than
+#      enumerating all of $SKILLS_HOME: a gate that fails on unrelated local
+#      work is a gate people stop running.
+#
+#  23. `--add` round-tripped the machine-discovered list through a comma-joined
+#      string, which is lossy for a directory name containing a comma — the
+#      same "names are unconstrained free text" premise #81 rests on. Only the
+#      user-typed value is comma-split now.
+
+# ------------------------------------------------------------------
+# Defect 20 — a hooks object with no source key
+# ------------------------------------------------------------------
+mkdir -p "$PREPARE_FIXTURE_DIR/hookstypo-plugin" "$PREPARE_FIXTURE_DIR/hooksnull-plugin"
+
+cat > "$PREPARE_FIXTURE_DIR/hookstypo-plugin/SKILL.md" <<'EOF'
+---
+name: hookstypo-plugin
+description: Throwaway fixture — manifest declares hooks with a misspelled key (harness defect 20).
+version: 0.1.0
+---
+
+# hookstypo-plugin
+EOF
+cat > "$PREPARE_FIXTURE_DIR/hookstypo-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "hookstypo-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture whose hooks object misspells 'source' (harness defect 20).",
+  "skills": [{ "name": "hookstypo-plugin", "source": "." }],
+  "hooks": { "src": "./hooks" },
+  "commands": []
+}
+EOF
+
+# The control that keeps #77's deliberate no-ops intact: an EXPLICIT null source
+# is "no hooks, on purpose" and must still build cleanly. Without this, a fix
+# that simply errored on any falsy hooks source would satisfy every assertion
+# below while reversing a design decision.
+cat > "$PREPARE_FIXTURE_DIR/hooksnull-plugin/SKILL.md" <<'EOF'
+---
+name: hooksnull-plugin
+description: Throwaway fixture — hooks.source explicitly null, a deliberate no-op (harness defect 20 control).
+version: 0.1.0
+---
+
+# hooksnull-plugin
+EOF
+cat > "$PREPARE_FIXTURE_DIR/hooksnull-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "hooksnull-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture with an explicitly null hooks source (harness defect 20 control).",
+  "skills": [{ "name": "hooksnull-plugin", "source": "." }],
+  "hooks": { "source": null },
+  "commands": []
+}
+EOF
+
+HOOKSTYPO_RC=0
+run_prepare hookstypo-plugin "$SCRATCH_DIR/hookstypo.stdout" "$SCRATCH_DIR/hookstypo.stderr" || HOOKSTYPO_RC=$?
+HOOKSTYPO_STDOUT="$(cat "$SCRATCH_DIR/hookstypo.stdout")"
+HOOKSTYPO_STDERR="$(cat "$SCRATCH_DIR/hookstypo.stderr")"
+
+# --- Verified red against the pre-fix build: rc=0, "--- Hooks ---" present,
+# no ERROR anywhere, and a plugin assembled with no hooks/ that rsync --delete
+# would then strip from the published copy. ---
+assert_eq "a hooks object with no 'source' key is refused, not silently skipped" \
+    "1" "$HOOKSTYPO_RC"
+assert_contains "…naming the malformed value so the typo is visible" \
+    "ERROR: 'hooks' is declared but carries no 'source' key: {\"src\":\"./hooks\"}" \
+    "$HOOKSTYPO_STDERR"
+assert_contains "…and pointing at the deliberate way to say \"no hooks\"" \
+    'Use {"source": null} to declare "no hooks" deliberately.' "$HOOKSTYPO_STDERR"
+assert_not_contains "…with no \"--- Hooks ---\" header for a branch that copied nothing" \
+    "--- Hooks ---" "$HOOKSTYPO_STDOUT"
+
+HOOKSNULL_RC=0
+run_prepare hooksnull-plugin "$SCRATCH_DIR/hooksnull.stdout" "$SCRATCH_DIR/hooksnull.stderr" || HOOKSNULL_RC=$?
+HOOKSNULL_STDOUT="$(cat "$SCRATCH_DIR/hooksnull.stdout")"
+assert_eq "control: an EXPLICIT null hooks source stays a legal no-op and still builds" \
+    "0" "$HOOKSNULL_RC"
+assert_not_contains "…drawing no missing-source error" \
+    "carries no 'source' key" "$(cat "$SCRATCH_DIR/hooksnull.stderr")"
+assert_not_contains "…and printing no Hooks header either, since it copied nothing" \
+    "--- Hooks ---" "$HOOKSNULL_STDOUT"
+assert_file_exists "…while still producing a plugin" \
+    "$PREPARE_OUT_DIR/hooksnull-plugin/.claude-plugin/plugin.json"
+
+# ------------------------------------------------------------------
+# Defect 21 — --author must reach the auto-built plugin's LICENSE
+# ------------------------------------------------------------------
+#
+# Asserted on the two LICENSEs written by DIFFERENT writers: the monorepo's is
+# written by sync-monorepo.sh directly, the plugin's by prepare-plugin.sh as a
+# child. Only the second could disagree, so asserting the first alone would
+# pass against the unfixed build.
+SKILLS_HOME_AUTHOR_FIXTURE="$SCRATCH_DIR/skills-home-author"
+MONOREPO_AUTHOR_FIXTURE="$SCRATCH_DIR/monorepo-author"
+mkdir -p "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill" "$MONOREPO_AUTHOR_FIXTURE"
+cat > "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill/SKILL.md" <<'EOF'
+---
+name: author-skill
+description: Throwaway fixture backing the --author forwarding check (harness defect 21).
+version: 1.0.0
+---
+
+# Author Skill
+EOF
+cat > "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "author-plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin for the --author forwarding check (harness defect 21).",
+  "skills": [{ "name": "author-skill", "source": "." }],
+  "commands": []
+}
+EOF
+
+AUTHOR_RC=0
+(
+    cd "$RUN_CWD"
+    PATH="$GH_DRAIN_SHIM_DIR:$PATH" \
+    SKILLS_HOME="$SKILLS_HOME_AUTHOR_FIXTURE" \
+        "$SYNC_SCRIPT" --github-user harness-fixture-user \
+                       --author "Harness Author" "$MONOREPO_AUTHOR_FIXTURE"
+) >"$SCRATCH_DIR/author-stdout.log" 2>"$SCRATCH_DIR/author-stderr.log" </dev/null || AUTHOR_RC=$?
+
+# --- Verified red against the pre-fix build: the monorepo LICENSE said
+# "Harness Author" while the plugin's said "Abhishek" — one run, two identities,
+# in a distributed MIT licence. ---
+assert_eq "the --author run completes" "0" "$AUTHOR_RC"
+assert_contains "the monorepo LICENSE carries the requested author (the parent's own writer)" \
+    "Harness Author" "$(cat "$MONOREPO_AUTHOR_FIXTURE/LICENSE" 2>/dev/null || true)"
+assert_contains "…and so does the auto-built plugin's LICENSE, written by the child" \
+    "Harness Author" \
+    "$(cat "$MONOREPO_AUTHOR_FIXTURE/plugins/author-plugin/LICENSE" 2>/dev/null || true)"
+assert_not_contains "…with no trace of prepare-plugin.sh's hardcoded default" \
+    "Abhishek" "$(cat "$MONOREPO_AUTHOR_FIXTURE/plugins/author-plugin/LICENSE" 2>/dev/null || true)"
+
+# ------------------------------------------------------------------
+# Defect 22 — validate-pre-sync.sh must be able to see an --add target
+# ------------------------------------------------------------------
+PRESYNC_ADD_HOME_FIXTURE="$SCRATCH_DIR/presync-add-home"
+PRESYNC_ADD_MONOREPO_FIXTURE="$SCRATCH_DIR/presync-add-monorepo"
+mkdir -p "$PRESYNC_ADD_HOME_FIXTURE/presync-brandnew" \
+         "$PRESYNC_ADD_HOME_FIXTURE/presync-addok" \
+         "$PRESYNC_ADD_HOME_FIXTURE/presync-onrepo" \
+         "$PRESYNC_ADD_MONOREPO_FIXTURE/presync-onrepo"
+
+# In $SKILLS_HOME only, and MISMATCHED: v2.0.0 against a CHANGELOG topping out
+# at 1.0.0. This is exactly what `sync-monorepo.sh --add presync-brandnew`
+# would publish.
+cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-brandnew/SKILL.md" <<'EOF'
+---
+name: presync-brandnew
+description: Throwaway fixture — home-only skill with a mismatched CHANGELOG (harness defect 22).
+version: 2.0.0
+---
+
+# Presync Brandnew
+EOF
+cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-brandnew/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.0.0] - 2026-01-01
+
+Deliberately older than SKILL.md — this must be REPORTED, not skipped.
+EOF
+
+# Same shape, CHANGELOG matching: the control that catches a --add which fails
+# everything it is handed.
+cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-addok/SKILL.md" <<'EOF'
+---
+name: presync-addok
+description: Throwaway fixture — home-only skill whose CHANGELOG matches (harness defect 22 control).
+version: 1.0.0
+---
+
+# Presync Addok
+EOF
+cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-addok/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.0.0] - 2026-01-01
+
+Matches SKILL.md.
+EOF
+
+PRESYNC_ONREPO_MD='---
+name: presync-onrepo
+description: Throwaway fixture — already in the monorepo, enumerated with or without --add.
+version: 1.0.0
+---
+
+# Presync Onrepo'
+printf '%s\n' "$PRESYNC_ONREPO_MD" > "$PRESYNC_ADD_HOME_FIXTURE/presync-onrepo/SKILL.md"
+printf '%s\n' "$PRESYNC_ONREPO_MD" > "$PRESYNC_ADD_MONOREPO_FIXTURE/presync-onrepo/SKILL.md"
+cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-onrepo/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.0.0] - 2026-01-01
+
+Matches SKILL.md.
+EOF
+
+PRESYNC_NOADD_RC=0
+run_presync "$PRESYNC_ADD_HOME_FIXTURE" "$PRESYNC_ADD_MONOREPO_FIXTURE" \
+    "$SCRATCH_DIR/presync-noadd.stdout" "$SCRATCH_DIR/presync-noadd.stderr" || PRESYNC_NOADD_RC=$?
+PRESYNC_NOADD_STDOUT="$(cat "$SCRATCH_DIR/presync-noadd.stdout")"
+
+# Baseline: WITHOUT --add the home-only skills are correctly out of scope. This
+# is not the defect — a discovery-driven sync would not touch them either — and
+# asserting it pins that the fix is opt-in rather than a blanket widening.
+assert_eq "without --add, only the monorepo's own skills are enumerated" \
+    "1" "$(presync_total "$PRESYNC_NOADD_STDOUT")"
+assert_eq "…and that run is clean" "0" "$PRESYNC_NOADD_RC"
+
+PRESYNC_ADD_RC=0
+run_presync "$PRESYNC_ADD_HOME_FIXTURE" "$PRESYNC_ADD_MONOREPO_FIXTURE" \
+    "$SCRATCH_DIR/presync-add.stdout" "$SCRATCH_DIR/presync-add.stderr" \
+    --add presync-brandnew || PRESYNC_ADD_RC=$?
+PRESYNC_ADD_STDOUT="$(cat "$SCRATCH_DIR/presync-add.stdout")"
+
+# --- Verified red against the pre-fix build, which had no --add at all:
+# "Total: 1 | Pass: 1 | Fail: 0 … Safe to sync." at rc=0, immediately before
+# `sync-monorepo.sh --add presync-brandnew` published the mismatch. ---
+assert_eq "--add lets the gate see a skill that is not in the monorepo yet" \
+    "1" "$PRESYNC_ADD_RC"
+assert_eq "…enumerating it alongside the monorepo's own" \
+    "2" "$(presync_total "$PRESYNC_ADD_STDOUT")"
+assert_line_present "…and reporting its version/CHANGELOG mismatch by name" \
+    "FAIL  presync-brandnew — SKILL.md says v2.0.0 but CHANGELOG latest is v1.0.0" \
+    "$PRESYNC_ADD_STDOUT"
+assert_not_contains "…so the \"Safe to sync\" banner does not print over it" \
+    "Safe to sync" "$PRESYNC_ADD_STDOUT"
+
+PRESYNC_ADDOK_RC=0
+run_presync "$PRESYNC_ADD_HOME_FIXTURE" "$PRESYNC_ADD_MONOREPO_FIXTURE" \
+    "$SCRATCH_DIR/presync-addok.stdout" "$SCRATCH_DIR/presync-addok.stderr" \
+    --add presync-addok || PRESYNC_ADDOK_RC=$?
+assert_eq "control: --add of a skill whose CHANGELOG matches still exits 0" \
+    "0" "$PRESYNC_ADDOK_RC"
+assert_eq "…with both skills examined" \
+    "2" "$(presync_total "$(cat "$SCRATCH_DIR/presync-addok.stdout")")"
+
+# `--add ,` must fail loudly rather than degrade to a no-op. The emptiness test
+# is on the ADD-contributed names, not the union: a union test looks equivalent
+# and is not, because the monorepo scan keeps the union non-empty. Caught in
+# this fix's own first draft, where `--add ,` silently validated nothing extra
+# and still printed "Safe to sync".
+PRESYNC_ADDCOMMA_RC=0
+run_presync "$PRESYNC_ADD_HOME_FIXTURE" "$PRESYNC_ADD_MONOREPO_FIXTURE" \
+    "$SCRATCH_DIR/presync-addcomma.stdout" "$SCRATCH_DIR/presync-addcomma.stderr" \
+    --add , || PRESYNC_ADDCOMMA_RC=$?
+assert_eq "--add with only separators is a usage error, not a silent no-op" \
+    "2" "$PRESYNC_ADDCOMMA_RC"
+assert_contains "…naming the offending argument" \
+    "Error: --add produced no skill names from: ','" \
+    "$(cat "$SCRATCH_DIR/presync-addcomma.stderr")"
+
+# ------------------------------------------------------------------
+# Defect 24 — the report is DATA, not a printf format string
+# ------------------------------------------------------------------
+#
+# `printf "$RESULTS"` interpreted the accumulated report as a format string, so
+# a skill directory named `pct%s-skill` was reported as `pct-skill` — the `%s`
+# consumed as a conversion, and the operator told a directory name that does
+# not exist on disk. Pre-existing, but #78 tripled what flows through here by
+# making in-repo-source skills reportable at all. `printf '%b'` keeps the `\n`
+# expansion the RESULTS strings rely on and stops interpreting data as format.
+#
+# Its own monorepo, because every presync fixture above pins exact Total counts
+# and adding a fourth skill to any of them would mean rewriting another
+# defect's evidence to carry this one.
+PRESYNC_PCT_HOME_FIXTURE="$SCRATCH_DIR/presync-pct-home"
+PRESYNC_PCT_MONOREPO_FIXTURE="$SCRATCH_DIR/presync-pct-monorepo"
+mkdir -p "$PRESYNC_PCT_HOME_FIXTURE/pct%s-skill" "$PRESYNC_PCT_MONOREPO_FIXTURE/pct%s-skill"
+PCT_SKILL_MD='---
+name: pct%s-skill
+description: Throwaway fixture whose directory name contains a printf conversion (harness defect 24).
+version: 1.0.0
+---
+
+# Pct Skill'
+printf '%s\n' "$PCT_SKILL_MD" > "$PRESYNC_PCT_HOME_FIXTURE/pct%s-skill/SKILL.md"
+printf '%s\n' "$PCT_SKILL_MD" > "$PRESYNC_PCT_MONOREPO_FIXTURE/pct%s-skill/SKILL.md"
+cat > "$PRESYNC_PCT_HOME_FIXTURE/pct%s-skill/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.0.0] - 2026-01-01
+
+Matches SKILL.md.
+EOF
+
+PRESYNC_PCT_RC=0
+run_presync "$PRESYNC_PCT_HOME_FIXTURE" "$PRESYNC_PCT_MONOREPO_FIXTURE" \
+    "$SCRATCH_DIR/presync-pct.stdout" "$SCRATCH_DIR/presync-pct.stderr" || PRESYNC_PCT_RC=$?
+PRESYNC_PCT_STDOUT="$(cat "$SCRATCH_DIR/presync-pct.stdout")"
+
+# --- Verified red against the pre-fix build: `PASS  pct-skill v1.0.0`. ---
+assert_eq "a skill whose name contains a printf conversion validates cleanly" \
+    "0" "$PRESYNC_PCT_RC"
+assert_line_present "…and is reported under its real on-disk name" \
+    "PASS  pct%s-skill v1.0.0" "$PRESYNC_PCT_STDOUT"
+assert_not_contains "…not with the conversion silently consumed" \
+    "PASS  pct-skill" "$PRESYNC_PCT_STDOUT"
+
+# ------------------------------------------------------------------
+# Defect 23 — a comma in a DISCOVERED directory name
+# ------------------------------------------------------------------
+#
+# The --add branch joined the discovered list with `tr '\n' ','` and split it
+# back apart, so a directory legitimately named `alpha,beta` became two names,
+# neither of which resolves. The new per-name --add guard cannot catch it: it
+# checks only $ADD_SKILL-contributed names and trusts the discovered list by
+# construction — correctly, since that list was intact until the join mangled it.
+SKILLS_HOME_COMMA_FIXTURE="$SCRATCH_DIR/skills-home-comma"
+MONOREPO_COMMA_FIXTURE="$SCRATCH_DIR/monorepo-comma"
+mkdir -p "$SKILLS_HOME_COMMA_FIXTURE/alpha,beta" \
+         "$SKILLS_HOME_COMMA_FIXTURE/comma-newcomer" \
+         "$MONOREPO_COMMA_FIXTURE/alpha,beta"
+COMMA_SKILL_MD='---
+name: alpha,beta
+description: Throwaway fixture skill whose directory name contains a comma (harness defect 23).
+version: 1.0.0
+---
+
+# Alpha,Beta'
+printf '%s\n' "$COMMA_SKILL_MD" > "$SKILLS_HOME_COMMA_FIXTURE/alpha,beta/SKILL.md"
+printf '%s\n' "$COMMA_SKILL_MD" > "$MONOREPO_COMMA_FIXTURE/alpha,beta/SKILL.md"
+cat > "$SKILLS_HOME_COMMA_FIXTURE/comma-newcomer/SKILL.md" <<'EOF'
+---
+name: comma-newcomer
+description: Throwaway fixture skill brought in by --add alongside a comma-named sibling (harness defect 23).
+version: 1.0.0
+---
+
+# Comma Newcomer
+EOF
+
+COMMA_RC=0
+run_sync "$SKILLS_HOME_COMMA_FIXTURE" "$MONOREPO_COMMA_FIXTURE" \
+    "$SCRATCH_DIR/comma-stdout.log" "$SCRATCH_DIR/comma-stderr.log" \
+    --add comma-newcomer || COMMA_RC=$?
+COMMA_STDOUT="$(cat "$SCRATCH_DIR/comma-stdout.log")"
+COMMA_README="$(cat "$MONOREPO_COMMA_FIXTURE/README.md" 2>/dev/null || true)"
+
+# --- Verified red against the pre-fix build: "Skills to sync (4)" listing
+# alpha / beta / comma-newcomer, two "no SKILL.md" ERRORs, "Sync complete. 2",
+# a 2-row catalogue, and `alpha,beta/` still on disk but absent from the
+# published catalogue at rc=0. ---
+assert_eq "--add alongside a comma-named skill exits 0" "0" "$COMMA_RC"
+assert_line_present "…the comma-named skill survives discovery as ONE name" \
+    "alpha,beta" "$(synced_names "$COMMA_STDOUT")"
+assert_line_absent "…not split into a bogus first fragment" \
+    "alpha" "$(synced_names "$COMMA_STDOUT")"
+assert_line_absent "…nor a bogus second fragment" \
+    "beta" "$(synced_names "$COMMA_STDOUT")"
+assert_not_contains "…and no name fails to resolve" "ERROR: no SKILL.md" "$COMMA_STDOUT"
+assert_eq "…both skills are synced, not just the --add target" \
+    "2" "$(sync_complete_count "$COMMA_STDOUT")"
+assert_eq "…with both catalogue rows written" \
+    "2" "$(skill_catalog_row_count "$MONOREPO_COMMA_FIXTURE/README.md")"
+assert_contains "…including the comma-named skill's own row, whole" \
+    "| [alpha,beta](./alpha,beta/) |" "$COMMA_README"
 
 # ============================================================
 # Authoring-source parity

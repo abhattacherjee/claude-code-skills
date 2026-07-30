@@ -201,10 +201,23 @@ resolve_source_path() {
 # copies exist, and hands over automatically once the local copy is removed.
 # Echoes nothing when the skill has no source anywhere.
 # Usage: skill_source_dir <skill-name>
-# Requires: SKILLS_HOME set by the caller (deliberately unwrapped, unlike
-#   MONOREPO_DIR below — an unset SKILLS_HOME should abort loudly under
-#   `set -u`, not silently resolve; every current caller sets it before
-#   sourcing this file).
+# Requires: SKILLS_HOME set by the caller. Deliberately unwrapped, unlike
+#   MONOREPO_DIR below — an unset SKILLS_HOME must abort rather than silently
+#   resolve to "/<name>/SKILL.md".
+#
+#   An earlier version of this comment said "every current caller sets it
+#   before sourcing this file", and that was FALSE — and it contradicted the
+#   very next paragraph, which correctly names three scripts that source this
+#   file without setting MONOREPO_DIR. Those same three (prepare-plugin.sh,
+#   prepare-skill-repo.sh, sync-individual-repos.sh) do not set SKILLS_HOME
+#   either. What is true is narrower: every caller of this FUNCTION sets it.
+#   Sourcing the file is not calling the function, and the three scripts above
+#   never call it — verified, 0 references in each.
+#
+#   The explicit guard below exists because `set -u` alone reports
+#   "_lib.sh: line NNN: SKILLS_HOME: unbound variable", which blames this file
+#   for a contract the CALLER broke. Same loudness, a message that names the
+#   actual requirement.
 #
 # References ${MONOREPO_DIR:-}, not $MONOREPO_DIR: this file is sourced by
 # scripts (prepare-plugin.sh, prepare-skill-repo.sh, sync-individual-repos.sh)
@@ -223,6 +236,12 @@ resolve_source_path() {
 # shape this batch exists to close.
 skill_source_dir() {
   local name="$1"
+  if [[ -z "${SKILLS_HOME:-}" ]]; then
+    echo "Error: skill_source_dir() requires SKILLS_HOME to be set by the calling script." >&2
+    echo "       Set it before calling (sync-monorepo.sh and validate-pre-sync.sh both" >&2
+    echo "       default it to \$HOME/.claude/skills); sourcing _lib.sh does not set it." >&2
+    return 1
+  fi
   if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
     echo "$SKILLS_HOME/$name"
   elif [[ -n "${MONOREPO_DIR:-}" && -f "${MONOREPO_DIR}/$name/SKILL.md" ]]; then

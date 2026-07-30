@@ -281,10 +281,38 @@ fi
 
 # --- 5. Copy hooks (optional) ---
 if [[ $HOOK_COUNT -gt 0 ]]; then
-  echo ""
-  echo "--- Hooks ---"
+  # A `hooks` value that carries no `source` KEY is malformed, and is refused
+  # here (#77, second half). The fatal `else` added for #77 sits inside the
+  # `[[ -n … ]] && [[ != null ]]` test below, so it only ever covered a source
+  # that was PRESENT but did not resolve. A manifest whose hooks key is
+  # misspelled — `{"src": "./hooks"}` is the plausible one — makes
+  # `.hooks.source` yield null, fails that test, and fell off the end with no
+  # else at all: exit 0, no hooks copied, and `rsync -a --delete` then removed
+  # the previously published hooks/ under an AUTO-SYNCED line. Identical
+  # consequence to the defect #77 closed, reached by the neighbouring branch.
+  #
+  # has("source") is what distinguishes the two intents jq otherwise collapses
+  # into the same null:
+  #   {"source": null} / {"source": ""}  -> DELIBERATE "no hooks", legal no-op
+  #   {"src": "./hooks"} / {}            -> the author meant hooks; refuse
+  # The explicit-null and empty-string no-ops are preserved on purpose; they
+  # were a deliberate design decision, not an oversight, and this check does not
+  # reverse it. The type test also catches a non-object `hooks` (e.g.
+  # `"hooks": "./hooks"`), where has() would otherwise be a jq type error.
+  if [[ "$(jq -r 'if (.hooks | type) == "object" then (.hooks | has("source")) else false end' "$MANIFEST_FILE")" != "true" ]]; then
+    echo "" >&2
+    echo "  ERROR: 'hooks' is declared but carries no 'source' key: $(jq -c '.hooks' "$MANIFEST_FILE")" >&2
+    echo "         in $MANIFEST_SOURCE_PATH" >&2
+    echo "         Use {\"source\": null} to declare \"no hooks\" deliberately." >&2
+    exit 1
+  fi
   HOOKS_SRC=$(jq -r '.hooks.source' "$MANIFEST_FILE")
+  # The header prints only for a branch that does something. It used to print
+  # unconditionally, so a manifest that silently copied no hooks still produced
+  # a "--- Hooks ---" heading and read, in the log, exactly like one that had.
   if [[ -n "$HOOKS_SRC" ]] && [[ "$HOOKS_SRC" != "null" ]]; then
+    echo ""
+    echo "--- Hooks ---"
     HOOKS_SRC=$(resolve_source_path "$HOOKS_SRC" "$MANIFEST_DIR")
     if [[ -d "$HOOKS_SRC" ]]; then
       if $DRY_RUN; then

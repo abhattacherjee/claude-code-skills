@@ -266,7 +266,7 @@ discover_skills() {
       existing=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
         ! -name '.git' ! -name '.github' ! -name '.*' \
         ! -name 'plugins' ! -name 'scripts' \
-        -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort | tr '\n' ',')
+        -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort)
     fi
     # ADD_SKILL itself is a user-typed name, like --skills below — kept unfiltered
     # so a genuine typo still surfaces the loop's existing ERROR, not a silent SKIP.
@@ -282,8 +282,22 @@ discover_skills() {
     # rc=1 and empty stderr — no explanation. Capture the combined list first
     # and, if it comes back empty, fail loudly and explain why instead of
     # letting grep's exit status propagate as an unexplained abort.
+    #
+    # The machine-discovered list stays NEWLINE-separated end to end; only the
+    # user-typed $ADD_SKILL is comma-split. It used to be joined with
+    # `tr '\n' ','` and split back apart here, which is lossy for a directory
+    # name containing a comma — legal on both platforms, and exactly the
+    # "names are unconstrained free text" premise issue #81 rests on. Measured
+    # on a monorepo holding `alpha,beta/`: the name split into `alpha` and
+    # `beta`, neither resolved, and the skill was deleted from the published
+    # catalogue while staying on disk, at rc=0, with every downstream figure
+    # agreeing with the loss. The per-name --add guard below cannot catch it —
+    # it checks only $ADD_SKILL-contributed names and trusts $existing by
+    # construction, which is correct, because $existing came through
+    # filter_skill_candidates() and was intact until this join mangled it.
     local combined
-    combined=$(printf '%s\n' "${existing}${ADD_SKILL}" | tr ',' '\n' | sort -u | grep -v '^$' || true)
+    combined=$(printf '%s\n%s\n' "$existing" "$(printf '%s\n' "$ADD_SKILL" | tr ',' '\n')" \
+                 | sort -u | grep -v '^$' || true)
     if [[ -z "$combined" ]]; then
       echo "Error: --add produced no skill names from: '$ADD_SKILL'" >&2
       exit 1
@@ -998,7 +1012,25 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
         # under the open descriptor and leave it reading empty.
         _BUILD_DIR="$_AUTO_BUILD_TMP/$_MANIFEST_NAME"
         _BUILD_LOG="$_AUTO_BUILD_TMP/$_MANIFEST_NAME.log"
-        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" --github-user "$GITHUB_USER" "$_MANIFEST" >"$_BUILD_LOG" 2>&1; then
+        # --author forwarded alongside --github-user (#79, second half). #79
+        # fixed the identity the child re-derives from `gh api user`; --author
+        # is the identity it falls back to a hardcoded default for, on the SAME
+        # command line. Unforwarded, `--author "Jane Doe"` produced
+        # `Copyright (c) 2026 Jane Doe` in the monorepo LICENSE and in
+        # marketplace.json's owner.name, and `Copyright (c) 2026 Abhishek` in
+        # every auto-built plugin's own LICENSE — one run advertising two
+        # identities, which is #79's defect verbatim, in a distributed MIT
+        # licence sitting next to a marketplace entry that contradicts it.
+        # A manifest-level `.author` still wins inside the child, so per-plugin
+        # overrides are unaffected.
+        #
+        # Audited the whole invocation rather than assuming these two are all:
+        # prepare-plugin.sh accepts exactly four flags — --output-dir,
+        # --github-user, --author, --dry-run. The first three are now forwarded.
+        # --dry-run deliberately is not: under --dry-run this stage prints
+        # "WOULD BUILD + SYNC" and never invokes the child at all, so there is
+        # nothing to forward it to.
+        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" --github-user "$GITHUB_USER" --author "$AUTHOR" "$_MANIFEST" >"$_BUILD_LOG" 2>&1; then
           if [[ -d "$_BUILD_DIR/.claude-plugin" ]]; then
             # Preserve hand-written README if it exists in destination
             _PRESERVED_README=""

@@ -25,9 +25,13 @@ Pre-sync validation gate. Checks that every skill about to be synced has:
   2. A CHANGELOG.md that exists (bare minimum)
 
 Options:
-  --fix     Show what needs to be fixed (does not auto-fix)
-  --json    Machine-readable JSON output
-  -h, --help  Show this help
+  --add <names>  Also validate these comma-separated skills, which need not be
+                 in the monorepo yet. Mirrors sync-monorepo.sh --add: that is
+                 the one sync shape whose skills this gate cannot otherwise
+                 see, because discovery below scans the monorepo only.
+  --fix          Show what needs to be fixed (does not auto-fix)
+  --json         Machine-readable JSON output
+  -h, --help     Show this help
 
 Exit codes:
   0  All skills have matching CHANGELOG entries
@@ -38,6 +42,7 @@ Examples:
   validate-pre-sync.sh ~/dev/claude-code-skills
   validate-pre-sync.sh ~/dev/claude-code-skills --fix
   validate-pre-sync.sh ~/dev/claude-code-skills --json
+  validate-pre-sync.sh --add brandnew ~/dev/claude-code-skills   # before --add
 EOF
   exit 0
 }
@@ -46,9 +51,11 @@ EOF
 FIX_MODE=false
 JSON_MODE=false
 MONOREPO_DIR=""
+ADD_SKILLS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --add)   ADD_SKILLS="$2"; shift 2 ;;
     --fix)   FIX_MODE=true; shift ;;
     --json)  JSON_MODE=true; shift ;;
     -h|--help) usage ;;
@@ -67,11 +74,44 @@ if [[ ! -d "$MONOREPO_DIR" ]]; then
   exit 2
 fi
 
-# --- Discover skills in monorepo ---
+# --- Discover skills to validate ---
+# The monorepo scan alone is blind to any skill that does not have a directory
+# there yet — which is every `sync-monorepo.sh --add <new-skill>`, the single
+# highest-risk case for the version/CHANGELOG mismatch this gate exists to
+# catch. Measured before the fix: a `brandnew` skill at v2.0.0 whose newest
+# CHANGELOG entry was 1.0.0 gave "Total: 1 | Pass: 1 | Fail: 0 … Safe to sync."
+# at rc=0, and the very next command published that exact mismatch. #78 moved
+# such a skill from "skipped silently mid-loop" to "never enumerated"; this
+# closes the other half.
+#
+# Named skills are unioned in rather than enumerating all of $SKILLS_HOME.
+# Enumerating the home would report on skills no sync is going to touch — a
+# gate that fails on unrelated local work is a gate people stop running — and
+# would not match any actual sync shape: a discovery run syncs the monorepo's
+# skills, `--skills` syncs exactly what is named, and `--add` syncs the
+# monorepo's plus what is named. This union is that third shape.
 SKILLS=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
   ! -name '.git' ! -name '.github' ! -name '.*' \
   ! -name 'plugins' ! -name 'scripts' \
   -exec basename {} \; 2>/dev/null | sort)
+
+if [[ -n "$ADD_SKILLS" ]]; then
+  # Only the user-typed value is comma-split; the discovered list stays
+  # newline-separated, so a directory name containing a comma survives.
+  #
+  # The emptiness test is on the ADD-CONTRIBUTED names, not on the union. A
+  # union test looks equivalent and is not: `--add ,` reduces to blank lines,
+  # the union is still non-empty because the monorepo scan filled it, and the
+  # run would silently degrade to "no extra skills" while reporting success —
+  # the same quiet no-op shape sync-monorepo.sh already refuses by name for
+  # this exact argument. Caught in this script's own first draft.
+  ADD_SPLIT=$(printf '%s\n' "$ADD_SKILLS" | tr ',' '\n' | grep -v '^$' || true)
+  if [[ -z "$ADD_SPLIT" ]]; then
+    echo "Error: --add produced no skill names from: '$ADD_SKILLS'" >&2
+    exit 2
+  fi
+  SKILLS=$(printf '%s\n%s\n' "$SKILLS" "$ADD_SPLIT" | sort -u | grep -v '^$' || true)
+fi
 
 TOTAL=0
 PASS=0
@@ -181,7 +221,13 @@ ENDJSON
 else
   echo "=== Pre-Sync Validation ==="
   echo ""
-  printf "$RESULTS"
+  # '%b' — RESULTS is DATA, not a format string. It carries skill names and
+  # CHANGELOG versions, so a directory named e.g. `pct%s-skill` had its `%s`
+  # consumed as a conversion and printed as `pct-skill`: the operator is told a
+  # directory name that does not exist on disk. Pre-existing, but #78 tripled
+  # what flows through here by making in-repo-source skills reportable at all.
+  # '%b' keeps the `\n` expansion the RESULTS strings rely on.
+  printf '%b' "$RESULTS"
   echo ""
   echo "Total: $TOTAL | Pass: $PASS | Fail: $FAIL"
 
