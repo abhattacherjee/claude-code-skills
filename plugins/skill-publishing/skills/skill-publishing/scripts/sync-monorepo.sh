@@ -576,6 +576,16 @@ if [[ -n "$SKILLS_LIST" && "$SKILLS_RESOLVED_COUNT" -eq 0 ]]; then
   exit 1
 fi
 
+# Skills actually synced: resolved minus refused (issue #81, second pass).
+# SKILL_COUNT is the discovered/requested count, printed above the loop as the
+# *plan* before anything has been attempted — legitimately SKILL_COUNT, left
+# alone. Every stage below that describes "how many skills" in the past
+# tense — the README template's {{SKILL_COUNT}} substitution, the minimal-
+# README fallback description, the CHANGELOG's "Synced N skills" entry, the
+# --init git commit message, and the closing "Sync complete." line — is a
+# claim about what actually happened, and must use this figure instead.
+SKILLS_SYNCED_COUNT=$((SKILLS_RESOLVED_COUNT - REFUSED_COUNT))
+
 # --- Discover and sync plugins ---
 discover_plugins() {
   # Scan $MONOREPO_DIR/plugins/ for directories with .claude-plugin/plugin.json
@@ -1081,7 +1091,10 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # Extract everything after the --- separator (skip the template header)
   ROOT_README=$(sed '1,/^---$/d' "$TEMPLATE_DIR/monorepo-readme-template.md")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{GITHUB_USER}}|$GITHUB_USER|g")
-  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$SKILL_COUNT|g")
+  # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): this
+  # placeholder describes the catalogue table right below it, so it must
+  # match the catalogue's actual row count, not the discovered/requested one.
+  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$SKILLS_SYNCED_COUNT|g")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{LAST_UPDATED}}|$TODAY|g")
   # Build install-all commands (one cp -r per skill)
   INSTALL_ALL_CMDS=""
@@ -1163,9 +1176,12 @@ rm -rf /tmp/ccs
   rm -f "$TMPFILE"
 else
   echo "  Warning: monorepo-readme-template.md not found, generating minimal README"
+  # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): same
+  # reasoning as the template branch above — this describes $CATALOG_TABLE's
+  # actual contents, immediately below it.
   ROOT_README="# Claude Code Skills
 
-A curated collection of $SKILL_COUNT reusable Agent Skills.
+A curated collection of $SKILLS_SYNCED_COUNT reusable Agent Skills.
 
 ## Skills
 
@@ -1220,9 +1236,12 @@ while IFS= read -r SKILL_NAME; do
   fi
 done <<< "$SKILLS_TO_SYNC"
 
+# SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): "Synced" is
+# past tense — a claim about what happened, persisted into the CHANGELOG —
+# not the discovered/requested count.
 SYNC_ENTRY="## [$TODAY] — Monorepo sync
 
-Synced $SKILL_COUNT skills from local source.
+Synced $SKILLS_SYNCED_COUNT skills from local source.
 $SKILL_INVENTORY
 "
 
@@ -1482,7 +1501,9 @@ if $INIT_MODE && ! $DRY_RUN; then
   cd "$MONOREPO_DIR"
   git init
   git add -A
-  git commit -m "Initial commit: $SKILL_COUNT skills synced from local source"
+  # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): "synced" is
+  # past tense, persisted into a commit message this time.
+  git commit -m "Initial commit: $SKILLS_SYNCED_COUNT skills synced from local source"
 
   echo ""
   echo "Creating GitHub repository..."
@@ -1502,16 +1523,16 @@ echo ""
 if $DRY_RUN; then
   echo "Dry run complete. No files were written."
 else
-  # SKILLS_RESOLVED_COUNT, not SKILL_COUNT (issue #81): SKILL_COUNT is how many
+  # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81): SKILL_COUNT is how many
   # names discover_skills() produced, which under the unquoted-loop bug this
-  # fix removes was not the same thing as how many the loop actually processed
+  # task fixes was not the same thing as how many the loop actually processed
   # — a name that IFS-split into unresolvable fragments was still counted here
-  # even though nothing was copied for it. SKILLS_RESOLVED_COUNT only counts
-  # names the loop above actually resolved to a real SKILL.md (whether synced
-  # or refused), so subtracting REFUSED_COUNT from it — not from the
-  # discovered total — is what makes this line describe what happened rather
-  # than what was attempted.
-  echo "Sync complete. $((SKILLS_RESOLVED_COUNT - REFUSED_COUNT)) skills synced to $MONOREPO_DIR"
+  # even though nothing was copied for it. SKILLS_SYNCED_COUNT (computed once,
+  # right after the main loop — see its definition above) is
+  # SKILLS_RESOLVED_COUNT minus REFUSED_COUNT: every other stage that reports
+  # this same figure in the past tense uses the identical variable, so there is
+  # one honest number instead of several that could drift apart.
+  echo "Sync complete. $SKILLS_SYNCED_COUNT skills synced to $MONOREPO_DIR"
   if [[ -n "$AUTO_BUILT_PLUGINS" ]]; then
     echo "Auto-built plugins: $AUTO_BUILT_PLUGINS"
   fi

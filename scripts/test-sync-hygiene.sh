@@ -1924,6 +1924,21 @@ assert_eq "a monorepo with no skills prints no name lines at all" "0" "$EMPTY_LI
 PHANTOM_BULLETS=$(printf '%s\n' "$EMPTY_STDOUT" | grep -c '^  - $' || true)
 assert_eq "a monorepo with no skills prints no bare \"  - \" bullet" "0" "$PHANTOM_BULLETS"
 
+# Issue #81's blank-line guards (`[[ -z "$NAME" ]] && continue`), added to
+# every here-string loop converted in that fix: `<<< ""` still feeds one
+# blank line to `read`, so an empty $SKILLS_TO_SYNC reaches the main sync
+# loop, the install-all loop and the skill-inventory loop with SKILL_NAME=""
+# unless each one skips it. The main loop's case is the loud one — an empty
+# name still resolves nothing and prints its own "no SKILL.md" ERROR at rc 0
+# (verified reachable: reverting just the five guards, keeping the
+# herestring conversion, and probing this exact empty-monorepo shape in
+# isolation reproduces "ERROR: no SKILL.md in …/ or …/, skipping"). Nothing
+# in this harness asserted against it before — the pre-existing rc-0
+# assertion above survives regardless, since the blank iteration still
+# `continue`s either way.
+assert_not_contains "a monorepo with no skills prints no ERROR line (the #81 blank-line guards, not just the rc)" \
+    "ERROR:" "$EMPTY_STDOUT"
+
 # ============================================================
 # A skill name that looks like an option must survive the filter
 # ============================================================
@@ -2595,10 +2610,10 @@ SPACE_PLUGIN_STDOUT="$(cat "$SPACE_PLUGIN_STDOUT_LOG")"
 # cannot tell "uses SKILLS_RESOLVED_COUNT" apart from "still uses SKILL_COUNT".
 # This one can: SKILL_COUNT is 2 either way, but only one of the two names
 # ever resolves.
+MIXEDSKILLS_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_MIXEDSKILLS_FIXTURE" \
     "$SCRATCH_DIR/mixedskills.stdout" "$SCRATCH_DIR/mixedskills.stderr" \
     --skills demo-skill,mixedskills-nosuchskill || MIXEDSKILLS_RC=$?
-MIXEDSKILLS_RC="${MIXEDSKILLS_RC:-0}"
 MIXEDSKILLS_STDOUT="$(cat "$SCRATCH_DIR/mixedskills.stdout")"
 
 # --- Assertions: main sync loop + honest summary (site 1/5, plus the
@@ -2692,7 +2707,7 @@ assert_contains "the space-named already-published plugin keeps its catalogue ro
 # site-2-reverted variant for exactly this reason before being tightened here. ---
 assert_eq "space-plugin reversion-guard run exits 3 (a skill was refused)" \
     "3" "$SPACE_PLUGIN_RC"
-assert_contains "…the refused skill is named correctly, whole, on the top-level REFUSED trailer" \
+assert_line_present "…the refused skill is named correctly, whole, on the top-level REFUSED trailer" \
     "  - my skill" "$SPACE_PLUGIN_STDOUT"
 assert_line_present "the plugin auto-build stage's OWN reversion-guard check skips the refused space-named skill's plugin" \
     "  SKIP (reversion guard)  plugins/space-plugin  —  stale local source for: my skill" "$SPACE_PLUGIN_STDOUT"
@@ -2712,6 +2727,27 @@ assert_eq "…and the summary reports exactly the one skill that actually resolv
     "1" "$(sync_complete_count "$MIXEDSKILLS_STDOUT")"
 assert_eq "…matching its single catalogue row" \
     "1" "$(skill_catalog_row_count "$MONOREPO_MIXEDSKILLS_FIXTURE/README.md")"
+
+# --- Assertion: the fix must reach every PERSISTED past-tense count, not only
+# stdout (review round 2's finding: five result-sites total — the stdout
+# summary line fixed in round 1 is only one of them). Checked against this
+# same mixed-skills fixture, whose catalogue row count (1) and requested name
+# count (2) diverge, which is exactly what makes this a real discriminator
+# rather than the coincidental-agreement trap the round-1 report already
+# flagged for the space fixture. Each assertion below fails against the
+# round-1 code (which still wrote SKILL_COUNT — 2 — into these two artifacts)
+# and passes only once the writer uses SKILLS_SYNCED_COUNT. The README's
+# {{SKILL_COUNT}}-templated line and the CHANGELOG's "Synced N skills" entry
+# are both PAST-TENSE claims about what the run actually did, unlike the
+# "Skills to sync (N):" line printed before the loop runs (deliberately left
+# on the discovered/requested count — see the comment at its definition
+# site). ---
+MIXEDSKILLS_README="$(cat "$MONOREPO_MIXEDSKILLS_FIXTURE/README.md" 2>/dev/null || true)"
+MIXEDSKILLS_CHANGELOG="$(cat "$MONOREPO_MIXEDSKILLS_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+assert_contains "…the persisted README count also agrees with the catalogue, not the two names requested" \
+    "A curated collection of 1 reusable" "$MIXEDSKILLS_README"
+assert_contains "…and the persisted CHANGELOG \"Synced N skills\" entry agrees too" \
+    "Synced 1 skills from local source." "$MIXEDSKILLS_CHANGELOG"
 
 # --- Positive control: the ordinary (no-space, no partial-failure) fixture's
 # summary line is correct and self-consistent. Without this, a rework that
