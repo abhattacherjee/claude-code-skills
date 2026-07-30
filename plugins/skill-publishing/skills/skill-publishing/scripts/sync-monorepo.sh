@@ -55,30 +55,38 @@ Reversion guard:
 
 Exit status:
   0  success
-  1  usage/setup error — bad/missing arguments, or a --skills value that
-     resolves to no valid skill — or a plugin auto-build failed (the
+  1  usage/setup error — bad/missing arguments, a --skills value that resolves
+     to no valid skill, or an --add value naming a skill with no SKILL.md —
+     or a plugin auto-build failed, or its manifest could not be read (the
      catalogue is then deliberately left un-regenerated rather than
      describing an unbuilt plugin or an emptied one)
   3  completed, but skills were refused by the reversion guard
 
-  A --skills value that matches no real skill is a usage error, not a build
-  failure, but it deliberately shares exit 1 with one rather than mint a third
-  code: the unknown-option and missing-monorepo-directory errors above already
-  use 1 for "usage/setup error", and --add's identical no-names-matched case
-  has used 1 since PR #76. This keeps 1 to its existing two senses instead of
+  A --skills or --add value that matches no real skill is a usage error, not a
+  build failure, but it deliberately shares exit 1 with one rather than mint a
+  third code: the unknown-option and missing-monorepo-directory errors above
+  already use 1 for "usage/setup error", and --add's no-names-matched case has
+  used 1 since PR #76. This keeps 1 to its existing two senses instead of
   letting a third meaning accrete onto it silently.
+
+  --skills and --add differ in WHAT they refuse. --skills is refused only when
+  *every* named skill fails to resolve (a partial resolution is a legitimate
+  run); --add is refused when *any* name it contributes fails, because --add
+  names are typed one at a time to introduce a skill, so an unresolvable one is
+  a typo rather than a subset.
 
   1 wins over 3: a run that both refused a skill and failed a build stops at the
   build failure, so the end-of-run REFUSED summary never prints — the refusal is
   still reported, but only as an inline line earlier in the log.
 
-  --dry-run cannot predict a 1 from a failed build. Plugins are not assembled at
-  all under --dry-run, so a broken manifest previews as a clean plan and only
-  fails on the real run. It DOES correctly predict the other two: a 3 (the
-  reversion guard runs unconditionally), and a 1 from --skills resolving to no
-  valid skill (both of that guard's checks run before any --dry-run gate, so a
-  bad --skills value refuses the preview exactly as it would refuse the real
-  run).
+  --dry-run cannot predict a 1 from a failed BUILD. Plugins are not assembled at
+  all under --dry-run, so a manifest that is well-formed but names a missing
+  source previews as a clean plan and only fails on the real run. It DOES
+  correctly predict the rest: a 3 (the reversion guard runs unconditionally); a
+  1 from --skills or --add resolving to no valid skill (those guards run before
+  any --dry-run gate, so a bad value refuses the preview exactly as it would
+  refuse the real run); and a 1 from a manifest whose skills[] cannot be read at
+  all, since that read happens regardless of whether a build follows it.
 
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
@@ -245,6 +253,45 @@ discover_skills() {
       echo "Error: --add produced no skill names from: '$ADD_SKILL'" >&2
       exit 1
     fi
+
+    # Every name --add contributes must resolve to a real SKILL.md before the
+    # run is allowed to regenerate anything (#83 fix round; closes #85).
+    #
+    # Without this, `--add nosuchskill` against a POPULATED monorepo printed one
+    # inline "ERROR: no SKILL.md …" from the sync loop, `continue`d, and went on
+    # to rewrite the README, CHANGELOG and marketplace at exit 0 — the same
+    # "reports success while not doing its job" shape #80 closed for --skills.
+    # #80's post-loop guard cannot catch it: it fires only when *zero* names
+    # resolved, and a populated monorepo always contributes resolvable names
+    # through $existing, so SKILLS_RESOLVED_COUNT is never 0. #85 tracked the
+    # narrower empty-monorepo case, where the count IS 0 but the guard is gated
+    # on $SKILLS_LIST rather than $ADD_SKILL; a per-name check here subsumes it,
+    # and fires earlier — before the sync loop writes anything at all.
+    #
+    # Only the --add-contributed names are checked, not $combined: $existing
+    # came through filter_skill_candidates(), so those already resolve by
+    # construction, and re-testing them would turn a monorepo carrying one
+    # unrelated broken directory into a permanent --add outage.
+    #
+    # Split on commas rather than testing "$ADD_SKILL" whole: --add takes the
+    # same comma-separated form as --skills (it is comma-split into $combined
+    # two lines up), so a single skill_source_dir "$ADD_SKILL" test would look
+    # for a skill literally named "a,b" and refuse a legitimate `--add a,b`.
+    local _add_unresolved="" _add_name
+    while IFS= read -r _add_name <&3; do
+      [[ -z "$_add_name" ]] && continue
+      if [[ -z "$(skill_source_dir "$_add_name")" ]]; then
+        _add_unresolved="${_add_unresolved:+$_add_unresolved, }$_add_name"
+      fi
+    done 3<<< "$(printf '%s\n' "$ADD_SKILL" | tr ',' '\n')"
+    if [[ -n "$_add_unresolved" ]]; then
+      echo "Error: --add named skills with no SKILL.md: $_add_unresolved" >&2
+      echo "       Looked under $SKILLS_HOME/<name>/ and $MONOREPO_DIR/<name>/." >&2
+      echo "       Nothing was synced; the monorepo README, CHANGELOG and" >&2
+      echo "       marketplace catalogue are left untouched." >&2
+      exit 1
+    fi
+
     printf '%s\n' "$combined"
     return
   fi
@@ -256,8 +303,16 @@ discover_skills() {
     # bare `grep -v '^$'` on an all-blank input exits 1 and would abort the
     # whole run under `set -e` with empty stderr — no explanation. Capture the
     # filtered result first and, if nothing survives, fail loudly and say why.
+    #
+    # `sort -u`, matching the --add branch's (#83 fix round): with a plain
+    # `sort`, `--skills alpha,alpha` synced the same skill twice — two
+    # "--- alpha ---" stanzas, two identical catalogue rows, two identical
+    # `cp -r` install lines published as instructions, and a doubled count in
+    # the summary, the README and the CHANGELOG. Everything agreed with
+    # everything else, so nothing flagged it. Naming a skill twice in one
+    # --skills value is a typo with exactly one sensible reading.
     local skills_filtered
-    skills_filtered=$(printf '%s\n' "$SKILLS_LIST" | tr ',' '\n' | sort | grep -v '^$' || true)
+    skills_filtered=$(printf '%s\n' "$SKILLS_LIST" | tr ',' '\n' | sort -u | grep -v '^$' || true)
     if [[ -z "$skills_filtered" ]]; then
       echo "Error: --skills produced no skill names from: '$SKILLS_LIST'" >&2
       exit 1
@@ -318,8 +373,17 @@ CATALOG_ROWS=""
 # Counts every SKILLS_TO_SYNC entry that resolved to a real skill (found a
 # SKILL.md), whether it was ultimately copied or refused by the reversion
 # guard further down — a refusal is a legitimate outcome (exit 3), not the
-# "no such skill" case this counter exists to catch. Read only by the
-# explicit --skills guard after the loop (#80).
+# "no such skill" case this counter exists to catch.
+#
+# FOUR readers, not one — an earlier version of this comment said "read only by
+# the explicit --skills guard after the loop (#80)", and that has been false
+# since #81's third pass. The other three are all catalogue-describing figures:
+# SKILLS_SYNCED_COUNT (this minus REFUSED_COUNT), the README template's
+# {{SKILL_COUNT}} substitution, and the minimal-README fallback's "N reusable
+# Agent Skills". Changing what this counts changes every published count in the
+# monorepo, not just one guard's threshold. The full reasoning for why the
+# catalogue-facing figure is this and NOT SKILLS_SYNCED_COUNT lives at the
+# {{SKILL_COUNT}} substitution site; read it before touching either.
 SKILLS_RESOLVED_COUNT=0
 
 # Line-wise, not `for SKILL_NAME in $SKILLS_TO_SYNC` (issue #81): unquoted word
@@ -330,7 +394,22 @@ SKILLS_RESOLVED_COUNT=0
 # SKILLS_RESOLVED_COUNT, all read after the loop, and a pipe would run the body
 # in a subshell and silently discard every one of them. A here-string on an
 # empty $SKILLS_TO_SYNC still feeds one blank line, hence the guard below.
-while IFS= read -r SKILL_NAME; do
+#
+# `<&3` / `3<<<`, not plain stdin: `done <<< "$LIST"` makes the list the loop
+# BODY's stdin, and this body shells out to gh, rsync, cp, diff, find and jq.
+# Any child that reads stdin — because it is a filter by nature, or because a
+# future version grows a prompt — consumes the rest of the skill list, and the
+# loop then exits early having synced only the skills read so far. It exits 0
+# while doing it, and every downstream figure agrees with the truncation:
+# {{SKILL_COUNT}} is SKILLS_RESOLVED_COUNT, the catalogue is built from the
+# same rows, and the CHANGELOG inventory iterates the same (already drained)
+# list — so a two-thirds-empty catalogue is internally self-consistent and
+# nothing flags it. The old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such
+# exposure; converting to `while read` created it. Binding the list to fd 3
+# leaves the body's stdin untouched (inherited from the caller), so no child
+# can reach the list at all. The same treatment is applied to every converted
+# loop in this file and in validate-pre-sync.sh.
+while IFS= read -r SKILL_NAME <&3; do
   [[ -z "$SKILL_NAME" ]] && continue
   SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
   SKILL_DST="$MONOREPO_DIR/$SKILL_NAME"
@@ -458,6 +537,31 @@ while IFS= read -r SKILL_NAME; do
   MANIFEST="$SKILL_SRC/plugin-manifest.json"
   if [[ -f "$MANIFEST" ]]; then
     AGENT_COUNT=$(jq -r '.agents // [] | length' "$MANIFEST" 2>/dev/null)
+    # Bare-string agents[] entries are refused, same as prepare-plugin.sh (#73).
+    # That guard lived only there, and this loop runs FIRST — so on a manifest
+    # carrying `"agents": ["x"]` the run died right below at
+    # `jq -r ".agents[0].name"` with a raw `jq: error … Cannot index string
+    # with "name"` and rc=5, and prepare-plugin.sh's friendly explanation never
+    # printed because the sync never reached the auto-build stage. Checked here
+    # too, with the same message text, so whichever script meets the manifest
+    # first says the same actionable thing.
+    #
+    # Scoped to agents[] alone, unlike prepare-plugin.sh's commands+agents
+    # sweep: agents[] is the only array this loop indexes, so it is the only one
+    # whose shape can break it. A bare commands[] entry is still refused by
+    # prepare-plugin.sh at the auto-build stage below, which is the script that
+    # actually reads it.
+    #
+    # Skipped, not fatal: the very next stage runs prepare-plugin.sh against
+    # this same manifest, which exits 1 on it and is collected into
+    # _FAILED_BUILDS, so the run still fails — and it fails after naming every
+    # other broken manifest too, rather than one per re-run.
+    _BARE_AGENTS=$(manifest_bare_entries "$MANIFEST" agents 2>/dev/null || true)
+    if [[ -n "$_BARE_AGENTS" ]]; then
+      echo "  ERROR: agent entry must be an object with 'name' and 'source', not a bare string: $_BARE_AGENTS" >&2
+      echo "         in $MANIFEST" >&2
+      AGENT_COUNT=0
+    fi
     if [[ "$AGENT_COUNT" -gt 0 ]]; then
       if ! $DRY_RUN; then
         mkdir -p "$SKILL_DST/agents"
@@ -563,7 +667,7 @@ This skill follows the **Agent Skills** standard — a \`SKILL.md\` file with YA
   fi
 
   echo ""
-done <<< "$SKILLS_TO_SYNC"
+done 3<<< "$SKILLS_TO_SYNC"
 
 # --- Guard: an explicit --skills value that matched no real skill must not
 # proceed to rebuild the catalogue (#80, second half). The discover_skills()
@@ -612,8 +716,15 @@ discover_plugins() {
 # and synced as a plugin. No --add-plugin needed for known plugins.
 PREPARE_SCRIPT="$SCRIPT_DIR/prepare-plugin.sh"
 AUTO_BUILT_PLUGINS=""
-# Manifests whose auto-build failed. Space-separated, matching AUTO_BUILT_PLUGINS'
-# idiom. Collected across the whole stage and acted on once, after the loop.
+# Manifests whose auto-build failed, or that could not be read far enough to
+# attempt one. Space-separated, matching AUTO_BUILT_PLUGINS' idiom. Collected
+# across the whole stage and acted on once, after the loop.
+#
+# The read-failure entries are the only ones a --dry-run can produce: the build
+# itself never runs under --dry-run, but the manifest is read regardless, so a
+# structurally broken manifest now fails a dry run too. That is deliberate — it
+# is a defect --dry-run can genuinely see, so it should say so rather than
+# predict a clean run that will not happen.
 _FAILED_BUILDS=""
 
 if [[ -x "$PREPARE_SCRIPT" ]]; then
@@ -669,9 +780,34 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     # both sites' `jq -r '.skills[…].name'` errored into `2>/dev/null` on such a
     # manifest, so the reversion guard saw no skills to check and the drift check
     # saw no first skill and never rebuilt the plugin at all.
-    # `|| true` keeps the pre-existing tolerance of an unreadable manifest — the
-    # build below is what reports that, with the child's own parse error.
-    _MANIFEST_SKILL_NAMES=$(manifest_skill_names "$_MANIFEST" 2>/dev/null || true)
+    #
+    # A failed read is recorded as a build failure, NOT swallowed. The earlier
+    # `2>/dev/null || true` here claimed to keep "the pre-existing tolerance of
+    # an unreadable manifest", and that was only half true. At the base commit
+    # there were two reads: the reversion guard's `for _PLUGIN_SKILL in $(jq …)`
+    # — a command substitution in a `for` word-list, which does not trip
+    # `set -e`, so genuinely tolerant — and the drift check's
+    # `_FIRST_SKILL=$(jq …)`, an ASSIGNMENT, which under `set -e` did abort the
+    # run. Consolidating both onto one tolerant read silently downgraded the
+    # second from fatal to skipped, on the destructive path: with
+    # $_MANIFEST_SKILL_NAMES empty, $_REFUSED_IN_PLUGIN stays empty, so the
+    # reversion guard does not fire and the plugin is rebuilt from the stale
+    # local source the main loop just refused, then `rsync -a --delete`'d over
+    # the published copy under a reassuring "AUTO-SYNCED" line.
+    #
+    # This is reachable: `"skills": [123]` makes manifest_skill_names exit 5
+    # (`Cannot index number with string "name"`), and the `.name` read further
+    # up succeeds on the same file, so nothing earlier catches it.
+    #
+    # 2>&1 rather than 2>/dev/null: the child's own parse error is the only
+    # description of what is wrong with the manifest, and there is no build log
+    # on this path to carry it.
+    if ! _MANIFEST_SKILL_NAMES=$(manifest_skill_names "$_MANIFEST" 2>&1); then
+      echo "  ERROR: cannot read skills[] from $_MANIFEST" >&2
+      sed 's/^/    | /' <<< "$_MANIFEST_SKILL_NAMES" >&2 || true
+      _FAILED_BUILDS="${_FAILED_BUILDS:+$_FAILED_BUILDS }$_MANIFEST"
+      continue
+    fi
 
     # A skill refused by the reversion guard must not be rebuilt into a plugin
     # either: prepare-plugin.sh reads the same stale local source, so the rsync
@@ -684,13 +820,16 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       # would then silently miss its own refusal and let the plugin rebuild
       # over the stale local source it exists to protect against. Here-string,
       # not a pipe: _REFUSED_IN_PLUGIN is read immediately after this loop, in
-      # the current shell.
-      while IFS= read -r _PLUGIN_SKILL; do
+      # the current shell. On fd 3, not stdin: see the main sync loop's comment —
+      # the body is pure bash today, but a stdin-consuming child added later
+      # would silently truncate the list of skills this guard checks, which is
+      # the one list whose truncation lets the guard miss its own refusal.
+      while IFS= read -r _PLUGIN_SKILL <&3; do
         [[ -z "$_PLUGIN_SKILL" ]] && continue
         if skill_refused "$_PLUGIN_SKILL"; then
           _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
         fi
-      done <<< "$_MANIFEST_SKILL_NAMES"
+      done 3<<< "$_MANIFEST_SKILL_NAMES"
       if [[ -n "$_REFUSED_IN_PLUGIN" ]]; then
         echo "  SKIP (reversion guard)  plugins/$_MANIFEST_NAME  —  stale local source for: $_REFUSED_IN_PLUGIN"
         continue
@@ -776,9 +915,19 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
           # broken manifests names all of them in one pass instead of one per
           # re-run. The exit happens at the end of this loop — still ahead of
           # every stage that regenerates the catalogue.
+          #
+          # The record is written FIRST, before the log is echoed. $_BUILD_LOG
+          # is named after $_MANIFEST_NAME, which is free text out of the
+          # manifest's `.name`: a `/` in it makes the `>"$_BUILD_LOG"` redirect
+          # fail, so no log file exists, so `sed` on it fails, and under `set -e`
+          # that kills the run before _FAILED_BUILDS is ever assigned — losing
+          # the whole point of collecting failures, since the summary that names
+          # every broken manifest in one pass then never prints. `|| true` on
+          # the sed for the same reason: reporting the failure must not be able
+          # to destroy the record of it.
           echo "  ERROR: prepare-plugin.sh failed for $_MANIFEST" >&2
-          sed 's/^/    | /' "$_BUILD_LOG" >&2
           _FAILED_BUILDS="${_FAILED_BUILDS:+$_FAILED_BUILDS }$_MANIFEST"
+          sed 's/^/    | /' "$_BUILD_LOG" >&2 || true
         fi
       fi
       echo ""
@@ -1067,7 +1216,9 @@ if [[ -n "$PLUGINS_TO_LIST" ]]; then
   # of the real plugins/<name>/, find nothing, and silently drop the plugin
   # from PLUGIN_COUNT and the catalog table with no error at all. Here-string,
   # not a pipe: PLUGIN_COUNT and PLUGIN_CATALOG_ROWS are read after the loop.
-  while IFS= read -r PLUGIN_NAME; do
+  # On fd 3, not stdin: see the main sync loop's comment. This body shells out
+  # to jq, find and wc, so it has the exposure directly.
+  while IFS= read -r PLUGIN_NAME <&3; do
     [[ -z "$PLUGIN_NAME" ]] && continue
     PLUGIN_DIR="$MONOREPO_DIR/plugins/$PLUGIN_NAME"
     PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
@@ -1087,7 +1238,7 @@ if [[ -n "$PLUGINS_TO_LIST" ]]; then
 "
       PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
     fi
-  done <<< "$PLUGINS_TO_LIST"
+  done 3<<< "$PLUGINS_TO_LIST"
 fi
 
 # --- Generate root README ---
@@ -1120,12 +1271,14 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # one real skill into two bogus, non-functional `cp -r` lines instead of the
   # one correct command — wrong instructions published with a straight face,
   # not merely a miscount. Here-string, not a pipe: INSTALL_ALL_CMDS is read
-  # immediately after this loop.
-  while IFS= read -r SKILL_NAME; do
+  # immediately after this loop. On fd 3, not stdin: see the main sync loop's
+  # comment — pure-bash body today, uniform treatment so a later addition
+  # cannot reintroduce the truncation silently.
+  while IFS= read -r SKILL_NAME <&3; do
     [[ -z "$SKILL_NAME" ]] && continue
     INSTALL_ALL_CMDS="${INSTALL_ALL_CMDS}cp -r /tmp/claude-code-skills/$SKILL_NAME ~/.claude/skills/$SKILL_NAME
 "
-  done <<< "$SKILLS_TO_SYNC"
+  done 3<<< "$SKILLS_TO_SYNC"
 
   # Build plugin section (only if plugins exist)
   PLUGIN_SECTION=""
@@ -1236,8 +1389,10 @@ SKILL_INVENTORY=""
 # Line-wise (issue #81): a space-named skill split into fragments here resolves
 # neither via skill_source_dir(), so it silently vanishes from the CHANGELOG's
 # inventory instead of getting its own "- `name` vX.Y.Z" line. Here-string, not
-# a pipe: SKILL_INVENTORY is read immediately after this loop.
-while IFS= read -r SKILL_NAME; do
+# a pipe: SKILL_INVENTORY is read immediately after this loop. On fd 3, not
+# stdin: see the main sync loop's comment. This body shells out to sed and grep
+# (via extract_version/extract_field), so it has the exposure directly.
+while IFS= read -r SKILL_NAME <&3; do
   [[ -z "$SKILL_NAME" ]] && continue
   SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
   SKILL_MD="${SKILL_SRC:+$SKILL_SRC/SKILL.md}"
@@ -1262,7 +1417,7 @@ while IFS= read -r SKILL_NAME; do
     SKILL_INVENTORY="${SKILL_INVENTORY}
 - \`$SKILL_NAME\` v${VERSION:-?.?.?}${INVENTORY_REFUSED_NOTE} — $SHORT_DESC"
   fi
-done <<< "$SKILLS_TO_SYNC"
+done 3<<< "$SKILLS_TO_SYNC"
 
 # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): "Synced" is
 # past tense — a claim about what happened, persisted into the CHANGELOG —

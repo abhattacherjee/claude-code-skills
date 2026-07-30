@@ -365,7 +365,9 @@ git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
 ```
 
-`--skills a,b` replaces the synced set (vs `--add`, which appends); either refuses on an unresolvable value rather than publish an empty/partial catalogue. **Exit codes**: `0` success; `1` usage/setup error (bad names, or a failed plugin build — fix the manifest) beats `3` (completed, refused above); `--dry-run` predicts `3` but not a build-failure `1`.
+`--skills a,b` replaces the synced set; `--add` appends. Both refuse an unresolvable name rather than publish, and both de-duplicate repeats. **`--skills` rewrites the catalogue to exactly the named subset** — skills left out stay on disk but lose their catalogue row, the published count and their CHANGELOG entry until the next full sync, so prefer `--add` to introduce one skill without disturbing the rest.
+
+**Exit codes**: `0` success; `1` usage/setup error (bad names, or a failed plugin build — fix the manifest) beats `3` (completed, refused above); `--dry-run` predicts `3` and an unreadable manifest, but not a build-failure `1`.
 
 ## Workflow C: Sync Individual Repos
 

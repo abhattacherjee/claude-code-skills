@@ -85,7 +85,16 @@ JSON_ITEMS=""
 # character. A here-string, not a pipe — TOTAL/PASS/FAIL/RESULTS/JSON_ITEMS all
 # have to survive in the current shell, and a pipe would run the loop body in a
 # subshell and silently discard every one of them.
-while IFS= read -r SKILL_NAME; do
+#
+# `<&3` / `3<<<`, not plain stdin: `done <<< "$SKILLS"` would make the skill
+# list the loop BODY's stdin, and this body shells out to grep and sed (via
+# extract_version) on every iteration. A child that reads stdin would eat the
+# rest of the list, and the loop would exit early having examined only the
+# skills read so far — while still printing "Safe to sync" over a TOTAL that
+# agrees with the truncation, since TOTAL counts the same loop. Binding the
+# list to fd 3 leaves the body's stdin untouched so no child can reach it.
+# Same treatment as every converted loop in sync-monorepo.sh.
+while IFS= read -r SKILL_NAME <&3; do
   [[ -z "$SKILL_NAME" ]] && continue
 
   # Resolve through skill_source_dir() (_lib.sh, issue #78) instead of
@@ -148,7 +157,7 @@ while IFS= read -r SKILL_NAME; do
       RESULTS="${RESULTS}  Describe what changed from v${LATEST_CL_VERSION} to v${VERSION}\n"
     fi
   fi
-done <<< "$SKILLS"
+done 3<<< "$SKILLS"
 
 # --- Output ---
 if $JSON_MODE; then

@@ -77,10 +77,14 @@ set -euo pipefail
 #      plugin auto-build fails exits 1 rather than warning and going on to
 #      regenerate a catalogue describing a plugin it could not build.
 #
-# The whole run is hermetic: four throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, twelve throwaway monorepos, the syncs
+# The whole run is hermetic: 13 throwaway SKILLS_HOMEs, a fixture directory
+# that is deliberately never a SKILLS_HOME, 27 throwaway monorepos, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
+#
+# Counts are `grep -oE '^[A-Z_]*(MONOREPO|SKILLS_HOME)[A-Z_]*_FIXTURE=' | sort -u`
+# over this file — re-derive them the same way rather than incrementing by hand.
+# Two `gh` shims: the ordinary one, and the stdin-draining one defect 11 needs.
 #
 # Usage:
 #   ./test-sync-hygiene.sh
@@ -2786,6 +2790,596 @@ assert_eq "positive control: the ordinary (no-space) fixture's summary count is 
     "2" "$(sync_complete_count "$SYNC_STDOUT")"
 assert_eq "…and matches its catalogue row count" \
     "$SYNC_ROW_COUNT" "$(sync_complete_count "$SYNC_STDOUT")"
+
+# ============================================================
+# Deep-review fix round (#83): defects introduced or left open by the
+# #73/#77-#81 batch above
+# ============================================================
+#
+#  11. THE INSTRUMENT GAP. #81 converted five `for X in $LIST` loops in
+#      sync-monorepo.sh (and one in validate-pre-sync.sh) to
+#      `while IFS= read -r X; do … done <<< "$LIST"`. That fixed the
+#      word-splitting, and introduced a new failure mode the old `for` never
+#      had: `done <<< "$LIST"` binds the list to the loop BODY's stdin, and
+#      those bodies shell out to gh, rsync, cp, diff, find, jq, sed and grep.
+#      Any child that reads stdin consumes the rest of the skill list, the loop
+#      exits early, and the run reports success. Worse, #81's own count fix
+#      makes the truncation self-consistent — {{SKILL_COUNT}} is
+#      SKILLS_RESOLVED_COUNT, which counts the loop's own iterations, so the
+#      catalogue, the count and the CHANGELOG inventory all agree with each
+#      other while two thirds of the catalogue silently vanishes.
+#
+#      This harness could not see it, and that is the point of the fixture
+#      below. Every existing run uses a `gh` shim that never touches stdin, so
+#      the whole suite is structurally blind to the defect: the shim is the
+#      instrument, and the instrument had no probe for this. DRAIN_FIXTURE
+#      supplies a `gh` shim that drains stdin (`cat`) exactly as any ordinary
+#      filter would, and asserts all three skills still sync. All six loops are
+#      now bound to fd 3 (`read … <&3` / `done 3<<< "$LIST"`), which leaves the
+#      body's stdin inherited from the caller so no child can reach the list.
+#
+#  12. `_MANIFEST_SKILL_NAMES=$(manifest_skill_names … 2>/dev/null || true)`
+#      claimed to preserve "the pre-existing tolerance of an unreadable
+#      manifest". Only half true: the base commit had TWO reads, and only one
+#      was tolerant. The reversion guard's was a command substitution in a `for`
+#      word-list (does not trip `set -e`); the drift check's was an ASSIGNMENT,
+#      which under `set -e` aborted the run. Consolidating both onto one
+#      tolerant read silently downgraded the second, on the destructive path.
+#      Now recorded as a build failure and collected into _FAILED_BUILDS.
+#
+#  13. The collected-failure record was written AFTER a command that can abort.
+#      `_BUILD_LOG` is named from the manifest's `.name`, which is free text; a
+#      `/` in it makes the log redirect fail, so `sed` on the missing log fails,
+#      so `set -e` kills the run before `_FAILED_BUILDS=` is ever assigned — and
+#      the whole point of collecting failures (naming every broken manifest in
+#      one pass) is lost, because the closing summary never prints. The
+#      assignment now precedes the `sed`, and the `sed` carries `|| true`.
+#
+#  14. #73's bare-entry rejection landed in prepare-plugin.sh only, and the main
+#      sync loop runs FIRST — so `"agents": ["x"]` killed the sync at
+#      `jq -r ".agents[0].name"` with a raw `Cannot index string with "name"`
+#      and rc=5, and the friendly message never printed. Now checked at both.
+#
+#  15. `--add <unresolvable>` against a POPULATED monorepo printed one inline
+#      ERROR and exited 0 having regenerated the catalogue. #80's guard cannot
+#      catch it (it fires only when *zero* names resolve, and $existing always
+#      contributes resolvable ones). discover_skills() now rejects any
+#      --add-contributed name with no SKILL.md, before anything is written.
+#      This also closes #85, which tracked the narrower empty-monorepo case.
+#
+#  16. The --skills branch used `sort` where --add used `sort -u`, under a
+#      comment saying it mirrored --add. `--skills alpha,alpha` synced one skill
+#      twice: two stanzas, two identical catalogue rows, two identical `cp -r`
+#      install lines published as instructions, and a doubled count in three
+#      places, all agreeing with each other. Now `sort -u`.
+
+SKILLS_HOME_FIXROUND_FIXTURE="$SCRATCH_DIR/skills-home-fixround"
+MONOREPO_DRAIN_FIXTURE="$SCRATCH_DIR/monorepo-drain"
+MONOREPO_ADDBAD_FIXTURE="$SCRATCH_DIR/monorepo-addbad"
+MONOREPO_DUPSKILLS_FIXTURE="$SCRATCH_DIR/monorepo-dupskills"
+SKILLS_HOME_BADMANIFEST_FIXTURE="$SCRATCH_DIR/skills-home-badmanifest"
+MONOREPO_BADMANIFEST_FIXTURE="$SCRATCH_DIR/monorepo-badmanifest"
+SKILLS_HOME_GOODMANIFEST_FIXTURE="$SCRATCH_DIR/skills-home-goodmanifest"
+MONOREPO_GOODMANIFEST_FIXTURE="$SCRATCH_DIR/monorepo-goodmanifest"
+SKILLS_HOME_BAREAGENT_FIXTURE="$SCRATCH_DIR/skills-home-bareagent"
+MONOREPO_BAREAGENT_FIXTURE="$SCRATCH_DIR/monorepo-bareagent"
+SKILLS_HOME_SLASHLOG_FIXTURE="$SCRATCH_DIR/skills-home-slashlog"
+MONOREPO_SLASHLOG_FIXTURE="$SCRATCH_DIR/monorepo-slashlog"
+
+# One shared SKILLS_HOME for the three manifest-free fixtures (drain, addbad,
+# dupskills): with no plugin-manifest.json anywhere under it, the auto-build
+# stage finds nothing in any of those runs, so they cannot print into each
+# other the way a broken manifest would. The four manifest-carrying fixtures
+# below each get a home of their own for exactly that reason.
+mkdir -p "$SKILLS_HOME_FIXROUND_FIXTURE" \
+         "$MONOREPO_DRAIN_FIXTURE" \
+         "$MONOREPO_ADDBAD_FIXTURE" \
+         "$MONOREPO_DUPSKILLS_FIXTURE" \
+         "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill" \
+         "$MONOREPO_BADMANIFEST_FIXTURE/badmanifest-skill" \
+         "$MONOREPO_BADMANIFEST_FIXTURE/plugins/badmanifest-plugin/.claude-plugin" \
+         "$MONOREPO_BADMANIFEST_FIXTURE/plugins/badmanifest-plugin/skills/badmanifest-skill" \
+         "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill" \
+         "$MONOREPO_GOODMANIFEST_FIXTURE/goodmanifest-skill" \
+         "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/.claude-plugin" \
+         "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/skills/goodmanifest-skill" \
+         "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill" \
+         "$MONOREPO_BAREAGENT_FIXTURE/bareagent-skill" \
+         "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill" \
+         "$MONOREPO_SLASHLOG_FIXTURE/slashlog-skill"
+
+# Writes a minimal fixture SKILL.md into <dir>/<name>/, at <version>.
+write_fixround_skill() {
+    local dir="$1" name="$2" version="${3:-1.0.0}"
+    mkdir -p "$dir/$name"
+    cat > "$dir/$name/SKILL.md" <<EOF
+---
+name: $name
+description: Throwaway fixture skill for the #83 deep-review fix round.
+version: $version
+---
+
+# $name
+
+Fixture content.
+EOF
+}
+
+for _fr_skill in drain-alpha drain-beta drain-gamma; do
+    write_fixround_skill "$SKILLS_HOME_FIXROUND_FIXTURE" "$_fr_skill"
+    write_fixround_skill "$MONOREPO_DRAIN_FIXTURE" "$_fr_skill"
+done
+write_fixround_skill "$SKILLS_HOME_FIXROUND_FIXTURE" addbad-skill
+write_fixround_skill "$MONOREPO_ADDBAD_FIXTURE" addbad-skill
+# Named by --add in the positive control below; deliberately has no directory in
+# MONOREPO_ADDBAD_FIXTURE beforehand, so --add has to bring it in.
+write_fixround_skill "$SKILLS_HOME_FIXROUND_FIXTURE" addbad-newcomer
+write_fixround_skill "$SKILLS_HOME_FIXROUND_FIXTURE" dup-skill
+write_fixround_skill "$MONOREPO_DUPSKILLS_FIXTURE" dup-skill
+
+# ------------------------------------------------------------------
+# Defect 11 — a `gh` shim that drains stdin
+# ------------------------------------------------------------------
+#
+# The whole suite's existing shim exits without reading stdin, which is why it
+# never caught this. `cat >/dev/null` is not a contrived hostile stub: it is
+# what any program that treats stdin as input does, and `gh` itself reads stdin
+# on several subcommands. The real `gh repo view --json url` happens not to,
+# which is the only reason the shipped defect is latent rather than live.
+#
+# The byte counter is the instrument's own control. Post-fix the loop body's
+# stdin is inherited from the caller (/dev/null on the run below), so every
+# invocation must read 0 bytes; pre-fix it is the here-string carrying the
+# remaining skill list, so the first invocation reads the rest of it. Asserting
+# the counter — not just the skill count — is what proves the probe is wired to
+# the thing under test rather than passing for an unrelated reason.
+GH_DRAIN_SHIM_DIR="$SCRATCH_DIR/shim-bin-drain"
+GH_DRAIN_BYTES_LOG="$SCRATCH_DIR/gh-drain-bytes.log"
+mkdir -p "$GH_DRAIN_SHIM_DIR"
+: > "$GH_DRAIN_BYTES_LOG"
+
+cat > "$GH_DRAIN_SHIM_DIR/gh" <<EOF
+#!/usr/bin/env bash
+# wc -c on the drained stream, not a bare cat: the assertion needs to know
+# HOW MUCH was consumed, and "0" is the post-fix expectation.
+_drained=\$(cat | wc -c | tr -d ' ')
+printf '%s\n' "\$_drained" >> "$GH_DRAIN_BYTES_LOG"
+exit 1
+EOF
+chmod +x "$GH_DRAIN_SHIM_DIR/gh"
+
+# Control on the shim itself: fed 4 bytes it must report 4. Without this, a shim
+# broken so that it always reports 0 would make the "0 bytes drained" assertion
+# below pass vacuously — the guard-stuck-ON case for the instrument.
+GH_DRAIN_SELFTEST="$(printf 'abcd' | "$GH_DRAIN_SHIM_DIR/gh" x y || true; tail -1 "$GH_DRAIN_BYTES_LOG")"
+assert_eq "control: the draining gh shim genuinely consumes stdin (4 bytes in, 4 reported)" \
+    "4" "$GH_DRAIN_SELFTEST"
+: > "$GH_DRAIN_BYTES_LOG"
+
+# stdin from /dev/null explicitly. Two reasons: the shim would otherwise block
+# on an interactive terminal, and the post-fix expectation ("every gh invocation
+# reads 0 bytes") has to be pinned to a known-empty stdin rather than to
+# whatever the harness inherited.
+DRAIN_STDOUT_LOG="$SCRATCH_DIR/drain-stdout.log"
+DRAIN_STDERR_LOG="$SCRATCH_DIR/drain-stderr.log"
+DRAIN_RC=0
+(
+    cd "$RUN_CWD"
+    PATH="$GH_DRAIN_SHIM_DIR:$PATH" \
+    SKILLS_HOME="$SKILLS_HOME_FIXROUND_FIXTURE" \
+        "$SYNC_SCRIPT" --github-user harness-fixture-user "$MONOREPO_DRAIN_FIXTURE"
+) >"$DRAIN_STDOUT_LOG" 2>"$DRAIN_STDERR_LOG" </dev/null || DRAIN_RC=$?
+DRAIN_STDOUT="$(cat "$DRAIN_STDOUT_LOG")"
+
+# --- Assertions: defect 11. Verified red against the pre-fix build (the six
+# loops on plain stdin): this run synced ONE skill, printed "Sync complete. 1
+# skills synced", wrote a one-row catalogue and "A curated collection of 1
+# reusable Agent Skills", and exited 0 — every figure agreeing with every other
+# while two of the three skills silently vanished from the published
+# catalogue. ---
+assert_eq "stdin-draining gh: the sync still exits 0" "0" "$DRAIN_RC"
+DRAIN_NAMES="$(synced_names "$DRAIN_STDOUT")"
+assert_eq "…discovery still finds all three (the truncation is in consumption, not discovery)" \
+    "3" "$(listed_skill_count "$DRAIN_NAMES")"
+assert_eq "…and all three are actually synced, not just the first before gh ate the rest" \
+    "3" "$(sync_complete_count "$DRAIN_STDOUT")"
+for _fr_skill in drain-alpha drain-beta drain-gamma; do
+    assert_contains "…the main sync loop reached $_fr_skill" \
+        "--- $_fr_skill ---" "$DRAIN_STDOUT"
+done
+DRAIN_README="$(cat "$MONOREPO_DRAIN_FIXTURE/README.md" 2>/dev/null || true)"
+assert_eq "…the published catalogue has all three rows (site 1/5: the main loop)" \
+    "3" "$(skill_catalog_row_count "$MONOREPO_DRAIN_FIXTURE/README.md")"
+assert_contains "…and the README count agrees with it rather than with a truncated loop" \
+    "A curated collection of 3 reusable" "$DRAIN_README"
+DRAIN_CHANGELOG="$(cat "$MONOREPO_DRAIN_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+assert_contains "…and its \"Synced N skills\" figure is the full three" \
+    "Synced 3 skills from local source." "$DRAIN_CHANGELOG"
+
+# --- Positive controls on the fd-3 conversion itself, NOT fail-first probes for
+# defect 11. Measured, not assumed: both of these PASS against the
+# loops-on-stdin mutant, because the install-all builder (site 4/5) and the
+# CHANGELOG inventory builder (site 5/5) re-read $SKILLS_TO_SYNC from scratch
+# and their bodies spawn nothing that reads stdin, so a truncated main loop
+# does not truncate them. What they do catch is a botched conversion of these
+# two loops — `done 3<<<` without the matching `read … <&3` reads nothing at
+# all and both artifacts come out empty — which is the failure mode this fix
+# round could plausibly introduce at these sites. Labelled honestly rather than
+# left implying a fail-first they do not have. ---
+assert_line_present "control: install-all still emits the last skill's cp line after the fd-3 conversion (site 4/5)" \
+    "cp -r /tmp/claude-code-skills/drain-gamma ~/.claude/skills/drain-gamma" "$DRAIN_README"
+assert_contains "control: the CHANGELOG inventory still carries the last skill's entry (site 5/5)" \
+    "- \`drain-gamma\` v1.0.0" "$DRAIN_CHANGELOG"
+
+# The instrument assertion. Every recorded invocation must be 0 — the loop's
+# list is on fd 3, so a child on stdin has nothing to reach. `sort -u` over the
+# whole log rather than a tail: one non-zero invocation anywhere is a leak, and
+# checking only the last would miss it.
+assert_eq "…and no gh invocation could read a single byte of the skill list (all on fd 3)" \
+    "0" "$(sort -u "$GH_DRAIN_BYTES_LOG" | tr '\n' ' ' | sed 's/ *$//')"
+assert_eq "…with the probe actually having run (gh was invoked once per synced skill)" \
+    "3" "$(wc -l < "$GH_DRAIN_BYTES_LOG" | tr -d ' ')"
+
+# ------------------------------------------------------------------
+# Defects 15 + 16 — --add resolvability, --skills de-duplication
+# ------------------------------------------------------------------
+
+# Seed run: an ordinary sync, so the fixture has a real published catalogue for
+# the refused --add below to be shown NOT to have disturbed. Without the seed
+# there is no README, and "the catalogue is untouched" would hold vacuously.
+ADDBAD_SEED_RC=0
+run_sync "$SKILLS_HOME_FIXROUND_FIXTURE" "$MONOREPO_ADDBAD_FIXTURE" \
+    "$SCRATCH_DIR/addbad-seed-stdout.log" "$SCRATCH_DIR/addbad-seed-stderr.log" || ADDBAD_SEED_RC=$?
+assert_eq "control: the addbad fixture's seed sync succeeds and publishes a catalogue" \
+    "0" "$ADDBAD_SEED_RC"
+ADDBAD_README_BEFORE="$(cat "$MONOREPO_ADDBAD_FIXTURE/README.md" 2>/dev/null || true)"
+ADDBAD_CHANGELOG_BEFORE="$(cat "$MONOREPO_ADDBAD_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+assert_eq "…with exactly one skill row to protect" \
+    "1" "$(skill_catalog_row_count "$MONOREPO_ADDBAD_FIXTURE/README.md")"
+
+ADDBAD_RC=0
+run_sync "$SKILLS_HOME_FIXROUND_FIXTURE" "$MONOREPO_ADDBAD_FIXTURE" \
+    "$SCRATCH_DIR/addbad-stdout.log" "$SCRATCH_DIR/addbad-stderr.log" \
+    --add nosuchskill || ADDBAD_RC=$?
+ADDBAD_STDERR="$(cat "$SCRATCH_DIR/addbad-stderr.log")"
+
+# --- Assertions: defect 15. Verified red against the pre-fix build: rc=0, the
+# only complaint a single inline "  ERROR: no SKILL.md in …" from the sync loop,
+# and the README/CHANGELOG/marketplace all regenerated regardless. ---
+assert_eq "--add with an unresolvable name against a POPULATED monorepo now fails" \
+    "1" "$ADDBAD_RC"
+assert_contains "…naming the offending argument, not just reporting a count" \
+    "--add named skills with no SKILL.md: nosuchskill" "$ADDBAD_STDERR"
+assert_contains "…and saying where it looked" \
+    "Looked under $SKILLS_HOME_FIXROUND_FIXTURE/<name>/" "$ADDBAD_STDERR"
+assert_eq "…with the published catalogue left byte-identical, not republished" \
+    "$ADDBAD_README_BEFORE" "$(cat "$MONOREPO_ADDBAD_FIXTURE/README.md" 2>/dev/null || true)"
+assert_eq "…and the CHANGELOG likewise untouched" \
+    "$ADDBAD_CHANGELOG_BEFORE" "$(cat "$MONOREPO_ADDBAD_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+
+# --- Positive control: a guard that refused EVERY --add would satisfy every
+# assertion above. A real skill must still come in, and the catalogue must grow
+# to two rows. This also covers the comma-split path — a one-line
+# skill_source_dir "$ADD_SKILL" test would look for a skill literally named
+# "addbad-newcomer,addbad-skill" and refuse this legitimate call. ---
+ADDGOOD_RC=0
+run_sync "$SKILLS_HOME_FIXROUND_FIXTURE" "$MONOREPO_ADDBAD_FIXTURE" \
+    "$SCRATCH_DIR/addgood-stdout.log" "$SCRATCH_DIR/addgood-stderr.log" \
+    --add addbad-newcomer,addbad-skill || ADDGOOD_RC=$?
+assert_eq "positive control: --add with resolvable comma-separated names still succeeds" \
+    "0" "$ADDGOOD_RC"
+assert_eq "…and the catalogue grew to two rows" \
+    "2" "$(skill_catalog_row_count "$MONOREPO_ADDBAD_FIXTURE/README.md")"
+assert_file_exists "…with the newcomer actually copied in" \
+    "$MONOREPO_ADDBAD_FIXTURE/addbad-newcomer/SKILL.md"
+
+DUPSKILLS_RC=0
+run_sync "$SKILLS_HOME_FIXROUND_FIXTURE" "$MONOREPO_DUPSKILLS_FIXTURE" \
+    "$SCRATCH_DIR/dupskills-stdout.log" "$SCRATCH_DIR/dupskills-stderr.log" \
+    --skills dup-skill,dup-skill || DUPSKILLS_RC=$?
+DUPSKILLS_STDOUT="$(cat "$SCRATCH_DIR/dupskills-stdout.log")"
+DUPSKILLS_README="$(cat "$MONOREPO_DUPSKILLS_FIXTURE/README.md" 2>/dev/null || true)"
+DUPSKILLS_CHANGELOG="$(cat "$MONOREPO_DUPSKILLS_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+
+# --- Assertions: defect 16. Verified red against the pre-fix build (`sort`
+# without -u): "Skills to sync (2):", two "--- dup-skill ---" stanzas, "Sync
+# complete. 2 skills synced", two identical catalogue rows, "A curated
+# collection of 2 reusable", "Synced 2 skills" and two identical `cp -r` lines
+# — one skill counted twice everywhere, consistently. ---
+assert_eq "--skills with a repeated name still exits 0" "0" "$DUPSKILLS_RC"
+assert_eq "…de-duplicated to one name in the plan line, matching the --add branch" \
+    "1" "$(printed_skill_count "$DUPSKILLS_STDOUT")"
+assert_eq "…one name in the plan list" \
+    "1" "$(listed_skill_count "$(synced_names "$DUPSKILLS_STDOUT")")"
+assert_eq "…synced once, not twice" "1" "$(sync_complete_count "$DUPSKILLS_STDOUT")"
+assert_eq "…with a single catalogue row rather than a duplicated one" \
+    "1" "$(skill_catalog_row_count "$MONOREPO_DUPSKILLS_FIXTURE/README.md")"
+assert_contains "…and the README count is 1" \
+    "A curated collection of 1 reusable" "$DUPSKILLS_README"
+assert_contains "…and the CHANGELOG count is 1" \
+    "Synced 1 skills from local source." "$DUPSKILLS_CHANGELOG"
+assert_eq "…and exactly one install-all cp line is published as an instruction" \
+    "1" "$(grep -cxF "cp -r /tmp/claude-code-skills/dup-skill ~/.claude/skills/dup-skill" <<< "$DUPSKILLS_README" || true)"
+
+# ------------------------------------------------------------------
+# Defect 12 — an unreadable skills[] must not be swallowed
+# ------------------------------------------------------------------
+#
+# The plugin is ALREADY PUBLISHED under plugins/, which is what makes this
+# fixture discriminate. With the plugin absent, `[[ ! -d "$_PLUGIN_DST/
+# .claude-plugin" ]]` sets _NEEDS_BUILD=true regardless of the failed read,
+# prepare-plugin.sh runs, fails on the same manifest and is collected — so the
+# pre-fix run exits 1 too and the fixture proves nothing. Published, the drift
+# check is the ONLY thing that can set _NEEDS_BUILD, its _FIRST_SKILL comes from
+# the swallowed read, and the pre-fix run therefore never attempts a build at
+# all: rc=0, not one ERROR line anywhere, catalogue regenerated.
+cat > "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/SKILL.md" <<'EOF'
+---
+name: badmanifest-skill
+description: Throwaway fixture skill whose manifest declares skills[] as a number (#83 defect 12).
+version: 2.0.0
+---
+
+# Bad Manifest Skill
+EOF
+cp "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/SKILL.md" \
+   "$MONOREPO_BADMANIFEST_FIXTURE/badmanifest-skill/SKILL.md"
+
+# `[123]`, not `["name"]`: a bare STRING is the legacy form #73 normalises and
+# manifest_skill_names() handles it deliberately. A number has no normalisation,
+# so `.name` on it is the type error that makes jq exit 5 — while the `.name`
+# read further up the stage succeeds on the same file, so nothing earlier
+# catches it.
+cat > "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "badmanifest-plugin",
+  "version": "2.0.0",
+  "description": "Throwaway fixture plugin whose skills[] holds a number (#83 defect 12).",
+  "skills": [123],
+  "commands": []
+}
+EOF
+
+# The stale published copy the drift check would want to rebuild (v1.0.0 against
+# the source's v2.0.0).
+cat > "$MONOREPO_BADMANIFEST_FIXTURE/plugins/badmanifest-plugin/.claude-plugin/plugin.json" <<'EOF'
+{
+  "name": "badmanifest-plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin, already published and stale."
+}
+EOF
+cat > "$MONOREPO_BADMANIFEST_FIXTURE/plugins/badmanifest-plugin/skills/badmanifest-skill/SKILL.md" <<'EOF'
+---
+name: badmanifest-skill
+description: STALE published copy — a correct drift check wants to rebuild this.
+version: 1.0.0
+---
+
+# Bad Manifest Skill (stale)
+EOF
+
+BADMANIFEST_RC=0
+run_sync "$SKILLS_HOME_BADMANIFEST_FIXTURE" "$MONOREPO_BADMANIFEST_FIXTURE" \
+    "$SCRATCH_DIR/badmanifest-stdout.log" "$SCRATCH_DIR/badmanifest-stderr.log" || BADMANIFEST_RC=$?
+BADMANIFEST_STDERR="$(cat "$SCRATCH_DIR/badmanifest-stderr.log")"
+BADMANIFEST_MANIFEST="$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/plugin-manifest.json"
+
+# --- Assertions: defect 12. Verified red against the pre-fix build: rc=0, the
+# combined output contained no "ERROR" at all, and README.md was regenerated. ---
+assert_eq "a manifest whose skills[] cannot be read fails the run instead of being skipped" \
+    "1" "$BADMANIFEST_RC"
+assert_contains "…naming the manifest" \
+    "ERROR: cannot read skills[] from $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
+assert_contains "…and relaying jq's own diagnosis rather than swallowing it" \
+    "Cannot index number with string \"name\"" "$BADMANIFEST_STDERR"
+assert_contains "…joining the collected-failure summary that names every broken manifest in one pass" \
+    "Error: plugin build failed, refusing to continue: $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
+assert_eq "…with the catalogue deliberately NOT regenerated on the way out" \
+    "false" "$([[ -f "$MONOREPO_BADMANIFEST_FIXTURE/README.md" ]] && echo true || echo false)"
+
+# --- Positive control: the identical fixture shape with a WELL-FORMED skills[].
+# Without it, a change that failed every run carrying an already-published
+# plugin would satisfy every assertion above. ---
+cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md" <<'EOF'
+---
+name: goodmanifest-skill
+description: Throwaway fixture skill — positive control for #83 defect 12, well-formed manifest.
+version: 2.0.0
+---
+
+# Good Manifest Skill
+EOF
+cp "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md" \
+   "$MONOREPO_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md"
+cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "goodmanifest-plugin",
+  "version": "2.0.0",
+  "description": "Throwaway fixture plugin, well-formed (#83 defect 12 positive control).",
+  "skills": [
+    {
+      "name": "goodmanifest-skill",
+      "source": "."
+    }
+  ],
+  "agents": [
+    {
+      "name": "control-agent",
+      "source": "./agents-src/control-agent.md"
+    }
+  ],
+  "commands": []
+}
+EOF
+
+# A WELL-FORMED agents[] entry, so defect 14's guard has something it must NOT
+# reject. Without an agents[] here the guard could be stuck permanently ON and
+# every assertion in this file would still pass — measured, not assumed: a
+# mutant with `_BARE_AGENTS="always-on-control"` (fires on every manifest,
+# suppressing all agent copying) produced 246 PASS / 0 FAIL before this fixture
+# existed.
+mkdir -p "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src"
+cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src/control-agent.md" <<'EOF'
+---
+name: control-agent
+description: Throwaway fixture agent — proves a well-formed agents[] entry is still copied (#83 defect 14 positive control).
+---
+
+GOODMANIFEST-AGENT-MARKER
+EOF
+cat > "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/.claude-plugin/plugin.json" <<'EOF'
+{
+  "name": "goodmanifest-plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin, already published and stale."
+}
+EOF
+cat > "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/skills/goodmanifest-skill/SKILL.md" <<'EOF'
+---
+name: goodmanifest-skill
+description: STALE published copy — the drift check must rebuild this.
+version: 1.0.0
+---
+
+# Good Manifest Skill (stale)
+EOF
+
+GOODMANIFEST_RC=0
+run_sync "$SKILLS_HOME_GOODMANIFEST_FIXTURE" "$MONOREPO_GOODMANIFEST_FIXTURE" \
+    "$SCRATCH_DIR/goodmanifest-stdout.log" "$SCRATCH_DIR/goodmanifest-stderr.log" || GOODMANIFEST_RC=$?
+GOODMANIFEST_STDOUT="$(cat "$SCRATCH_DIR/goodmanifest-stdout.log")"
+# Both streams. The bare-agent ERROR goes to stderr, so a control that reads
+# stdout alone passes no matter what the guard does — which is exactly what
+# happened: the stdout-only form of the assertion below was green against the
+# guard-stuck-ON mutant.
+GOODMANIFEST_BOTH="$(cat "$SCRATCH_DIR/goodmanifest-stdout.log" "$SCRATCH_DIR/goodmanifest-stderr.log")"
+assert_eq "positive control: the same shape with a well-formed skills[] still exits 0" \
+    "0" "$GOODMANIFEST_RC"
+assert_contains "…the drift check still fires and the stale published plugin is rebuilt" \
+    "AUTO-SYNCED  plugins/goodmanifest-plugin/" "$GOODMANIFEST_STDOUT"
+assert_contains "…the read that now reports failure still succeeds silently here" \
+    "goodmanifest-skill" "$(cat "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/skills/goodmanifest-skill/SKILL.md" 2>/dev/null || true)"
+assert_contains "…and the published copy is no longer the stale v1.0.0" \
+    "version: 2.0.0" "$(cat "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/skills/goodmanifest-skill/SKILL.md" 2>/dev/null || true)"
+
+# ------------------------------------------------------------------
+# Defect 14 — bare agents[] entry must not kill the main sync loop
+# ------------------------------------------------------------------
+cat > "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/SKILL.md" <<'EOF'
+---
+name: bareagent-skill
+description: Throwaway fixture skill whose manifest declares a bare-string agent (#83 defect 14).
+version: 1.0.0
+---
+
+# Bare Agent Skill
+EOF
+cp "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/SKILL.md" \
+   "$MONOREPO_BAREAGENT_FIXTURE/bareagent-skill/SKILL.md"
+cat > "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "bareagent-plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin with a bare-string agents[] entry (#83 defect 14).",
+  "skills": [
+    {
+      "name": "bareagent-skill",
+      "source": "."
+    }
+  ],
+  "agents": ["not-an-object"],
+  "commands": []
+}
+EOF
+
+BAREAGENT_RC=0
+run_sync "$SKILLS_HOME_BAREAGENT_FIXTURE" "$MONOREPO_BAREAGENT_FIXTURE" \
+    "$SCRATCH_DIR/bareagent-stdout.log" "$SCRATCH_DIR/bareagent-stderr.log" || BAREAGENT_RC=$?
+BAREAGENT_BOTH="$(cat "$SCRATCH_DIR/bareagent-stdout.log" "$SCRATCH_DIR/bareagent-stderr.log")"
+
+# --- Assertions: defect 14. Verified red against the pre-fix build: the main
+# sync loop died at `jq -r ".agents[0].name"` with rc=5 and a raw
+# `jq: error (…): Cannot index string with "name"` as the only output, having
+# never reached the auto-build stage where prepare-plugin.sh's friendly message
+# lives. ---
+assert_eq "a bare-string agents[] entry gives the documented exit-1 failure, not jq's rc=5" \
+    "1" "$BAREAGENT_RC"
+assert_contains "…with the same actionable message prepare-plugin.sh gives, from the loop that meets it first" \
+    "ERROR: agent entry must be an object with 'name' and 'source', not a bare string: not-an-object" \
+    "$BAREAGENT_BOTH"
+assert_not_contains "…and no raw jq type error reaching the operator" \
+    "Cannot index string with string \"name\"" "$BAREAGENT_BOTH"
+
+# --- Positive control: the goodmanifest fixture carries a WELL-FORMED agents[]
+# entry, so a guard stuck ON is caught two ways — no ERROR may be printed on
+# either stream, and the agent must actually reach the monorepo. The file
+# assertion is the load-bearing half: the guard sets AGENT_COUNT=0, so a
+# stuck-ON guard silently copies no agents at all while printing its ERROR to
+# stderr where a stdout-only check never looks. ---
+assert_not_contains "positive control: a well-formed agents[] entry draws no bare-string ERROR (both streams)" \
+    "must be an object with 'name' and 'source'" "$GOODMANIFEST_BOTH"
+assert_file_exists "…and the agent is actually copied into the monorepo, so the guard cannot be stuck ON" \
+    "$MONOREPO_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents/control-agent.md"
+assert_contains "…with its real content, not an empty file" \
+    "GOODMANIFEST-AGENT-MARKER" \
+    "$(cat "$MONOREPO_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents/control-agent.md" 2>/dev/null || true)"
+
+# ------------------------------------------------------------------
+# Defect 13 — the failure record must survive its own reporting
+# ------------------------------------------------------------------
+#
+# A `/` in the manifest's `.name` puts a directory separator in $_BUILD_LOG's
+# path, so the `>"$_BUILD_LOG"` redirect fails (its parent does not exist), the
+# build is treated as failed, and the `sed` that reports it fails too.
+#
+# NOTE: rc is 1 both before and after the fix and is therefore NOT the
+# discriminator — pre-fix the run dies from `set -e` on the failed sed, which
+# also happens to exit 1. The discriminator is whether the collected-failure
+# SUMMARY prints: pre-fix the run is dead before `_FAILED_BUILDS=` is assigned,
+# so the "names every broken manifest in one pass" line never appears at all.
+cat > "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/SKILL.md" <<'EOF'
+---
+name: slashlog-skill
+description: Throwaway fixture skill whose manifest name contains a slash (#83 defect 13).
+version: 1.0.0
+---
+
+# Slash Log Skill
+EOF
+cp "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/SKILL.md" \
+   "$MONOREPO_SLASHLOG_FIXTURE/slashlog-skill/SKILL.md"
+cat > "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "slash/name",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin whose name carries a slash (#83 defect 13).",
+  "skills": [
+    {
+      "name": "slashlog-skill",
+      "source": "."
+    }
+  ],
+  "commands": []
+}
+EOF
+
+SLASHLOG_RC=0
+run_sync "$SKILLS_HOME_SLASHLOG_FIXTURE" "$MONOREPO_SLASHLOG_FIXTURE" \
+    "$SCRATCH_DIR/slashlog-stdout.log" "$SCRATCH_DIR/slashlog-stderr.log" || SLASHLOG_RC=$?
+SLASHLOG_STDERR="$(cat "$SCRATCH_DIR/slashlog-stderr.log")"
+SLASHLOG_MANIFEST="$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/plugin-manifest.json"
+
+# --- Assertions: defect 13. Verified red against the pre-fix build: the
+# per-manifest "ERROR: prepare-plugin.sh failed for …" line printed, then the
+# sed failed and set -e killed the run — so the collected-failure summary below
+# was absent from stderr entirely. ---
+assert_eq "a manifest name containing a slash still ends the run at exit 1" \
+    "1" "$SLASHLOG_RC"
+assert_contains "…the per-manifest failure line still prints" \
+    "ERROR: prepare-plugin.sh failed for $SLASHLOG_MANIFEST" "$SLASHLOG_STDERR"
+assert_contains "…and the collected-failure summary survives the sed that cannot read its own log" \
+    "Error: plugin build failed, refusing to continue: $SLASHLOG_MANIFEST" "$SLASHLOG_STDERR"
 
 # ============================================================
 # Authoring-source parity

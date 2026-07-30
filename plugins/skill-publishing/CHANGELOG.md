@@ -99,15 +99,93 @@ from those paths needs re-checking before upgrading.
   next to a "Synced 0 skills" entry. Only the pre-loop "Skills to sync (N):" line keeps the
   requested count, because it is a plan rather than a claim about what happened. (#81)
 
+- **The line-wise conversion above introduced a truncation the old `for` loops could not
+  have.** `done <<< "$LIST"` binds the list to the loop *body's* stdin, and those bodies
+  shell out to `gh`, `rsync`, `cp`, `diff`, `find`, `jq`, `sed` and `grep`. Any child that
+  reads stdin consumes the rest of the skill list; the loop then exits early having synced
+  only what it read, and reports success. The count fix above makes that self-consistent —
+  `{{SKILL_COUNT}}` is `SKILLS_RESOLVED_COUNT`, which counts the loop's own iterations — so
+  the catalogue, the published count and the CHANGELOG inventory all agree with each other
+  while the rest of the catalogue silently disappears. Demonstrated with a `gh` shim that
+  drains stdin: a three-skill monorepo synced **one** skill, rewrote the README to a single
+  catalogue row, and exited `0`.
+
+  Latent in production only because the real `gh repo view --json url` happens not to read
+  stdin — a property of today's `gh`, not a guarantee. All five sites in `sync-monorepo.sh`
+  and the one in `validate-pre-sync.sh` now bind the list to **fd 3** (`read … <&3` /
+  `done 3<<<`), leaving the body's stdin inherited from the caller so no child can reach
+  the list at all. (#83)
+
+- The plugin auto-build stage's `manifest_skill_names … 2>/dev/null || true` was documented
+  as keeping "the pre-existing tolerance of an unreadable manifest". Only half true: the
+  base commit had *two* reads, and only one was tolerant. The reversion guard's was a
+  command substitution in a `for` word-list, which does not trip `set -e`; the drift
+  check's was an **assignment**, which did. Consolidating both onto one tolerant read
+  silently downgraded the second from fatal to skipped, on the destructive path — with the
+  name list empty the reversion guard cannot fire, so a plugin is rebuilt from the stale
+  local source the main loop just refused and `rsync -a --delete`'d over the published
+  copy under an `AUTO-SYNCED` line; and an already-published plugin is never rebuilt at
+  all. Reachable via `"skills": [123]`, which makes `jq` exit 5 while the `.name` read
+  earlier in the same stage succeeds on the same file, so nothing catches it first. A
+  failed read is now recorded as a build failure and joins the collected-failure exit,
+  relaying `jq`'s own message. (#83)
+
+- The collected-failure record was written *after* a command that can abort. `_BUILD_LOG`
+  is named from the manifest's `.name`, which is free text; a `/` in it makes the log
+  redirect fail, so the `sed` that reports the failure fails too, and `set -e` killed the
+  run before `_FAILED_BUILDS=` was ever assigned — losing the point of collecting failures,
+  since the summary naming every broken manifest in one pass never printed. The assignment
+  now precedes the `sed`, and the `sed` carries `|| true`: reporting a failure must not be
+  able to destroy the record of it. (#83)
+
+- The bare-entry rejection added to `prepare-plugin.sh` above landed there only, and
+  `sync-monorepo.sh`'s main sync loop runs **first** — so a manifest carrying
+  `"agents": ["x"]` killed the sync at `jq -r ".agents[$ai].name"` with a raw
+  `jq: error … Cannot index string with "name"` and rc=5, and the friendly explanation
+  never printed because the run never reached the auto-build stage. The same
+  `manifest_bare_entries` check, with the same message text, now runs in the main loop too,
+  scoped to `agents[]` — the only array that loop indexes. (#83)
+
+- `--add <unresolvable>` against a **populated** monorepo printed one inline
+  `ERROR: no SKILL.md` and exited `0` having regenerated the README, CHANGELOG and
+  marketplace — the same shape closed above for `--skills`, on the flag that is the
+  documented way to introduce a new skill. That guard cannot catch it: it fires only when
+  *every* name fails to resolve, and a populated monorepo always contributes resolvable
+  ones through the existing-directory scan. `discover_skills()` now rejects any
+  `--add`-contributed name with no `SKILL.md`, before anything is written, splitting on
+  commas so a legitimate `--add a,b` is unaffected. (#83, closes #85)
+
+- The `--skills` branch used `sort` where the `--add` branch used `sort -u`, under a
+  comment claiming it mirrored `--add`. `--skills alpha,alpha` therefore synced one skill
+  twice: two `--- alpha ---` stanzas, two identical catalogue rows, two identical `cp -r`
+  lines published as install instructions, and a doubled count in the summary, the README
+  and the CHANGELOG — every figure agreeing with every other, so nothing flagged it.
+  Now `sort -u`. (#83)
+
 ### Changed
 
 - Exit-status contract, now documented in `--help`:
   `0` success; `1` usage/setup error — including a `--skills` value that resolves to no
-  valid skill — or a failed plugin auto-build; `3` completed, but skills were refused by
-  the reversion guard. `1` wins over `3`: a run that both refused a skill and failed a
-  build stops at the build failure, so the end-of-run refusal summary never prints.
-  `--dry-run` cannot predict a `1` from a failed build, because plugins are not assembled
-  at all under `--dry-run`; it does still predict a `3`.
+  valid skill, or an `--add` value naming a skill with no `SKILL.md` — or a failed plugin
+  auto-build, or a manifest whose `skills[]` cannot be read; `3` completed, but skills were
+  refused by the reversion guard. `1` wins over `3`: a run that both refused a skill and
+  failed a build stops at the build failure, so the end-of-run refusal summary never
+  prints. `--dry-run` cannot predict a `1` from a failed *build*, because plugins are not
+  assembled at all under `--dry-run`; it does predict a `3`, a bad `--skills`/`--add`
+  value, and an unreadable manifest (that read happens whether or not a build follows).
+
+- `--skills` and `--add` are refused on different thresholds, deliberately. `--skills` is
+  refused only when *every* named skill fails to resolve — a partial resolution is a
+  legitimate run. `--add` is refused when *any* name it contributes fails, because `--add`
+  names are typed to introduce a skill, so an unresolvable one is a typo rather than a
+  subset. (#83)
+
+- **`--skills` rewrites the published catalogue to exactly the named subset.** Skills left
+  out stay on disk but lose their catalogue row, their place in the skill count and their
+  CHANGELOG inventory entry until the next full sync. This is long-standing behaviour, now
+  stated plainly in `SKILL.md` — an earlier draft of that documentation promised `--skills`
+  would not "publish an empty/partial catalogue", which was true only of the empty half.
+  Use `--add` to introduce one skill without disturbing the rest. (#83)
 
 ## [4.2.1] - 2026-07-26
 
