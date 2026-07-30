@@ -139,6 +139,13 @@ from those paths needs re-checking before upgrading.
   stdin, turning a truncation into a hang on an interactive terminal. `--help` states both
   halves and which one is load-bearing. (#81)
 
+- The `marketplace.json` builder — the only one of the eight converted loops reached through
+  a process substitution, and the last converted — had no control, so a botched conversion
+  of it was invisible. Reverting `3< <(…)` to `< <(…)` writes an empty `"plugins": []` and
+  exits 0, silently emptying the marketplace catalogue while the sole existing assertion
+  (file exists) stays green, because the file is written and merely empty. Measured: that
+  mutant passed all 279 assertions. Now asserted on contents, not existence. (#81)
+
 - **Process note, recorded because it caught a fifth instance.** Four half-true safety
   comments shipped on this branch, and twice the correction produced another. The shape is
   mechanical: an absolute — "no", "never", "always", "still", "only", "cannot" — describing

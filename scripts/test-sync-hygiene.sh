@@ -1806,6 +1806,31 @@ assert_file_exists "positive control: a completed sync does regenerate the root 
 assert_file_exists "positive control: a completed sync does regenerate the marketplace catalogue" \
     "$MONOREPO_LEGACY_FIXTURE/.claude-plugin/marketplace.json"
 
+# …and that it has CONTENTS, not merely existence. The marketplace builder is
+# the one list-driven loop reached through a process substitution rather than a
+# here-string, and it was the last one converted to fd 3. Botching that
+# conversion — `3< <(…)` back to `< <(…)`, the exact failure mode the
+# install-all and CHANGELOG-inventory loops already have controls for — writes
+#     "plugins": [
+#     ]
+# and exits 0: the marketplace catalogue silently emptied, which is #80's shape
+# on the marketplace side. The assert_file_exists above stays GREEN through it,
+# because the file is written, just empty; the README's plugin row is built by a
+# different loop and survives, so nothing else notices either. Measured: that
+# mutant passed all 279 assertions at rc=0 before this line existed. Bash does
+# print "3: Bad file descriptor" to stderr, but no assertion reads that stream
+# for this run.
+#
+# Pairs with the assert_file_exists above rather than relying on the `|| true`:
+# on a missing file the substitution yields an empty haystack, and
+# assert_contains on an empty haystack FAILS (`"" == *needle*` is false), so
+# this is red either way. Checked directly rather than assumed — the vacuous-
+# `|| true` shape bit this harness once already, but it bites assert_not_contains,
+# not assert_contains.
+assert_contains "…listing the plugin it built, not an empty plugins[]" \
+    '"name": "legacy-sync-plugin"' \
+    "$(cat "$MONOREPO_LEGACY_FIXTURE/.claude-plugin/marketplace.json" 2>/dev/null || true)"
+
 # The other half of the control pair: proves the run took the failure branch
 # rather than somehow succeeding, so the assertion above cannot be satisfied by a
 # build that worked and printed the line for some unrelated reason.
