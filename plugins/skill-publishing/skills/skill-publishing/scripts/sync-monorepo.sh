@@ -318,7 +318,16 @@ CATALOG_ROWS=""
 # explicit --skills guard after the loop (#80).
 SKILLS_RESOLVED_COUNT=0
 
-for SKILL_NAME in $SKILLS_TO_SYNC; do
+# Line-wise, not `for SKILL_NAME in $SKILLS_TO_SYNC` (issue #81): unquoted word
+# splitting breaks a skill directory whose name contains a space into separate
+# tokens, each of which fails to resolve — two loud "no SKILL.md" ERRORs where
+# there should have been one successful sync. A here-string, not a pipe: this
+# loop assigns CATALOG_ROWS, REFUSED_SKILLS, REFUSED_COUNT and
+# SKILLS_RESOLVED_COUNT, all read after the loop, and a pipe would run the body
+# in a subshell and silently discard every one of them. A here-string on an
+# empty $SKILLS_TO_SYNC still feeds one blank line, hence the guard below.
+while IFS= read -r SKILL_NAME; do
+  [[ -z "$SKILL_NAME" ]] && continue
   SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
   SKILL_DST="$MONOREPO_DIR/$SKILL_NAME"
 
@@ -542,7 +551,7 @@ This skill follows the **Agent Skills** standard — a \`SKILL.md\` file with YA
   fi
 
   echo ""
-done
+done <<< "$SKILLS_TO_SYNC"
 
 # --- Guard: an explicit --skills value that matched no real skill must not
 # proceed to rebuild the catalogue (#80, second half). The discover_skills()
@@ -647,11 +656,19 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     # below would revert plugins/<name>/ exactly as the main loop would have.
     if [[ -n "$REFUSED_SKILLS" ]]; then
       _REFUSED_IN_PLUGIN=""
-      for _PLUGIN_SKILL in $_MANIFEST_SKILL_NAMES; do
+      # Line-wise (issue #81): a manifest skill name containing a space would
+      # otherwise be split into fragments, neither of which matches the
+      # refused name skill_refused() actually recorded — the reversion guard
+      # would then silently miss its own refusal and let the plugin rebuild
+      # over the stale local source it exists to protect against. Here-string,
+      # not a pipe: _REFUSED_IN_PLUGIN is read immediately after this loop, in
+      # the current shell.
+      while IFS= read -r _PLUGIN_SKILL; do
+        [[ -z "$_PLUGIN_SKILL" ]] && continue
         if skill_refused "$_PLUGIN_SKILL"; then
           _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
         fi
-      done
+      done <<< "$_MANIFEST_SKILL_NAMES"
       if [[ -n "$_REFUSED_IN_PLUGIN" ]]; then
         echo "  SKIP (reversion guard)  plugins/$_MANIFEST_NAME  —  stale local source for: $_REFUSED_IN_PLUGIN"
         continue
@@ -1022,7 +1039,14 @@ PLUGIN_COUNT=0
 PLUGIN_CATALOG_ROWS=""
 
 if [[ -n "$PLUGINS_TO_LIST" ]]; then
-  for PLUGIN_NAME in $PLUGINS_TO_LIST; do
+  # Line-wise (issue #81): a plugin's manifest `name` (and therefore its
+  # published directory name) is unconstrained free text and can contain a
+  # space. Word-splitting it here would look for plugins/<fragment>/ instead
+  # of the real plugins/<name>/, find nothing, and silently drop the plugin
+  # from PLUGIN_COUNT and the catalog table with no error at all. Here-string,
+  # not a pipe: PLUGIN_COUNT and PLUGIN_CATALOG_ROWS are read after the loop.
+  while IFS= read -r PLUGIN_NAME; do
+    [[ -z "$PLUGIN_NAME" ]] && continue
     PLUGIN_DIR="$MONOREPO_DIR/plugins/$PLUGIN_NAME"
     PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
     if [[ -f "$PLUGIN_JSON" ]]; then
@@ -1041,7 +1065,7 @@ if [[ -n "$PLUGINS_TO_LIST" ]]; then
 "
       PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
     fi
-  done
+  done <<< "$PLUGINS_TO_LIST"
 fi
 
 # --- Generate root README ---
@@ -1061,10 +1085,16 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{LAST_UPDATED}}|$TODAY|g")
   # Build install-all commands (one cp -r per skill)
   INSTALL_ALL_CMDS=""
-  for SKILL_NAME in $SKILLS_TO_SYNC; do
+  # Line-wise (issue #81): word-splitting a space-named skill here would turn
+  # one real skill into two bogus, non-functional `cp -r` lines instead of the
+  # one correct command — wrong instructions published with a straight face,
+  # not merely a miscount. Here-string, not a pipe: INSTALL_ALL_CMDS is read
+  # immediately after this loop.
+  while IFS= read -r SKILL_NAME; do
+    [[ -z "$SKILL_NAME" ]] && continue
     INSTALL_ALL_CMDS="${INSTALL_ALL_CMDS}cp -r /tmp/claude-code-skills/$SKILL_NAME ~/.claude/skills/$SKILL_NAME
 "
-  done
+  done <<< "$SKILLS_TO_SYNC"
 
   # Build plugin section (only if plugins exist)
   PLUGIN_SECTION=""
@@ -1168,7 +1198,12 @@ Format: Monorepo-level events only. For per-skill change details, see \`<skill>/
 
 # Build a compact skill inventory: name + version
 SKILL_INVENTORY=""
-for SKILL_NAME in $SKILLS_TO_SYNC; do
+# Line-wise (issue #81): a space-named skill split into fragments here resolves
+# neither via skill_source_dir(), so it silently vanishes from the CHANGELOG's
+# inventory instead of getting its own "- `name` vX.Y.Z" line. Here-string, not
+# a pipe: SKILL_INVENTORY is read immediately after this loop.
+while IFS= read -r SKILL_NAME; do
+  [[ -z "$SKILL_NAME" ]] && continue
   SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
   SKILL_MD="${SKILL_SRC:+$SKILL_SRC/SKILL.md}"
   # Refused skills were not copied, so describe them by what the repo actually
@@ -1183,7 +1218,7 @@ for SKILL_NAME in $SKILLS_TO_SYNC; do
     SKILL_INVENTORY="${SKILL_INVENTORY}
 - \`$SKILL_NAME\` v${VERSION:-?.?.?} — $SHORT_DESC"
   fi
-done
+done <<< "$SKILLS_TO_SYNC"
 
 SYNC_ENTRY="## [$TODAY] — Monorepo sync
 
@@ -1467,7 +1502,16 @@ echo ""
 if $DRY_RUN; then
   echo "Dry run complete. No files were written."
 else
-  echo "Sync complete. $((SKILL_COUNT - REFUSED_COUNT)) skills synced to $MONOREPO_DIR"
+  # SKILLS_RESOLVED_COUNT, not SKILL_COUNT (issue #81): SKILL_COUNT is how many
+  # names discover_skills() produced, which under the unquoted-loop bug this
+  # fix removes was not the same thing as how many the loop actually processed
+  # — a name that IFS-split into unresolvable fragments was still counted here
+  # even though nothing was copied for it. SKILLS_RESOLVED_COUNT only counts
+  # names the loop above actually resolved to a real SKILL.md (whether synced
+  # or refused), so subtracting REFUSED_COUNT from it — not from the
+  # discovered total — is what makes this line describe what happened rather
+  # than what was attempted.
+  echo "Sync complete. $((SKILLS_RESOLVED_COUNT - REFUSED_COUNT)) skills synced to $MONOREPO_DIR"
   if [[ -n "$AUTO_BUILT_PLUGINS" ]]; then
     echo "Auto-built plugins: $AUTO_BUILT_PLUGINS"
   fi

@@ -253,6 +253,19 @@ listed_skill_count() {
     fi
 }
 
+# The N out of the closing "Sync complete. N skills synced to <dir>" line
+# (issue #81). Read this rather than substring-matching a literal "Sync
+# complete. 2" — in a two-skill fixture the pre-fix formula (discovered count)
+# and the post-fix formula (actually-resolved count) coincidentally agree
+# whenever every discovered name resolves, so a bare literal-match assertion
+# would pass against the unfixed formula too. Parsing the number out and
+# comparing it against something independently derived (a catalogue row count,
+# or a fixture where the two formulas are known to diverge) is what actually
+# discriminates.
+sync_complete_count() {
+    sed -n 's/^Sync complete\. \([0-9]*\) skills synced .*/\1/p' <<< "$1"
+}
+
 # Counts SKILL catalogue rows in a generated README.md, distinguishing them
 # from plugin catalogue rows in the same file. Both are `| [name](path) | ... |`
 # table rows, but a skill row's link is `(./name/)` — a single path segment —
@@ -2431,6 +2444,284 @@ assert_eq "…Pass is both skills" "2" "$(presync_pass "$PRESYNC_PASS_STDOUT")"
 assert_eq "…Fail is zero" "0" "$(presync_fail "$PRESYNC_PASS_STDOUT")"
 assert_contains "…\"Safe to sync\" banner prints" \
     "All skills have matching CHANGELOG entries. Safe to sync." "$PRESYNC_PASS_STDOUT"
+
+# ============================================================
+# Issue #81 — unquoted iteration IFS-splits any skill/plugin name containing
+# a space, and the closing summary reported the discovered count rather than
+# what actually resolved and synced
+# ============================================================
+#
+# filter_skill_candidates() correctly accepts a directory named "my skill" —
+# it has a valid SKILL.md — and prints it as ONE line. Five separate consumers
+# of that line then re-split it on whitespace via an unquoted `for X in $LIST`:
+# the main sync loop, the manifest-skill-names check inside the auto-build
+# stage's reversion guard, the published-plugin catalogue loop, the
+# install-all command builder, and the CHANGELOG skill-inventory builder. All
+# five are now `while IFS= read -r … done <<< "$LIST"`. The closing "Sync
+# complete. N skills synced" line is also fixed: it read SKILL_COUNT
+# (discovered) rather than SKILLS_RESOLVED_COUNT (actually resolved), so a
+# name that failed to resolve was still counted as synced.
+#
+# Two fixture families, because the two scenarios need opposite outcomes for
+# a same-shaped skill: SPACE_FIXTURE needs "my skill" to resolve and sync
+# cleanly (proving the ordinary path is not broken by the space); SPACE_PLUGIN
+# FIXTURE needs it refused by the reversion guard (proving the manifest-skill
+# loop still recognises a refused name that contains a space). They cannot
+# share a monorepo.
+
+SKILLS_HOME_SPACE_FIXTURE="$SCRATCH_DIR/skills-home-space"
+MONOREPO_SPACE_FIXTURE="$SCRATCH_DIR/monorepo-space"
+SKILLS_HOME_SPACE_PLUGIN_FIXTURE="$SCRATCH_DIR/skills-home-space-plugin"
+MONOREPO_SPACE_PLUGIN_FIXTURE="$SCRATCH_DIR/monorepo-space-plugin"
+MONOREPO_MIXEDSKILLS_FIXTURE="$SCRATCH_DIR/monorepo-mixedskills"
+
+mkdir -p "$SKILLS_HOME_SPACE_FIXTURE/my skill/scripts" \
+         "$SKILLS_HOME_SPACE_FIXTURE/space-plain-skill" \
+         "$MONOREPO_SPACE_FIXTURE/my skill" \
+         "$MONOREPO_SPACE_FIXTURE/space-plain-skill" \
+         "$MONOREPO_SPACE_FIXTURE/plugins/my plugin/.claude-plugin" \
+         "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE/my skill" \
+         "$MONOREPO_SPACE_PLUGIN_FIXTURE/my skill" \
+         "$MONOREPO_MIXEDSKILLS_FIXTURE"
+
+cat > "$SKILLS_HOME_SPACE_FIXTURE/my skill/SKILL.md" <<'EOF'
+---
+name: my skill
+description: Throwaway fixture skill in a directory named with a space, guarding sync-monorepo.sh's unquoted iteration sites against IFS word-splitting (#81).
+version: 1.0.0
+---
+
+# My Skill
+
+Fixture content.
+EOF
+
+# Proves the space-named skill's content is actually copied, not merely
+# counted — a marker file distinct from SKILL.md, so the assertion below
+# cannot be satisfied by the SKILL.md copy alone.
+echo "SPACE-FIXTURE-SCRIPT-MARKER" > "$SKILLS_HOME_SPACE_FIXTURE/my skill/scripts/marker.sh"
+
+cat > "$SKILLS_HOME_SPACE_FIXTURE/space-plain-skill/SKILL.md" <<'EOF'
+---
+name: space-plain-skill
+description: Throwaway fixture skill with an ordinary name, synced alongside "my skill" as the positive control for issue #81.
+version: 1.0.0
+---
+
+# Space Plain Skill
+
+Fixture content.
+EOF
+
+# An already-published plugin whose directory (and manifest `name`) contains a
+# space — seeded directly rather than through prepare-plugin.sh, since the
+# PLUGINS_TO_LIST catalogue loop only reads what is already on disk under
+# plugins/. Guards `for PLUGIN_NAME in $PLUGINS_TO_LIST`: word-split into "my"
+# and "plugin", plugins/my/.claude-plugin/plugin.json and
+# plugins/plugin/.claude-plugin/plugin.json both resolve to nothing, and the
+# plugin silently drops out of PLUGIN_COUNT and the catalogue table with no
+# error at all.
+cat > "$MONOREPO_SPACE_FIXTURE/plugins/my plugin/.claude-plugin/plugin.json" <<'EOF'
+{
+  "name": "my plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin with a space in its name, guarding the PLUGINS_TO_LIST catalogue loop (#81)."
+}
+EOF
+
+# --- The reversion-guard-in-plugin fixture: a plugin manifest whose sole
+# skill has a space in its name, and IS refused. A stale local source (v1.0.0)
+# alongside a newer in-repo copy (v2.0.0, below) forces the same reversion
+# guard the main loop already exercises, but reached this time through the
+# auto-build stage's own manifest-skill-names read.
+cat > "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE/my skill/SKILL.md" <<'EOF'
+---
+name: my skill
+description: Throwaway fixture skill — stale local source, refused by the reversion guard (#81's manifest-skill-names loop).
+version: 1.0.0
+---
+
+# My Skill (stale local source)
+
+Fixture content.
+EOF
+
+cat > "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE/my skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "space-plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin whose sole skill has a space in its name.",
+  "skills": [
+    {
+      "name": "my skill",
+      "source": "."
+    }
+  ],
+  "commands": []
+}
+EOF
+
+# The monorepo's own copy is NEWER, so the reversion guard refuses to sync
+# "my skill" forward from the stale local source above.
+cat > "$MONOREPO_SPACE_PLUGIN_FIXTURE/my skill/SKILL.md" <<'EOF'
+---
+name: my skill
+description: Throwaway fixture skill — the in-repo copy, newer than the local source, so the reversion guard must refuse to overwrite it.
+version: 2.0.0
+---
+
+# My Skill (in-repo, newer)
+
+Fixture content.
+EOF
+
+SPACE_STDOUT_LOG="$SCRATCH_DIR/space.stdout"
+SPACE_STDERR_LOG="$SCRATCH_DIR/space.stderr"
+SPACE_RC=0
+run_sync "$SKILLS_HOME_SPACE_FIXTURE" "$MONOREPO_SPACE_FIXTURE" "$SPACE_STDOUT_LOG" "$SPACE_STDERR_LOG" || SPACE_RC=$?
+SPACE_STDOUT="$(cat "$SPACE_STDOUT_LOG")"
+
+SPACE_PLUGIN_STDOUT_LOG="$SCRATCH_DIR/space-plugin.stdout"
+SPACE_PLUGIN_STDERR_LOG="$SCRATCH_DIR/space-plugin.stderr"
+SPACE_PLUGIN_RC=0
+run_sync "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE" "$MONOREPO_SPACE_PLUGIN_FIXTURE" "$SPACE_PLUGIN_STDOUT_LOG" "$SPACE_PLUGIN_STDERR_LOG" || SPACE_PLUGIN_RC=$?
+SPACE_PLUGIN_STDOUT="$(cat "$SPACE_PLUGIN_STDOUT_LOG")"
+
+# --- The arithmetic-only fixture: a --skills value with one real name and one
+# that resolves to nothing, no spaces anywhere. Isolates the summary-count fix
+# from the word-splitting fix — in the space fixture above, once the main
+# loop is fixed, SKILL_COUNT and SKILLS_RESOLVED_COUNT happen to be numerically
+# equal (every discovered, filtered name resolves), so that fixture alone
+# cannot tell "uses SKILLS_RESOLVED_COUNT" apart from "still uses SKILL_COUNT".
+# This one can: SKILL_COUNT is 2 either way, but only one of the two names
+# ever resolves.
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_MIXEDSKILLS_FIXTURE" \
+    "$SCRATCH_DIR/mixedskills.stdout" "$SCRATCH_DIR/mixedskills.stderr" \
+    --skills demo-skill,mixedskills-nosuchskill || MIXEDSKILLS_RC=$?
+MIXEDSKILLS_RC="${MIXEDSKILLS_RC:-0}"
+MIXEDSKILLS_STDOUT="$(cat "$SCRATCH_DIR/mixedskills.stdout")"
+
+# --- Assertions: main sync loop + honest summary (site 1/5, plus the
+# arithmetic fix). Verified by hand against a scratch revert of the main loop
+# alone: SKILLS_TO_SYNC still lists "my skill" and "space-plain-skill" as two
+# correct lines (discovery is unaffected — the bug is purely in consumption),
+# but the unquoted `for` re-splits them into "my", "skill",
+# "space-plain-skill"; "my" and "skill" each print a "no SKILL.md" ERROR and
+# are never counted into SKILLS_RESOLVED_COUNT or given a catalogue row, while
+# "space-plain-skill" still resolves normally. ---
+assert_eq "space-named-skill sync exits 0 (both skills resolve and sync cleanly)" \
+    "0" "$SPACE_RC"
+
+SPACE_SYNCED_NAMES="$(synced_names "$SPACE_STDOUT")"
+assert_line_present "…\"my skill\" enters the discovered list as one name (discovery was never the bug)" \
+    "my skill" "$SPACE_SYNCED_NAMES"
+assert_line_present "…the ordinary-named sibling is listed too" \
+    "space-plain-skill" "$SPACE_SYNCED_NAMES"
+
+assert_not_contains "no ERROR line anywhere in the run" "ERROR:" "$SPACE_STDOUT"
+
+assert_file_exists "the space-named skill's SKILL.md was actually written to disk" \
+    "$MONOREPO_SPACE_FIXTURE/my skill/SKILL.md"
+assert_file_exists "…and its scripts/ directory, proving copy_dir() received the real (unsplit) source path" \
+    "$MONOREPO_SPACE_FIXTURE/my skill/scripts/marker.sh"
+assert_eq "…with the right content, not an empty or wrong file" \
+    "SPACE-FIXTURE-SCRIPT-MARKER" "$(cat "$MONOREPO_SPACE_FIXTURE/my skill/scripts/marker.sh" 2>/dev/null || true)"
+
+SPACE_ROW_COUNT="$(skill_catalog_row_count "$MONOREPO_SPACE_FIXTURE/README.md")"
+assert_eq "the catalogue has exactly 2 skill rows — \"my\"/\"skill\" fragments never got their own wrong rows" \
+    "2" "$SPACE_ROW_COUNT"
+SPACE_README="$(cat "$MONOREPO_SPACE_FIXTURE/README.md" 2>/dev/null || true)"
+assert_contains "…the space-named skill's own row, with the un-split name" \
+    "| [my skill](./my skill/) |" "$SPACE_README"
+assert_contains "…the ordinary-named skill's row is unaffected" \
+    "| [space-plain-skill](./space-plain-skill/) |" "$SPACE_README"
+
+SPACE_SUMMARY_COUNT="$(sync_complete_count "$SPACE_STDOUT")"
+assert_eq "the printed summary count is the full 2 (#81 core: not the false count a half-conversion would report)" \
+    "2" "$SPACE_SUMMARY_COUNT"
+assert_eq "…and agrees with the catalogue row count actually written" \
+    "$SPACE_ROW_COUNT" "$SPACE_SUMMARY_COUNT"
+
+# --- Assertion: install-all commands (site 4/5). Independent of site 1 — this
+# loop reads $SKILLS_TO_SYNC directly, which is unaffected by the main loop's
+# own bug. Verified by hand against a scratch revert of this loop alone: the
+# correct single line below is replaced by two broken fragment lines ("cp -r
+# …/my ~/.claude/skills/my" and "cp -r …/skill ~/.claude/skills/skill"). ---
+assert_line_present "install-all commands contain the one correct cp -r line for the space-named skill" \
+    "cp -r /tmp/claude-code-skills/my skill ~/.claude/skills/my skill" "$SPACE_README"
+assert_line_absent "…and not the broken first-word-only fragment" \
+    "cp -r /tmp/claude-code-skills/my ~/.claude/skills/my" "$SPACE_README"
+assert_line_absent "…nor the broken second-word-only fragment" \
+    "cp -r /tmp/claude-code-skills/skill ~/.claude/skills/skill" "$SPACE_README"
+
+# --- Assertion: CHANGELOG skill inventory (site 5/5). Also independent of
+# site 1. Verified by hand against a scratch revert of this loop alone: both
+# "my" and "skill" fail skill_source_dir() individually, so the space-named
+# skill's inventory line is silently omitted (space-plain-skill's still
+# appears — its own name is a single token either way). ---
+SPACE_CHANGELOG="$(cat "$MONOREPO_SPACE_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+assert_contains "the CHANGELOG skill inventory carries the space-named skill's own entry" \
+    "- \`my skill\` v1.0.0" "$SPACE_CHANGELOG"
+
+# --- Assertion: published-plugin catalogue (site 3/5). Verified by hand
+# against a scratch revert of this loop alone: PLUGIN_COUNT stays 0 (the
+# split "my"/"plugin" fragments each fail the plugin.json existence check),
+# the "## Plugins" section never renders, and "my plugin" is invisible in the
+# generated README with no error at all. ---
+assert_contains "the space-named already-published plugin keeps its catalogue row" \
+    "| [my plugin](./plugins/my plugin/) |" "$SPACE_README"
+
+# --- Assertion: manifest-skill-names loop inside the reversion guard (site
+# 2/5). Verified by hand against a scratch revert of this loop alone:
+# skill_refused("my") and skill_refused("skill") are each checked instead of
+# skill_refused("my skill"), neither matches, the auto-build stage's own SKIP
+# line never prints, and the plugin is auto-built from the stale local source
+# the reversion guard exists to protect against — "AUTO-SYNCED
+# plugins/space-plugin/" appears instead.
+#
+# assert_line_present with the FULL exact line, not assert_contains on a
+# prefix: the (already-safe, glob-based) plugin RESYNC stage further down
+# prints its own, differently-worded "SKIP (reversion guard)
+# plugins/space-plugin resync — …" line whenever plugins/space-plugin/
+# already exists on disk — which, under a reverted site 2, it now wrongly
+# does, because the auto-build stage just created it. A substring match on
+# "SKIP (reversion guard)  plugins/space-plugin" is a prefix of BOTH lines and
+# is satisfied by the resync stage's unrelated, correct detection even while
+# the auto-build stage's own check (the thing actually under test) stayed
+# broken — caught by hand: the bare assert_contains form passed against the
+# site-2-reverted variant for exactly this reason before being tightened here. ---
+assert_eq "space-plugin reversion-guard run exits 3 (a skill was refused)" \
+    "3" "$SPACE_PLUGIN_RC"
+assert_contains "…the refused skill is named correctly, whole, on the top-level REFUSED trailer" \
+    "  - my skill" "$SPACE_PLUGIN_STDOUT"
+assert_line_present "the plugin auto-build stage's OWN reversion-guard check skips the refused space-named skill's plugin" \
+    "  SKIP (reversion guard)  plugins/space-plugin  —  stale local source for: my skill" "$SPACE_PLUGIN_STDOUT"
+assert_not_contains "the refused plugin is not built anyway" \
+    "AUTO-SYNCED  plugins/space-plugin/" "$SPACE_PLUGIN_STDOUT"
+
+# --- Assertion: the arithmetic fix in isolation, no spaces involved. Verified
+# by hand against a scratch revert of the summary line alone (SKILL_COUNT -
+# REFUSED_COUNT instead of SKILLS_RESOLVED_COUNT - REFUSED_COUNT): this run
+# reports "2 skills synced" — the number of names *requested* — even though
+# only demo-skill actually resolved and was copied. ---
+assert_eq "mixed --skills run (one resolves, one does not) exits 0 — a partial resolution is not the #80 all-fail case" \
+    "0" "$MIXEDSKILLS_RC"
+assert_contains "…the unresolved name still gets its own ERROR" \
+    "ERROR: no SKILL.md" "$MIXEDSKILLS_STDOUT"
+assert_eq "…and the summary reports exactly the one skill that actually resolved and synced, not the two names requested" \
+    "1" "$(sync_complete_count "$MIXEDSKILLS_STDOUT")"
+assert_eq "…matching its single catalogue row" \
+    "1" "$(skill_catalog_row_count "$MONOREPO_MIXEDSKILLS_FIXTURE/README.md")"
+
+# --- Positive control: the ordinary (no-space, no partial-failure) fixture's
+# summary line is correct and self-consistent. Without this, a rework that
+# broke the arithmetic for every run (not just the space/mixed cases above)
+# would still pass every #81 assertion so far. ---
+SYNC_ROW_COUNT="$(skill_catalog_row_count "$MONOREPO_FIXTURE/README.md")"
+assert_eq "positive control: the ordinary (no-space) fixture's summary count is correct" \
+    "2" "$(sync_complete_count "$SYNC_STDOUT")"
+assert_eq "…and matches its catalogue row count" \
+    "$SYNC_ROW_COUNT" "$(sync_complete_count "$SYNC_STDOUT")"
 
 # ============================================================
 # Authoring-source parity
