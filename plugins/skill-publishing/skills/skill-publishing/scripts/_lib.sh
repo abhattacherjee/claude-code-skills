@@ -205,19 +205,34 @@ resolve_source_path() {
 #   MONOREPO_DIR below — an unset SKILLS_HOME must abort rather than silently
 #   resolve to "/<name>/SKILL.md".
 #
-#   An earlier version of this comment said "every current caller sets it
-#   before sourcing this file", and that was FALSE — and it contradicted the
-#   very next paragraph, which correctly names three scripts that source this
-#   file without setting MONOREPO_DIR. Those same three (prepare-plugin.sh,
-#   prepare-skill-repo.sh, sync-individual-repos.sh) do not set SKILLS_HOME
-#   either. What is true is narrower: every caller of this FUNCTION sets it.
-#   Sourcing the file is not calling the function, and the three scripts above
-#   never call it — verified, 0 references in each.
+#   An earlier version said "every current caller sets it before sourcing this
+#   file". That is FALSE: "before sourcing this file" ties "caller" to the
+#   scripts that source _lib.sh, and two of the six do not set SKILLS_HOME.
+#   Measured, because the first correction of this comment ALSO got it wrong —
+#   it said three, having inherited the list from the MONOREPO_DIR paragraph
+#   below without re-deriving it:
 #
-#   The explicit guard below exists because `set -u` alone reports
-#   "_lib.sh: line NNN: SKILLS_HOME: unbound variable", which blames this file
-#   for a contract the CALLER broke. Same loudness, a message that names the
-#   actual requirement.
+#     script                     sets SKILLS_HOME   calls skill_source_dir
+#     prepare-plugin.sh                 no                   no
+#     prepare-skill-repo.sh             no                   no
+#     release-monorepo.sh               yes                  no
+#     sync-individual-repos.sh          yes                  no      <- sets it
+#     sync-monorepo.sh                  yes                  yes
+#     validate-pre-sync.sh              yes                  yes
+#
+#   What is true is narrower: every caller of this FUNCTION sets it. Sourcing
+#   is not calling, and the two that do not set it never call it.
+#
+#   Note this is the same shape as the MONOREPO_DIR case documented two
+#   paragraphs down — correct today only because the call site that would break
+#   it does not exist yet. Stated here too so the two read consistently rather
+#   than one carrying the caveat and the other implying a guarantee.
+#
+#   Hence the explicit guard below. `set -u` alone reports
+#   "_lib.sh: line NNN: SKILLS_HOME: unbound variable", which blames THIS file
+#   for a contract the caller broke; the guard names the calling script instead.
+#   It does not disturb the ratified bare-$SKILLS_HOME decision — an unset value
+#   still aborts loudly rather than silently resolving to "/<name>/SKILL.md".
 #
 # References ${MONOREPO_DIR:-}, not $MONOREPO_DIR: this file is sourced by
 # scripts (prepare-plugin.sh, prepare-skill-repo.sh, sync-individual-repos.sh)
@@ -237,10 +252,13 @@ resolve_source_path() {
 skill_source_dir() {
   local name="$1"
   if [[ -z "${SKILLS_HOME:-}" ]]; then
-    echo "Error: skill_source_dir() requires SKILLS_HOME to be set by the calling script." >&2
-    echo "       Set it before calling (sync-monorepo.sh and validate-pre-sync.sh both" >&2
-    echo "       default it to \$HOME/.claude/skills); sourcing _lib.sh does not set it." >&2
-    return 1
+    # rc 2, matching the usage-error code the entry-point scripts already use,
+    # because this IS a usage error — a caller-contract breach, not a lookup
+    # failure. $0 names the script that forgot, which is the whole point.
+    echo "Error: skill_source_dir() requires SKILLS_HOME; it is unset (caller: $0)." >&2
+    echo "       Sourcing _lib.sh does not set it. sync-monorepo.sh and" >&2
+    echo "       validate-pre-sync.sh default it to \$HOME/.claude/skills." >&2
+    return 2
   fi
   if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
     echo "$SKILLS_HOME/$name"

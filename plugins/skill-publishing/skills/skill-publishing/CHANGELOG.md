@@ -346,9 +346,18 @@ from those paths needs re-checking before upgrading.
   correctly names three scripts that source the file without setting `MONOREPO_DIR`. Those
   same three do not set `SKILLS_HOME` either; what is true is narrower — every caller of the
   FUNCTION sets it, and those three never call it (verified, 0 references each). Sourcing is
-  not calling. The bare `set -u` abort also reported `_lib.sh: line NNN: SKILLS_HOME:
-  unbound variable`, blaming this file for a contract the caller broke; an explicit guard now
-  names the actual requirement. (#78)
+  not calling. Measured, because the FIRST correction of this comment was also wrong — it
+  said three scripts, having inherited the list from the `MONOREPO_DIR` paragraph below
+  without re-deriving it, when `sync-individual-repos.sh` does set `SKILLS_HOME`. Only two
+  of the six sourcers do not, and neither calls the function. The comment now carries the
+  measured table, and says explicitly that this is the same "correct only because the call
+  site that would break it does not exist yet" shape already flagged two paragraphs down,
+  so the two read consistently instead of one carrying the caveat and the other implying a
+  guarantee. The bare `set -u` abort also reported `_lib.sh: line NNN: SKILLS_HOME: unbound
+  variable`, blaming this file for a contract the caller broke; an explicit guard now names
+  the calling script and returns 2, matching the usage-error code the entry points already
+  use. The ratified bare-`$SKILLS_HOME` decision is untouched — an unset value still aborts
+  loudly rather than silently resolving. (#78)
 
 - **`SKILL.md`'s Quick Reference now states the `--skills`/`--add` asymmetry rather than
   asserting parity.** The fix for the "partial catalogue" overclaim above introduced a
