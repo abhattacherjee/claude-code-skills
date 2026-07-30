@@ -135,14 +135,46 @@ three files and stacked feature PRs are blocked in this repo.
 - A here-string on an empty variable yields one empty line, so every converted loop needs
   `[[ -z "$NAME" ]] && continue`.
 
-**Versions**
-- `skill-publishing` is at **4.2.1** at five sites: `plugins/skill-publishing/.claude-plugin/plugin.json`,
-  `.claude-plugin/marketplace.json`, `~/.claude/skills/skill-publishing/plugin-manifest.json`, and
-  `metadata.version` in **both** `SKILL.md` copies. `README.md:35` carries it in the catalogue
-  table. Three CHANGELOG copies must stay byte-identical: root `CHANGELOG.md`,
-  `plugins/skill-publishing/CHANGELOG.md`, `plugins/skill-publishing/skills/skill-publishing/CHANGELOG.md`.
+**Versions — the sites are NOT peers (verified this session; corrects an earlier draft of this plan)**
+
+There is exactly **one authoritative** version site per plugin, and three **derived** ones. The
+chain, each link read from the code:
+
+```
+~/.claude/skills/<name>/plugin-manifest.json  .version      <- the ONLY hand-authored site
+  -> prepare-plugin.sh:87 reads it into PLUGIN_VERSION
+  -> prepare-plugin.sh:143 writes it into the generated plugins/<name>/.claude-plugin/plugin.json
+     -> sync-monorepo.sh:915 reads plugin.json into P_VERSION -> README.md plugin-catalogue row
+     -> sync-monorepo.sh:~1287 reads plugin.json -> .claude-plugin/marketplace.json
+```
+
+Consequences that change what Task 6 must do:
+- **Hand-editing `plugin.json`, `marketplace.json`, or the README row without bumping the live
+  `plugin-manifest.json` silently reverts on the next sync.** This is not hypothetical: the
+  `deep-review` plugin is in exactly that state right now (live manifest and `SKILL.md` at 1.0.0,
+  derived `plugin.json` and `marketplace.json` hand-bumped to 1.1.1, README row still 1.0.0).
+- `SKILL.md`'s `metadata.version` is a **separate**, also hand-authored record at the skill level.
+  It is what `validate-pre-sync.sh` compares against the CHANGELOG — i.e. the thing #78 is about.
+- So the sites to change are: the live `plugin-manifest.json`, **both** `SKILL.md` copies, and then
+  the three derived files brought into agreement by hand so the repo is self-consistent between
+  syncs. Six files. **Re-derive this yourself** — do not trust the count.
+
+`skill-publishing` currently reads **4.2.1** at all of them, and `README.md:35` carries it in the
+catalogue table. Three CHANGELOG copies must stay byte-identical: root `CHANGELOG.md`,
+`plugins/skill-publishing/CHANGELOG.md`,
+`plugins/skill-publishing/skills/skill-publishing/CHANGELOG.md`.
+
 - Target: **4.3.0** (minor, not patch — this batch introduces new *refusals*, so runs that
   previously exited 0 will now exit 1).
+
+**Historical gotchas confirmed already fixed (do not spend time on these)**
+- The BSD `seq 0 -1` two-line bug that once produced phantom `/null` entries: all eight index loops
+  in `prepare-plugin.sh` are now C-style `for ((i=0; i<COUNT; i++))`, so a zero count iterates zero
+  times. Verified this session.
+- `skill_source_dir()` has exactly **one** definition per copy (`sync-monorepo.sh:95`) — no second
+  stale copy hiding elsewhere, unlike the `extract_field()` duplication that once required two
+  separate fixes (#35, then #37). Verified this session. Task 3 should still grep for duplicate
+  definitions of anything it hoists, but for this function the answer is already known.
 
 **Harness**
 - `scripts/test-sync-hygiene.sh` exists with 59 assertions; `scripts/test-discovery-guards.sh`
