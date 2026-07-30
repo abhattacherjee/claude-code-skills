@@ -56,10 +56,15 @@ FIX_MODE=false
 JSON_MODE=false
 MONOREPO_DIR=""
 ADD_SKILLS=""
+# Whether --add was PASSED, not what it was passed: `--add ""` is an operator
+# asking to add a skill and naming none. Gating on `-n` skipped the branch
+# wholesale, making the run identical to one with no --add — the same silent
+# no-op the `--add ,` guard below refuses, via a shorter argument.
+ADD_GIVEN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --add)   ADD_SKILLS="$2"; shift 2 ;;
+    --add)   ADD_SKILLS="$2"; ADD_GIVEN=true; shift 2 ;;
     --fix)   FIX_MODE=true; shift ;;
     --json)  JSON_MODE=true; shift ;;
     -h|--help) usage ;;
@@ -99,7 +104,7 @@ SKILLS=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
   ! -name 'plugins' ! -name 'scripts' \
   -exec basename {} \; 2>/dev/null | sort)
 
-if [[ -n "$ADD_SKILLS" ]]; then
+if $ADD_GIVEN; then
   # Only the user-typed value is comma-split; the discovered list stays
   # newline-separated, so a directory name containing a comma survives.
   #

@@ -19,6 +19,13 @@ FORCE_LOCAL=false
 GITHUB_USER=""
 SKILLS_LIST=""
 ADD_SKILL=""
+# Whether --add was PASSED, as distinct from what it was passed. `--add ""` is a
+# non-empty intent with an empty value: the operator asked to add a skill and
+# named none. Gating the branch on `-n "$ADD_SKILL"` skipped it wholesale, so
+# the run was byte-identical to one with no --add at all — measured: rc=0,
+# "Sync complete. 1 skills", same as a plain discovery sync. Same silent no-op
+# the `--add ,` guard exists to refuse, reached by a shorter argument.
+ADD_GIVEN=false
 ADD_PLUGIN=""
 MONOREPO_DIR=""
 AUTHOR="Abhishek"
@@ -131,7 +138,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)      DRY_RUN=true; shift ;;
     --init)         INIT_MODE=true; shift ;;
     --skills)       SKILLS_LIST="$2"; shift 2 ;;
-    --add)          ADD_SKILL="$2"; shift 2 ;;
+    --add)          ADD_SKILL="$2"; ADD_GIVEN=true; shift 2 ;;
     --add-plugin)   ADD_PLUGIN="$2"; shift 2 ;;
     --github-user)  GITHUB_USER="$2"; shift 2 ;;
     --author)       AUTHOR="$2"; shift 2 ;;
@@ -150,7 +157,9 @@ done
 # the *wrong* flag's value, since the guard has no way to know which flag
 # actually produced the (empty) list it is refusing. Reject the combination
 # outright rather than pick a silent winner.
-if [[ -n "$ADD_SKILL" && -n "$SKILLS_LIST" ]]; then
+# $ADD_GIVEN, not `-n "$ADD_SKILL"`: `--add "" --skills x` passes both flags, so
+# the mutual-exclusion diagnosis is the accurate one to give.
+if $ADD_GIVEN && [[ -n "$SKILLS_LIST" ]]; then
   echo "Error: --add and --skills are mutually exclusive; pass one or the other" >&2
   exit 1
 fi
@@ -258,7 +267,7 @@ filter_skill_candidates() {
 # --- Determine which skills to sync ---
 discover_skills() {
   # If --add specified, add it to existing skills
-  if [[ -n "$ADD_SKILL" ]]; then
+  if $ADD_GIVEN; then
     # Get existing skill dirs in monorepo (exclude plugins/, scripts/, .git, .github,
     # and any top-level directory that isn't a skill, e.g. docs/, build/)
     local existing=""
@@ -1676,11 +1685,18 @@ GITIGNORE=".DS_Store
 
 write_file "$MONOREPO_DIR/.gitignore" "$GITIGNORE" ".gitignore"
 
-# write_file does not overwrite, so the template above only ever reaches a
-# freshly --init-ed monorepo. An already-published one keeps whatever .gitignore
-# it has and gets a bare "SKIP    .gitignore (already exists)" line, which reads
-# exactly like "already correct" — so the fix above would reach nobody who
-# already has a monorepo, silently. Say so instead.
+# write_file does not overwrite, so the template above reaches any monorepo that
+# has no .gitignore YET — a freshly --init-ed one, and equally a hand-made
+# `mkdir` directory being synced for the first time. (An earlier version of this
+# comment said "only ever reaches a freshly --init-ed monorepo", which is false;
+# the error was pessimistic — it understated the fix's reach rather than
+# overstating a guarantee — so unlike the other absolutes corrected on this
+# branch it suppressed no audit, and the NOTE it justifies is unaffected.)
+#
+# A monorepo that already HAS a .gitignore keeps it and gets a bare
+# "SKIP    .gitignore (already exists)" line, which reads exactly like "already
+# correct" — so the fix above would reach nobody in that state, silently. Say so
+# instead.
 #
 # Advisory, never fatal: the file belongs to the monorepo, not to this script,
 # and refusing to sync over a hand-edited .gitignore would be a far worse

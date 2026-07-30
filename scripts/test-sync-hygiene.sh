@@ -2075,6 +2075,33 @@ assert_eq "…leaving the published catalogue byte-identical" \
     "$ADDCOMMAPOP_README_BEFORE" \
     "$(cat "$MONOREPO_ADDCOMMAPOP_FIXTURE/README.md" 2>/dev/null || true)"
 
+# --- `--add ""` is the same silent no-op through a shorter argument. The guard
+# above lived inside `if [[ -n "$ADD_SKILL" ]]`, so an EMPTY value never reached
+# it — the branch was skipped wholesale and the run came out byte-identical to
+# one with no --add at all. Measured before the fix: rc=0, "Sync complete. 1
+# skills synced", exactly matching a plain discovery sync on the same fixture.
+# The operator passed --add, nothing was added, success reported.
+#
+# Gating on whether the flag was PASSED ($ADD_GIVEN) rather than on whether its
+# value is non-empty is what closes it; the existing add_split guard then prints
+# the message it already had. Reuses the populated fixture above because a
+# refusing run writes nothing, so it cannot disturb those assertions. ---
+ADDEMPTY_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMAPOP_FIXTURE" \
+    "$SCRATCH_DIR/addempty.stdout" "$SCRATCH_DIR/addempty.stderr" \
+    --add "" || ADDEMPTY_RC=$?
+ADDEMPTY_STDOUT="$(cat "$SCRATCH_DIR/addempty.stdout")"
+assert_eq "--add with an EMPTY value refuses too, not just --add ," \
+    "1" "$ADDEMPTY_RC"
+assert_contains "…naming the empty argument" \
+    "Error: --add produced no skill names from: ''" \
+    "$(cat "$SCRATCH_DIR/addempty.stderr")"
+assert_not_contains "…and never reporting a completed sync" \
+    "Sync complete." "$ADDEMPTY_STDOUT"
+assert_eq "…with the catalogue still untouched" \
+    "$ADDCOMMAPOP_README_BEFORE" \
+    "$(cat "$MONOREPO_ADDCOMMAPOP_FIXTURE/README.md" 2>/dev/null || true)"
+
 # ============================================================
 # --add and --skills together must be rejected, with the right diagnosis
 # ============================================================
@@ -4102,6 +4129,28 @@ assert_eq "--add with only separators is a usage error, not a silent no-op" \
 assert_contains "…naming the offending argument" \
     "Error: --add produced no skill names from: ','" \
     "$(cat "$SCRATCH_DIR/presync-addcomma.stderr")"
+
+# Same for an EMPTY value, which the `-n "$ADD_SKILLS"` gate skipped wholesale:
+# the run came out identical to one with no --add, "Total: 1", rc=0.
+#
+# rc IS a valid discriminator on THIS fixture, unlike a naive one: the baseline
+# run above asserts rc=0 / Total 1 and the control asserts rc=0 / Total 2, so
+# every skill here genuinely passes validation and rc=0 is reachable. On a
+# fixture whose skills lack CHANGELOGs, validate-pre-sync returns 1 for every
+# case including the controls, and an rc assertion would pass for the wrong
+# reason. Total is asserted alongside rc for the same reason.
+PRESYNC_ADDEMPTY_RC=0
+run_presync "$PRESYNC_ADD_HOME_FIXTURE" "$PRESYNC_ADD_MONOREPO_FIXTURE" \
+    "$SCRATCH_DIR/presync-addempty.stdout" "$SCRATCH_DIR/presync-addempty.stderr" \
+    --add "" || PRESYNC_ADDEMPTY_RC=$?
+PRESYNC_ADDEMPTY_STDOUT="$(cat "$SCRATCH_DIR/presync-addempty.stdout")"
+assert_eq "--add with an EMPTY value is a usage error here too" \
+    "2" "$PRESYNC_ADDEMPTY_RC"
+assert_contains "…naming the empty argument" \
+    "Error: --add produced no skill names from: ''" \
+    "$(cat "$SCRATCH_DIR/presync-addempty.stderr")"
+assert_eq "…and producing no report, rather than one identical to a no-flag run" \
+    "" "$(presync_total "$PRESYNC_ADDEMPTY_STDOUT")"
 
 # ------------------------------------------------------------------
 # Defect 24 — the report is DATA, not a printf format string

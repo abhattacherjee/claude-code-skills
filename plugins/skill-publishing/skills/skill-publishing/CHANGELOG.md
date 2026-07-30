@@ -350,6 +350,17 @@ from those paths needs re-checking before upgrading.
   `sync-monorepo.sh` "already refuses by name for this exact argument" are corrected; it
   did not. (#81)
 
+- **`--add ""` was the same silent no-op, through a shorter argument.** Both `--add ,`
+  guards sit inside `if [[ -n "$ADD_SKILL" ]]`, so an EMPTY value never reached them — the
+  branch was skipped wholesale and the run came out byte-identical to one with no `--add`
+  at all: rc=0, "Sync complete. 1 skills synced". The operator passed `--add`, nothing was
+  added, success reported. Both scripts now gate on whether the flag was **passed**
+  (`ADD_GIVEN`) rather than on whether its value is non-empty, so the existing guard prints
+  the message it already had. The mutual-exclusion check moved to the same basis, since
+  `--add "" --skills x` passes both flags and that is the accurate diagnosis. Pre-existing;
+  landed rather than filed because shipping it fixed-for-one-degenerate-value-only would
+  re-instantiate the finding the previous entry describes. (#81)
+
 - `validate-pre-sync.sh --add` matches `sync-monorepo.sh --add`'s skill SET, not its
   strictness: an unresolvable name is announced as a SKIP here and the run can still report
   "Safe to sync", whereas the sync refuses outright. Deliberate — the sync is the gate that
