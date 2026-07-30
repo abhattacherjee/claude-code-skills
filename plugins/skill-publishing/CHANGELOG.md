@@ -2,6 +2,105 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.3.0] - 2026-07-30
+
+Minor, not patch. Five of the six defects below share one shape — a write path that
+reported success while not doing its job — and closing them introduces new
+**refusals**: `prepare-plugin.sh` and `sync-monorepo.sh` invocations that previously
+exited `0` while quietly skipping work now exit `1`. Anything scripted against a `0`
+from those paths needs re-checking before upgrading.
+
+### Fixed
+
+- `prepare-plugin.sh` silently skipped a declared `hooks.source` that does not resolve
+  to a directory: the existence check had no `else`, unlike its skills/commands/agents
+  siblings, which all error and exit. The plugin was then assembled with no `hooks/`,
+  and `sync-monorepo.sh`'s `rsync -a --delete` removed the previously published `hooks/`
+  from `plugins/<name>/`. A declared, non-empty source that does not exist is now a
+  manifest error. `hooks` absent from the manifest, and `hooks.source` explicitly
+  `null`/empty, both remain legal no-ops.
+
+  **This is a latent guardrail in this repo, not the repair of an active breakage.**
+  All 14 `plugin-manifest.json` files on the authoring machine were audited and none
+  declares `hooks.source`, so nothing here was losing hooks. It protects other repos
+  that use this tooling and do ship hooks. (#77)
+
+- `sync-monorepo.sh`'s plugin auto-build stage invoked `prepare-plugin.sh` without
+  `--github-user`, so the child re-derived the value itself via `gh api user` and fell
+  back to the literal string `USERNAME` when unauthenticated. One run could therefore
+  advertise two different accounts — the parent's resolved user in the monorepo README
+  and `USERNAME` in every auto-built plugin's own README. `GITHUB_USER` is resolved well
+  before that stage, so it is now forwarded. Side effect: one fewer `gh` call per sync,
+  making the run less network-dependent. (#79)
+
+- A legacy manifest declaring its skills as bare strings (`"skills": ["name"]`) rather
+  than objects killed every one of `prepare-plugin.sh`'s eight `.skills[…]` reads with
+  `jq: error … Cannot index string with "name"`, and `sync-monorepo.sh` read the same
+  shape at two sites under `2>/dev/null` — so its reversion guard saw no skills to check
+  and its drift check saw no first skill, and the plugin was never rebuilt at all. The
+  manifest is now shape-normalised once into a temp copy that every read is pointed at
+  (`normalize_manifest()` in `_lib.sh`), with `MANIFEST_DIR` deliberately left pointing
+  at the *original* manifest's directory so relative `source` values still resolve; the
+  two sync-side reads go through `manifest_skill_names()`. A bare string in `commands[]`
+  or `agents[]` is refused rather than guessed at — those sources are files, so `"."`
+  has no defensible meaning. And a failed plugin auto-build is now fatal: the run reports
+  every broken manifest in one pass and exits `1` before any catalogue-regenerating
+  stage, rather than warning and going on to publish a README, CHANGELOG and marketplace
+  entry describing a plugin it could not build.
+
+  **Consequence worth stating plainly:** `github-release-board-promote` — the only real
+  legacy-shape manifest — has no `plugins/` directory and no marketplace entry today. It
+  was never published *at all*, not merely left stale. With the tooling fixed, the next
+  real sync run will publish it for the first time and add a new marketplace entry. This
+  release does not do that; publishing it is a separate, deliberate act. (#73)
+
+- `validate-pre-sync.sh` hardcoded each skill's source as `$SKILLS_HOME/<name>` and
+  `continue`d when that path had no `SKILL.md` — counting the skill as neither examined
+  nor failed, i.e. as a pass. Every skill whose only source is its in-repo directory was
+  therefore never validated, while the summary still printed "Safe to sync". It now
+  resolves through the same `skill_source_dir()` the sync uses, hoisted from
+  `sync-monorepo.sh` into `_lib.sh` so there is one definition of "where does this
+  skill's source live" instead of two that can disagree. A skill with no source anywhere
+  is still skipped rather than failed, but the skip is now announced on stderr instead of
+  being silent. Its `for SKILL_NAME in $SKILLS` loop was converted line-wise at the same
+  time (see #81 below). (#78)
+
+- `--skills` resolving to zero names republished an empty catalogue, silently. A value
+  that is nothing but separators (`--skills ,`) produced no names at all, exited `0`, and
+  regenerated the monorepo README with an empty catalogue table plus a CHANGELOG entry
+  claiming "Synced 0 skills"; `--skills nosuchskill` printed one inline `ERROR: no
+  SKILL.md` line and then did the same destructive rewrite. `discover_skills()` now
+  refuses the first case by name, and a second guard sited immediately after the main
+  sync loop — ahead of the plugin auto-build, which `rsync --delete`s into `plugins/` —
+  refuses the second. A discovery-driven run against a monorepo that genuinely contains
+  no skills is deliberately exempt and still exits `0`. `--add` and `--skills` are now
+  rejected as mutually exclusive rather than one silently winning, since the guard cannot
+  otherwise tell which flag's value it is refusing. (#80)
+
+- Unquoted `for` iteration over newline-delimited lists IFS-split any skill or plugin
+  name containing a space into fragments, none of which resolved. `filter_skill_candidates`
+  correctly accepted `my skill` as one entry; the loop then produced two loud `ERROR:` lines
+  and a closing summary that still claimed the full count had synced, with `rc=0`. All five
+  sites in `sync-monorepo.sh` — the main sync loop, the plugin reversion-guard check, the
+  plugin catalogue loop, the install-all command builder and the CHANGELOG skill inventory —
+  are now `while IFS= read -r … done <<< "$LIST"`, here-strings rather than pipes so the
+  loops keep assigning in the current shell. The closing count is now the number of skills
+  that actually resolved minus those refused, and the same honest figure is used at every
+  *past-tense* result site: the README template's `{{SKILL_COUNT}}`, the minimal-README
+  fallback, the CHANGELOG's "Synced N skills" entry, and the `--init` commit message. Only
+  the pre-loop "Skills to sync (N):" line keeps the requested count, because it is a plan
+  rather than a claim about what happened. (#81)
+
+### Changed
+
+- Exit-status contract, now documented in `--help`:
+  `0` success; `1` usage/setup error — including a `--skills` value that resolves to no
+  valid skill — or a failed plugin auto-build; `3` completed, but skills were refused by
+  the reversion guard. `1` wins over `3`: a run that both refused a skill and failed a
+  build stops at the build failure, so the end-of-run refusal summary never prints.
+  `--dry-run` cannot predict a `1` from a failed build, because plugins are not assembled
+  at all under `--dry-run`; it does still predict a `3`.
+
 ## [4.2.1] - 2026-07-26
 
 ### Fixed

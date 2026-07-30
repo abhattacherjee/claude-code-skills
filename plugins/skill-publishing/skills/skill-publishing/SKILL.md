@@ -2,7 +2,7 @@
 name: skill-publishing
 description: "Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos. Use when: (1) user says 'publish', 'share', or 'sync' a skill, (2) a skill needs to be made installable by others, (3) syncing skills/plugins to the monorepo, (4) creating a versioned monorepo release, (5) assembling a plugin from skills + commands, (6) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 4.2.1
+  version: 4.3.0
 ---
 
 # Publish Skills & Plugins
