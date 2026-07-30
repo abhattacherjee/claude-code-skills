@@ -2122,19 +2122,34 @@ presync_fail() {
     sed -n 's/^Total: [0-9]* | Pass: [0-9]* | Fail: \([0-9]*\)$/\1/p' <<< "$1"
 }
 
+# stdout and stderr captured to separate log files, same shape as run_sync()
+# above — a bare command substitution captures stdout only, which is why the
+# SKIP line item 4 added below was invisible to every assertion here despite
+# printing correctly: it went straight through to the harness's own stderr
+# instead of into a variable anything could assert against.
 run_presync() {
-    local skills_home="$1" monorepo="$2"
+    local skills_home="$1" monorepo="$2" stdout_log="$3" stderr_log="$4"
+    local rc=0
     (
         cd "$RUN_CWD"
         SKILLS_HOME="$skills_home" "$PRESYNC_SCRIPT" "$monorepo"
-    )
+    ) >"$stdout_log" 2>"$stderr_log" || rc=$?
+    return "$rc"
 }
 
+PRESYNC_STDOUT_LOG="$SCRATCH_DIR/presync.stdout"
+PRESYNC_STDERR_LOG="$SCRATCH_DIR/presync.stderr"
 PRESYNC_RC=0
-PRESYNC_STDOUT="$(run_presync "$PRESYNC_SKILLS_HOME_FIXTURE" "$PRESYNC_MONOREPO_FIXTURE")" || PRESYNC_RC=$?
+run_presync "$PRESYNC_SKILLS_HOME_FIXTURE" "$PRESYNC_MONOREPO_FIXTURE" "$PRESYNC_STDOUT_LOG" "$PRESYNC_STDERR_LOG" || PRESYNC_RC=$?
+PRESYNC_STDOUT="$(cat "$PRESYNC_STDOUT_LOG")"
+PRESYNC_STDERR="$(cat "$PRESYNC_STDERR_LOG")"
 
+PRESYNC_PASS_STDOUT_LOG="$SCRATCH_DIR/presync-pass.stdout"
+PRESYNC_PASS_STDERR_LOG="$SCRATCH_DIR/presync-pass.stderr"
 PRESYNC_PASS_RC=0
-PRESYNC_PASS_STDOUT="$(run_presync "$PRESYNC_SKILLS_HOME_FIXTURE" "$PRESYNC_MONOREPO_PASS_FIXTURE")" || PRESYNC_PASS_RC=$?
+run_presync "$PRESYNC_SKILLS_HOME_FIXTURE" "$PRESYNC_MONOREPO_PASS_FIXTURE" "$PRESYNC_PASS_STDOUT_LOG" "$PRESYNC_PASS_STDERR_LOG" || PRESYNC_PASS_RC=$?
+PRESYNC_PASS_STDOUT="$(cat "$PRESYNC_PASS_STDOUT_LOG")"
+PRESYNC_PASS_STDERR="$(cat "$PRESYNC_PASS_STDERR_LOG")"
 
 # --- Core assertion: an in-repo-source-only skill with a mismatched CHANGELOG
 # is examined and blocks the sync. Before the fix this fixture exits 0 with
@@ -2153,6 +2168,29 @@ assert_contains "…a local-source skill still validates exactly as before" \
     "PASS  presync-local-skill v1.0.0" "$PRESYNC_STDOUT"
 assert_not_contains "…docs/ never enters the report" "docs" "$PRESYNC_STDOUT"
 assert_not_contains "…build/ never enters the report" "build" "$PRESYNC_STDOUT"
+
+# --- The stderr SKIP line added alongside item 4's fix: a non-skill directory
+# is announced, not silently dropped, matching sync-monorepo.sh's
+# filter_skill_candidates() message shape exactly (same string as the
+# assertions against $SYNC_STDERR above — the two are distinguishable only by
+# which producer's captured stream the assertion reads, never by content; a
+# future assertion that merged the two logs before grepping could not tell
+# them apart). Verified by hand: reverting the printf in a scratch copy leaves
+# $PRESYNC_STDERR empty against this fixture, and this pair of assertions goes
+# red. ---
+assert_contains "the presync run announces docs/ as skipped on stderr" \
+    "  SKIP (not a skill: no SKILL.md)  docs" "$PRESYNC_STDERR"
+assert_contains "…and build/ too" \
+    "  SKIP (not a skill: no SKILL.md)  build" "$PRESYNC_STDERR"
+# Positive control: a real skill must never be named in a SKIP line. Without
+# this, a regression that announced every name (including real skills) as
+# skipped would still satisfy the two assertions above. Verified by hand:
+# making the skip unconditional (skill_source_dir() always empty) makes both
+# real skill names appear in $PRESYNC_STDERR and flips this pair red.
+assert_not_contains "…a real skill (presync-local-skill) is never named in a SKIP line" \
+    "SKIP (not a skill: no SKILL.md)  presync-local-skill" "$PRESYNC_STDERR"
+assert_not_contains "…nor is the other real skill (presync-inrepo-skill)" \
+    "SKIP (not a skill: no SKILL.md)  presync-inrepo-skill" "$PRESYNC_STDERR"
 
 # --- Positive control: same skill, CHANGELOG updated to match v2.0.0. Without
 # this, a rework that failed every skill unconditionally would still satisfy
