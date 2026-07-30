@@ -255,7 +255,7 @@ discover_skills() {
     fi
 
     # Every name --add contributes must resolve to a real SKILL.md before the
-    # run is allowed to regenerate anything (#83 fix round; closes #85).
+    # run is allowed to regenerate anything (closes #85; same shape as #80).
     #
     # Without this, `--add nosuchskill` against a POPULATED monorepo printed one
     # inline "ERROR: no SKILL.md …" from the sync loop, `continue`d, and went on
@@ -304,7 +304,8 @@ discover_skills() {
     # whole run under `set -e` with empty stderr — no explanation. Capture the
     # filtered result first and, if nothing survives, fail loudly and say why.
     #
-    # `sort -u`, matching the --add branch's (#83 fix round): with a plain
+    # `sort -u`, matching the --add branch's (#80, where this branch's own
+    # `sort` was introduced): with a plain
     # `sort`, `--skills alpha,alpha` synced the same skill twice — two
     # "--- alpha ---" stanzas, two identical catalogue rows, two identical
     # `cp -r` install lines published as instructions, and a doubled count in

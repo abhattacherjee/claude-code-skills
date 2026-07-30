@@ -2465,7 +2465,7 @@ assert_contains "…\"Safe to sync\" banner prints" \
     "All skills have matching CHANGELOG entries. Safe to sync." "$PRESYNC_PASS_STDOUT"
 
 # ------------------------------------------------------------------
-# Issue #81's SIXTH site — validate-pre-sync.sh's own skill loop (#83)
+# Issue #81's SIXTH site — validate-pre-sync.sh's own skill loop
 # ------------------------------------------------------------------
 #
 # #81 is described everywhere in this file as "five sites in sync-monorepo.sh",
@@ -2516,7 +2516,7 @@ mkdir -p "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill" \
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill/SKILL.md" <<'EOF'
 ---
 name: my presync skill
-description: Throwaway fixture — space-named, CHANGELOG deliberately mismatched (#83, #81's sixth site).
+description: Throwaway fixture — space-named, CHANGELOG deliberately mismatched (#81, sixth site).
 version: 1.0.0
 ---
 
@@ -2533,7 +2533,7 @@ EOF
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my passing skill/SKILL.md" <<'EOF'
 ---
 name: my passing skill
-description: Throwaway fixture — space-named, CHANGELOG matches (#83, #81's sixth site).
+description: Throwaway fixture — space-named, CHANGELOG matches (#81, sixth site).
 version: 1.0.0
 ---
 
@@ -2550,7 +2550,7 @@ EOF
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/presync-plain-skill/SKILL.md" <<'EOF'
 ---
 name: presync-plain-skill
-description: Throwaway fixture with an ordinary name — the control that survives word-splitting either way (#83).
+description: Throwaway fixture with an ordinary name — the control that survives word-splitting either way (#81, sixth site).
 version: 1.0.0
 ---
 
@@ -2944,7 +2944,7 @@ assert_eq "…and matches its catalogue row count" \
     "$SYNC_ROW_COUNT" "$(sync_complete_count "$SYNC_STDOUT")"
 
 # ============================================================
-# Deep-review fix round (#83): defects introduced or left open by the
+# Deep-review fix round (PR #91): defects introduced or left open by the
 # #73/#77-#81 batch above
 # ============================================================
 #
@@ -3055,7 +3055,7 @@ write_fixround_skill() {
     cat > "$dir/$name/SKILL.md" <<EOF
 ---
 name: $name
-description: Throwaway fixture skill for the #83 deep-review fix round.
+description: Throwaway fixture skill for the PR #91 deep-review fix round.
 version: $version
 ---
 
@@ -3276,7 +3276,7 @@ assert_eq "…and exactly one install-all cp line is published as an instruction
 cat > "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: badmanifest-skill
-description: Throwaway fixture skill whose manifest declares skills[] as a number (#83 defect 12).
+description: Throwaway fixture skill whose manifest declares skills[] as a number (#73; harness defect 12).
 version: 2.0.0
 ---
 
@@ -3294,7 +3294,7 @@ cat > "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/plugin-manifest.json" 
 {
   "name": "badmanifest-plugin",
   "version": "2.0.0",
-  "description": "Throwaway fixture plugin whose skills[] holds a number (#83 defect 12).",
+  "description": "Throwaway fixture plugin whose skills[] holds a number (#73; harness defect 12).",
   "skills": [123],
   "commands": []
 }
@@ -3344,7 +3344,7 @@ assert_eq "…with the catalogue deliberately NOT regenerated on the way out" \
 cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: goodmanifest-skill
-description: Throwaway fixture skill — positive control for #83 defect 12, well-formed manifest.
+description: Throwaway fixture skill — positive control for #73, harness defect 12; well-formed manifest.
 version: 2.0.0
 ---
 
@@ -3356,7 +3356,7 @@ cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/plugin-manifest.json
 {
   "name": "goodmanifest-plugin",
   "version": "2.0.0",
-  "description": "Throwaway fixture plugin, well-formed (#83 defect 12 positive control).",
+  "description": "Throwaway fixture plugin, well-formed (#73, harness defect 12 positive control).",
   "skills": [
     {
       "name": "goodmanifest-skill",
@@ -3383,7 +3383,7 @@ mkdir -p "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src"
 cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src/control-agent.md" <<'EOF'
 ---
 name: control-agent
-description: Throwaway fixture agent — proves a well-formed agents[] entry is still copied (#83 defect 14 positive control).
+description: Throwaway fixture agent — proves a well-formed agents[] entry is still copied (#73, harness defect 14 positive control).
 ---
 
 GOODMANIFEST-AGENT-MARKER
@@ -3429,7 +3429,7 @@ assert_contains "…and the published copy is no longer the stale v1.0.0" \
 cat > "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/SKILL.md" <<'EOF'
 ---
 name: bareagent-skill
-description: Throwaway fixture skill whose manifest declares a bare-string agent (#83 defect 14).
+description: Throwaway fixture skill whose manifest declares a bare-string agent (#73; harness defect 14).
 version: 1.0.0
 ---
 
@@ -3441,7 +3441,7 @@ cat > "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/plugin-manifest.json" <<'E
 {
   "name": "bareagent-plugin",
   "version": "1.0.0",
-  "description": "Throwaway fixture plugin with a bare-string agents[] entry (#83 defect 14).",
+  "description": "Throwaway fixture plugin with a bare-string agents[] entry (#73; harness defect 14).",
   "skills": [
     {
       "name": "bareagent-skill",
@@ -3501,7 +3501,7 @@ assert_contains "…with its real content, not an empty file" \
 cat > "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/SKILL.md" <<'EOF'
 ---
 name: slashlog-skill
-description: Throwaway fixture skill whose manifest name contains a slash (#83 defect 13).
+description: Throwaway fixture skill whose manifest name contains a slash (#73; harness defect 13).
 version: 1.0.0
 ---
 
@@ -3513,7 +3513,7 @@ cat > "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/plugin-manifest.json" <<'EOF
 {
   "name": "slash/name",
   "version": "1.0.0",
-  "description": "Throwaway fixture plugin whose name carries a slash (#83 defect 13).",
+  "description": "Throwaway fixture plugin whose name carries a slash (#73; harness defect 13).",
   "skills": [
     {
       "name": "slashlog-skill",

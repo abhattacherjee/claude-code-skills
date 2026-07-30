@@ -116,7 +116,7 @@ from those paths needs re-checking before upgrading.
   `done 3<<<`), leaving the body's stdin inherited from the caller so no child can reach
   the list at all. Only the main sync loop and the plugin-catalogue loop have
   stdin-consuming children today; the other four are defence in depth, and the regression
-  harness's mutants report that honestly rather than claiming a fail-first at all six. (#83)
+  harness's mutants report that honestly rather than claiming a fail-first at all six. (#81)
 
 - **The line-wise conversion above had a sixth site with no test coverage at all.** It is
   described everywhere as five sites in `sync-monorepo.sh`; the sixth is
@@ -126,7 +126,7 @@ from those paths needs re-checking before upgrading.
   behaviour changed here — the loop was already correct — but a correct loop with no test
   is one refactor away from being an incorrect one, and this is the first N-1-of-N on this
   work that crossed a file boundary rather than sitting inside one. Now covered by a third
-  presync fixture with space-named skills on both sides of the report. (#83)
+  presync fixture with space-named skills on both sides of the report. (#81)
 
 - The plugin auto-build stage's `manifest_skill_names … 2>/dev/null || true` was documented
   as keeping "the pre-existing tolerance of an unreadable manifest". Only half true: the
@@ -140,7 +140,7 @@ from those paths needs re-checking before upgrading.
   all. Reachable via `"skills": [123]`, which makes `jq` exit 5 while the `.name` read
   earlier in the same stage succeeds on the same file, so nothing catches it first. A
   failed read is now recorded as a build failure and joins the collected-failure exit,
-  relaying `jq`'s own message. (#83)
+  relaying `jq`'s own message. (#73)
 
 - The collected-failure record was written *after* a command that can abort. `_BUILD_LOG`
   is named from the manifest's `.name`, which is free text; a `/` in it makes the log
@@ -148,7 +148,7 @@ from those paths needs re-checking before upgrading.
   run before `_FAILED_BUILDS=` was ever assigned — losing the point of collecting failures,
   since the summary naming every broken manifest in one pass never printed. The assignment
   now precedes the `sed`, and the `sed` carries `|| true`: reporting a failure must not be
-  able to destroy the record of it. (#83)
+  able to destroy the record of it. (#73)
 
 - The bare-entry rejection added to `prepare-plugin.sh` above landed there only, and
   `sync-monorepo.sh`'s main sync loop runs **first** — so a manifest carrying
@@ -156,7 +156,7 @@ from those paths needs re-checking before upgrading.
   `jq: error … Cannot index string with "name"` and rc=5, and the friendly explanation
   never printed because the run never reached the auto-build stage. The same
   `manifest_bare_entries` check, with the same message text, now runs in the main loop too,
-  scoped to `agents[]` — the only array that loop indexes. (#83)
+  scoped to `agents[]` — the only array that loop indexes. (#73)
 
 - `--add <unresolvable>` against a **populated** monorepo printed one inline
   `ERROR: no SKILL.md` and exited `0` having regenerated the README, CHANGELOG and
@@ -165,14 +165,14 @@ from those paths needs re-checking before upgrading.
   *every* name fails to resolve, and a populated monorepo always contributes resolvable
   ones through the existing-directory scan. `discover_skills()` now rejects any
   `--add`-contributed name with no `SKILL.md`, before anything is written, splitting on
-  commas so a legitimate `--add a,b` is unaffected. (#83, closes #85)
+  commas so a legitimate `--add a,b` is unaffected. (#80, closes #85)
 
 - The `--skills` branch used `sort` where the `--add` branch used `sort -u`, under a
   comment claiming it mirrored `--add`. `--skills alpha,alpha` therefore synced one skill
   twice: two `--- alpha ---` stanzas, two identical catalogue rows, two identical `cp -r`
   lines published as install instructions, and a doubled count in the summary, the README
   and the CHANGELOG — every figure agreeing with every other, so nothing flagged it.
-  Now `sort -u`. (#83)
+  Now `sort -u`. (#80)
 
 ### Changed
 
@@ -190,14 +190,14 @@ from those paths needs re-checking before upgrading.
   refused only when *every* named skill fails to resolve — a partial resolution is a
   legitimate run. `--add` is refused when *any* name it contributes fails, because `--add`
   names are typed to introduce a skill, so an unresolvable one is a typo rather than a
-  subset. (#83)
+  subset. (#80)
 
 - **`--skills` rewrites the published catalogue to exactly the named subset.** Skills left
   out stay on disk but lose their catalogue row, their place in the skill count and their
   CHANGELOG inventory entry until the next full sync. This is long-standing behaviour, now
   stated plainly in `SKILL.md` — an earlier draft of that documentation promised `--skills`
   would not "publish an empty/partial catalogue", which was true only of the empty half.
-  Use `--add` to introduce one skill without disturbing the rest. (#83)
+  Use `--add` to introduce one skill without disturbing the rest. (#80)
 
 ## [4.2.1] - 2026-07-26
 
