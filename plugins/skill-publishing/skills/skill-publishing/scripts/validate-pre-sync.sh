@@ -26,9 +26,13 @@ Pre-sync validation gate. Checks that every skill about to be synced has:
 
 Options:
   --add <names>  Also validate these comma-separated skills, which need not be
-                 in the monorepo yet. Mirrors sync-monorepo.sh --add: that is
-                 the one sync shape whose skills this gate cannot otherwise
-                 see, because discovery below scans the monorepo only.
+                 in the monorepo yet. Named for sync-monorepo.sh --add, whose
+                 skill set this gate cannot otherwise see: discovery below scans
+                 the monorepo only. It matches that flag's SET, not its
+                 strictness — a name that resolves nowhere is announced as a
+                 SKIP here and the run can still report "Safe to sync", whereas
+                 sync-monorepo.sh --add refuses an unresolvable name outright.
+                 The sync is the gate that refuses; this one reports.
   --fix          Show what needs to be fixed (does not auto-fix)
   --json         Machine-readable JSON output
   -h, --help     Show this help
@@ -102,9 +106,13 @@ if [[ -n "$ADD_SKILLS" ]]; then
   # The emptiness test is on the ADD-CONTRIBUTED names, not on the union. A
   # union test looks equivalent and is not: `--add ,` reduces to blank lines,
   # the union is still non-empty because the monorepo scan filled it, and the
-  # run would silently degrade to "no extra skills" while reporting success —
-  # the same quiet no-op shape sync-monorepo.sh already refuses by name for
-  # this exact argument. Caught in this script's own first draft.
+  # run would silently degrade to "no extra skills" while reporting success.
+  # Caught in this script's own first draft.
+  #
+  # An earlier version of this comment said sync-monorepo.sh "already refuses
+  # by name for this exact argument". It did not — it had the union bug too,
+  # and refused `--add ,` only against an EMPTY monorepo, where nothing was at
+  # stake. Both sides now test the add-contributed names.
   ADD_SPLIT=$(printf '%s\n' "$ADD_SKILLS" | tr ',' '\n' | grep -v '^$' || true)
   if [[ -z "$ADD_SPLIT" ]]; then
     echo "Error: --add produced no skill names from: '$ADD_SKILLS'" >&2

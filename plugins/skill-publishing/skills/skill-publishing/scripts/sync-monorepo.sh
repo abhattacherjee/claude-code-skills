@@ -279,9 +279,17 @@ discover_skills() {
     # The trailing `grep -v '^$'` drops blank lines, which is also what's left
     # when ADD_SKILL is itself nothing but separators (e.g. `--add ,`): grep has
     # nothing to match, exits 1, and under `set -e` that killed the run with
-    # rc=1 and empty stderr — no explanation. Capture the combined list first
-    # and, if it comes back empty, fail loudly and explain why instead of
-    # letting grep's exit status propagate as an unexplained abort.
+    # rc=1 and empty stderr — no explanation. So the result is captured first
+    # and checked before use.
+    #
+    # The check is on the ADD-CONTRIBUTED names, not on the union. That
+    # distinction is the whole guard: an earlier version tested the union, which
+    # is only empty when the monorepo is ALSO empty. Against a POPULATED
+    # monorepo `--add ,` therefore contributed nothing, left the union non-empty
+    # via $existing, and the run completed at rc=0 with the next-steps banner —
+    # the operator asked to add a skill, none was added, and the run reported
+    # success. Measured: rc=0 on a populated monorepo, rc=1 on an empty one, so
+    # the guard fired only in the case where nothing was at stake.
     #
     # The machine-discovered list stays NEWLINE-separated end to end; only the
     # user-typed $ADD_SKILL is comma-split. It used to be joined with
@@ -295,13 +303,14 @@ discover_skills() {
     # it checks only $ADD_SKILL-contributed names and trusts $existing by
     # construction, which is correct, because $existing came through
     # filter_skill_candidates() and was intact until this join mangled it.
-    local combined
-    combined=$(printf '%s\n%s\n' "$existing" "$(printf '%s\n' "$ADD_SKILL" | tr ',' '\n')" \
-                 | sort -u | grep -v '^$' || true)
-    if [[ -z "$combined" ]]; then
+    local add_split
+    add_split=$(printf '%s\n' "$ADD_SKILL" | tr ',' '\n' | grep -v '^$' || true)
+    if [[ -z "$add_split" ]]; then
       echo "Error: --add produced no skill names from: '$ADD_SKILL'" >&2
       exit 1
     fi
+    local combined
+    combined=$(printf '%s\n%s\n' "$existing" "$add_split" | sort -u | grep -v '^$' || true)
 
     # Every name --add contributes must resolve to a real SKILL.md before the
     # run is allowed to regenerate anything (closes #85; same shape as #80).

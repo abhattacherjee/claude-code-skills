@@ -78,7 +78,7 @@ set -euo pipefail
 #      regenerate a catalogue describing a plugin it could not build.
 #
 # The whole run is hermetic: 18 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 33 throwaway monorepos, the syncs
+# that is deliberately never a SKILLS_HOME, 34 throwaway monorepos, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
@@ -1245,6 +1245,37 @@ ADDCOMMA_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMA_FIXTURE" "$ADDCOMMA_STDOUT_LOG" "$ADDCOMMA_STDERR_LOG" --add , || ADDCOMMA_RC=$?
 ADDCOMMA_STDERR="$(cat "$ADDCOMMA_STDERR_LOG")"
 
+# Run 7b: the SAME argument against a POPULATED monorepo, which is the half the
+# fixture above structurally cannot reach — and the half that was broken.
+#
+# MONOREPO_ADDCOMMA_FIXTURE is created bare, so `--add ,` there leaves the
+# combined list empty and the guard fires. The guard used to test emptiness on
+# the UNION, which is empty only when the monorepo is also empty: against a
+# populated one, $existing kept the union non-empty, `--add ,` contributed
+# nothing, and the run completed at rc=0 with the next-steps banner — the
+# operator asked to add a skill, none was added, success reported. Measured
+# before the fix: rc=0 populated, rc=1 empty.
+#
+# The fixture was the root cause, not the guard. The existing assertion looked
+# like coverage of `--add ,` while exercising only the case that already worked,
+# which is why the bug survived into the commit that fixed its twin in
+# validate-pre-sync.sh. A second, populated fixture is the fix; asserting harder
+# against the bare one could not have caught it.
+MONOREPO_ADDCOMMAPOP_FIXTURE="$SCRATCH_DIR/monorepo-addcomma-populated"
+mkdir -p "$MONOREPO_ADDCOMMAPOP_FIXTURE"
+ADDCOMMAPOP_SEED_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMAPOP_FIXTURE" \
+    "$SCRATCH_DIR/addcommapop-seed.stdout" "$SCRATCH_DIR/addcommapop-seed.stderr" \
+    --add demo-skill || ADDCOMMAPOP_SEED_RC=$?
+ADDCOMMAPOP_README_BEFORE="$(cat "$MONOREPO_ADDCOMMAPOP_FIXTURE/README.md" 2>/dev/null || true)"
+
+ADDCOMMAPOP_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMAPOP_FIXTURE" \
+    "$SCRATCH_DIR/addcommapop.stdout" "$SCRATCH_DIR/addcommapop.stderr" \
+    --add , || ADDCOMMAPOP_RC=$?
+ADDCOMMAPOP_STDOUT="$(cat "$SCRATCH_DIR/addcommapop.stdout")"
+ADDCOMMAPOP_STDERR="$(cat "$SCRATCH_DIR/addcommapop.stderr")"
+
 # --add and --skills together: they're parsed independently with no mutual
 # exclusion in the argument loop, and discover_skills() returns from the
 # --add branch without ever reading SKILLS_LIST — but the #80 post-loop guard
@@ -2022,6 +2053,27 @@ assert_eq "--add , fails with a deliberate, explained exit rather than an unexpl
     "1" "$ADDCOMMA_RC"
 assert_contains "--add , explains itself on stderr, naming the offending argument" \
     "Error: --add produced no skill names from: ','" "$ADDCOMMA_STDERR"
+
+# --- The same argument against a POPULATED monorepo (run 7b). The two
+# assertions above cannot reach this: their fixture is bare, so the union is
+# empty and the old union-based guard fired for the wrong reason. Verified red
+# against that guard — rc=0, "Sync complete. 1 skills synced", the next-steps
+# banner, and no error at all, because $existing kept the union non-empty while
+# `--add ,` contributed nothing. The operator asked to add a skill, none was
+# added, and the run reported success. ---
+assert_eq "control: the populated fixture's seed --add really did publish a catalogue" \
+    "0" "$ADDCOMMAPOP_SEED_RC"
+assert_eq "…with a row to protect" \
+    "1" "$(skill_catalog_row_count "$MONOREPO_ADDCOMMAPOP_FIXTURE/README.md")"
+assert_eq "--add , against a POPULATED monorepo refuses too, not just an empty one" \
+    "1" "$ADDCOMMAPOP_RC"
+assert_contains "…naming the offending argument there as well" \
+    "Error: --add produced no skill names from: ','" "$ADDCOMMAPOP_STDERR"
+assert_not_contains "…and never claiming the sync completed" \
+    "Sync complete." "$ADDCOMMAPOP_STDOUT"
+assert_eq "…leaving the published catalogue byte-identical" \
+    "$ADDCOMMAPOP_README_BEFORE" \
+    "$(cat "$MONOREPO_ADDCOMMAPOP_FIXTURE/README.md" 2>/dev/null || true)"
 
 # ============================================================
 # --add and --skills together must be rejected, with the right diagnosis

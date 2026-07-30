@@ -335,6 +335,27 @@ from those paths needs re-checking before upgrading.
   user-typed names and trusts the discovered list, correctly, since that list was intact
   until the join mangled it. Only the user-typed value is comma-split now. (#81)
 
+- **The `--add ,` guard tested emptiness on the UNION, so it fired only when the monorepo
+  was ALSO empty.** Against a populated monorepo, `$existing` kept the union non-empty,
+  `--add ,` contributed nothing, and the run completed at **rc=0 with the next-steps
+  banner** — the operator asked to add a skill, none was added, success reported. Measured:
+  rc=0 populated, rc=1 empty, so the guard fired only where nothing was at stake. Both
+  `sync-monorepo.sh` and `validate-pre-sync.sh` now test the **add-contributed** names.
+
+  The fixture was the root cause, not the guard: `MONOREPO_ADDCOMMA_FIXTURE` is created
+  bare, so the existing `--add ,` assertion looked like coverage while exercising only the
+  half that already worked. That is why the bug survived into the commit that fixed its
+  twin on the presync side — and why the fix is a second, POPULATED fixture rather than a
+  stricter assertion against the bare one. Two comments that claimed
+  `sync-monorepo.sh` "already refuses by name for this exact argument" are corrected; it
+  did not. (#81)
+
+- `validate-pre-sync.sh --add` matches `sync-monorepo.sh --add`'s skill SET, not its
+  strictness: an unresolvable name is announced as a SKIP here and the run can still report
+  "Safe to sync", whereas the sync refuses outright. Deliberate — the sync is the gate that
+  refuses, this one reports — but the `--help` text claimed a plain "mirrors", which
+  overstated it. Now says which half it mirrors. (#78)
+
 - `validate-pre-sync.sh` printed its report with `printf "$RESULTS"`, treating accumulated
   DATA as a format string: a directory named `pct%s-skill` was reported as `pct-skill`, so
   the operator is told a name that is not on disk. Pre-existing, but #78 tripled what flows
