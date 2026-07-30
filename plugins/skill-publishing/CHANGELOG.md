@@ -286,6 +286,12 @@ from those paths needs re-checking before upgrading.
   would not "publish an empty/partial catalogue", which was true only of the empty half.
   Use `--add` to introduce one skill without disturbing the rest. (#80)
 
+- `SKILL.md` never mentioned that `--add` and `--skills` are now **mutually exclusive**,
+  though `--help` did. That combination is rejected at parse time with exit 1 rather than
+  one flag silently winning — a user-visible contract change introduced by this batch, and
+  the same class of doc gap as the exit-code and manifest-shape ones closed earlier here.
+  Documented in the sentence users actually skim. (#80)
+
 - **`SKILL.md`'s Quick Reference now states the `--skills`/`--add` asymmetry rather than
   asserting parity.** The fix for the "partial catalogue" overclaim above introduced a
   different false claim in its place — "both refuse an unresolvable name rather than

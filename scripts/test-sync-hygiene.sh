@@ -3676,14 +3676,14 @@ assert_not_contains "…and no \"Sync complete\" line claiming the run succeeded
 # with an unreadable skills[], both are false: no build was attempted (the
 # failure was a READ) and --dry-run wrote nothing at all. In a change set whose
 # theme is that a message must not claim more than happened, that one did.
-BAREPUB_DRYRUN_RC=0
+BADMANIFEST_DRYRUN_RC=0
 run_sync "$SKILLS_HOME_BADMANIFEST_FIXTURE" "$MONOREPO_BADMANIFEST_FIXTURE" \
     "$SCRATCH_DIR/dryrun-stdout.log" "$SCRATCH_DIR/dryrun-stderr.log" \
-    --dry-run || BAREPUB_DRYRUN_RC=$?
+    --dry-run || BADMANIFEST_DRYRUN_RC=$?
 DRYRUN_STDERR="$(cat "$SCRATCH_DIR/dryrun-stderr.log")"
 
 assert_eq "--dry-run over an unreadable manifest still refuses (the read happens either way)" \
-    "1" "$BAREPUB_DRYRUN_RC"
+    "1" "$BADMANIFEST_DRYRUN_RC"
 assert_contains "…saying plainly that nothing was written" \
     "Nothing was written — this was a --dry-run." "$DRYRUN_STDERR"
 assert_not_contains "…and not repeating the real run's \"already written\" claim" \
