@@ -368,6 +368,13 @@ PREPARE_OUT_DIR="$SCRATCH_DIR/prepare-out"
 # the MKTEMP_PARENT probe below exists for).
 PREPARE_TMPDIR="$SCRATCH_DIR/prepare-tmpdir"
 
+# A TMPDIR that cannot hold a file, used to prove the location above is actually
+# honoured. A regular file rather than a chmod 555 directory: mode bits do not
+# constrain root, and some CI containers run as root, where a permissions-based
+# injection would silently stop failing and the assertion would go red for the
+# wrong reason. ENOTDIR constrains everyone.
+PREPARE_BAD_TMPDIR="$SCRATCH_DIR/prepare-tmpdir-not-a-directory"
+
 # The source path the broken manifest names. Absolute, so resolve_source_path
 # returns it untouched and the error text is fixed rather than carrying this
 # run's scratch path — the assertion below can then match the whole line.
@@ -881,7 +888,7 @@ EOF
 # Sync invocations
 # ============================================================
 #
-# Fourteen sync runs, all from the same throwaway cwd, followed by five direct
+# Fourteen sync runs, all from the same throwaway cwd, followed by six direct
 # prepare-plugin.sh invocations:
 #   1. plain sync of monorepo/            — the main hygiene surface
 #   2. --add added-skill on monorepo-add/ — the SECOND filter site (line ~197)
@@ -1211,15 +1218,18 @@ snapshot_mktemp_parent > "$TMP_AFTER"
 # regardless of cause, so a sync could not tell "rejected a bare command entry"
 # from "could not find a skill source". TMPDIR is redirected into a directory
 # this harness owns so the normalised-manifest temp file's cleanup is assertable.
+# $4/$5 override TMPDIR and the output directory; both default to the ordinary
+# ones. Only the unusable-TMPDIR run below passes them.
 run_prepare() {
     local fixture="$1" stdout_log="$2" stderr_log="$3"
+    local tmpdir="${4:-$PREPARE_TMPDIR}" outdir="${5:-$PREPARE_OUT_DIR/$fixture}"
     local rc=0
     (
         cd "$RUN_CWD"
         PATH="$GH_SHIM_DIR:$PATH" \
-        TMPDIR="$PREPARE_TMPDIR" \
+        TMPDIR="$tmpdir" \
             "$PREPARE_SCRIPT" \
-                --output-dir "$PREPARE_OUT_DIR/$fixture" \
+                --output-dir "$outdir" \
                 --github-user harness-fixture-user \
                 "$PREPARE_FIXTURE_DIR/$fixture/plugin-manifest.json"
     ) >"$stdout_log" 2>"$stderr_log" || rc=$?
@@ -1245,7 +1255,20 @@ PREPARE_BAREAGENT_STDERR="$(cat "$SCRATCH_DIR/prep-bareagent.stderr")"
 PREPARE_OBJENTRY_RC=0
 run_prepare objentry-plugin "$SCRATCH_DIR/prep-objentry.stdout" "$SCRATCH_DIR/prep-objentry.stderr" || PREPARE_OBJENTRY_RC=$?
 
-# Counted after every invocation above, including the two that exit non-zero:
+# The same manifest that just built cleanly, re-run with TMPDIR pointed at a
+# regular file. Reusing objentry-plugin is the point: it is known-good one line
+# above, so the only thing that can make this run fail is the TMPDIR itself.
+# Its output directory is a path nothing else uses, so "never created" is
+# checkable — prepare-plugin.sh's mktemp runs before its `rm -rf "$OUTPUT_DIR"`,
+# and a failure there must not have got as far as touching the output.
+printf 'Not a directory. TMPDIR is pointed here to make mktemp fail.\n' > "$PREPARE_BAD_TMPDIR"
+PREPARE_BADTMP_RC=0
+run_prepare objentry-plugin "$SCRATCH_DIR/prep-badtmp.stdout" "$SCRATCH_DIR/prep-badtmp.stderr" \
+    "$PREPARE_BAD_TMPDIR" "$PREPARE_OUT_DIR/badtmpdir-run" || PREPARE_BADTMP_RC=$?
+PREPARE_BADTMP_STDERR="$(cat "$SCRATCH_DIR/prep-badtmp.stderr")"
+PREPARE_BADTMP_OUTPUT_DIR="$([[ -e "$PREPARE_OUT_DIR/badtmpdir-run" ]] && echo PRESENT || echo ABSENT)"
+
+# Counted after every invocation above, including the three that exit non-zero:
 # the EXIT trap that removes the normalised manifest has to fire on the failure
 # paths too, and a leaked file there is exactly what `rm -r` (no -f) would also
 # have turned into a rewritten exit status.
@@ -1831,14 +1854,14 @@ assert_contains "the relative source resolved against the original manifest's di
 # nothing; both are refused rather than guessed at.
 assert_eq "a bare string in commands[] is refused" "1" "$PREPARE_BARECMD_RC"
 assert_contains "…with a message naming the offending entry" \
-    "ERROR: commands entry must be an object with 'name' and 'source', not a bare string: bare-command-entry" \
+    "ERROR: command entry must be an object with 'name' and 'source', not a bare string: bare-command-entry" \
     "$PREPARE_BARECMD_STDERR"
 assert_contains "…and the manifest the caller actually named, not the temp copy" \
     "$PREPARE_FIXTURE_DIR/barecmd-plugin/plugin-manifest.json" "$PREPARE_BARECMD_STDERR"
 
 assert_eq "a bare string in agents[] is refused" "1" "$PREPARE_BAREAGENT_RC"
 assert_contains "…with a message naming the offending entry" \
-    "ERROR: agents entry must be an object with 'name' and 'source', not a bare string: bare-agent-entry" \
+    "ERROR: agent entry must be an object with 'name' and 'source', not a bare string: bare-agent-entry" \
     "$PREPARE_BAREAGENT_STDERR"
 
 # Positive control for that guard: object-form commands[] and agents[] must
@@ -1851,11 +1874,42 @@ assert_file_exists "positive control: an object-form command is still copied" \
 assert_file_exists "positive control: an object-form agent is still copied" \
     "$PREPARE_OUT_DIR/objentry-plugin/agents/fixture-agent.md"
 
-# The normalised manifest is a temp file; its EXIT trap has to remove it on
-# every path, including the two refusals above. `rm -rf` rather than `rm -r`
-# there is load-bearing for a second reason this cannot see — under `set -e` a
-# trap body returning non-zero rewrites the script's exit status — but a leak
-# here is the visible half.
+# --- The normalised manifest's temp file: created where we think, then removed ---
+#
+# These two assertions only mean something together. A leftover count of 0 on
+# its own is satisfied identically by "created and cleaned up" and by "never
+# created there at all" — and "never created there" is not hypothetical: it is
+# what a bare `mktemp` produces on macOS, where BSD mktemp ignores TMPDIR unless
+# the template says otherwise. So the location has to be pinned first.
+#
+# Pinned by pointing TMPDIR at something no file can be created inside and
+# requiring the run to die there. mktemp's own message carries the path, which
+# is what makes this checkable without prepare-plugin.sh growing a diagnostic
+# it would not otherwise need.
+#
+# Honest limit: this discriminates on BSD mktemp (macOS), where a bare `mktemp`
+# would ignore this TMPDIR and succeed, turning the assertion red. On GNU mktemp
+# (CI) both forms honour TMPDIR, so both fail and the assertion cannot tell them
+# apart — it still cannot pass falsely there, it just stops being a tripwire for
+# that particular simplification. The leak direction below is measured by
+# mutation instead: deleting prepare-plugin.sh's EXIT trap takes the count from
+# 0 to 5, which is also a second, platform-independent proof that the file is
+# being created in $PREPARE_TMPDIR.
+assert_eq "an unusable TMPDIR stops the run rather than relocating the temp file" \
+    "1" "$PREPARE_BADTMP_RC"
+assert_contains "…and mktemp's failure names the TMPDIR that was honoured" \
+    "$PREPARE_BAD_TMPDIR" "$PREPARE_BADTMP_STDERR"
+assert_eq "…before any output directory is created" \
+    "ABSENT" "$PREPARE_BADTMP_OUTPUT_DIR"
+
+# Positive control for the three above: the same manifest, with an ordinary
+# TMPDIR, builds cleanly (asserted by PREPARE_OBJENTRY_RC and the two copied
+# files above). Without that pairing, a prepare-plugin.sh that failed on every
+# TMPDIR would satisfy all three.
+#
+# `rm -rf` rather than `rm -r` in the trap is load-bearing for a second reason
+# this count cannot see — under `set -e` a trap body returning non-zero rewrites
+# the script's exit status — verified separately rather than asserted here.
 assert_eq "prepare-plugin.sh leaves no normalised-manifest temp file behind" \
     "0" "$PREPARE_TMPDIR_LEFTOVERS"
 

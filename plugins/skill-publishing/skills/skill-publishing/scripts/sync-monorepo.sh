@@ -57,6 +57,14 @@ Exit status:
      deliberately left un-regenerated rather than describing an unbuilt plugin)
   3  completed, but skills were refused by the reversion guard
 
+  1 wins over 3: a run that both refused a skill and failed a build stops at the
+  build failure, so the end-of-run REFUSED summary never prints — the refusal is
+  still reported, but only as an inline line earlier in the log.
+
+  --dry-run cannot predict a 1 from a failed build. Plugins are not assembled at
+  all under --dry-run, so a broken manifest previews as a clean plan and only
+  fails on the real run. It does still predict a 3.
+
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
   sync-monorepo.sh ~/dev/claude-code-skills

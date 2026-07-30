@@ -141,7 +141,7 @@ fi
 for _ARRAY_KEY in commands agents; do
   _BARE_ENTRIES=$(manifest_bare_entries "$MANIFEST_FILE" "$_ARRAY_KEY")
   if [[ -n "$_BARE_ENTRIES" ]]; then
-    echo "  ERROR: $_ARRAY_KEY entry must be an object with 'name' and 'source', not a bare string: $_BARE_ENTRIES" >&2
+    echo "  ERROR: ${_ARRAY_KEY%s} entry must be an object with 'name' and 'source', not a bare string: $_BARE_ENTRIES" >&2
     echo "         in $MANIFEST_SOURCE_PATH" >&2
     exit 1
   fi
