@@ -194,3 +194,51 @@ resolve_source_path() {
     *)  echo "${manifest_dir%/}/$expanded" ;;
   esac
 }
+
+# --- Manifest shape (issue #73) ----------------------------------------------
+#
+# A legacy plugin-manifest.json declares skills as bare strings:
+#     "skills": ["my-skill"]
+# rather than the current object form:
+#     "skills": [{"name": "my-skill", "source": "."}]
+# A bare string means "the skill lives in this manifest's own directory", so
+# {"name": <string>, "source": "."} is the faithful normalisation —
+# resolve_source_path "." "$MANIFEST_DIR" yields the manifest's own directory.
+#
+# Bare strings are normalisable in skills[] ONLY. A skill's source is a
+# directory, so "." has a meaning there; commands[] and agents[] sources are
+# *files*, for which there is no defensible default. Callers reject a bare
+# string in those rather than guessing — see prepare-plugin.sh.
+
+# Write a shape-normalised copy of a manifest.
+#   $1 = source manifest, $2 = destination path (overwritten)
+# Callers point every subsequent `.skills[…]` read at the copy instead of
+# teaching each read site the legacy shape: prepare-plugin.sh has eight such
+# reads, and a fix that converts some of them still dies with
+# `jq: error … Cannot index string with "name"` from whichever it missed.
+#
+# `.skills = ((.skills // []) | map(…))`, deliberately not the terser
+# `(.skills // []) |= map(…)`: the latter is not a valid path expression when
+# `.skills` is absent — jq 1.7.1 fails with "Invalid path expression with
+# result []" — which would turn a manifest declaring no skills at all (legal
+# today: `.skills | length` is 0) into a hard error.
+normalize_manifest() {
+  local src="$1" dst="$2"
+  jq '.skills = ((.skills // []) | map(if type == "string" then {name: ., source: "."} else . end))' \
+    "$src" > "$dst"
+}
+
+# Emit a manifest's skill names, one per line, tolerating the legacy
+# bare-string form. For callers that need only the names and so do not need a
+# normalised copy on disk. Entries with no name are skipped rather than
+# emitting a blank line.
+manifest_skill_names() {
+  jq -r '(.skills // [])[] | (if type == "string" then . else .name end) // empty' "$1"
+}
+
+# Emit the bare-string entries of manifest $1's array $2 ("commands"/"agents"),
+# comma-joined; empty when the array is absent or fully object-form.
+manifest_bare_entries() {
+  jq -r --arg key "$2" \
+    '[(.[$key] // [])[] | select(type == "string")] | join(", ")' "$1"
+}

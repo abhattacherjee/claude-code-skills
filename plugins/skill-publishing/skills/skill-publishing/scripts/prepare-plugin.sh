@@ -83,6 +83,38 @@ if [[ ! -f "$MANIFEST_FILE" ]]; then
 fi
 MANIFEST_DIR="$(cd "$(dirname "$MANIFEST_FILE")" && pwd)"
 
+# --- Normalise the manifest's shape, once, before anything reads it (#73) ---
+#
+# A legacy manifest declares skills as bare strings ("skills": ["name"]), and
+# every `.skills[…]` read below then dies with
+# `jq: error … Cannot index string with "name"`. There are eight such reads;
+# they are repointed at a normalised copy in one move rather than each being
+# taught the legacy shape, because a fix that converts N-1 of N reproduces the
+# original error from whichever it missed. See normalize_manifest() in _lib.sh.
+#
+# MANIFEST_DIR is captured from the ORIGINAL path above and is deliberately NOT
+# recomputed from the copy: resolve_source_path() resolves every relative
+# "source" against it, and every manifest in use today uses a relative source
+# (most of them "."). Pointing MANIFEST_DIR at the temp copy's directory would
+# break all of them — a far worse regression than the bug being fixed.
+#
+# The ${TMPDIR:-/tmp} template rather than a bare `mktemp`: BSD mktemp on macOS
+# ignores TMPDIR unless the template says otherwise, and an honoured TMPDIR is
+# what lets the regression harness point this at a directory it owns and then
+# assert the file was cleaned up.
+MANIFEST_SOURCE_PATH="$MANIFEST_FILE"
+NORMALIZED_MANIFEST="$(mktemp "${TMPDIR:-/tmp}/plugin-manifest.XXXXXX")"
+# `rm -rf`, not `rm -r`: under `set -e` a trap body that returns non-zero
+# rewrites the script's exit status, and `rm -r` on an already-removed path
+# exits 1. This is the only EXIT trap in this script — extend it rather than
+# replacing it if another cleanup is ever needed.
+trap 'rm -rf "$NORMALIZED_MANIFEST"' EXIT
+normalize_manifest "$MANIFEST_SOURCE_PATH" "$NORMALIZED_MANIFEST"
+# From here on every read goes through the normalised copy, so no read site can
+# be left behind. Diagnostics keep naming $MANIFEST_SOURCE_PATH — the path the
+# caller actually passed.
+MANIFEST_FILE="$NORMALIZED_MANIFEST"
+
 PLUGIN_NAME=$(jq -r '.name // empty' "$MANIFEST_FILE")
 PLUGIN_VERSION=$(jq -r '.version // empty' "$MANIFEST_FILE")
 PLUGIN_DESC=$(jq -r '.description // empty' "$MANIFEST_FILE")
@@ -101,6 +133,19 @@ if [[ -z "$PLUGIN_DESC" ]]; then
   echo "Error: manifest missing required field 'description'" >&2
   exit 1
 fi
+
+# A bare string is only normalisable in skills[] — see _lib.sh. commands[] and
+# agents[] sources are files, so "." would name a directory and mean nothing;
+# refuse rather than guess, with the same error shape as their missing-source
+# checks below.
+for _ARRAY_KEY in commands agents; do
+  _BARE_ENTRIES=$(manifest_bare_entries "$MANIFEST_FILE" "$_ARRAY_KEY")
+  if [[ -n "$_BARE_ENTRIES" ]]; then
+    echo "  ERROR: $_ARRAY_KEY entry must be an object with 'name' and 'source', not a bare string: $_BARE_ENTRIES" >&2
+    echo "         in $MANIFEST_SOURCE_PATH" >&2
+    exit 1
+  fi
+done
 
 # Use manifest author if present, fall back to --author flag
 if [[ -n "$PLUGIN_AUTHOR" ]]; then

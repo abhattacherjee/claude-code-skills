@@ -52,7 +52,10 @@ Reversion guard:
   sync still runs and the script exits 3. Use --force-local to override.
 
 Exit status:
-  0  success   1  usage/setup error   3  completed, but skills were refused
+  0  success
+  1  usage/setup error, or a plugin auto-build failed (the catalogue is then
+     deliberately left un-regenerated rather than describing an unbuilt plugin)
+  3  completed, but skills were refused by the reversion guard
 
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
@@ -511,6 +514,9 @@ discover_plugins() {
 # and synced as a plugin. No --add-plugin needed for known plugins.
 PREPARE_SCRIPT="$SCRIPT_DIR/prepare-plugin.sh"
 AUTO_BUILT_PLUGINS=""
+# Manifests whose auto-build failed. Space-separated, matching AUTO_BUILT_PLUGINS'
+# idiom. Collected across the whole stage and acted on once, after the loop.
+_FAILED_BUILDS=""
 
 if [[ -x "$PREPARE_SCRIPT" ]]; then
   # Auto-built plugins are assembled into a throwaway temp directory, never the
@@ -559,12 +565,22 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     # Skip if --add-plugin targets this same plugin (handled below)
     [[ "$ADD_PLUGIN" == "$_MANIFEST_NAME" ]] && continue
 
+    # One read of this manifest's skill names, shared by the reversion-guard
+    # check immediately below and the drift check after it. manifest_skill_names()
+    # tolerates the legacy bare-string `"skills": ["name"]` form (#73): before it,
+    # both sites' `jq -r '.skills[…].name'` errored into `2>/dev/null` on such a
+    # manifest, so the reversion guard saw no skills to check and the drift check
+    # saw no first skill and never rebuilt the plugin at all.
+    # `|| true` keeps the pre-existing tolerance of an unreadable manifest — the
+    # build below is what reports that, with the child's own parse error.
+    _MANIFEST_SKILL_NAMES=$(manifest_skill_names "$_MANIFEST" 2>/dev/null || true)
+
     # A skill refused by the reversion guard must not be rebuilt into a plugin
     # either: prepare-plugin.sh reads the same stale local source, so the rsync
     # below would revert plugins/<name>/ exactly as the main loop would have.
     if [[ -n "$REFUSED_SKILLS" ]]; then
       _REFUSED_IN_PLUGIN=""
-      for _PLUGIN_SKILL in $(jq -r '.skills[]?.name // empty' "$_MANIFEST" 2>/dev/null); do
+      for _PLUGIN_SKILL in $_MANIFEST_SKILL_NAMES; do
         if skill_refused "$_PLUGIN_SKILL"; then
           _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
         fi
@@ -583,8 +599,11 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     if [[ ! -d "$_PLUGIN_DST/.claude-plugin" ]]; then
       _NEEDS_BUILD=true
     else
-      # Quick drift check: compare SKILL.md versions
-      _FIRST_SKILL=$(jq -r '.skills[0].name // ""' "$_MANIFEST" 2>/dev/null)
+      # Quick drift check: compare SKILL.md versions. First line of the shared
+      # name list above; parameter expansion rather than `| head -1`, which
+      # would put a first-line reader on the far end of a pipe (the EPIPE shape
+      # removed from the CHANGELOG stage below).
+      _FIRST_SKILL="${_MANIFEST_SKILL_NAMES%%$'\n'*}"
       if [[ -n "$_FIRST_SKILL" ]]; then
         _FIRST_SRC_DIR=$(skill_source_dir "$_FIRST_SKILL")
         _SRC_MD="${_FIRST_SRC_DIR:+$_FIRST_SRC_DIR/SKILL.md}"
@@ -642,18 +661,46 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
             echo "  Warning: build produced no plugin at $_BUILD_DIR"
           fi
         else
-          # Surface the child's own diagnosis. Without it the operator gets a
-          # bare "failed" line, an exit status of 0, and no artifact left on
-          # disk to look at — the failure becomes undiagnosable. The exit-0
-          # behaviour itself is deliberate here and tracked separately (#73);
-          # this is only about not destroying the evidence.
-          echo "  Warning: prepare-plugin.sh failed for $_MANIFEST"
+          # A failed build is fatal (#73). Surface the child's own diagnosis
+          # first: with the build stage a mktemp -d that the EXIT trap removes,
+          # it is the only artifact the failure ever produces, and a bare
+          # "failed" line leaves it undiagnosable.
+          #
+          # Recorded rather than exited on right here so a run with several
+          # broken manifests names all of them in one pass instead of one per
+          # re-run. The exit happens at the end of this loop — still ahead of
+          # every stage that regenerates the catalogue.
+          echo "  ERROR: prepare-plugin.sh failed for $_MANIFEST" >&2
           sed 's/^/    | /' "$_BUILD_LOG" >&2
+          _FAILED_BUILDS="${_FAILED_BUILDS:+$_FAILED_BUILDS }$_MANIFEST"
         fi
       fi
       echo ""
     fi
   done
+
+  # A plugin that could not be built must stop the run (#73). Everything after
+  # this point regenerates the monorepo's catalogue — the root README's plugin
+  # table, the CHANGELOG entry and .claude-plugin/marketplace.json — from the
+  # published plugins/ tree. Continuing would publish a catalogue describing a
+  # plugin this run failed to build, at whatever version was already on disk,
+  # and report exit 0 while doing it. That is the "reports success while not
+  # doing its job" shape, and before this it was exactly what happened: the
+  # plugin silently never rebuilt.
+  #
+  # The trade-off is deliberate. Stopping here leaves skills synced but the
+  # README/CHANGELOG/marketplace not regenerated — inconsistent, but loud, fully
+  # git-recoverable, and fixed by re-running after the manifest is corrected.
+  if [[ -n "$_FAILED_BUILDS" ]]; then
+    echo "" >&2
+    echo "Error: plugin build failed, refusing to continue: $_FAILED_BUILDS" >&2
+    echo "       The child's own diagnosis is above. Skills synced before this" >&2
+    echo "       point are already written; the monorepo README, CHANGELOG and" >&2
+    echo "       marketplace catalogue are deliberately NOT regenerated, so they" >&2
+    echo "       cannot come to describe a plugin this run could not build." >&2
+    echo "       Fix the manifest and re-run." >&2
+    exit 1
+  fi
 fi
 
 # Add new plugin from build directory if --add-plugin specified (manual override)

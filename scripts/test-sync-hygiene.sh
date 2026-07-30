@@ -54,18 +54,33 @@ set -euo pipefail
 #      (e.g. "ERROR: skill source not found: …") became the only evidence that
 #      ever existed, and it was the thing being discarded. It is now captured to
 #      a log in the stage root — not inside the build dir, which prepare-plugin.sh
-#      `rm -rf`s on entry — and echoed to stderr on failure. The run still exits
-#      0: that is a separate defect, tracked as #73, deliberately unchanged here.
+#      `rm -rf`s on entry — and echoed to stderr on failure. The run's exit status
+#      on that path was a separate defect, tracked as #73 and closed below.
 #   9. The .gitignore template fix (defect 3) reaches freshly --init-ed monorepos
 #      only. write_file does not overwrite, so an already-published monorepo gets
 #      "SKIP    .gitignore (already exists)" — indistinguishable from "already
 #      correct" — and no signal that it lacks the rule. A non-fatal NOTE now says
 #      so, naming the pattern to add.
 #
-# The whole run is hermetic: three throwaway SKILLS_HOMEs and ten throwaway
-# monorepos are built under mktemp, the syncs are invoked from a throwaway cwd,
-# and `gh` is shimmed off PATH so nothing reaches the network. The live repo is
-# never passed to sync-monorepo.sh.
+#  10. Issue #73, both halves. A legacy manifest declares its skills as bare
+#      strings ("skills": ["name"]) rather than objects, and every one of
+#      prepare-plugin.sh's eight `.skills[…]` reads then died with
+#      `jq: error … Cannot index string with "name"`. The manifest is now
+#      normalised once into a temp copy that every read is pointed at (see
+#      normalize_manifest() in _lib.sh), with MANIFEST_DIR deliberately left
+#      pointing at the ORIGINAL manifest's directory — relative sources resolve
+#      against it, and every manifest in use has one. sync-monorepo.sh read the
+#      same shape at two sites under `2>/dev/null`, so on a legacy manifest its
+#      reversion guard saw no skills and its drift check saw no first skill and
+#      never rebuilt the plugin at all; both now go through
+#      manifest_skill_names(). And the failure itself is now fatal: a sync whose
+#      plugin auto-build fails exits 1 rather than warning and going on to
+#      regenerate a catalogue describing a plugin it could not build.
+#
+# The whole run is hermetic: four throwaway SKILLS_HOMEs, a fixture directory
+# that is deliberately never a SKILLS_HOME, twelve throwaway monorepos, the syncs
+# invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
+# network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
 # Usage:
 #   ./test-sync-hygiene.sh
@@ -100,6 +115,19 @@ if [[ ! -f "$SYNC_SCRIPT" ]]; then
 fi
 if [[ ! -x "$SYNC_SCRIPT" ]]; then
     echo "FATAL: SYNC_SCRIPT is not executable: $SYNC_SCRIPT" >&2
+    exit 1
+fi
+
+# Issue #73's manifest-shape assertions drive prepare-plugin.sh directly rather
+# than through a sync: the shapes under test are its input, and a sync run would
+# only reach them via the auto-build stage, which reports a build failure with
+# one line whatever the cause. Taken from the same directory as SYNC_SCRIPT, not
+# from the repo, so a `SYNC_SCRIPT=/tmp/pre-fix/…` mutation run exercises the
+# matching pre-fix child — the two scripts are edited together and testing a
+# reverted parent against the current child would prove nothing.
+PREPARE_SCRIPT="$(dirname "$SYNC_SCRIPT")/prepare-plugin.sh"
+if [[ ! -x "$PREPARE_SCRIPT" ]]; then
+    echo "FATAL: no executable prepare-plugin.sh beside SYNC_SCRIPT: $PREPARE_SCRIPT" >&2
     exit 1
 fi
 
@@ -314,6 +342,32 @@ RUN_CWD="$SCRATCH_DIR/run-cwd"
 SKILLS_HOME_HOOKS_FIXTURE="$SCRATCH_DIR/skills-home-hooks"
 MONOREPO_HOOKS_FIXTURE="$SCRATCH_DIR/monorepo-hooks"
 
+# Issue #73 (legacy `"skills": ["name"]` manifests). A fourth SKILLS_HOME, for
+# the same reason as the two above — its single manifest would otherwise print
+# into every run that shares a home — holding one legacy-shape plugin driven
+# through three sync runs:
+#   monorepo-legacy/     runs 12 and 13, first build then forced rebuild
+#   monorepo-legacyref/  run 14, the same manifest with its skill refused
+SKILLS_HOME_LEGACY_FIXTURE="$SCRATCH_DIR/skills-home-legacy"
+MONOREPO_LEGACY_FIXTURE="$SCRATCH_DIR/monorepo-legacy"
+MONOREPO_LEGACYREF_FIXTURE="$SCRATCH_DIR/monorepo-legacyref"
+
+# Manifests driven straight into prepare-plugin.sh. Deliberately NOT a
+# SKILLS_HOME: two of them are meant to fail the build, and the auto-build stage
+# scans every manifest under $SKILLS_HOME on every sync, so as a home they would
+# now abort each of the fourteen sync runs above (the failure is fatal as of
+# #73) instead of being read as the isolated inputs they are.
+PREPARE_FIXTURE_DIR="$SCRATCH_DIR/prepare-fixtures"
+PREPARE_OUT_DIR="$SCRATCH_DIR/prepare-out"
+
+# TMPDIR for those invocations, so prepare-plugin.sh's normalised-manifest temp
+# file lands somewhere this harness owns and its cleanup can be asserted rather
+# than assumed. Its `mktemp "${TMPDIR:-/tmp}/plugin-manifest.XXXXXX"` honours
+# TMPDIR by way of the explicit template; a bare `mktemp` on macOS would not
+# (BSD mktemp resolves _CS_DARWIN_USER_TEMP_DIR instead — the same divergence
+# the MKTEMP_PARENT probe below exists for).
+PREPARE_TMPDIR="$SCRATCH_DIR/prepare-tmpdir"
+
 # The source path the broken manifest names. Absolute, so resolve_source_path
 # returns it untouched and the error text is fixed rather than carrying this
 # run's scratch path — the assertion below can then match the whole line.
@@ -351,6 +405,16 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$SKILLS_HOME_HOOKS_FIXTURE/hooks-empty-plugin" \
          "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src" \
          "$MONOREPO_HOOKS_FIXTURE" \
+         "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin" \
+         "$MONOREPO_LEGACY_FIXTURE" \
+         "$MONOREPO_LEGACYREF_FIXTURE/legacy-sync-plugin" \
+         "$PREPARE_FIXTURE_DIR/legacy-plugin" \
+         "$PREPARE_FIXTURE_DIR/relsource-plugin/nested-src" \
+         "$PREPARE_FIXTURE_DIR/barecmd-plugin" \
+         "$PREPARE_FIXTURE_DIR/bareagent-plugin" \
+         "$PREPARE_FIXTURE_DIR/objentry-plugin" \
+         "$PREPARE_OUT_DIR" \
+         "$PREPARE_TMPDIR" \
          "$RUN_CWD"
 
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
@@ -598,11 +662,227 @@ echo "#!/usr/bin/env bash" > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-s
 echo "# Throwaway fixture hook, present only to prove hooks/ survives the build." \
     >> "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src/pre-tool-use.sh"
 
+# ------------------------------------------------------------------
+# Issue #73 fixtures — legacy `"skills": ["name"]` manifests
+# ------------------------------------------------------------------
+#
+# The skill's directory name matches the name inside skills[]. That is not
+# cosmetic: a bare string carries no source, so it normalises to source "."
+# (the manifest's own directory), and sync-monorepo.sh's drift check separately
+# resolves the same name through skill_source_dir(), which looks the name up as
+# a directory. The one real legacy manifest on this machine
+# (github-release-board-promote) has exactly this shape.
+
+cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
+---
+name: legacy-sync-plugin
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
+version: 0.1.0
+---
+
+# legacy-sync-plugin
+
+Fixture content.
+EOF
+
+cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "legacy-sync-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin declaring its skills in the legacy bare-string form.",
+  "skills": ["legacy-sync-plugin"],
+  "commands": []
+}
+EOF
+
+# Run 14's monorepo holds a copy of the same skill at a version far ahead of the
+# local source, which is the only thing that makes the reversion guard refuse it
+# — and a refusal is the only way to reach the auto-build stage's
+# `.skills[]?.name` read, the second of sync-monorepo.sh's two legacy-blind
+# sites. Without it that site is never executed by this harness at all.
+cat > "$MONOREPO_LEGACYREF_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
+---
+name: legacy-sync-plugin
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
+version: 9.9.9
+---
+
+# legacy-sync-plugin
+
+In-repo copy, deliberately far newer than the local source so the reversion
+guard refuses it.
+EOF
+
+# ------------------------------------------------------------------
+# Issue #73 fixtures — manifests driven straight into prepare-plugin.sh
+# ------------------------------------------------------------------
+#
+# legacy-plugin     bare-string skills[], and NO CHANGELOG.md beside it, so the
+#                   build takes the generated-template branch — the only branch
+#                   that reaches the `.skills[$i].name` read inside the CHANGELOG
+#                   stage. With a CHANGELOG present that read is never executed
+#                   and a fix that missed it would still look green here.
+# relsource-plugin  object-form skills[] with a *relative* source that is not
+#                   ".": the regression guard for MANIFEST_DIR. If MANIFEST_DIR
+#                   ever follows the normalised temp copy instead of the original
+#                   manifest, "./nested-src" resolves under the temp directory
+#                   and this build fails outright.
+# barecmd-plugin    a bare string in commands[] — not normalisable, since a
+#                   command's source is a file and "." would name a directory.
+# bareagent-plugin  the same for agents[]. Both halves of the guard are checked;
+#                   one alone is an N-1-of-N of the guard's own two branches.
+# objentry-plugin   the positive control for that guard: object-form commands[]
+#                   AND agents[] must still build. Without it, a "guard" that
+#                   rejected every commands[]/agents[] entry would pass both
+#                   rejection assertions.
+
+cat > "$PREPARE_FIXTURE_DIR/legacy-plugin/SKILL.md" <<'EOF'
+---
+name: legacy-plugin
+description: LEGACY-SOURCE-MARKER — throwaway fixture skill reached only through a legacy bare-string skills[] entry.
+version: 0.1.0
+---
+
+# legacy-plugin
+
+Fixture content.
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/legacy-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "legacy-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin declaring its skills in the legacy bare-string form.",
+  "skills": ["legacy-plugin"],
+  "commands": []
+}
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/relsource-plugin/nested-src/SKILL.md" <<'EOF'
+---
+name: relsource-skill
+description: RELSOURCE-MARKER — throwaway fixture skill reached only through a relative source that is not ".".
+version: 0.1.0
+---
+
+# relsource-skill
+
+Fixture content.
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/relsource-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "relsource-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin whose only skill source is a relative subdirectory.",
+  "skills": [
+    { "name": "relsource-skill", "source": "./nested-src" }
+  ],
+  "commands": []
+}
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/barecmd-plugin/SKILL.md" <<'EOF'
+---
+name: barecmd-plugin
+description: Throwaway fixture skill backing the bare-string commands[] manifest.
+version: 0.1.0
+---
+
+# barecmd-plugin
+
+Fixture content.
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/barecmd-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "barecmd-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin with a bare string in commands[], which is not normalisable.",
+  "skills": [
+    { "name": "barecmd-plugin", "source": "." }
+  ],
+  "commands": ["bare-command-entry"]
+}
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/bareagent-plugin/SKILL.md" <<'EOF'
+---
+name: bareagent-plugin
+description: Throwaway fixture skill backing the bare-string agents[] manifest.
+version: 0.1.0
+---
+
+# bareagent-plugin
+
+Fixture content.
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/bareagent-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "bareagent-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin with a bare string in agents[], which is not normalisable.",
+  "skills": [
+    { "name": "bareagent-plugin", "source": "." }
+  ],
+  "commands": [],
+  "agents": ["bare-agent-entry"]
+}
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/SKILL.md" <<'EOF'
+---
+name: objentry-plugin
+description: Throwaway fixture skill backing the object-form commands[]/agents[] positive control.
+version: 0.1.0
+---
+
+# objentry-plugin
+
+Fixture content.
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-command.md" <<'EOF'
+---
+description: Throwaway fixture command, object-form.
+---
+
+Fixture command body.
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-agent.md" <<'EOF'
+---
+name: fixture-agent
+description: Throwaway fixture agent, object-form.
+---
+
+Fixture agent body.
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "objentry-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin whose commands[] and agents[] are object-form and must still build.",
+  "skills": [
+    { "name": "objentry-plugin", "source": "." }
+  ],
+  "commands": [
+    { "name": "fixture-command", "source": "./fixture-command.md" }
+  ],
+  "agents": [
+    { "name": "fixture-agent", "source": "./fixture-agent.md" }
+  ]
+}
+EOF
+
 # ============================================================
 # Sync invocations
 # ============================================================
 #
-# Eleven runs, all from the same throwaway cwd:
+# Fourteen sync runs, all from the same throwaway cwd, followed by five direct
+# prepare-plugin.sh invocations:
 #   1. plain sync of monorepo/            — the main hygiene surface
 #   2. --add added-skill on monorepo-add/ — the SECOND filter site (line ~197)
 #   3. plain sync of monorepo-empty/      — the empty-skill-list branch
@@ -616,6 +896,12 @@ echo "# Throwaway fixture hook, present only to prove hooks/ survives the build.
 #  11. second sync of monorepo-hooks/     — issue #77's error path, after the hooks source
 #                                           is removed and the fixture's SKILL.md is bumped
 #                                           to force a rebuild attempt
+#  12. plain sync of monorepo-legacy/     — issue #73: a legacy bare-string manifest's
+#                                           first build, through a sync
+#  13. second sync of monorepo-legacy/    — the same manifest once published, so the
+#                                           auto-build stage's drift read is reached
+#  14. plain sync of monorepo-legacyref/  — the same manifest with its skill refused, so
+#                                           the reversion-guard read is reached
 #
 # Run 2 exists because sync-monorepo.sh filters at two independent sites and a
 # single no-`--add` invocation executes only one of them. Reverting the filter
@@ -627,7 +913,7 @@ echo "# Throwaway fixture hook, present only to prove hooks/ survives the build.
 # of the `echo`-eats-`-n` defect. Reverting any single one leaves the other two
 # green — verified, one revert at a time.
 #
-# Run 7 is the only one expected to exit non-zero. An ADD_SKILL that reduces to
+# Runs 7, 8, 11 and 14 are the ones expected to exit non-zero. An ADD_SKILL that reduces to
 # nothing after comma-splitting (e.g. the literal argument `,`) used to leave
 # the discovery pipeline's trailing `grep -v '^$'` with no line to match: it
 # exited 1 and `set -e` killed the run with rc=1 and empty stderr — no
@@ -766,8 +1052,9 @@ run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMA_FIXTURE" "$ADDCOMMA_STDOUT_L
 ADDCOMMA_STDERR="$(cat "$ADDCOMMA_STDERR_LOG")"
 
 # Run 8: the only run pointed at the second SKILLS_HOME, whose single manifest
-# names a skill source that does not exist. prepare-plugin.sh exits 1; the sync
-# warns and carries on to a clean exit 0 (that part is #73's, not this harness's).
+# names a skill source that does not exist. prepare-plugin.sh exits 1, and as of
+# #73 the sync surfaces the child's diagnosis and then exits 1 itself rather than
+# carrying on to regenerate a catalogue describing a plugin it could not build.
 BUILDFAIL_STDOUT_LOG="$SCRATCH_DIR/buildfail.stdout"
 BUILDFAIL_STDERR_LOG="$SCRATCH_DIR/buildfail.stderr"
 BUILDFAIL_RC=0
@@ -826,10 +1113,12 @@ version: 0.2.0
 Fixture content, version-bumped to force run 11's rebuild attempt.
 EOF
 
-# Run 11: the forced rebuild, with hooks-src gone. Expected to exit 0 — the
-# sync layer's existing "warn and keep going" handling for a failed auto-build
-# (proven by run 8's BUILDFAIL fixture) is deliberately left alone here; #73's
-# hard-failure behaviour is out of scope for this task.
+# Run 11: the forced rebuild, with hooks-src gone. Expected to exit 1: the child
+# refuses (#77) and the sync layer treats a failed auto-build as fatal (#73). It
+# is a second, independent path to that exit status from run 8's — run 8 fails on
+# a missing skill source before the plugin exists at all, run 11 on a missing
+# hooks source while a published copy is already on disk — so the two rc
+# assertions are not duplicates of each other.
 HOOKS2_STDOUT_LOG="$SCRATCH_DIR/hooks2.stdout"
 HOOKS2_STDERR_LOG="$SCRATCH_DIR/hooks2.stderr"
 HOOKS2_RC=0
@@ -837,7 +1126,130 @@ run_sync "$SKILLS_HOME_HOOKS_FIXTURE" "$MONOREPO_HOOKS_FIXTURE" "$HOOKS2_STDOUT_
 HOOKS2_STDOUT="$(cat "$HOOKS2_STDOUT_LOG")"
 HOOKS2_STDERR="$(cat "$HOOKS2_STDERR_LOG")"
 
+# Run 12: the legacy manifest's first build. Nothing is published yet, so the
+# auto-build stage takes its "plugin does not exist" branch and never consults
+# the drift check — this run proves prepare-plugin.sh can assemble a legacy
+# manifest at all, end to end through a sync.
+LEGACY_STDOUT_LOG="$SCRATCH_DIR/legacy.stdout"
+LEGACY_STDERR_LOG="$SCRATCH_DIR/legacy.stderr"
+LEGACY_RC=0
+run_sync "$SKILLS_HOME_LEGACY_FIXTURE" "$MONOREPO_LEGACY_FIXTURE" "$LEGACY_STDOUT_LOG" "$LEGACY_STDERR_LOG" || LEGACY_RC=$?
+LEGACY_STDOUT="$(cat "$LEGACY_STDOUT_LOG")"
+
+# Snapshotted here, before run 13 overwrites it: only the auto-build stage
+# writes .claude-plugin/plugin.json, so its version is the one artifact that
+# distinguishes "this plugin was rebuilt" from "the resync stage patched its
+# SKILL.md" — and the resync stage would happily do the latter on run 13
+# regardless of whether the drift check ever fired.
+LEGACY_PLUGIN_JSON_AFTER_RUN12="$(cat "$MONOREPO_LEGACY_FIXTURE/plugins/legacy-sync-plugin/.claude-plugin/plugin.json" 2>/dev/null || true)"
+
+# Mutate between runs 12 and 13: the SKILL.md version drives the drift check
+# (forward, so the reversion guard cannot fire), and the manifest is what the
+# rebuild — and only the rebuild — writes into plugin.json.
+#
+# The manifest's DESCRIPTION changes too, and it has to change *length*. The
+# auto-build publishes through `rsync -a --delete`, whose default quick-check
+# skips any file whose size and mtime both match the destination's. Bumping
+# 0.1.0 -> 0.2.0 alone leaves plugin.json byte-for-byte the same size, so when
+# runs 12 and 13 land in the same wall-clock second — measured at 3 of 5 runs —
+# rsync skips it and the published plugin.json keeps run 12's content while the
+# differently-sized SKILL.md beside it updates normally. The assertion below
+# then reads a stale file and fails for a reason that has nothing to do with
+# the drift check it is testing. A length change makes the transfer
+# unconditional. (The underlying rsync behaviour is pre-existing and out of
+# scope here; it only bites two builds inside one second.)
+cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
+---
+name: legacy-sync-plugin
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
+version: 0.2.0
+---
+
+# legacy-sync-plugin
+
+Fixture content, version-bumped to force run 13's rebuild.
+EOF
+
+cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/plugin-manifest.json" <<'EOF'
+{
+  "name": "legacy-sync-plugin",
+  "version": "0.2.0",
+  "description": "Throwaway fixture plugin declaring its skills in the legacy bare-string form, REBUILT-AFTER-DRIFT-MARKER.",
+  "skills": ["legacy-sync-plugin"],
+  "commands": []
+}
+EOF
+
+# Run 13: the same pair again, with the plugin now already published. This is
+# the run that reaches sync-monorepo.sh's own legacy-blind drift read — the one
+# that made the plugin silently never rebuild.
+LEGACY2_STDOUT_LOG="$SCRATCH_DIR/legacy2.stdout"
+LEGACY2_STDERR_LOG="$SCRATCH_DIR/legacy2.stderr"
+LEGACY2_RC=0
+run_sync "$SKILLS_HOME_LEGACY_FIXTURE" "$MONOREPO_LEGACY_FIXTURE" "$LEGACY2_STDOUT_LOG" "$LEGACY2_STDERR_LOG" || LEGACY2_RC=$?
+LEGACY2_STDOUT="$(cat "$LEGACY2_STDOUT_LOG")"
+
+# Run 14: the same legacy manifest against a monorepo holding a far newer copy
+# of its skill, so the reversion guard refuses that skill and the auto-build
+# stage reaches its `.skills[]?.name` read. Expected to exit 3 — a refusal is
+# not a success — which is also why it gets its own monorepo rather than reusing
+# run 12/13's.
+LEGACYREF_STDOUT_LOG="$SCRATCH_DIR/legacyref.stdout"
+LEGACYREF_STDERR_LOG="$SCRATCH_DIR/legacyref.stderr"
+LEGACYREF_RC=0
+run_sync "$SKILLS_HOME_LEGACY_FIXTURE" "$MONOREPO_LEGACYREF_FIXTURE" "$LEGACYREF_STDOUT_LOG" "$LEGACYREF_STDERR_LOG" || LEGACYREF_RC=$?
+LEGACYREF_STDOUT="$(cat "$LEGACYREF_STDOUT_LOG")"
+
 snapshot_mktemp_parent > "$TMP_AFTER"
+
+# ============================================================
+# prepare-plugin.sh invocations (issue #73's manifest shapes)
+# ============================================================
+#
+# Driven directly, not through a sync: these are shapes of prepare-plugin.sh's
+# input, and the auto-build stage collapses every build failure into one line
+# regardless of cause, so a sync could not tell "rejected a bare command entry"
+# from "could not find a skill source". TMPDIR is redirected into a directory
+# this harness owns so the normalised-manifest temp file's cleanup is assertable.
+run_prepare() {
+    local fixture="$1" stdout_log="$2" stderr_log="$3"
+    local rc=0
+    (
+        cd "$RUN_CWD"
+        PATH="$GH_SHIM_DIR:$PATH" \
+        TMPDIR="$PREPARE_TMPDIR" \
+            "$PREPARE_SCRIPT" \
+                --output-dir "$PREPARE_OUT_DIR/$fixture" \
+                --github-user harness-fixture-user \
+                "$PREPARE_FIXTURE_DIR/$fixture/plugin-manifest.json"
+    ) >"$stdout_log" 2>"$stderr_log" || rc=$?
+    return "$rc"
+}
+
+PREPARE_LEGACY_RC=0
+run_prepare legacy-plugin "$SCRATCH_DIR/prep-legacy.stdout" "$SCRATCH_DIR/prep-legacy.stderr" || PREPARE_LEGACY_RC=$?
+PREPARE_LEGACY_STDERR="$(cat "$SCRATCH_DIR/prep-legacy.stderr")"
+
+PREPARE_RELSOURCE_RC=0
+run_prepare relsource-plugin "$SCRATCH_DIR/prep-relsource.stdout" "$SCRATCH_DIR/prep-relsource.stderr" || PREPARE_RELSOURCE_RC=$?
+PREPARE_RELSOURCE_STDERR="$(cat "$SCRATCH_DIR/prep-relsource.stderr")"
+
+PREPARE_BARECMD_RC=0
+run_prepare barecmd-plugin "$SCRATCH_DIR/prep-barecmd.stdout" "$SCRATCH_DIR/prep-barecmd.stderr" || PREPARE_BARECMD_RC=$?
+PREPARE_BARECMD_STDERR="$(cat "$SCRATCH_DIR/prep-barecmd.stderr")"
+
+PREPARE_BAREAGENT_RC=0
+run_prepare bareagent-plugin "$SCRATCH_DIR/prep-bareagent.stdout" "$SCRATCH_DIR/prep-bareagent.stderr" || PREPARE_BAREAGENT_RC=$?
+PREPARE_BAREAGENT_STDERR="$(cat "$SCRATCH_DIR/prep-bareagent.stderr")"
+
+PREPARE_OBJENTRY_RC=0
+run_prepare objentry-plugin "$SCRATCH_DIR/prep-objentry.stdout" "$SCRATCH_DIR/prep-objentry.stderr" || PREPARE_OBJENTRY_RC=$?
+
+# Counted after every invocation above, including the two that exit non-zero:
+# the EXIT trap that removes the normalised manifest has to fire on the failure
+# paths too, and a leaked file there is exactly what `rm -r` (no -f) would also
+# have turned into a rewritten exit status.
+PREPARE_TMPDIR_LEFTOVERS="$(find "$PREPARE_TMPDIR" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')"
 
 # ============================================================
 # Run-level controls
@@ -852,10 +1264,25 @@ assert_eq "empty-monorepo run exits 0 on the fixture" "0" "$EMPTY_RC"
 assert_eq "dash-named-skill run exits 0 on the fixture" "0" "$DASHN_RC"
 assert_eq "--skills -n run exits 0 on the fixture" "0" "$SKILLSN_RC"
 assert_eq "--add -n run exits 0 on the fixture" "0" "$ADDN_RC"
-assert_eq "failing-auto-build run exits 0 on the fixture" "0" "$BUILDFAIL_RC"
 assert_eq "pre-existing-.gitignore run exits 0 on the fixture" "0" "$GITIGNORE_RC"
 assert_eq "hooks no-ops + positive-control run exits 0 on the fixture" "0" "$HOOKS_RC"
-assert_eq "hooks forced-rebuild-failure run exits 0 on the fixture (soft warn, #73 out of scope)" "0" "$HOOKS2_RC"
+assert_eq "legacy-manifest first-build run exits 0 on the fixture" "0" "$LEGACY_RC"
+assert_eq "legacy-manifest rebuild run exits 0 on the fixture" "0" "$LEGACY2_RC"
+
+# A failed plugin auto-build is fatal as of #73. Both runs that produce one are
+# asserted, for two independent causes — see run 11's fixture note. These two
+# were the only "a failed auto-build still exits 0" assertions in this file
+# (re-derived by grep, not carried over: `grep -n '_RC"$' | grep '"0"'` across
+# every run, cross-checked against which runs have a failing manifest at all).
+# Retiring one and not the other would have left the suite green while half the
+# assertion set still encoded the behaviour #73 removed.
+assert_eq "failing-auto-build run exits non-zero on the fixture (#73)" "1" "$BUILDFAIL_RC"
+assert_eq "hooks forced-rebuild-failure run exits non-zero on the fixture (#73)" "1" "$HOOKS2_RC"
+
+# Exit 3, not 1: the reversion guard refused a skill, and no build failed. This
+# is the control that the fatal-build-failure change did not turn every
+# unhappy-path sync into a bare exit 1.
+assert_eq "legacy-manifest reversion-guard run exits 3 on the fixture" "3" "$LEGACYREF_RC"
 
 assert_contains "control: the plugin auto-build stage actually ran" \
     "AUTO-SYNCED  plugins/$DEMO_PLUGIN_NAME/" "$SYNC_STDOUT"
@@ -1004,14 +1431,51 @@ assert_eq "no auto-build temp stage left behind under $MKTEMP_PARENT" \
 # Cleaning up the stage (above) is what made this urgent: with the partial
 # ./build/<name>/ tree gone from the caller's cwd, the child's own error line is
 # the only evidence a failure ever produces — and it was being sent to
-# /dev/null. Asserted on that line's *content*: a Warning that says "failed" and
+# /dev/null. Asserted on that line's *content*: a line that says "failed" and
 # nothing else is precisely the undiagnosable state this closes.
+#
+# On stderr, with the child's log: as of #73 the whole failure path is an error
+# rather than a warning, so it belongs on the same stream as the diagnosis it
+# introduces — an operator redirecting stdout must not lose half of it.
 
 assert_contains "control: the auto-build failure path actually ran" \
-    "Warning: prepare-plugin.sh failed for" "$BUILDFAIL_STDOUT"
+    "ERROR: prepare-plugin.sh failed for" "$BUILDFAIL_STDERR"
+
+assert_contains "the failing manifest is named on stderr" \
+    "$SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin/plugin-manifest.json" "$BUILDFAIL_STDERR"
 
 assert_line_present "the failing child's own error line reaches the operator" \
     "    |   ERROR: skill source not found: $BROKEN_SKILL_SOURCE" "$BUILDFAIL_STDERR"
+
+# The refusal summary, distinct from the per-manifest line above: it is what
+# names every failing manifest in one place and explains the partial state the
+# run is leaving behind.
+assert_contains "the run explains its refusal to continue, naming the manifest" \
+    "Error: plugin build failed, refusing to continue: $SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin/plugin-manifest.json" \
+    "$BUILDFAIL_STDERR"
+
+# The point of exiting: the catalogue-regenerating stages must not have run.
+# Asserted on the monorepo's own files rather than on log text — the root README
+# is generated from the plugin table and is written on every completed sync, so
+# its absence is the load-bearing evidence that the run stopped where it claimed
+# to. Without this, an "exit 1" bolted onto the very end of the script would
+# satisfy every other assertion in this section.
+# Both artifacts are written unconditionally by a completed run. Deliberately
+# NOT marketplace.json, which the script only writes when the monorepo has at
+# least one published plugin — this fixture's one plugin is the one that failed,
+# so marketplace.json would be absent whether the run stopped or not, and the
+# assertion would pass under the un-fixed script too. (Measured: it does.)
+assert_eq "a failed build stops before the root README is regenerated" "ABSENT" \
+    "$([[ -f "$MONOREPO_BUILDFAIL_FIXTURE/README.md" ]] && echo PRESENT || echo ABSENT)"
+assert_eq "a failed build stops before the root CHANGELOG is regenerated" "ABSENT" \
+    "$([[ -f "$MONOREPO_BUILDFAIL_FIXTURE/CHANGELOG.md" ]] && echo PRESENT || echo ABSENT)"
+
+# …and the other direction, so the two above cannot pass merely because this
+# fixture never generates those files: a run that completes does write them.
+assert_file_exists "positive control: a completed sync does regenerate the root README" \
+    "$MONOREPO_LEGACY_FIXTURE/README.md"
+assert_file_exists "positive control: a completed sync does regenerate the marketplace catalogue" \
+    "$MONOREPO_LEGACY_FIXTURE/.claude-plugin/marketplace.json"
 
 # The other half of the control pair: proves the run took the failure branch
 # rather than somehow succeeding, so the assertion above cannot be satisfied by a
@@ -1181,8 +1645,8 @@ assert_file_exists "--add -n wrote the -n skill to disk" \
 # `--add ,` reduces to nothing after comma-splitting: with no existing skills
 # in the target monorepo, there is no line left for the discovery pipeline's
 # trailing `grep -v '^$'` to match, so it used to exit 1 and take the whole
-# run down under `set -e` with an empty stderr — rc=1 and no clue why. This is
-# the only run in this harness expected to fail; the assertions are about the
+# run down under `set -e` with an empty stderr — rc=1 and no clue why. The
+# assertions here are about the
 # run's rc and its stderr content; a failure of "no skill(s) synced" would be
 # the wrong kind of green here, since the run must not silently succeed either.
 assert_eq "--add , fails with a deliberate, explained exit rather than an unexplained abort" \
@@ -1237,7 +1701,7 @@ assert_eq "no ERROR line from the run-10 hooks fixtures" "" "$HOOKS_ERROR_LINES"
 # siblings' error shape — and the sync layer must surface that refusal rather
 # than reporting success.
 assert_contains "control: run 11 actually attempted to rebuild hooks-ok-plugin" \
-    "Warning: prepare-plugin.sh failed for" "$HOOKS2_STDOUT"
+    "ERROR: prepare-plugin.sh failed for" "$HOOKS2_STDERR"
 assert_line_present "the child's hooks-source error reaches the operator" \
     "    |   ERROR: hooks source not found: $SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/./hooks-src" \
     "$HOOKS2_STDERR"
@@ -1312,6 +1776,134 @@ while IFS= read -r _hp; do
     assert_not_contains "plugins/$_hp/README.md does not fall back to USERNAME" \
         "USERNAME" "$_hp_readme"
 done <<< "$HOOKS_PUBLISHED_PLUGINS"
+
+# ============================================================
+# Issue #73 — a legacy bare-string skills[] manifest must build, and a failed
+# build must stop the run
+# ============================================================
+#
+# Before the fix, every `.skills[$i].name` / `.skills[$i].source` read in
+# prepare-plugin.sh died on such a manifest with
+# `jq: error … Cannot index string with "name"` (measured: rc=5, no plugin
+# assembled). There are eight of those reads, so the fix normalises the manifest
+# once into a temp copy and points every read at it — and this fixture is
+# arranged so that all eight are actually executed. A read left un-normalised
+# still errors, `set -e` still kills the child, and the rc assertion below still
+# goes red: the fixture is itself the N-1-of-N detector, not a spot check.
+
+assert_eq "a legacy bare-string skills[] manifest builds" "0" "$PREPARE_LEGACY_RC"
+
+assert_not_contains "…without the legacy shape reaching jq" \
+    "Cannot index string" "$PREPARE_LEGACY_STDERR"
+
+assert_file_exists "the legacy manifest's skill is assembled under its declared name" \
+    "$PREPARE_OUT_DIR/legacy-plugin/skills/legacy-plugin/SKILL.md"
+assert_file_exists "the legacy manifest still produces a plugin manifest" \
+    "$PREPARE_OUT_DIR/legacy-plugin/.claude-plugin/plugin.json"
+
+# Content, not just existence: a bare string normalises to source ".", and the
+# only proof that "." resolved against the ORIGINAL manifest's directory is that
+# the description was read out of the SKILL.md that lives there. This is the
+# README's Contents list — the `.skills[$i].source` read furthest from the copy
+# loop, and the one a partial fix is likeliest to miss.
+PREPARE_LEGACY_README="$(cat "$PREPARE_OUT_DIR/legacy-plugin/README.md" 2>/dev/null || true)"
+assert_contains "the legacy skill's source resolved to the manifest's own directory" \
+    "LEGACY-SOURCE-MARKER" "$PREPARE_LEGACY_README"
+
+# The CHANGELOG stage's own `.skills[$i].name` read, reachable only on the
+# generated-template branch — hence a fixture with no CHANGELOG.md beside it.
+PREPARE_LEGACY_CHANGELOG="$(cat "$PREPARE_OUT_DIR/legacy-plugin/CHANGELOG.md" 2>/dev/null || true)"
+assert_contains "the generated CHANGELOG names the legacy skill" \
+    '- Skill: `legacy-plugin`' "$PREPARE_LEGACY_CHANGELOG"
+
+# The MANIFEST_DIR regression guard. If MANIFEST_DIR ever follows the normalised
+# temp copy, "./nested-src" resolves under the temp directory, the source is not
+# found, and this build exits 1 — which is why the rc and the marker are both
+# asserted: the marker alone would be satisfiable by an empty file.
+assert_eq "a relative source that is not \".\" still builds" "0" "$PREPARE_RELSOURCE_RC"
+assert_file_exists "the relative source's skill is assembled" \
+    "$PREPARE_OUT_DIR/relsource-plugin/skills/relsource-skill/SKILL.md"
+PREPARE_RELSOURCE_README="$(cat "$PREPARE_OUT_DIR/relsource-plugin/README.md" 2>/dev/null || true)"
+assert_contains "the relative source resolved against the original manifest's directory" \
+    "RELSOURCE-MARKER" "$PREPARE_RELSOURCE_README"
+
+# A bare string in commands[]/agents[] names a *file* source, so "." would mean
+# nothing; both are refused rather than guessed at.
+assert_eq "a bare string in commands[] is refused" "1" "$PREPARE_BARECMD_RC"
+assert_contains "…with a message naming the offending entry" \
+    "ERROR: commands entry must be an object with 'name' and 'source', not a bare string: bare-command-entry" \
+    "$PREPARE_BARECMD_STDERR"
+assert_contains "…and the manifest the caller actually named, not the temp copy" \
+    "$PREPARE_FIXTURE_DIR/barecmd-plugin/plugin-manifest.json" "$PREPARE_BARECMD_STDERR"
+
+assert_eq "a bare string in agents[] is refused" "1" "$PREPARE_BAREAGENT_RC"
+assert_contains "…with a message naming the offending entry" \
+    "ERROR: agents entry must be an object with 'name' and 'source', not a bare string: bare-agent-entry" \
+    "$PREPARE_BAREAGENT_STDERR"
+
+# Positive control for that guard: object-form commands[] and agents[] must
+# still build and still be copied. Without this, a guard that rejected every
+# commands[]/agents[] entry outright would pass both assertions above.
+assert_eq "positive control: object-form commands[] and agents[] still build" \
+    "0" "$PREPARE_OBJENTRY_RC"
+assert_file_exists "positive control: an object-form command is still copied" \
+    "$PREPARE_OUT_DIR/objentry-plugin/commands/fixture-command.md"
+assert_file_exists "positive control: an object-form agent is still copied" \
+    "$PREPARE_OUT_DIR/objentry-plugin/agents/fixture-agent.md"
+
+# The normalised manifest is a temp file; its EXIT trap has to remove it on
+# every path, including the two refusals above. `rm -rf` rather than `rm -r`
+# there is load-bearing for a second reason this cannot see — under `set -e` a
+# trap body returning non-zero rewrites the script's exit status — but a leak
+# here is the visible half.
+assert_eq "prepare-plugin.sh leaves no normalised-manifest temp file behind" \
+    "0" "$PREPARE_TMPDIR_LEFTOVERS"
+
+# --- The sync layer's own two legacy-blind reads ---
+#
+# Run 12: nothing published yet, so this only proves the child can build the
+# manifest end to end through a sync. Run 13 is the one that reaches the drift
+# read.
+assert_contains "control: a legacy manifest is auto-built through a sync" \
+    "AUTO-SYNCED  plugins/legacy-sync-plugin/" "$LEGACY_STDOUT"
+assert_contains "the first build wrote the manifest's version into plugin.json" \
+    '"version": "0.1.0"' "$LEGACY_PLUGIN_JSON_AFTER_RUN12"
+
+# Run 13: the drift check compares the source SKILL.md against the published
+# copy, and it needs the manifest's FIRST SKILL NAME to do it. On a legacy
+# manifest that read errored into 2>/dev/null, leaving the name empty, the drift
+# check skipped, and the plugin never rebuilt.
+#
+# Asserted on plugin.json rather than on the published SKILL.md: the plugin
+# auto-RESYNC stage further down would have patched that SKILL.md across
+# regardless of whether the drift check ever fired, so a SKILL.md assertion here
+# would be green with the fix reverted. Only the auto-build stage writes
+# plugin.json.
+#
+# Matched on the description marker, not on the version string: see the
+# rsync quick-check note beside run 13's fixture mutation above. The marker is
+# the part of the rebuilt manifest that changes plugin.json's *size*, so it is
+# also the part that cannot be silently skipped in transit.
+LEGACY_PLUGIN_JSON_AFTER_RUN13="$(cat "$MONOREPO_LEGACY_FIXTURE/plugins/legacy-sync-plugin/.claude-plugin/plugin.json" 2>/dev/null || true)"
+assert_contains "a drifted legacy manifest is actually rebuilt, not silently skipped" \
+    "REBUILT-AFTER-DRIFT-MARKER" "$LEGACY_PLUGIN_JSON_AFTER_RUN13"
+# The other direction: run 12's snapshot must NOT already carry the marker, or
+# the assertion above would be satisfied by the first build rather than the
+# rebuild.
+assert_not_contains "…and the marker is not something the first build already wrote" \
+    "REBUILT-AFTER-DRIFT-MARKER" "$LEGACY_PLUGIN_JSON_AFTER_RUN12"
+assert_contains "control: run 13 reported the rebuild" \
+    "AUTO-SYNCED  plugins/legacy-sync-plugin/" "$LEGACY2_STDOUT"
+
+# Run 14: the reversion guard refused this manifest's only skill, and the
+# auto-build stage must recognise that from the manifest's skill names — the
+# second legacy-blind read. Blind, it saw no skills, skipped nothing, and
+# rebuilt the plugin from the stale local source the main loop had just refused.
+assert_contains "a refused skill is recognised through a legacy manifest" \
+    "SKIP (reversion guard)  plugins/legacy-sync-plugin  —  stale local source for: legacy-sync-plugin" \
+    "$LEGACYREF_STDOUT"
+assert_not_contains "…and the refused plugin is not built anyway" \
+    "AUTO-SYNCED  plugins/legacy-sync-plugin/" "$LEGACYREF_STDOUT"
 
 # ============================================================
 # Authoring-source parity
