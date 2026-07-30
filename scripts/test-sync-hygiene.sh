@@ -407,18 +407,26 @@ DEMO_PLUGIN_NAME="demo-plugin-$$"
 # contaminating the other.
 #
 #   presync-skills-home/presync-local-skill/            local-source skill (regression control)
-#   presync-monorepo/presync-local-skill/                empty — source resolves via SKILLS_HOME
+#   presync-monorepo/presync-local-skill/                SHADOW SKILL.md + CHANGELOG (see below)
 #   presync-monorepo/presync-inrepo-skill/                in-repo-source-only; CHANGELOG MISMATCHED (core, negative)
 #   presync-monorepo/docs/, build/                        non-skill dirs, must enter neither count
 #   presync-monorepo-pass/presync-local-skill/            same shape as above
 #   presync-monorepo-pass/presync-inrepo-skill/           same skill; CHANGELOG MATCHES (positive control)
 #   presync-monorepo-pass/docs/, build/                   same shape as above
 #
-# presync-local-skill's monorepo-side CHANGELOG.md is deliberately WRONG
-# (STALE-DO-NOT-READ, matching no real version) in both monorepos: skill_source_dir()
-# is local-first, so a correct implementation never reads it. If a regression
-# read the monorepo copy for a local-source skill instead, this fixture turns
-# that PASS into a FAIL rather than agreeing with the regression by accident.
+# presync-local-skill's monorepo-side directory is deliberately NOT empty: it
+# carries its own SKILL.md (a different version, 9.9.9) and its own WRONG
+# CHANGELOG.md (STALE-DO-NOT-READ, matching no real version). skill_source_dir()
+# is local-first, so a correct implementation resolves to presync-skills-home
+# and this fixture never enters the report. A monorepo-side directory with NO
+# SKILL.md would not actually exercise that precedence — a monorepo-first
+# mutant's own `[[ -f … SKILL.md ]]` test would fail on an empty directory and
+# fall through to the same right answer by construction, silently agreeing
+# with the bug. The shadow SKILL.md gives the wrong branch something to match:
+# a monorepo-first mutant resolves here instead, reads v9.9.9, checks it
+# against the STALE CHANGELOG (which matches no version), and presync-local-skill
+# flips PASS -> FAIL. Proven by mutation, not asserted from reading the code —
+# see the fix-round section of the task report.
 PRESYNC_SKILLS_HOME_FIXTURE="$SCRATCH_DIR/presync-skills-home"
 PRESYNC_MONOREPO_FIXTURE="$SCRATCH_DIR/presync-monorepo"
 PRESYNC_MONOREPO_PASS_FIXTURE="$SCRATCH_DIR/presync-monorepo-pass"
@@ -594,9 +602,21 @@ cat > "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-inrepo-skill/CHANGELOG.md" <<'EOF'
 - Initial fixture version.
 EOF
 
-# Deliberately wrong — see the fixture-block comment above. A regression that
-# resolved a local-source skill's CHANGELOG through the monorepo instead of
-# SKILLS_HOME would read this and flip presync-local-skill from PASS to FAIL.
+# Deliberately wrong, deliberately present — see the fixture-block comment
+# above. A different version (9.9.9, vs. the real 1.0.0) so a monorepo-first
+# resolution is distinguishable from the correct local-first one, paired with
+# a CHANGELOG that cannot match ANY version. skill_source_dir() must never
+# reach either file for a local-source skill.
+PRESYNC_SHADOW_SKILL_MD='---
+name: presync-local-skill
+description: MUST NOT BE READ — shadows presync-local-skill in the monorepo so a local-first precedence violation in skill_source_dir() is distinguishable, not silently correct by construction.
+version: 9.9.9
+---
+
+# Presync Local Skill (stale monorepo shadow — must not be read)'
+
+printf '%s\n' "$PRESYNC_SHADOW_SKILL_MD" > "$PRESYNC_MONOREPO_FIXTURE/presync-local-skill/SKILL.md"
+printf '%s\n' "$PRESYNC_SHADOW_SKILL_MD" > "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-local-skill/SKILL.md"
 echo "STALE-DO-NOT-READ — matches no real version" > "$PRESYNC_MONOREPO_FIXTURE/presync-local-skill/CHANGELOG.md"
 echo "STALE-DO-NOT-READ — matches no real version" > "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-local-skill/CHANGELOG.md"
 

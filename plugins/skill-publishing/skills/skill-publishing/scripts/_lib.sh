@@ -201,6 +201,10 @@ resolve_source_path() {
 # copies exist, and hands over automatically once the local copy is removed.
 # Echoes nothing when the skill has no source anywhere.
 # Usage: skill_source_dir <skill-name>
+# Requires: SKILLS_HOME set by the caller (deliberately unwrapped, unlike
+#   MONOREPO_DIR below — an unset SKILLS_HOME should abort loudly under
+#   `set -u`, not silently resolve; every current caller sets it before
+#   sourcing this file).
 #
 # References ${MONOREPO_DIR:-}, not $MONOREPO_DIR: this file is sourced by
 # scripts (prepare-plugin.sh, prepare-skill-repo.sh, sync-individual-repos.sh)
@@ -208,12 +212,21 @@ resolve_source_path() {
 # inside a *called* function still aborts the script. Callers that do have a
 # monorepo directory (sync-monorepo.sh, validate-pre-sync.sh) already set
 # MONOREPO_DIR before calling this, so their behaviour is unchanged.
+#
+# The elif guards with `-n` explicitly rather than relying on `-f "${x:-}/…"`
+# alone: with MONOREPO_DIR unset, "${MONOREPO_DIR:-}/$name/SKILL.md" collapses
+# to "/$name/SKILL.md" — a root-relative path outside both trees that a
+# caller with no monorepo directory could still match by accident (e.g.
+# name=tmp against a real /tmp/SKILL.md). Unreachable today only because no
+# current caller without MONOREPO_DIR set calls this function at all — which
+# is exactly the "correct only because the next call site doesn't exist yet"
+# shape this batch exists to close.
 skill_source_dir() {
   local name="$1"
   if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
     echo "$SKILLS_HOME/$name"
-  elif [[ -f "${MONOREPO_DIR:-}/$name/SKILL.md" ]]; then
-    echo "${MONOREPO_DIR:-}/$name"
+  elif [[ -n "${MONOREPO_DIR:-}" && -f "${MONOREPO_DIR}/$name/SKILL.md" ]]; then
+    echo "${MONOREPO_DIR}/$name"
   fi
 }
 

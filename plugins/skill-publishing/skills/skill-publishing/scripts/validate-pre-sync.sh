@@ -100,7 +100,13 @@ while IFS= read -r SKILL_NAME; do
   # neither is a failure, both are simply not examined.
   SKILL_SRC="$(skill_source_dir "$SKILL_NAME")"
   if [[ -z "$SKILL_SRC" ]]; then
-    continue  # No source anywhere — not a skill (docs/, build/, ...), skip
+    # Announce, don't silently drop — sync-monorepo.sh's filter_skill_candidates()
+    # emits this same message shape for the same condition. A real skill that
+    # has lost its source everywhere would otherwise vanish from the report
+    # with no line to say so, a quieter instance of the exact defect #78 exists
+    # to kill.
+    printf '%s\n' "  SKIP (not a skill: no SKILL.md)  $SKILL_NAME" >&2
+    continue
   fi
   SKILL_MD="$SKILL_SRC/SKILL.md"
   CHANGELOG="$SKILL_SRC/CHANGELOG.md"
