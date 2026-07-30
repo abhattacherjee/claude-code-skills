@@ -62,7 +62,7 @@ set -euo pipefail
 #      correct" — and no signal that it lacks the rule. A non-fatal NOTE now says
 #      so, naming the pattern to add.
 #
-# The whole run is hermetic: two throwaway SKILLS_HOMEs and nine throwaway
+# The whole run is hermetic: three throwaway SKILLS_HOMEs and ten throwaway
 # monorepos are built under mktemp, the syncs are invoked from a throwaway cwd,
 # and `gh` is shimmed off PATH so nothing reaches the network. The live repo is
 # never passed to sync-monorepo.sh.
@@ -276,7 +276,9 @@ chmod +x "$GH_SHIM_DIR/gh"
 # skills-home-buildfail/ is a second SKILLS_HOME rather than one more manifest in
 # the shared one because the auto-build stage scans $SKILLS_HOME/*/ on every run:
 # a deliberately broken manifest living there would print its failure into all
-# nine runs and leave every other assertion reading around it.
+# eight other runs that share skills-home/ and leave every other assertion
+# reading around it. (Runs 10-11 use their own third SKILLS_HOME, skills-home-hooks/,
+# for the identical reason — see its own fixture comment below.)
 #
 # The two positive-control skills are not redundant: skill_source_dir() has two
 # branches, and demo-skill (which exists under BOTH skills-home/ and monorepo/)
@@ -307,7 +309,8 @@ RUN_CWD="$SCRATCH_DIR/run-cwd"
 # separate SKILLS_HOME/monorepo pair, for the same reason SKILLS_HOME_BUILDFAIL_FIXTURE
 # is separate: the auto-build stage scans $SKILLS_HOME/*/plugin-manifest.json on
 # every invocation, so these four manifests would otherwise print their own
-# AUTO-SYNCED / ERROR lines into all nine runs above and perturb their counts.
+# AUTO-SYNCED / ERROR lines into all eight runs above that share skills-home/
+# (runs 1-7 and 9) and perturb their counts.
 SKILLS_HOME_HOOKS_FIXTURE="$SCRATCH_DIR/skills-home-hooks"
 MONOREPO_HOOKS_FIXTURE="$SCRATCH_DIR/monorepo-hooks"
 
@@ -599,7 +602,7 @@ echo "# Throwaway fixture hook, present only to prove hooks/ survives the build.
 # Sync invocations
 # ============================================================
 #
-# Nine runs, all from the same throwaway cwd:
+# Eleven runs, all from the same throwaway cwd:
 #   1. plain sync of monorepo/            — the main hygiene surface
 #   2. --add added-skill on monorepo-add/ — the SECOND filter site (line ~197)
 #   3. plain sync of monorepo-empty/      — the empty-skill-list branch
@@ -639,7 +642,8 @@ echo "# Throwaway fixture hook, present only to prove hooks/ survives the build.
 # Run 8 is the only one using the second SKILLS_HOME. It is a separate run and a
 # separate home so the deliberate build failure stays confined to it: the
 # auto-build stage scans $SKILLS_HOME/*/plugin-manifest.json on every invocation,
-# so a broken manifest in the shared home would print into all nine runs.
+# so a broken manifest in the shared home would print into all eight other runs
+# that share it (runs 1-7 and 9 — runs 10-11 use the third, hooks-only, home).
 #
 # Run 9 is the only monorepo that starts with a .gitignore already on disk, which
 # is the only way to reach write_file's "already exists" branch — the branch an
@@ -790,6 +794,17 @@ HOOKS_RC=0
 run_sync "$SKILLS_HOME_HOOKS_FIXTURE" "$MONOREPO_HOOKS_FIXTURE" "$HOOKS_STDOUT_LOG" "$HOOKS_STDERR_LOG" || HOOKS_RC=$?
 HOOKS_STDOUT="$(cat "$HOOKS_STDOUT_LOG")"
 HOOKS_STDERR="$(cat "$HOOKS_STDERR_LOG")"
+
+# Filesystem snapshot taken immediately after run 10, before run 11's mutation
+# below removes hooks-src. Every assertion in this file runs after all eleven
+# syncs, so a check against the live path on disk at that point measures
+# end-of-harness state — identical to whatever run 11 leaves behind — not
+# "run 10 copied hooks/". This is the one property run 10 alone can prove;
+# capturing it here, mirroring how HOOKS_STDOUT/HOOKS_STDERR above are
+# snapshotted per run rather than re-read live, is what keeps it distinct from
+# the post-run-11 survival check below.
+HOOKS_OK_HOOKS_AFTER_RUN10="ABSENT"
+[[ -f "$MONOREPO_HOOKS_FIXTURE/plugins/hooks-ok-plugin/hooks/pre-tool-use.sh" ]] && HOOKS_OK_HOOKS_AFTER_RUN10="PRESENT"
 
 # Mutate the fixture between runs 10 and 11: remove the real hooks source and
 # bump the skill's SKILL.md to a new version, so the auto-build stage's drift
@@ -1201,8 +1216,17 @@ assert_eq "hooks-empty-plugin (hooks.source: \"\") has no hooks/ dir" "ABSENT" \
 # The positive control: a real hooks.source must actually land in the build.
 # Without this, a fix that rejected every hooks.source unconditionally (a guard
 # stuck ON) would still pass every assertion above.
-assert_file_exists "positive control: hooks-ok-plugin's hooks/ was copied" \
-    "$MONOREPO_HOOKS_FIXTURE/plugins/hooks-ok-plugin/hooks/pre-tool-use.sh"
+#
+# Checked against the HOOKS_OK_HOOKS_AFTER_RUN10 snapshot taken right after run
+# 10, not by re-testing the live path here: every assertion in this file runs
+# after all eleven syncs, and run 11 deliberately deletes hooks-src and forces
+# a rebuild of this exact plugin. A live re-check at this point in the file
+# would be byte-for-byte the same predicate as the post-run-11 survival check
+# below — run 10's own positive control would be silently absorbed into run
+# 11's, and reverting either fix would fail both assertions for one cause
+# instead of the two the brief asks for.
+assert_eq "positive control: hooks-ok-plugin's hooks/ was copied (as of run 10)" \
+    "PRESENT" "$HOOKS_OK_HOOKS_AFTER_RUN10"
 
 # None of the four no-op/positive-control builds may have errored.
 HOOKS_ERROR_LINES=$(printf '%s\n%s\n' "$HOOKS_STDOUT" "$HOOKS_STDERR" | grep 'ERROR' || true)
@@ -1250,13 +1274,36 @@ assert_contains "root README carries the forwarded --github-user" \
 assert_not_contains "root README does not fall back to USERNAME" \
     "USERNAME" "$ROOT_README_CONTENT"
 
-for _hp in hooks-none-plugin hooks-null-plugin hooks-empty-plugin hooks-ok-plugin; do
-    _hp_readme="$(cat "$MONOREPO_HOOKS_FIXTURE/plugins/$_hp/README.md" 2>/dev/null || true)"
+# Globbed rather than the hardcoded four names used to build the fixture
+# (line ~532 above): a fifth manifest added to skills-home-hooks/ later must
+# not be able to escape this loop by simply not being named here.
+HOOKS_PUBLISHED_PLUGINS=$(find "$MONOREPO_HOOKS_FIXTURE/plugins" -maxdepth 1 -mindepth 1 -type d \
+    -exec basename {} \; 2>/dev/null | LC_ALL=C sort)
+
+# Control on the glob itself: without this, a run that silently built fewer
+# than four plugins (or somehow more) would just iterate the loop below over
+# whatever it found and still print all-PASS — the same "green through
+# omission" shape the fail-first discipline in this file exists to rule out.
+assert_eq "exactly the four hooks fixture plugins were published" \
+    "4" "$(printf '%s\n' "$HOOKS_PUBLISHED_PLUGINS" | grep -c .)"
+
+while IFS= read -r _hp; do
+    [[ -z "$_hp" ]] && continue
+    _hp_readme_path="$MONOREPO_HOOKS_FIXTURE/plugins/$_hp/README.md"
+    # Checked as its own assertion, not folded into the `cat … || true` below:
+    # `|| true` turns a missing file into an empty string, and an empty string
+    # already satisfies assert_not_contains "USERNAME" — so a README that
+    # never got written would pass that half silently. assert_contains still
+    # catches it (empty can't contain "harness-fixture-user"), but only by
+    # accident of which literal is being searched for; this makes the missing
+    # case fail on its own, for its own reason, regardless of either literal.
+    assert_file_exists "plugins/$_hp/README.md exists" "$_hp_readme_path"
+    _hp_readme="$(cat "$_hp_readme_path" 2>/dev/null || true)"
     assert_contains "plugins/$_hp/README.md carries the forwarded --github-user" \
         "harness-fixture-user" "$_hp_readme"
     assert_not_contains "plugins/$_hp/README.md does not fall back to USERNAME" \
         "USERNAME" "$_hp_readme"
-done
+done <<< "$HOOKS_PUBLISHED_PLUGINS"
 
 # ============================================================
 # Authoring-source parity
