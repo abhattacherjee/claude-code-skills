@@ -116,7 +116,17 @@ from those paths needs re-checking before upgrading.
   `done 3<<<`), leaving the body's stdin inherited from the caller so no child can reach
   the list at all. Only the main sync loop and the plugin-catalogue loop have
   stdin-consuming children today; the other four are defence in depth, and the regression
-  harness's mutants report that honestly rather than claiming a fail-first at all six. (#81)
+  harness's mutants report that honestly rather than claiming a fail-first at all six. The
+  `marketplace.json` builder is now on fd 3 too — its `< <(find …)` is the loop body's
+  stdin exactly as a here-string is, and it is the one such loop that actually spawns
+  children (`dirname`, three `jq`s per iteration), so exempting it would have applied the
+  rule everywhere except where it most obviously belongs.
+
+  One behavioural consequence worth stating: with the list off stdin, a stdin-consuming
+  child now inherits the **caller's** stdin, so it would manifest as a hang rather than a
+  silent truncation. A hang is strictly the better failure. The `gh repo view` probe reads
+  `</dev/null` so it cannot block on an inherited terminal, and `--help` records that
+  callers should redirect stdin when running non-interactively. (#81)
 
 - **The line-wise conversion above had a sixth site with no test coverage at all.** It is
   described everywhere as five sites in `sync-monorepo.sh`; the sixth is
@@ -158,6 +168,39 @@ from those paths needs re-checking before upgrading.
   `manifest_bare_entries` check, with the same message text, now runs in the main loop too,
   scoped to `agents[]` — the only array that loop indexes. (#73)
 
+- **That bare-entry guard was itself non-fatal, and its own comment's safety net did not
+  hold.** It set `AGENT_COUNT=0` and left the run to the auto-build stage, on the stated
+  grounds that "the very next stage runs `prepare-plugin.sh` against this same manifest,
+  which exits 1 on it" — false whenever no build runs, since `prepare-plugin.sh` is invoked
+  only when the drift check sets `_NEEDS_BUILD`. Adding `"agents": ["x"]` to an
+  already-published plugin's manifest without touching its `SKILL.md` — the natural way to
+  add an agent, in exactly the legacy bare-string form this batch exists to tolerate —
+  therefore printed one `ERROR`, copied no agents, regenerated README/CHANGELOG/marketplace
+  and exited **0**. Three further paths `continue` before the build stage and bypassed it
+  identically: the standalone-marketplace skip, the `--add-plugin` skip and the
+  shadowed-manifest skip. A loudness **regression**: before the guard existed, the same
+  manifest died at `jq` with rc=5 — ugly, but fatal, and nothing downstream was written.
+  Now collected and exited on through the shared refusal gate, which also moved out of the
+  `[[ -x "$PREPARE_SCRIPT" ]]` block — two of its three lists are filled inside that block
+  but the third is not, so nesting it there let a missing `prepare-plugin.sh` disarm the
+  bare-entry refusal. (#73)
+
+- The refusal summary claimed more than had happened on two of the three paths it now
+  serves: it said `plugin build failed` for a manifest whose `skills[]` merely could not be
+  **read** (no build was attempted), and "Skills synced before this point are already
+  written" under `--dry-run`, which writes nothing. Each reason now has its own labelled
+  row, and the `--dry-run` path says plainly that nothing was written. In a change set
+  whose theme is that a message must not claim more than happened, this one did. (#73)
+
+- `manifest_skill_names`' stderr is captured separately instead of via `2>&1`. On the
+  **success** path that variable *is* the skill-name list, feeding the reversion guard and
+  the drift check's first skill; a diagnostic accompanying a zero exit would become a
+  phantom skill name, which resolves nowhere, so the drift check falls through and the
+  plugin is silently never rebuilt — #73 re-entering through its own fix. No such warning
+  is reachable for this filter today, so this is hardening rather than a repair, and it
+  carries no regression assertion for that reason: asserting a condition the code cannot
+  reach passes vacuously and reads as coverage. (#73)
+
 - `--add <unresolvable>` against a **populated** monorepo printed one inline
   `ERROR: no SKILL.md` and exited `0` having regenerated the README, CHANGELOG and
   marketplace — the same shape closed above for `--skills`, on the flag that is the
@@ -198,6 +241,18 @@ from those paths needs re-checking before upgrading.
   stated plainly in `SKILL.md` — an earlier draft of that documentation promised `--skills`
   would not "publish an empty/partial catalogue", which was true only of the empty half.
   Use `--add` to introduce one skill without disturbing the rest. (#80)
+
+- **`SKILL.md`'s Quick Reference now states the `--skills`/`--add` asymmetry rather than
+  asserting parity.** The fix for the "partial catalogue" overclaim above introduced a
+  different false claim in its place — "both refuse an unresolvable name rather than
+  publish" — when in fact `--skills good,typo` exits 0 and publishes a one-row catalogue
+  while `--add good,typo` exits 1 and writes nothing. Someone trusting the shorter claim
+  could run `--skills prod-skill,typo-skll` expecting a safe refusal and publish a silently
+  shrunk catalogue instead. The correct asymmetry was already right in `--help` and in the
+  entry above; it simply had not propagated to the line users skim. Third pass on the same
+  sentence, so the whole block was re-read for the same shape — assertions of symmetry,
+  universality or guarantee over a conditional implementation — rather than patching the
+  one clause. The de-duplication half was verified true for both flags and kept. (#80)
 
 ## [4.2.1] - 2026-07-26
 

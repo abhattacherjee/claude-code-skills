@@ -77,8 +77,8 @@ set -euo pipefail
 #      plugin auto-build fails exits 1 rather than warning and going on to
 #      regenerate a catalogue describing a plugin it could not build.
 #
-# The whole run is hermetic: 13 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 28 throwaway monorepos, the syncs
+# The whole run is hermetic: 14 throwaway SKILLS_HOMEs, a fixture directory
+# that is deliberately never a SKILLS_HOME, 29 throwaway monorepos, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
@@ -1769,9 +1769,19 @@ assert_line_present "the failing child's own error line reaches the operator" \
 # The refusal summary, distinct from the per-manifest line above: it is what
 # names every failing manifest in one place and explains the partial state the
 # run is leaving behind.
-assert_contains "the run explains its refusal to continue, naming the manifest" \
-    "Error: plugin build failed, refusing to continue: $SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin/plugin-manifest.json" \
+assert_contains "the run explains its refusal to continue" \
+    "Error: refusing to continue — one or more manifests could not be published." \
     "$BUILDFAIL_STDERR"
+# The reason row, not just the headline: this manifest's build was ATTEMPTED and
+# failed, so it must appear under "plugin build failed" and not under one of the
+# two reasons that describe something else happening.
+assert_contains "…naming the manifest under the reason that actually applies" \
+    "plugin build failed:        $SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin/plugin-manifest.json" \
+    "$BUILDFAIL_STDERR"
+assert_not_contains "…and not miscategorised as an unreadable manifest" \
+    "skills[] could not be read:" "$BUILDFAIL_STDERR"
+assert_contains "…with the real run's wording about what is already on disk" \
+    "Skills synced before this point are already written" "$BUILDFAIL_STDERR"
 
 # The point of exiting: the catalogue-regenerating stages must not have run.
 # Asserted on the monorepo's own files rather than on log text — the root README
@@ -3012,6 +3022,37 @@ assert_eq "…and matches its catalogue row count" \
 #      monorepo carrying space-named skills on both sides of the report; see the
 #      section following the #78 assertions for why the coverage was missed and
 #      why it needed its own fixture rather than growing an existing one.
+#
+#  18. Defect 14's guard was NON-FATAL, and its own comment's safety net did not
+#      hold. It set AGENT_COUNT=0 and left the run to the auto-build stage,
+#      which only invokes prepare-plugin.sh when _NEEDS_BUILD is true. An
+#      already-published plugin whose manifest gains `"agents": ["x"]` without
+#      its SKILL.md changing therefore printed one ERROR and exited 0 with the
+#      catalogue regenerated and the declared agents silently not copied — a
+#      loudness regression, since before the guard the same manifest died at jq
+#      with rc=5 and wrote nothing. Now collected into _BARE_ENTRY_MANIFESTS,
+#      declared before the main sync loop, and exited on through the shared
+#      collected-failure gate — which also moved OUT of the
+#      `[[ -x "$PREPARE_SCRIPT" ]]` block, since two of its three lists are
+#      filled inside it but the third is not.
+#
+#  19. The collected-failure summary claimed more than happened on two of the
+#      three paths it now serves: it said "plugin build failed" for a manifest
+#      whose skills[] merely could not be READ (no build attempted), and
+#      "Skills synced before this point are already written" under --dry-run,
+#      which writes nothing. Each reason now gets its own labelled row, and the
+#      --dry-run path says so explicitly.
+#
+# NOT covered by any assertion, and deliberately so — both are latent by
+# construction, with no reachable input that triggers them today:
+#   * capturing manifest_skill_names' stderr separately instead of `2>&1`, so a
+#     jq diagnostic accompanying a ZERO exit cannot become a phantom skill name.
+#     No such warning exists for this filter; merging a diagnostic stream into
+#     data that is then read as data is unsafe by construction regardless.
+#   * putting the marketplace.json loop on fd 3 like every other list-driven
+#     loop. Its children (dirname, jq) do not read stdin today.
+# Writing an assertion for either would mean asserting a condition the code
+# cannot currently reach, which passes vacuously and reads as coverage.
 
 SKILLS_HOME_FIXROUND_FIXTURE="$SCRATCH_DIR/skills-home-fixround"
 MONOREPO_DRAIN_FIXTURE="$SCRATCH_DIR/monorepo-drain"
@@ -3334,7 +3375,9 @@ assert_contains "…naming the manifest" \
 assert_contains "…and relaying jq's own diagnosis rather than swallowing it" \
     "Cannot index number with string \"name\"" "$BADMANIFEST_STDERR"
 assert_contains "…joining the collected-failure summary that names every broken manifest in one pass" \
-    "Error: plugin build failed, refusing to continue: $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
+    "skills[] could not be read: $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
+assert_not_contains "…and is NOT reported as a build failure, since no build was attempted" \
+    "plugin build failed:" "$BADMANIFEST_STDERR"
 assert_eq "…with the catalogue deliberately NOT regenerated on the way out" \
     "false" "$([[ -f "$MONOREPO_BADMANIFEST_FIXTURE/README.md" ]] && echo true || echo false)"
 
@@ -3470,6 +3513,123 @@ assert_contains "…with the same actionable message prepare-plugin.sh gives, fr
     "$BAREAGENT_BOTH"
 assert_not_contains "…and no raw jq type error reaching the operator" \
     "Cannot index string with string \"name\"" "$BAREAGENT_BOTH"
+assert_contains "…reported under its own reason, not as a build failure" \
+    "bare-string agents[] entry: $SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/plugin-manifest.json" \
+    "$BAREAGENT_BOTH"
+
+# ------------------------------------------------------------------
+# Defect 18 — the bare-agents guard must be fatal even when NO BUILD RUNS
+# ------------------------------------------------------------------
+#
+# The first version of defect 14's guard set AGENT_COUNT=0 and left the run to
+# the auto-build stage, on the stated grounds that "the very next stage runs
+# prepare-plugin.sh against this same manifest, which exits 1 on it". That is
+# false whenever the build does not run at all — prepare-plugin.sh is invoked
+# only when _NEEDS_BUILD is true.
+#
+# This fixture is that case, and it is the NATURAL one: an already-published
+# plugin gains `"agents": ["x"]` in its manifest while its SKILL.md is untouched,
+# which is how anyone would add an agent to an existing plugin, in exactly the
+# legacy bare-string form #73 exists to tolerate. The drift check compares
+# SKILL.md versions, finds them identical, and never builds. Reproduced against
+# the guard's first version: one ERROR line, "Sync complete. 1 skills synced",
+# README/CHANGELOG/marketplace all regenerated, declared agents silently not
+# copied, and rc=0 — a loudness REGRESSION, since before the guard existed the
+# same manifest died at jq with rc=5 and wrote nothing.
+#
+# Three further paths `continue` before the build stage and would have bypassed
+# the claimed net identically: the standalone-marketplace skip, the --add-plugin
+# skip, and the shadowed-manifest skip. The published copy below is byte-identical
+# to the source, which is what pins _NEEDS_BUILD false.
+SKILLS_HOME_BAREPUB_FIXTURE="$SCRATCH_DIR/skills-home-barepub"
+MONOREPO_BAREPUB_FIXTURE="$SCRATCH_DIR/monorepo-barepub"
+mkdir -p "$SKILLS_HOME_BAREPUB_FIXTURE/barepub-skill" \
+         "$MONOREPO_BAREPUB_FIXTURE/barepub-skill" \
+         "$MONOREPO_BAREPUB_FIXTURE/plugins/barepub-plugin/.claude-plugin" \
+         "$MONOREPO_BAREPUB_FIXTURE/plugins/barepub-plugin/skills/barepub-skill"
+
+BAREPUB_SKILL_MD='---
+name: barepub-skill
+description: Throwaway fixture — already-published plugin whose manifest gains a bare agents[] entry (harness defect 18).
+version: 1.0.0
+---
+
+# Barepub Skill'
+printf '%s\n' "$BAREPUB_SKILL_MD" > "$SKILLS_HOME_BAREPUB_FIXTURE/barepub-skill/SKILL.md"
+printf '%s\n' "$BAREPUB_SKILL_MD" > "$MONOREPO_BAREPUB_FIXTURE/barepub-skill/SKILL.md"
+# Identical to the source: the drift check finds nothing, so no build is run and
+# the auto-build stage never sees this manifest at all.
+printf '%s\n' "$BAREPUB_SKILL_MD" > "$MONOREPO_BAREPUB_FIXTURE/plugins/barepub-plugin/skills/barepub-skill/SKILL.md"
+cat > "$MONOREPO_BAREPUB_FIXTURE/plugins/barepub-plugin/.claude-plugin/plugin.json" <<'EOF'
+{
+  "name": "barepub-plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin, already published and up to date."
+}
+EOF
+cat > "$SKILLS_HOME_BAREPUB_FIXTURE/barepub-skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "barepub-plugin",
+  "version": "1.0.0",
+  "description": "Throwaway fixture plugin whose agents[] gained a bare string (harness defect 18).",
+  "skills": [
+    {
+      "name": "barepub-skill",
+      "source": "."
+    }
+  ],
+  "agents": ["late-added-agent"],
+  "commands": []
+}
+EOF
+
+BAREPUB_RC=0
+run_sync "$SKILLS_HOME_BAREPUB_FIXTURE" "$MONOREPO_BAREPUB_FIXTURE" \
+    "$SCRATCH_DIR/barepub-stdout.log" "$SCRATCH_DIR/barepub-stderr.log" || BAREPUB_RC=$?
+BAREPUB_STDOUT="$(cat "$SCRATCH_DIR/barepub-stdout.log")"
+BAREPUB_STDERR="$(cat "$SCRATCH_DIR/barepub-stderr.log")"
+
+# --- Assertions: defect 18. Verified red against the guard's first version
+# (AGENT_COUNT=0 with no record kept): rc=0, "Sync complete. 1 skills synced",
+# and README.md regenerated. ---
+assert_eq "a bare agents[] entry is fatal even when the drift check runs no build" \
+    "1" "$BAREPUB_RC"
+assert_contains "…the per-manifest ERROR still names the offending entry" \
+    "ERROR: agent entry must be an object with 'name' and 'source', not a bare string: late-added-agent" \
+    "$BAREPUB_STDERR"
+assert_contains "…and it reaches the collected-failure summary under its own reason" \
+    "bare-string agents[] entry: $SKILLS_HOME_BAREPUB_FIXTURE/barepub-skill/plugin-manifest.json" \
+    "$BAREPUB_STDERR"
+assert_not_contains "…not miscategorised as a build failure, since no build ran" \
+    "plugin build failed:" "$BAREPUB_STDERR"
+assert_eq "…with the catalogue NOT regenerated on the way out" \
+    "false" "$([[ -f "$MONOREPO_BAREPUB_FIXTURE/README.md" ]] && echo true || echo false)"
+assert_not_contains "…and no \"Sync complete\" line claiming the run succeeded" \
+    "Sync complete." "$BAREPUB_STDOUT"
+
+# ------------------------------------------------------------------
+# Defect 19 — the refusal summary must not claim work a --dry-run did not do
+# ------------------------------------------------------------------
+#
+# The summary printed "plugin build failed" and "Skills synced before this point
+# are already written" on every path it served. Under --dry-run over a manifest
+# with an unreadable skills[], both are false: no build was attempted (the
+# failure was a READ) and --dry-run wrote nothing at all. In a change set whose
+# theme is that a message must not claim more than happened, that one did.
+BAREPUB_DRYRUN_RC=0
+run_sync "$SKILLS_HOME_BADMANIFEST_FIXTURE" "$MONOREPO_BADMANIFEST_FIXTURE" \
+    "$SCRATCH_DIR/dryrun-stdout.log" "$SCRATCH_DIR/dryrun-stderr.log" \
+    --dry-run || BAREPUB_DRYRUN_RC=$?
+DRYRUN_STDERR="$(cat "$SCRATCH_DIR/dryrun-stderr.log")"
+
+assert_eq "--dry-run over an unreadable manifest still refuses (the read happens either way)" \
+    "1" "$BAREPUB_DRYRUN_RC"
+assert_contains "…saying plainly that nothing was written" \
+    "Nothing was written — this was a --dry-run." "$DRYRUN_STDERR"
+assert_not_contains "…and not repeating the real run's \"already written\" claim" \
+    "Skills synced before this point are already written" "$DRYRUN_STDERR"
+assert_not_contains "…nor calling a read failure a build failure" \
+    "plugin build failed:" "$DRYRUN_STDERR"
 
 # --- Positive control: the goodmanifest fixture carries a WELL-FORMED agents[]
 # entry, so a guard stuck ON is caught two ways — no ERROR may be printed on
@@ -3539,7 +3699,7 @@ assert_eq "a manifest name containing a slash still ends the run at exit 1" \
 assert_contains "…the per-manifest failure line still prints" \
     "ERROR: prepare-plugin.sh failed for $SLASHLOG_MANIFEST" "$SLASHLOG_STDERR"
 assert_contains "…and the collected-failure summary survives the sed that cannot read its own log" \
-    "Error: plugin build failed, refusing to continue: $SLASHLOG_MANIFEST" "$SLASHLOG_STDERR"
+    "plugin build failed:        $SLASHLOG_MANIFEST" "$SLASHLOG_STDERR"
 
 # ============================================================
 # Authoring-source parity

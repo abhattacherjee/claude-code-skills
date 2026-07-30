@@ -350,10 +350,8 @@ This creates the directory, syncs the default skills (conversation-search, skill
 ```bash
 # Preview changes
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --dry-run ~/dev/claude-code-skills
-
 # Sync
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh ~/dev/claude-code-skills
-
 # Then commit and push
 cd ~/dev/claude-code-skills
 git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
@@ -365,9 +363,9 @@ git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
 ```
 
-`--skills a,b` replaces the synced set; `--add` appends. Both refuse an unresolvable name rather than publish, and both de-duplicate repeats. **`--skills` rewrites the catalogue to exactly the named subset** — skills left out stay on disk but lose their catalogue row, the published count and their CHANGELOG entry until the next full sync, so prefer `--add` to introduce one skill without disturbing the rest.
+`--skills a,b` replaces the synced set; `--add` appends. Both de-duplicate repeats, but they refuse on **different thresholds**: `--add` refuses if *any* name it contributes is unresolvable; `--skills` refuses only if *all* of them are — so a typo in a `--skills` list still publishes the rest. And **`--skills` rewrites the catalogue to exactly the named subset**: skills left out stay on disk but lose their catalogue row, the published count and their CHANGELOG entry until the next full sync. Prefer `--add` to introduce one skill without disturbing the rest.
 
-**Exit codes**: `0` success; `1` usage/setup error (bad names, or a failed plugin build — fix the manifest) beats `3` (completed, refused above); `--dry-run` predicts `3` and an unreadable manifest, but not a build-failure `1`.
+**Exit codes**: `0` success; `1` usage/setup error (bad names) or a manifest that could not be published — build failed, unreadable `skills[]`, or a bare-string `agents[]` entry — and `1` beats `3` (completed, refused above). `--dry-run` predicts `3` and both manifest-shape `1`s, but not a build-failure `1`.
 
 ## Workflow C: Sync Individual Repos
 

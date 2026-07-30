@@ -57,10 +57,15 @@ Exit status:
   0  success
   1  usage/setup error — bad/missing arguments, a --skills value that resolves
      to no valid skill, or an --add value naming a skill with no SKILL.md —
-     or a plugin auto-build failed, or its manifest could not be read (the
-     catalogue is then deliberately left un-regenerated rather than
+     or a manifest could not be published: its plugin build failed, its
+     skills[] could not be read, or it declares a bare-string agents[] entry
+     (the catalogue is then deliberately left un-regenerated rather than
      describing an unbuilt plugin or an emptied one)
   3  completed, but skills were refused by the reversion guard
+
+  All three manifest failures are collected across the run and reported in one
+  summary that names each, under its own reason, so several broken manifests
+  take one re-run rather than one each.
 
   A --skills or --add value that matches no real skill is a usage error, not a
   build failure, but it deliberately shares exit 1 with one rather than mint a
@@ -85,8 +90,17 @@ Exit status:
   correctly predict the rest: a 3 (the reversion guard runs unconditionally); a
   1 from --skills or --add resolving to no valid skill (those guards run before
   any --dry-run gate, so a bad value refuses the preview exactly as it would
-  refuse the real run); and a 1 from a manifest whose skills[] cannot be read at
-  all, since that read happens regardless of whether a build follows it.
+  refuse the real run); a 1 from a manifest whose skills[] cannot be read at
+  all, since that read happens regardless of whether a build follows it; and a 1
+  from a bare-string agents[] entry, which the main sync loop rejects before the
+  build stage is reached. A --dry-run that hits any of those says so explicitly
+  rather than repeating the real run's "already written" wording.
+
+Stdin:
+  Every list-driven loop reads its list from fd 3, never the loop body's stdin,
+  so no child process can consume the list and truncate the run. Children
+  therefore inherit the CALLER's stdin. Redirect stdin from /dev/null when
+  running this non-interactively if any child might read it.
 
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
@@ -387,6 +401,13 @@ CATALOG_ROWS=""
 # {{SKILL_COUNT}} substitution site; read it before touching either.
 SKILLS_RESOLVED_COUNT=0
 
+# Manifests the main sync loop refused for a bare-string agents[] entry.
+# Declared HERE, before the loop, rather than alongside _FAILED_BUILDS in the
+# auto-build stage below: this loop runs first, and a variable declared after it
+# cannot collect from it. Folded into the same collected-failure exit as the
+# auto-build stage's own lists, so all three report through one summary.
+_BARE_ENTRY_MANIFESTS=""
+
 # Line-wise, not `for SKILL_NAME in $SKILLS_TO_SYNC` (issue #81): unquoted word
 # splitting breaks a skill directory whose name contains a space into separate
 # tokens, each of which fails to resolve — two loud "no SKILL.md" ERRORs where
@@ -486,7 +507,13 @@ while IFS= read -r SKILL_NAME <&3; do
 
   # Check if individual repo exists
   INDIVIDUAL_REPO_URL=""
-  if gh repo view "$GITHUB_USER/$SKILL_NAME" --json url --jq '.url' >/dev/null 2>&1; then
+  # </dev/null: with the skill list moved off the loop body's stdin and onto
+  # fd 3, this child now inherits the CALLER's stdin. That is strictly safer —
+  # a stdin-consuming child can no longer eat the list — but if the caller's
+  # stdin is an interactive terminal it turns a silent truncation into a hang.
+  # An explicit /dev/null makes it an immediate EOF instead, so the call cannot
+  # block on any stdin, inherited or otherwise.
+  if gh repo view "$GITHUB_USER/$SKILL_NAME" --json url --jq '.url' >/dev/null 2>&1 </dev/null; then
     INDIVIDUAL_REPO_URL="https://github.com/$GITHUB_USER/$SKILL_NAME"
   fi
 
@@ -553,14 +580,33 @@ while IFS= read -r SKILL_NAME <&3; do
     # prepare-plugin.sh at the auto-build stage below, which is the script that
     # actually reads it.
     #
-    # Skipped, not fatal: the very next stage runs prepare-plugin.sh against
-    # this same manifest, which exits 1 on it and is collected into
-    # _FAILED_BUILDS, so the run still fails — and it fails after naming every
-    # other broken manifest too, rather than one per re-run.
+    # Recorded into _BARE_ENTRY_MANIFESTS and exited on after the auto-build
+    # stage, NOT left to that stage to catch. An earlier version of this guard
+    # claimed "the very next stage runs prepare-plugin.sh against this same
+    # manifest, which exits 1 on it", and that is false whenever the build does
+    # not run: prepare-plugin.sh is invoked only when _NEEDS_BUILD is true, so
+    # adding `"agents": ["x"]` to an ALREADY-PUBLISHED plugin's manifest without
+    # touching its SKILL.md — the natural way to add an agent, in exactly the
+    # legacy bare-string form this batch exists to tolerate — left the drift
+    # check finding nothing, the build never running, the declared agents
+    # silently not copied, and README/CHANGELOG/marketplace all regenerated at
+    # exit 0. Three more paths `continue` before the build for their own
+    # reasons and would have bypassed it identically: the standalone-marketplace
+    # skip, the --add-plugin skip, and the shadowed-manifest skip.
+    #
+    # That made this guard a LOUDNESS REGRESSION: before it, such a manifest
+    # died at `jq -r ".agents[$ai].name"` with rc=5 — ugly, but fatal, and
+    # nothing downstream was written. Trading a loud abort for a quiet ERROR
+    # line above a successful-looking run is the exact defect shape this whole
+    # batch exists to remove.
+    #
+    # Collected rather than `exit 1` here so a run with several broken manifests
+    # still names all of them in one pass, matching the auto-build stage.
     _BARE_AGENTS=$(manifest_bare_entries "$MANIFEST" agents 2>/dev/null || true)
     if [[ -n "$_BARE_AGENTS" ]]; then
       echo "  ERROR: agent entry must be an object with 'name' and 'source', not a bare string: $_BARE_AGENTS" >&2
       echo "         in $MANIFEST" >&2
+      _BARE_ENTRY_MANIFESTS="${_BARE_ENTRY_MANIFESTS:+$_BARE_ENTRY_MANIFESTS }$MANIFEST"
       AGENT_COUNT=0
     fi
     if [[ "$AGENT_COUNT" -gt 0 ]]; then
@@ -717,16 +763,24 @@ discover_plugins() {
 # and synced as a plugin. No --add-plugin needed for known plugins.
 PREPARE_SCRIPT="$SCRIPT_DIR/prepare-plugin.sh"
 AUTO_BUILT_PLUGINS=""
-# Manifests whose auto-build failed, or that could not be read far enough to
-# attempt one. Space-separated, matching AUTO_BUILT_PLUGINS' idiom. Collected
-# across the whole stage and acted on once, after the loop.
+# Two lists, not one, because the two failures are not the same event and the
+# summary must not claim more than happened: _FAILED_BUILDS is a build that was
+# ATTEMPTED and failed; _UNREADABLE_MANIFESTS is a manifest whose skills[] could
+# not be read, where no build was attempted at all. Reporting the second as
+# "plugin build failed" was itself a message claiming more than occurred, in a
+# change set whose whole theme is that messages must not do that.
 #
-# The read-failure entries are the only ones a --dry-run can produce: the build
-# itself never runs under --dry-run, but the manifest is read regardless, so a
-# structurally broken manifest now fails a dry run too. That is deliberate — it
-# is a defect --dry-run can genuinely see, so it should say so rather than
-# predict a clean run that will not happen.
+# Space-separated, matching AUTO_BUILT_PLUGINS' idiom. Collected across the
+# stage and acted on once, together with _BARE_ENTRY_MANIFESTS from the main
+# sync loop, in the combined check after this block.
+#
+# _UNREADABLE_MANIFESTS is the only one of the three a --dry-run can produce
+# from this stage: the build never runs under --dry-run, but the manifest is
+# read regardless, so a structurally broken manifest fails a dry run too. That
+# is deliberate — it is a defect --dry-run can genuinely see, so it should say
+# so rather than predict a clean run that will not happen.
 _FAILED_BUILDS=""
+_UNREADABLE_MANIFESTS=""
 
 if [[ -x "$PREPARE_SCRIPT" ]]; then
   # Auto-built plugins are assembled into a throwaway temp directory, never the
@@ -800,13 +854,22 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     # (`Cannot index number with string "name"`), and the `.name` read further
     # up succeeds on the same file, so nothing earlier catches it.
     #
-    # 2>&1 rather than 2>/dev/null: the child's own parse error is the only
-    # description of what is wrong with the manifest, and there is no build log
-    # on this path to carry it.
-    if ! _MANIFEST_SKILL_NAMES=$(manifest_skill_names "$_MANIFEST" 2>&1); then
+    # stderr is captured SEPARATELY, on the failure path only — never merged
+    # into $_MANIFEST_SKILL_NAMES. On the success path that variable *is* the
+    # skill-name list: it feeds the reversion guard and _FIRST_SKILL. A `2>&1`
+    # here would let any jq diagnostic that accompanies a zero exit become a
+    # phantom skill name, and a phantom _FIRST_SKILL resolves nowhere, so the
+    # drift check falls through, _NEEDS_BUILD stays false, and the plugin is
+    # silently never rebuilt — #73 re-entering through its own fix. No such
+    # warning is reachable for this filter today; merging a diagnostic stream
+    # into data that is then read as data is unsafe by construction regardless.
+    # The second invocation runs only when the first failed, so the success
+    # path still costs one jq.
+    if ! _MANIFEST_SKILL_NAMES=$(manifest_skill_names "$_MANIFEST" 2>/dev/null); then
+      _MANIFEST_READ_ERR=$(manifest_skill_names "$_MANIFEST" 2>&1 >/dev/null || true)
       echo "  ERROR: cannot read skills[] from $_MANIFEST" >&2
-      sed 's/^/    | /' <<< "$_MANIFEST_SKILL_NAMES" >&2 || true
-      _FAILED_BUILDS="${_FAILED_BUILDS:+$_FAILED_BUILDS }$_MANIFEST"
+      sed 's/^/    | /' <<< "$_MANIFEST_READ_ERR" >&2 || true
+      _UNREADABLE_MANIFESTS="${_UNREADABLE_MANIFESTS:+$_UNREADABLE_MANIFESTS }$_MANIFEST"
       continue
     fi
 
@@ -935,28 +998,56 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     fi
   done
 
-  # A plugin that could not be built must stop the run (#73). Everything after
-  # this point regenerates the monorepo's catalogue — the root README's plugin
-  # table, the CHANGELOG entry and .claude-plugin/marketplace.json — from the
-  # published plugins/ tree. Continuing would publish a catalogue describing a
-  # plugin this run failed to build, at whatever version was already on disk,
-  # and report exit 0 while doing it. That is the "reports success while not
-  # doing its job" shape, and before this it was exactly what happened: the
-  # plugin silently never rebuilt.
-  #
-  # The trade-off is deliberate. Stopping here leaves skills synced but the
-  # README/CHANGELOG/marketplace not regenerated — inconsistent, but loud, fully
-  # git-recoverable, and fixed by re-running after the manifest is corrected.
+fi
+
+# --- Collected-failure gate (#73) ---
+# A manifest that could not be published must stop the run. Everything after
+# this point regenerates the monorepo's catalogue — the root README's plugin
+# table, the CHANGELOG entry and .claude-plugin/marketplace.json — from the
+# published plugins/ tree. Continuing would publish a catalogue describing a
+# plugin this run failed to build, at whatever version was already on disk, and
+# report exit 0 while doing it. That is the "reports success while not doing its
+# job" shape, and before this it was exactly what happened.
+#
+# OUTSIDE the `[[ -x "$PREPARE_SCRIPT" ]]` block, deliberately. Two of the three
+# lists are filled inside it, but _BARE_ENTRY_MANIFESTS is filled by the main
+# sync loop, which runs whether or not prepare-plugin.sh is even present. Nested
+# inside, a missing or non-executable prepare-plugin.sh would silently disarm
+# the bare-entry refusal along with the build ones.
+#
+# The trade-off is deliberate. Stopping here leaves skills synced but the
+# README/CHANGELOG/marketplace not regenerated — inconsistent, but loud, fully
+# git-recoverable, and fixed by re-running after the manifest is corrected.
+if [[ -n "$_FAILED_BUILDS$_UNREADABLE_MANIFESTS$_BARE_ENTRY_MANIFESTS" ]]; then
+  echo "" >&2
+  echo "Error: refusing to continue — one or more manifests could not be published." >&2
+  # Named separately rather than lumped under one "build failed" line: only the
+  # first is a build that ran and failed. Calling a read error or a rejected
+  # entry a "build failure" is a message claiming more than happened, which is
+  # the defect class this whole batch exists to remove.
   if [[ -n "$_FAILED_BUILDS" ]]; then
-    echo "" >&2
-    echo "Error: plugin build failed, refusing to continue: $_FAILED_BUILDS" >&2
-    echo "       The child's own diagnosis is above. Skills synced before this" >&2
-    echo "       point are already written; the monorepo README, CHANGELOG and" >&2
-    echo "       marketplace catalogue are deliberately NOT regenerated, so they" >&2
-    echo "       cannot come to describe a plugin this run could not build." >&2
-    echo "       Fix the manifest and re-run." >&2
-    exit 1
+    echo "       plugin build failed:        $_FAILED_BUILDS" >&2
   fi
+  if [[ -n "$_UNREADABLE_MANIFESTS" ]]; then
+    echo "       skills[] could not be read: $_UNREADABLE_MANIFESTS" >&2
+  fi
+  if [[ -n "$_BARE_ENTRY_MANIFESTS" ]]; then
+    echo "       bare-string agents[] entry: $_BARE_ENTRY_MANIFESTS" >&2
+  fi
+  echo "       The diagnosis for each is above." >&2
+  # Under --dry-run nothing was written at all, so the "already written"
+  # sentence would be false. Verified: a --dry-run over a manifest with
+  # "skills": [123] reached this gate and printed it.
+  if $DRY_RUN; then
+    echo "       Nothing was written — this was a --dry-run." >&2
+  else
+    echo "       Skills synced before this point are already written; the" >&2
+    echo "       monorepo README, CHANGELOG and marketplace catalogue are" >&2
+    echo "       deliberately NOT regenerated, so they cannot come to describe" >&2
+    echo "       a manifest this run could not publish." >&2
+  fi
+  echo "       Fix the manifest and re-run." >&2
+  exit 1
 fi
 
 # Add new plugin from build directory if --add-plugin specified (manual override)
@@ -1634,7 +1725,15 @@ fi
 # via: /plugin marketplace add GITHUB_USER/claude-code-skills
 if [[ $PLUGIN_COUNT -gt 0 ]]; then
   MARKETPLACE_PLUGINS=""
-  while IFS= read -r pjson; do
+  # On fd 3 for the same reason as every other list-driven loop in this file:
+  # this body spawns dirname and three jq invocations per iteration, and a
+  # process substitution on plain stdin is the loop body's stdin exactly as a
+  # here-string is. None of those children reads stdin today — but that is the
+  # argument already rejected at the install-all loop, whose comment reads
+  # "pure-bash body today, uniform treatment so a later addition cannot
+  # reintroduce the truncation silently". Leaving this one out would have made
+  # that rule apply everywhere except the one loop that actually spawns things.
+  while IFS= read -r pjson <&3; do
     pdir=$(dirname "$(dirname "$pjson")")
     pname=$(jq -r '.name // ""' "$pjson" 2>/dev/null)
     pdesc=$(jq -r '.description // ""' "$pjson" 2>/dev/null)
@@ -1653,7 +1752,7 @@ if [[ $PLUGIN_COUNT -gt 0 ]]; then
       \"version\": \"$pver\"
     }"
     fi
-  done < <(find "$MONOREPO_DIR/plugins" -maxdepth 3 -name "plugin.json" -path "*/.claude-plugin/*" 2>/dev/null | sort)
+  done 3< <(find "$MONOREPO_DIR/plugins" -maxdepth 3 -name "plugin.json" -path "*/.claude-plugin/*" 2>/dev/null | sort)
 
   MARKETPLACE_JSON="{
   \"name\": \"claude-code-skills\",
