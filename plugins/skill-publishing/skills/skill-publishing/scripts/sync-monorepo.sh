@@ -97,12 +97,23 @@ Exit status:
   rather than repeating the real run's "already written" wording.
 
 Stdin:
-  Every list-driven loop reads its list from fd 3, and runs its body with stdin
-  on /dev/null. The second half is what guarantees a child cannot consume the
-  list: fd 3 is inherited across exec like any other descriptor, so it is a
-  convention (nothing reads fd 3 unless written to) rather than a barrier, while
-  the /dev/null makes stdin an immediate EOF for every child unconditionally.
-  This script therefore never reads the caller's stdin from inside those loops.
+  A loop that iterates a captured list IN THE CURRENT SHELL reads that list from
+  fd 3 and runs its body with stdin on /dev/null. The /dev/null is what
+  guarantees a child cannot consume the list: fd 3 is inherited across exec like
+  any other descriptor, so it is a convention (nothing reads fd 3 unless written
+  to) rather than a barrier, while the /dev/null makes stdin an immediate EOF for
+  every child. Those loops therefore never read the caller's stdin.
+
+  TWO loops deliberately do NOT follow that pattern, and must not be "fixed" to
+  match it:
+    - filter_skill_candidates() is a pipeline filter. It is invoked as
+      `find … | filter_skill_candidates | sort`, so its input IS stdin by
+      definition. Moving it to fd 3 makes it read nothing, discover_skills()
+      returns an empty list, and the run reports "Skills to sync (0)" and
+      "Sync complete. 0 skills synced" at exit 0 while rewriting the catalogue
+      empty — verified by doing it.
+    - the README placeholder loop pipes into a subshell whose stdout is
+      redirected to a file, so it assigns nothing back and has no list to lose.
 
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
@@ -223,6 +234,14 @@ fi
 # stdout here is captured by discover_skills()'s callers as the skill list itself.
 filter_skill_candidates() {
   local name
+  # STDIN, deliberately — do NOT convert this to `<&3` for consistency with the
+  # list-driven loops elsewhere in this file. This is a pipeline FILTER, invoked
+  # as `find … | filter_skill_candidates | sort`, so stdin is its input by
+  # definition. On fd 3 it reads nothing, discover_skills() returns an empty
+  # list, and the run prints "Skills to sync (0)" / "Sync complete. 0 skills
+  # synced" at exit 0 while rewriting the catalogue empty — measured, not
+  # theorised. The fd-3 rule applies to loops iterating a captured list in the
+  # current shell; this is not one.
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     # printf, not echo: bash's echo eats a leading -n/-e/-E, so a directory so

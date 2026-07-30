@@ -155,7 +155,22 @@ from those paths needs re-checking before upgrading.
   produce". It is not — `_BARE_ENTRY_MANIFESTS` is too, since the main sync loop's guard is
   not gated on `DRY_RUN` either, verified by running a `--dry-run` over an already-published
   plugin with `"agents": ["x"]` and getting exit 1. Two further absolutes were tightened in
-  the same pass. The check is cheap and belongs in review, not in hindsight. (#81)
+  the same pass.
+
+  **Run the sweep over the WHOLE FILE, not the diff.** The first pass was scoped to that
+  round's added lines, which structurally cannot catch a false absolute introduced by the
+  commit immediately before the one running the sweep — and one had been: `--help`'s
+  `Stdin:` block claimed "Every list-driven loop reads its list from fd 3", while
+  `filter_skill_candidates()` reads stdin and *must*, being a pipeline filter. That one was
+  a live trap rather than a nit: a maintainer converting it for the consistency the sentence
+  promised gets "Skills to sync (0)", "Sync complete. 0 skills synced", an emptied catalogue
+  and exit 0 — measured. A whole-file pass over 124 absolute-bearing lines found no others,
+  so this is a one-time audit rather than a recurring tax.
+
+  The two checks are complementary and neither subsumes the other: cross-reading two
+  descriptions of the same behaviour catches the class that produced the first four (a
+  comment disagreeing with another comment), while whole-file absolute-sweeping catches this
+  one, where the disagreement is between the documentation and the code. (#81)
 
 - **The line-wise conversion above had a sixth site with no test coverage at all.** It is
   described everywhere as five sites in `sync-monorepo.sh`; the sixth is
