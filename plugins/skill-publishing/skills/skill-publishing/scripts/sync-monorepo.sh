@@ -97,10 +97,12 @@ Exit status:
   rather than repeating the real run's "already written" wording.
 
 Stdin:
-  Every list-driven loop reads its list from fd 3, never the loop body's stdin,
-  so no child process can consume the list and truncate the run. Children
-  therefore inherit the CALLER's stdin. Redirect stdin from /dev/null when
-  running this non-interactively if any child might read it.
+  Every list-driven loop reads its list from fd 3, and runs its body with stdin
+  on /dev/null. The second half is what guarantees a child cannot consume the
+  list: fd 3 is inherited across exec like any other descriptor, so it is a
+  convention (nothing reads fd 3 unless written to) rather than a barrier, while
+  the /dev/null makes stdin an immediate EOF for every child unconditionally.
+  This script therefore never reads the caller's stdin from inside those loops.
 
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
@@ -297,7 +299,7 @@ discover_skills() {
       if [[ -z "$(skill_source_dir "$_add_name")" ]]; then
         _add_unresolved="${_add_unresolved:+$_add_unresolved, }$_add_name"
       fi
-    done 3<<< "$(printf '%s\n' "$ADD_SKILL" | tr ',' '\n')"
+    done 3<<< "$(printf '%s\n' "$ADD_SKILL" | tr ',' '\n')" </dev/null
     if [[ -n "$_add_unresolved" ]]; then
       echo "Error: --add named skills with no SKILL.md: $_add_unresolved" >&2
       echo "       Looked under $SKILLS_HOME/<name>/ and $MONOREPO_DIR/<name>/." >&2
@@ -427,10 +429,34 @@ _BARE_ENTRY_MANIFESTS=""
 # same rows, and the CHANGELOG inventory iterates the same (already drained)
 # list — so a two-thirds-empty catalogue is internally self-consistent and
 # nothing flags it. The old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such
-# exposure; converting to `while read` created it. Binding the list to fd 3
-# leaves the body's stdin untouched (inherited from the caller), so no child
-# can reach the list at all. The same treatment is applied to every converted
-# loop in this file and in validate-pre-sync.sh.
+# exposure; converting to `while read` created it.
+#
+# TWO mechanisms, and they are not equally strong — an earlier version of this
+# comment claimed fd 3 alone meant "no child can reach the list at all", which
+# is FALSE and was measured to be false:
+#
+#   1. `3<<<` moves the list off stdin. This is a CONVENTION, not a barrier.
+#      fd 3 is inherited across exec like any other descriptor, so a child that
+#      deliberately reads `<&3` consumes the list exactly as a stdin-reading
+#      child did. Measured on a 4-line list: a body running `head -1 <&3` cut
+#      the loop to 2 iterations. What fd 3 actually buys is that stdin is read
+#      by filters *by nature* — cat, sed, grep, a future `gh` subcommand that
+#      grows a prompt — whereas nothing reads fd 3 unless it was written to.
+#      That is a real and sufficient reduction in exposure; it is not immunity.
+#
+#   2. `</dev/null` on the loop makes the stdin half UNCONDITIONAL. The body's
+#      stdin is /dev/null rather than whatever the caller had, so every child
+#      spawned here — gh, rsync, cp, diff, find, jq — gets immediate EOF and
+#      cannot consume anything, deliberately or otherwise. It also removes the
+#      one downside of moving the list off stdin: with the list on fd 3 the
+#      body would otherwise inherit the caller's stdin, so a stdin-reading
+#      child would HANG on an interactive terminal instead of truncating. A
+#      hang is the better failure, but /dev/null avoids both.
+#
+# Together: (2) closes the reachable case; (1) means a child would have to name
+# fd 3 explicitly to break it, which nothing does by accident. The same
+# treatment is applied to every converted loop in this file and in
+# validate-pre-sync.sh.
 while IFS= read -r SKILL_NAME <&3; do
   [[ -z "$SKILL_NAME" ]] && continue
   SKILL_SRC=$(skill_source_dir "$SKILL_NAME")
@@ -507,13 +533,10 @@ while IFS= read -r SKILL_NAME <&3; do
 
   # Check if individual repo exists
   INDIVIDUAL_REPO_URL=""
-  # </dev/null: with the skill list moved off the loop body's stdin and onto
-  # fd 3, this child now inherits the CALLER's stdin. That is strictly safer —
-  # a stdin-consuming child can no longer eat the list — but if the caller's
-  # stdin is an interactive terminal it turns a silent truncation into a hang.
-  # An explicit /dev/null makes it an immediate EOF instead, so the call cannot
-  # block on any stdin, inherited or otherwise.
-  if gh repo view "$GITHUB_USER/$SKILL_NAME" --json url --jq '.url' >/dev/null 2>&1 </dev/null; then
+  # No per-call </dev/null needed: the loop itself is `done … </dev/null`, so
+  # this child's stdin is already /dev/null. One mechanism at the loop, not one
+  # per call site — see the loop's own comment.
+  if gh repo view "$GITHUB_USER/$SKILL_NAME" --json url --jq '.url' >/dev/null 2>&1; then
     INDIVIDUAL_REPO_URL="https://github.com/$GITHUB_USER/$SKILL_NAME"
   fi
 
@@ -590,9 +613,16 @@ while IFS= read -r SKILL_NAME <&3; do
     # legacy bare-string form this batch exists to tolerate — left the drift
     # check finding nothing, the build never running, the declared agents
     # silently not copied, and README/CHANGELOG/marketplace all regenerated at
-    # exit 0. Three more paths `continue` before the build for their own
-    # reasons and would have bypassed it identically: the standalone-marketplace
-    # skip, the --add-plugin skip, and the shadowed-manifest skip.
+    # exit 0. Measured pre/post on one fixture: rc 5 (fatal, nothing written)
+    # before the guard existed, rc 0 with the catalogue regenerated after it.
+    #
+    # SIX conditions leave prepare-plugin.sh un-run and would have bypassed the
+    # claimed net identically, not the three an earlier draft of this comment
+    # listed: --dry-run; a shadowed manifest; the standalone-marketplace skip
+    # (git-flow); --add-plugin targeting this same plugin; the skill having been
+    # refused by the reversion guard; and PREPARE_SCRIPT not being executable,
+    # which skips the entire stage. The seventh is the one above — no drift, so
+    # _NEEDS_BUILD is simply false.
     #
     # That made this guard a LOUDNESS REGRESSION: before it, such a manifest
     # died at `jq -r ".agents[$ai].name"` with rc=5 — ugly, but fatal, and
@@ -714,7 +744,7 @@ This skill follows the **Agent Skills** standard — a \`SKILL.md\` file with YA
   fi
 
   echo ""
-done 3<<< "$SKILLS_TO_SYNC"
+done 3<<< "$SKILLS_TO_SYNC" </dev/null
 
 # --- Guard: an explicit --skills value that matched no real skill must not
 # proceed to rebuild the catalogue (#80, second half). The discover_skills()
@@ -893,7 +923,7 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
         if skill_refused "$_PLUGIN_SKILL"; then
           _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
         fi
-      done 3<<< "$_MANIFEST_SKILL_NAMES"
+      done 3<<< "$_MANIFEST_SKILL_NAMES" </dev/null
       if [[ -n "$_REFUSED_IN_PLUGIN" ]]; then
         echo "  SKIP (reversion guard)  plugins/$_MANIFEST_NAME  —  stale local source for: $_REFUSED_IN_PLUGIN"
         continue
@@ -1330,7 +1360,7 @@ if [[ -n "$PLUGINS_TO_LIST" ]]; then
 "
       PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
     fi
-  done 3<<< "$PLUGINS_TO_LIST"
+  done 3<<< "$PLUGINS_TO_LIST" </dev/null
 fi
 
 # --- Generate root README ---
@@ -1370,7 +1400,7 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
     [[ -z "$SKILL_NAME" ]] && continue
     INSTALL_ALL_CMDS="${INSTALL_ALL_CMDS}cp -r /tmp/claude-code-skills/$SKILL_NAME ~/.claude/skills/$SKILL_NAME
 "
-  done 3<<< "$SKILLS_TO_SYNC"
+  done 3<<< "$SKILLS_TO_SYNC" </dev/null
 
   # Build plugin section (only if plugins exist)
   PLUGIN_SECTION=""
@@ -1509,7 +1539,7 @@ while IFS= read -r SKILL_NAME <&3; do
     SKILL_INVENTORY="${SKILL_INVENTORY}
 - \`$SKILL_NAME\` v${VERSION:-?.?.?}${INVENTORY_REFUSED_NOTE} — $SHORT_DESC"
   fi
-done 3<<< "$SKILLS_TO_SYNC"
+done 3<<< "$SKILLS_TO_SYNC" </dev/null
 
 # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): "Synced" is
 # past tense — a claim about what happened, persisted into the CHANGELOG —
@@ -1752,7 +1782,7 @@ if [[ $PLUGIN_COUNT -gt 0 ]]; then
       \"version\": \"$pver\"
     }"
     fi
-  done 3< <(find "$MONOREPO_DIR/plugins" -maxdepth 3 -name "plugin.json" -path "*/.claude-plugin/*" 2>/dev/null | sort)
+  done 3< <(find "$MONOREPO_DIR/plugins" -maxdepth 3 -name "plugin.json" -path "*/.claude-plugin/*" 2>/dev/null | sort) </dev/null
 
   MARKETPLACE_JSON="{
   \"name\": \"claude-code-skills\",

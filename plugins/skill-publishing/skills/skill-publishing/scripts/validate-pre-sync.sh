@@ -91,9 +91,15 @@ JSON_ITEMS=""
 # extract_version) on every iteration. A child that reads stdin would eat the
 # rest of the list, and the loop would exit early having examined only the
 # skills read so far — while still printing "Safe to sync" over a TOTAL that
-# agrees with the truncation, since TOTAL counts the same loop. Binding the
-# list to fd 3 leaves the body's stdin untouched so no child can reach it.
-# Same treatment as every converted loop in sync-monorepo.sh.
+# agrees with the truncation, since TOTAL counts the same loop.
+#
+# `3<<<` plus `</dev/null`, and the two are not equally strong. fd 3 is
+# INHERITED by children like any other descriptor, so a child that deliberately
+# reads `<&3` still eats the list — measured. What fd 3 buys is that stdin is
+# read by filters by nature while fd 3 is read by nothing unless written to.
+# The `</dev/null` on the loop is what makes the stdin half unconditional: every
+# child here (grep, sed, head) gets immediate EOF. Fuller reasoning at the main
+# sync loop in sync-monorepo.sh; same treatment at every converted loop.
 while IFS= read -r SKILL_NAME <&3; do
   [[ -z "$SKILL_NAME" ]] && continue
 
@@ -157,7 +163,7 @@ while IFS= read -r SKILL_NAME <&3; do
       RESULTS="${RESULTS}  Describe what changed from v${LATEST_CL_VERSION} to v${VERSION}\n"
     fi
   fi
-done 3<<< "$SKILLS"
+done 3<<< "$SKILLS" </dev/null
 
 # --- Output ---
 if $JSON_MODE; then

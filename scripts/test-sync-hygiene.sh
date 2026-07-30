@@ -3221,6 +3221,41 @@ assert_eq "…and no gh invocation could read a single byte of the skill list (a
 assert_eq "…with the probe actually having run (gh was invoked once per synced skill)" \
     "3" "$(wc -l < "$GH_DRAIN_BYTES_LOG" | tr -d ' ')"
 
+# --- The loop-level `</dev/null`, isolated from the run-level one. ---
+#
+# The run above supplies </dev/null itself, so its zero-bytes result would hold
+# even with the loop's own redirect removed — it proves the list is off stdin,
+# not that the body's stdin is neutralised. This run feeds the sync a KNOWN
+# NON-EMPTY stdin instead. With `done … </dev/null` on the loop the shim still
+# reads 0; without it the shim reaches the caller's stdin and reads those bytes.
+#
+# That distinction is the point. fd 3 alone is a convention, not a barrier: it
+# is inherited across exec, and a child running `<&3` consumes the list exactly
+# as a stdin-reading child did — measured directly, a 4-line list driving 2
+# iterations when the body read one line from fd 3. So the guarantee has two
+# halves, and this asserts the half that is actually unconditional. The other
+# half is not asserted: a child would have to name fd 3 deliberately, and an
+# assertion for it would be testing bash's fd inheritance rather than this
+# script.
+: > "$GH_DRAIN_BYTES_LOG"
+DRAIN_FED_RC=0
+(
+    cd "$RUN_CWD"
+    PATH="$GH_DRAIN_SHIM_DIR:$PATH" \
+    SKILLS_HOME="$SKILLS_HOME_FIXROUND_FIXTURE" \
+        "$SYNC_SCRIPT" --github-user harness-fixture-user "$MONOREPO_DRAIN_FIXTURE"
+) >"$SCRATCH_DIR/drain-fed-stdout.log" 2>"$SCRATCH_DIR/drain-fed-stderr.log" \
+    <<< "STDIN-THE-LOOP-MUST-NOT-EXPOSE" || DRAIN_FED_RC=$?
+DRAIN_FED_STDOUT="$(cat "$SCRATCH_DIR/drain-fed-stdout.log")"
+
+assert_eq "a run given non-empty stdin still syncs every skill" \
+    "0" "$DRAIN_FED_RC"
+assert_eq "…all three, not a prefix" "3" "$(sync_complete_count "$DRAIN_FED_STDOUT")"
+assert_eq "…and every gh invocation still read 0 bytes, so the loop's own </dev/null holds" \
+    "0" "$(sort -u "$GH_DRAIN_BYTES_LOG" | tr '\n' ' ' | sed 's/ *$//')"
+assert_eq "…with the probe having actually run against the fed stdin" \
+    "3" "$(wc -l < "$GH_DRAIN_BYTES_LOG" | tr -d ' ')"
+
 # ------------------------------------------------------------------
 # Defects 15 + 16 — --add resolvability, --skills de-duplication
 # ------------------------------------------------------------------

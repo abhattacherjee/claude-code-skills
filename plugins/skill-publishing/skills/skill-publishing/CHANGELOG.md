@@ -38,6 +38,11 @@ from those paths needs re-checking before upgrading.
   `jq: error … Cannot index string with "name"`, and `sync-monorepo.sh` read the same
   shape at two sites under `2>/dev/null` — so its reversion guard saw no skills to check
   and its drift check saw no first skill, and the plugin was never rebuilt at all. The
+  "never rebuilt at all" class is **not fully closed**: `custom-statusline` still is not,
+  for the unrelated reason filed as **#92** — the drift detectors resolve a plugin's skills
+  by `name` while `prepare-plugin.sh` resolves them by `source`, so a manifest whose two
+  disagree stays permanently drift-blind. Pre-existing, and out of scope here, but do not
+  read this entry as shutting the class. The
   manifest is now shape-normalised once into a temp copy that every read is pointed at
   (`normalize_manifest()` in `_lib.sh`), with `MANIFEST_DIR` deliberately left pointing
   at the *original* manifest's directory so relative `source` values still resolve; the
@@ -122,11 +127,17 @@ from those paths needs re-checking before upgrading.
   children (`dirname`, three `jq`s per iteration), so exempting it would have applied the
   rule everywhere except where it most obviously belongs.
 
-  One behavioural consequence worth stating: with the list off stdin, a stdin-consuming
-  child now inherits the **caller's** stdin, so it would manifest as a hang rather than a
-  silent truncation. A hang is strictly the better failure. The `gh repo view` probe reads
-  `</dev/null` so it cannot block on an inherited terminal, and `--help` records that
-  callers should redirect stdin when running non-interactively. (#81)
+  **fd 3 is a convention, not a barrier, and the comment saying otherwise was wrong.** It
+  claimed "no child can reach the list at all"; descriptors are inherited across `exec`, so
+  a child that deliberately reads `<&3` consumes the list exactly as a stdin-reading child
+  did — measured: a 4-line list drove 2 iterations when the body read one line from fd 3.
+  What fd 3 actually buys is that stdin is read by filters *by nature* while nothing reads
+  fd 3 unless written to. Every one of those loops therefore also runs its body with
+  `</dev/null`, which is the half that IS unconditional: every child gets immediate EOF, so
+  the reachable case is closed rather than merely made unlikely. It also removes the one
+  downside of moving the list off stdin — the body would otherwise inherit the caller's
+  stdin, turning a truncation into a hang on an interactive terminal. `--help` states both
+  halves and which one is load-bearing. (#81)
 
 - **The line-wise conversion above had a sixth site with no test coverage at all.** It is
   described everywhere as five sites in `sync-monorepo.sh`; the sixth is
