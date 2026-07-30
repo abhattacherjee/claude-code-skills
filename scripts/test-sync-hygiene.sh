@@ -2714,6 +2714,34 @@ assert_line_present "the plugin auto-build stage's OWN reversion-guard check ski
 assert_not_contains "the refused plugin is not built anyway" \
     "AUTO-SYNCED  plugins/space-plugin/" "$SPACE_PLUGIN_STDOUT"
 
+# --- Assertion: review round 3's CRITICAL finding, on the same refusal
+# fixture. A refused skill still keeps its catalogue row — CATALOG_ROWS is
+# built from the in-repo metadata BEFORE the reversion guard's `continue`,
+# deliberately, so the root README stays populated for a skill that just
+# wasn't recopied this run. Round 2 wrongly pointed the README's
+# {{SKILL_COUNT}} figure at SKILLS_SYNCED_COUNT (resolved minus refused),
+# which undercounts the catalogue by exactly REFUSED_COUNT whenever anything
+# is refused — this fixture has REFUSED_COUNT=1, SKILLS_RESOLVED_COUNT=1, so
+# the wrong figure reads 0 while the catalogue still has 1 row. Verified by
+# hand against the round-2 code: README said "0 reusable" above a 1-row
+# table, and the CHANGELOG said "Synced 0 skills" above a bullet for `my
+# skill` with no indication that entry wasn't part of the 0. Both fixed:
+# README/fallback now use SKILLS_RESOLVED_COUNT (matches the catalogue
+# unconditionally), and the CHANGELOG inventory annotates refused entries so
+# "Synced 0" no longer reads as contradicted by a populated list. ---
+SPACE_PLUGIN_README="$(cat "$MONOREPO_SPACE_PLUGIN_FIXTURE/README.md" 2>/dev/null || true)"
+SPACE_PLUGIN_CHANGELOG="$(cat "$MONOREPO_SPACE_PLUGIN_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+SPACE_PLUGIN_ROW_COUNT="$(skill_catalog_row_count "$MONOREPO_SPACE_PLUGIN_FIXTURE/README.md")"
+assert_eq "the README's {{SKILL_COUNT}} figure equals the catalogue row count even when a skill was refused" \
+    "$SPACE_PLUGIN_ROW_COUNT" "$(sed -n 's/^A curated collection of \([0-9]*\) reusable.*/\1/p' <<< "$SPACE_PLUGIN_README")"
+assert_contains "…concretely: the README says 1 (the refused skill's row is kept), not the synced-only 0" \
+    "A curated collection of 1 reusable" "$SPACE_PLUGIN_README"
+assert_contains "…while the CHANGELOG's \"Synced N skills\" correctly reports 0 (nothing was actually copied)" \
+    "Synced 0 skills from local source." "$SPACE_PLUGIN_CHANGELOG"
+assert_line_present "…and the refused skill's own inventory entry is annotated, not left silently contradicting \"Synced 0\"" \
+    "- \`my skill\` v2.0.0 (REFUSED — stale local source, not synced this run) — Throwaway fixture skill — the in-repo copy, newer than the local source, so the reversion guard must refuse to overwrite it." \
+    "$SPACE_PLUGIN_CHANGELOG"
+
 # --- Assertion: the arithmetic fix in isolation, no spaces involved. Verified
 # by hand against a scratch revert of the summary line alone (SKILL_COUNT -
 # REFUSED_COUNT instead of SKILLS_RESOLVED_COUNT - REFUSED_COUNT): this run

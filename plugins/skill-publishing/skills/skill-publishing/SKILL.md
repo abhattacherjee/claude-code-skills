@@ -159,9 +159,9 @@ skill moved into the monorepo would otherwise overwrite newer in-repo content. W
 `SKILL.md` version is strictly newer than the local one, that skill is **REFUSED**: the skill
 sync, the plugin auto-build, and the plugin resync all skip it (logging `SKIP (reversion guard)`),
 its catalog/CHANGELOG metadata is read from the in-repo copy instead, the rest of the sync still
-runs, and the script exits **3** (0 = success, 1 = usage/setup error). Resolve it by deleting the
-stale local copy so the in-repo copy becomes the source, or re-run with `--force-local` to let
-the local copy win deliberately.
+runs, and the script exits **3** — completed, but see below for the full exit-code contract.
+Resolve it by deleting the stale local copy so the in-repo copy becomes the source, or re-run
+with `--force-local` to let the local copy win deliberately.
 
 If user agrees, create the manifest and proceed with plugin publishing.
 
@@ -365,6 +365,8 @@ git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
 ```
 
+`--skills a,b` replaces the synced set (vs `--add`, which appends); either refuses on an unresolvable value rather than publish an empty/partial catalogue. **Exit codes**: `0` success; `1` usage/setup error (bad names, or a failed plugin build — fix the manifest) beats `3` (completed, refused above); `--dry-run` predicts `3` but not a build-failure `1`.
+
 ## Workflow C: Sync Individual Repos
 
 When you update a skill locally and want to push changes to its individual GitHub repo:
@@ -431,7 +433,7 @@ plugin-name/
 ├── commands/                    # Slash commands (.md files)
 ├── skills/skill-name/           # Skills (SKILL.md + scripts/ + references/)
 ├── agents/                      # Subagents (.md files, optional)
-└── hooks/                       # hooks.json + scripts (optional)
+└── hooks/                       # hooks.json + scripts (optional — see note below)
 ```
 
 ### Step 1: Create Build Manifest
@@ -447,6 +449,8 @@ Create `plugin-manifest.json` in the skill directory that anchors the plugin:
   "commands": [{ "name": "cmd-name", "source": "~/.claude/commands/cmd-name.md" }]
 }
 ```
+
+`skills[]` also accepts a legacy bare string (normalised to `source: "."`); bare strings in `commands[]`/`agents[]` are hard errors instead. A declared `hooks.source` that doesn't resolve is fatal too (absent/`null` remain no-ops).
 
 ### Step 2: Assemble
 

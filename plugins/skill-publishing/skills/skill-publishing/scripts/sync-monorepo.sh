@@ -74,7 +74,11 @@ Exit status:
 
   --dry-run cannot predict a 1 from a failed build. Plugins are not assembled at
   all under --dry-run, so a broken manifest previews as a clean plan and only
-  fails on the real run. It does still predict a 3.
+  fails on the real run. It DOES correctly predict the other two: a 3 (the
+  reversion guard runs unconditionally), and a 1 from --skills resolving to no
+  valid skill (both of that guard's checks run before any --dry-run gate, so a
+  bad --skills value refuses the preview exactly as it would refuse the real
+  run).
 
 Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
@@ -416,8 +420,16 @@ while IFS= read -r SKILL_NAME; do
   CATALOG_ROWS="${CATALOG_ROWS}| [$SKILL_NAME](./$SKILL_NAME/) | $VERSION | $SHORT | $REPO_LINK |
 "
 
-  # Refused above: the catalog row is kept (from the in-repo metadata) so the
-  # root README is unchanged, but nothing is copied for this skill.
+  # Refused above: the catalog row is kept (from the in-repo metadata), so
+  # this skill's row is unchanged, but nothing is copied for this skill. The
+  # README's overall "N reusable Agent Skills" figure (built further down)
+  # deliberately uses SKILLS_RESOLVED_COUNT, not SKILLS_SYNCED_COUNT, for
+  # exactly this reason: SKILLS_RESOLVED_COUNT counts every name that
+  # resolved to a real SKILL.md — refused or not — so it stays in step with
+  # the catalogue's actual row count regardless of how many were refused.
+  # SKILLS_SYNCED_COUNT (resolved minus refused) undercounts the catalogue by
+  # REFUSED_COUNT whenever anything here is refused, and shipped as exactly
+  # that regression once already (issue #81, third pass) — do not repeat it.
   if $SKILL_REVERTED; then
     echo ""
     continue
@@ -1091,10 +1103,16 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # Extract everything after the --- separator (skip the template header)
   ROOT_README=$(sed '1,/^---$/d' "$TEMPLATE_DIR/monorepo-readme-template.md")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{GITHUB_USER}}|$GITHUB_USER|g")
-  # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): this
-  # placeholder describes the catalogue table right below it, so it must
-  # match the catalogue's actual row count, not the discovered/requested one.
-  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$SKILLS_SYNCED_COUNT|g")
+  # SKILLS_RESOLVED_COUNT, not SKILL_COUNT and NOT SKILLS_SYNCED_COUNT (issue
+  # #81, third pass): this placeholder describes the catalogue table right
+  # below it, so it must match the catalogue's actual row count. A refused
+  # skill still gets a catalog row (CATALOG_ROWS is built before the
+  # reversion guard's `continue`, deliberately — see the comment where that
+  # row is added, above), so the catalogue's row count is
+  # SKILLS_RESOLVED_COUNT (every name that resolved to a real SKILL.md,
+  # refused or not) rather than SKILLS_SYNCED_COUNT (resolved minus refused,
+  # which undercounts the catalogue whenever anything was refused).
+  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$SKILLS_RESOLVED_COUNT|g")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{LAST_UPDATED}}|$TODAY|g")
   # Build install-all commands (one cp -r per skill)
   INSTALL_ALL_CMDS=""
@@ -1176,12 +1194,13 @@ rm -rf /tmp/ccs
   rm -f "$TMPFILE"
 else
   echo "  Warning: monorepo-readme-template.md not found, generating minimal README"
-  # SKILLS_SYNCED_COUNT, not SKILL_COUNT (issue #81, second pass): same
-  # reasoning as the template branch above — this describes $CATALOG_TABLE's
-  # actual contents, immediately below it.
+  # SKILLS_RESOLVED_COUNT (issue #81, third pass): same reasoning as the
+  # template branch above — this describes $CATALOG_TABLE's actual contents,
+  # immediately below it, and the catalogue's row count is
+  # SKILLS_RESOLVED_COUNT, not SKILLS_SYNCED_COUNT (see that comment).
   ROOT_README="# Claude Code Skills
 
-A curated collection of $SKILLS_SYNCED_COUNT reusable Agent Skills.
+A curated collection of $SKILLS_RESOLVED_COUNT reusable Agent Skills.
 
 ## Skills
 
@@ -1224,15 +1243,24 @@ while IFS= read -r SKILL_NAME; do
   SKILL_MD="${SKILL_SRC:+$SKILL_SRC/SKILL.md}"
   # Refused skills were not copied, so describe them by what the repo actually
   # holds — reading the stale local copy here would record a version the
-  # monorepo never received. Mirrors the catalog-row handling in the main loop.
-  if skill_refused "$SKILL_NAME" && [[ -f "$MONOREPO_DIR/$SKILL_NAME/SKILL.md" ]]; then
-    SKILL_MD="$MONOREPO_DIR/$SKILL_NAME/SKILL.md"
+  # monorepo never received. Mirrors the catalog-row handling in the main loop
+  # (issue #81, third pass): the inventory, like the catalogue, still lists a
+  # refused skill — it did not vanish from the monorepo, it just didn't get a
+  # fresh copy this run — so its entry is annotated rather than omitted. Without
+  # this, "Synced 0 skills" would sit directly above a non-empty bullet list
+  # with no explanation of what that entry is doing there.
+  INVENTORY_REFUSED_NOTE=""
+  if skill_refused "$SKILL_NAME"; then
+    INVENTORY_REFUSED_NOTE=" (REFUSED — stale local source, not synced this run)"
+    if [[ -f "$MONOREPO_DIR/$SKILL_NAME/SKILL.md" ]]; then
+      SKILL_MD="$MONOREPO_DIR/$SKILL_NAME/SKILL.md"
+    fi
   fi
   if [[ -f "$SKILL_MD" ]]; then
     VERSION=$(extract_version "$SKILL_MD")
     SHORT_DESC=$(extract_field "$SKILL_MD" "description" | sed 's/\. Use when:.*//')
     SKILL_INVENTORY="${SKILL_INVENTORY}
-- \`$SKILL_NAME\` v${VERSION:-?.?.?} — $SHORT_DESC"
+- \`$SKILL_NAME\` v${VERSION:-?.?.?}${INVENTORY_REFUSED_NOTE} — $SHORT_DESC"
   fi
 done <<< "$SKILLS_TO_SYNC"
 

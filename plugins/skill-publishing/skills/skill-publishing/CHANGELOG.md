@@ -84,12 +84,20 @@ from those paths needs re-checking before upgrading.
   sites in `sync-monorepo.sh` — the main sync loop, the plugin reversion-guard check, the
   plugin catalogue loop, the install-all command builder and the CHANGELOG skill inventory —
   are now `while IFS= read -r … done <<< "$LIST"`, here-strings rather than pipes so the
-  loops keep assigning in the current shell. The closing count is now the number of skills
-  that actually resolved minus those refused, and the same honest figure is used at every
-  *past-tense* result site: the README template's `{{SKILL_COUNT}}`, the minimal-README
-  fallback, the CHANGELOG's "Synced N skills" entry, and the `--init` commit message. Only
-  the pre-loop "Skills to sync (N):" line keeps the requested count, because it is a plan
-  rather than a claim about what happened. (#81)
+  loops keep assigning in the current shell.
+
+  The closing summary, the CHANGELOG's "Synced N skills" entry, and the `--init` commit
+  message now report the number of skills that actually resolved *and* were copied —
+  resolved minus refused — rather than the number discovered or requested. The README's
+  `{{SKILL_COUNT}}` (both the templated and no-template-fallback paths) instead reports the
+  number resolved, refusals included: a skill refused by the reversion guard still keeps its
+  catalogue row (built from the in-repo metadata, before the refusal `continue`), so that
+  figure has to match the catalogue's actual row count rather than how many were freshly
+  copied. The CHANGELOG's skill-inventory list likewise still lists a refused skill — it
+  didn't leave the monorepo, it just wasn't recopied this run — now annotated `(REFUSED —
+  stale local source, not synced this run)` so it doesn't read as a silent contradiction
+  next to a "Synced 0 skills" entry. Only the pre-loop "Skills to sync (N):" line keeps the
+  requested count, because it is a plan rather than a claim about what happened. (#81)
 
 ### Changed
 
