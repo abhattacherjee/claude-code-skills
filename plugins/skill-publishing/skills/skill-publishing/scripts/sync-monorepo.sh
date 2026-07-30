@@ -98,19 +98,12 @@ if [[ -z "$MONOREPO_DIR" ]]; then
   exit 1
 fi
 
-# Resolve a skill's authoring source: the local skills home if present, else an
-# in-repo top-level directory (the arrangement introduced when skills moved into
-# the monorepo). Local-first precedence keeps behaviour identical while both
-# copies exist, and hands over automatically once the local copy is removed.
-# Echoes nothing when the skill has no source anywhere.
-skill_source_dir() {
-  local name="$1"
-  if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
-    echo "$SKILLS_HOME/$name"
-  elif [[ -f "$MONOREPO_DIR/$name/SKILL.md" ]]; then
-    echo "$MONOREPO_DIR/$name"
-  fi
-}
+# skill_source_dir() now lives in _lib.sh (issue #78) — it is called from
+# validate-pre-sync.sh too, and having two definitions is exactly the
+# extract_field()-style duplication a fix once needed two rounds to fully close
+# (#35, then #37). _lib.sh is sourced above, before this script sets
+# MONOREPO_DIR, but the hoisted definition tolerates that (${MONOREPO_DIR:-});
+# by the time anything here calls it, MONOREPO_DIR is set.
 
 # Canonicalise a directory path for identity comparison. Non-existent paths are
 # returned unchanged (nothing can be identical to them that matters here).

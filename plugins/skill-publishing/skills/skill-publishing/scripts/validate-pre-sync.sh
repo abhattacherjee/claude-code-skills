@@ -80,14 +80,30 @@ MISSING_CL=0
 RESULTS=""
 JSON_ITEMS=""
 
-for SKILL_NAME in $SKILLS; do
-  SKILL_SRC="$SKILLS_HOME/$SKILL_NAME"
+# Line-wise, not `for SKILL_NAME in $SKILLS` (issue #81's shape): unquoted word
+# splitting would break on any skill name containing whitespace or a glob
+# character. A here-string, not a pipe — TOTAL/PASS/FAIL/RESULTS/JSON_ITEMS all
+# have to survive in the current shell, and a pipe would run the loop body in a
+# subshell and silently discard every one of them.
+while IFS= read -r SKILL_NAME; do
+  [[ -z "$SKILL_NAME" ]] && continue
+
+  # Resolve through skill_source_dir() (_lib.sh, issue #78) instead of
+  # hardcoding "$SKILLS_HOME/$SKILL_NAME": that hardcoding is what made this
+  # script blind to every in-repo-source-only skill (github-board-move, the
+  # spec-* family) — it fell into the branch below, was silently skipped, and
+  # never counted as anything, so the summary read "Safe to sync" without ever
+  # having examined it. skill_source_dir() also doubles as the discovery
+  # filter: a directory that is not a skill at all (docs/, build/) has no
+  # SKILL.md under either $SKILLS_HOME or $MONOREPO_DIR either, so it resolves
+  # empty and is skipped here exactly like a skill with no source anywhere —
+  # neither is a failure, both are simply not examined.
+  SKILL_SRC="$(skill_source_dir "$SKILL_NAME")"
+  if [[ -z "$SKILL_SRC" ]]; then
+    continue  # No source anywhere — not a skill (docs/, build/, ...), skip
+  fi
   SKILL_MD="$SKILL_SRC/SKILL.md"
   CHANGELOG="$SKILL_SRC/CHANGELOG.md"
-
-  if [[ ! -f "$SKILL_MD" ]]; then
-    continue  # Not a local skill (maybe only in monorepo)
-  fi
 
   TOTAL=$((TOTAL + 1))
   VERSION=$(extract_version "$SKILL_MD")
@@ -126,7 +142,7 @@ for SKILL_NAME in $SKILLS; do
       RESULTS="${RESULTS}  Describe what changed from v${LATEST_CL_VERSION} to v${VERSION}\n"
     fi
   fi
-done
+done <<< "$SKILLS"
 
 # --- Output ---
 if $JSON_MODE; then

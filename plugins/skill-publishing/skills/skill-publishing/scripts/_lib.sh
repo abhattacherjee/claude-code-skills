@@ -195,6 +195,28 @@ resolve_source_path() {
   esac
 }
 
+# Resolve a skill's authoring source: the local skills home if present, else an
+# in-repo top-level directory (the arrangement introduced when skills moved into
+# the monorepo). Local-first precedence keeps behaviour identical while both
+# copies exist, and hands over automatically once the local copy is removed.
+# Echoes nothing when the skill has no source anywhere.
+# Usage: skill_source_dir <skill-name>
+#
+# References ${MONOREPO_DIR:-}, not $MONOREPO_DIR: this file is sourced by
+# scripts (prepare-plugin.sh, prepare-skill-repo.sh, sync-individual-repos.sh)
+# that never set MONOREPO_DIR, and under `set -u` an unset variable referenced
+# inside a *called* function still aborts the script. Callers that do have a
+# monorepo directory (sync-monorepo.sh, validate-pre-sync.sh) already set
+# MONOREPO_DIR before calling this, so their behaviour is unchanged.
+skill_source_dir() {
+  local name="$1"
+  if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
+    echo "$SKILLS_HOME/$name"
+  elif [[ -f "${MONOREPO_DIR:-}/$name/SKILL.md" ]]; then
+    echo "${MONOREPO_DIR:-}/$name"
+  fi
+}
+
 # --- Manifest shape (issue #73) ----------------------------------------------
 #
 # A legacy plugin-manifest.json declares skills as bare strings:

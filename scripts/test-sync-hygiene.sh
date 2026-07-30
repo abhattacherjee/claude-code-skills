@@ -131,6 +131,16 @@ if [[ ! -x "$PREPARE_SCRIPT" ]]; then
     exit 1
 fi
 
+# Issue #78's assertions drive validate-pre-sync.sh directly — it is never
+# invoked by sync-monorepo.sh, so a sync run cannot reach it. Taken from beside
+# SYNC_SCRIPT for the same reason as PREPARE_SCRIPT above: it and _lib.sh (which
+# it sources for skill_source_dir()) are edited together with the parent.
+PRESYNC_SCRIPT="$(dirname "$SYNC_SCRIPT")/validate-pre-sync.sh"
+if [[ ! -x "$PRESYNC_SCRIPT" ]]; then
+    echo "FATAL: no executable validate-pre-sync.sh beside SYNC_SCRIPT: $PRESYNC_SCRIPT" >&2
+    exit 1
+fi
+
 FAIL_COUNT=0
 SKIPPED_COUNT=0
 
@@ -388,6 +398,31 @@ BROKEN_SKILL_SOURCE="/nonexistent/sync-hygiene-harness-no-such-skill-source"
 # 10 sequential solo runs never failed, while 3 of 3 concurrent pairs did.
 DEMO_PLUGIN_NAME="demo-plugin-$$"
 
+# Issue #78 fixtures — validate-pre-sync.sh must resolve every skill through
+# skill_source_dir() rather than hardcoding $SKILLS_HOME/<name>, so an
+# in-repo-source-only skill (no local copy at all) is examined instead of
+# silently skipped. Two monorepos, not one: the core (negative) fixture and the
+# positive control need the SAME skill with DIFFERENT CHANGELOG content, and a
+# single monorepo can't hold both without one run's fixture mutation
+# contaminating the other.
+#
+#   presync-skills-home/presync-local-skill/            local-source skill (regression control)
+#   presync-monorepo/presync-local-skill/                empty — source resolves via SKILLS_HOME
+#   presync-monorepo/presync-inrepo-skill/                in-repo-source-only; CHANGELOG MISMATCHED (core, negative)
+#   presync-monorepo/docs/, build/                        non-skill dirs, must enter neither count
+#   presync-monorepo-pass/presync-local-skill/            same shape as above
+#   presync-monorepo-pass/presync-inrepo-skill/           same skill; CHANGELOG MATCHES (positive control)
+#   presync-monorepo-pass/docs/, build/                   same shape as above
+#
+# presync-local-skill's monorepo-side CHANGELOG.md is deliberately WRONG
+# (STALE-DO-NOT-READ, matching no real version) in both monorepos: skill_source_dir()
+# is local-first, so a correct implementation never reads it. If a regression
+# read the monorepo copy for a local-source skill instead, this fixture turns
+# that PASS into a FAIL rather than agreeing with the regression by accident.
+PRESYNC_SKILLS_HOME_FIXTURE="$SCRATCH_DIR/presync-skills-home"
+PRESYNC_MONOREPO_FIXTURE="$SCRATCH_DIR/presync-monorepo"
+PRESYNC_MONOREPO_PASS_FIXTURE="$SCRATCH_DIR/presync-monorepo-pass"
+
 mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$SKILLS_HOME_FIXTURE/added-skill" \
          "$MONOREPO_FIXTURE/demo-skill" \
@@ -422,6 +457,15 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$PREPARE_FIXTURE_DIR/objentry-plugin" \
          "$PREPARE_OUT_DIR" \
          "$PREPARE_TMPDIR" \
+         "$PRESYNC_SKILLS_HOME_FIXTURE/presync-local-skill" \
+         "$PRESYNC_MONOREPO_FIXTURE/presync-local-skill" \
+         "$PRESYNC_MONOREPO_FIXTURE/presync-inrepo-skill" \
+         "$PRESYNC_MONOREPO_FIXTURE/docs" \
+         "$PRESYNC_MONOREPO_FIXTURE/build" \
+         "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-local-skill" \
+         "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-inrepo-skill" \
+         "$PRESYNC_MONOREPO_PASS_FIXTURE/docs" \
+         "$PRESYNC_MONOREPO_PASS_FIXTURE/build" \
          "$RUN_CWD"
 
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
@@ -489,6 +533,77 @@ echo "fixture" > "$MONOREPO_FIXTURE/build/stale-artifact.txt"
 echo "fixture" > "$MONOREPO_ADD_FIXTURE/docs/notes.md"
 echo "fixture" > "$MONOREPO_ADD_FIXTURE/build/stale-artifact.txt"
 echo "fixture" > "$MONOREPO_EMPTY_FIXTURE/docs/notes.md"
+
+# ------------------------------------------------------------------
+# Issue #78 fixtures — validate-pre-sync.sh
+# ------------------------------------------------------------------
+
+cat > "$PRESYNC_SKILLS_HOME_FIXTURE/presync-local-skill/SKILL.md" <<'EOF'
+---
+name: presync-local-skill
+description: Throwaway fixture — local-source skill, regression control for validate-pre-sync.sh.
+version: 1.0.0
+---
+
+# Presync Local Skill
+
+Fixture content.
+EOF
+
+cat > "$PRESYNC_SKILLS_HOME_FIXTURE/presync-local-skill/CHANGELOG.md" <<'EOF'
+## [1.0.0] - 2026-01-01
+
+- Initial fixture version.
+EOF
+
+# No skills-home counterpart — this skill's only source is the monorepo, which
+# is what forces skill_source_dir() down its in-repo branch. Same SKILL.md
+# (version 2.0.0) in both monorepos; only the CHANGELOG differs below.
+PRESYNC_INREPO_SKILL_MD='---
+name: presync-inrepo-skill
+description: Throwaway fixture — in-repo-source-only skill exercising issue #78.
+version: 2.0.0
+---
+
+# Presync In-repo Skill
+
+Fixture content.'
+
+printf '%s\n' "$PRESYNC_INREPO_SKILL_MD" > "$PRESYNC_MONOREPO_FIXTURE/presync-inrepo-skill/SKILL.md"
+printf '%s\n' "$PRESYNC_INREPO_SKILL_MD" > "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-inrepo-skill/SKILL.md"
+
+# Core (negative) fixture: CHANGELOG exists but has no entry matching v2.0.0 —
+# a version bump with no matching CHANGELOG entry, the exact failure #78 must
+# catch instead of silently skipping the skill.
+cat > "$PRESYNC_MONOREPO_FIXTURE/presync-inrepo-skill/CHANGELOG.md" <<'EOF'
+## [1.0.0] - 2026-01-01
+
+- Initial fixture version.
+EOF
+
+# Positive control: same skill, CHANGELOG updated to match v2.0.0. Without this,
+# a rework that fails every skill unconditionally would still pass the core
+# assertion above.
+cat > "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-inrepo-skill/CHANGELOG.md" <<'EOF'
+## [2.0.0] - 2026-01-02
+
+- Bumped version with a matching CHANGELOG entry.
+
+## [1.0.0] - 2026-01-01
+
+- Initial fixture version.
+EOF
+
+# Deliberately wrong — see the fixture-block comment above. A regression that
+# resolved a local-source skill's CHANGELOG through the monorepo instead of
+# SKILLS_HOME would read this and flip presync-local-skill from PASS to FAIL.
+echo "STALE-DO-NOT-READ — matches no real version" > "$PRESYNC_MONOREPO_FIXTURE/presync-local-skill/CHANGELOG.md"
+echo "STALE-DO-NOT-READ — matches no real version" > "$PRESYNC_MONOREPO_PASS_FIXTURE/presync-local-skill/CHANGELOG.md"
+
+echo "fixture" > "$PRESYNC_MONOREPO_FIXTURE/docs/notes.md"
+echo "fixture" > "$PRESYNC_MONOREPO_FIXTURE/build/stale-artifact.txt"
+echo "fixture" > "$PRESYNC_MONOREPO_PASS_FIXTURE/docs/notes.md"
+echo "fixture" > "$PRESYNC_MONOREPO_PASS_FIXTURE/build/stale-artifact.txt"
 
 # A skill directory literally named "-n". filter_skill_candidates emits each
 # surviving name on stdout, and bash's `echo` would consume this one as its
@@ -1958,6 +2073,82 @@ assert_contains "a refused skill is recognised through a legacy manifest" \
     "$LEGACYREF_STDOUT"
 assert_not_contains "…and the refused plugin is not built anyway" \
     "AUTO-SYNCED  plugins/legacy-sync-plugin/" "$LEGACYREF_STDOUT"
+
+# ============================================================
+# Issue #78 — validate-pre-sync.sh must see in-repo-source skills
+# ============================================================
+#
+# validate-pre-sync.sh hardcoded SKILL_SRC="$SKILLS_HOME/$SKILL_NAME" and
+# `continue`d whenever the local SKILL.md was absent — the same branch a
+# genuine non-skill directory (docs/, build/) takes. An in-repo-source-only
+# skill (no local copy at all — github-board-move and the three spec-* skills,
+# in the real repo) fell into that branch too: never counted in TOTAL, never
+# counted as a FAIL, and the run printed "Safe to sync" without ever having
+# examined it. It now resolves every skill through skill_source_dir() (_lib.sh),
+# the same function sync-monorepo.sh sources its own skills through, so
+# discovery can never disagree with sourcing.
+#
+# Parses "Total: N | Pass: P | Fail: F" out of validate-pre-sync.sh's own
+# summary line, not out of counting RESULTS lines: the bug was printing a green
+# summary despite having examined too few skills, so the summary's own number
+# is exactly what has to be checked, not a paraphrase of it.
+presync_total() {
+    sed -n 's/^Total: \([0-9]*\).*/\1/p' <<< "$1"
+}
+presync_pass() {
+    sed -n 's/^Total: [0-9]* | Pass: \([0-9]*\).*/\1/p' <<< "$1"
+}
+presync_fail() {
+    sed -n 's/^Total: [0-9]* | Pass: [0-9]* | Fail: \([0-9]*\)$/\1/p' <<< "$1"
+}
+
+run_presync() {
+    local skills_home="$1" monorepo="$2"
+    (
+        cd "$RUN_CWD"
+        SKILLS_HOME="$skills_home" "$PRESYNC_SCRIPT" "$monorepo"
+    )
+}
+
+PRESYNC_RC=0
+PRESYNC_STDOUT="$(run_presync "$PRESYNC_SKILLS_HOME_FIXTURE" "$PRESYNC_MONOREPO_FIXTURE")" || PRESYNC_RC=$?
+
+PRESYNC_PASS_RC=0
+PRESYNC_PASS_STDOUT="$(run_presync "$PRESYNC_SKILLS_HOME_FIXTURE" "$PRESYNC_MONOREPO_PASS_FIXTURE")" || PRESYNC_PASS_RC=$?
+
+# --- Core assertion: an in-repo-source-only skill with a mismatched CHANGELOG
+# is examined and blocks the sync. Before the fix this fixture exits 0 with
+# Total: 1 (presync-inrepo-skill silently omitted) — verified by hand against a
+# reverted scratch copy of validate-pre-sync.sh, both loop forms restored. ---
+assert_eq "issue #78 core: in-repo-source skill with mismatched CHANGELOG blocks the sync" \
+    "1" "$PRESYNC_RC"
+assert_contains "…and is named in the FAIL line with the right version" \
+    "FAIL  presync-inrepo-skill — SKILL.md says v2.0.0 but CHANGELOG latest is v1.0.0" \
+    "$PRESYNC_STDOUT"
+assert_eq "…Total counts both real skills despite docs/ and build/ present" \
+    "2" "$(presync_total "$PRESYNC_STDOUT")"
+assert_eq "…Pass is exactly the local-source skill" "1" "$(presync_pass "$PRESYNC_STDOUT")"
+assert_eq "…Fail is exactly the in-repo-source skill" "1" "$(presync_fail "$PRESYNC_STDOUT")"
+assert_contains "…a local-source skill still validates exactly as before" \
+    "PASS  presync-local-skill v1.0.0" "$PRESYNC_STDOUT"
+assert_not_contains "…docs/ never enters the report" "docs" "$PRESYNC_STDOUT"
+assert_not_contains "…build/ never enters the report" "build" "$PRESYNC_STDOUT"
+
+# --- Positive control: same skill, CHANGELOG updated to match v2.0.0. Without
+# this, a rework that failed every skill unconditionally would still satisfy
+# every assertion above — verified by hand: patching the CHANGELOG-match guard
+# to `if false && grep …` (an unconditional reject) turns this fixture's Pass
+# count from 2 to 0 and its exit status from 0 to 1. ---
+assert_eq "positive control: a matching CHANGELOG entry exits 0" \
+    "0" "$PRESYNC_PASS_RC"
+assert_contains "…and the skill appears in the PASS list with the right version" \
+    "PASS  presync-inrepo-skill v2.0.0" "$PRESYNC_PASS_STDOUT"
+assert_eq "…Total is still 2 (docs/ and build/ still excluded)" \
+    "2" "$(presync_total "$PRESYNC_PASS_STDOUT")"
+assert_eq "…Pass is both skills" "2" "$(presync_pass "$PRESYNC_PASS_STDOUT")"
+assert_eq "…Fail is zero" "0" "$(presync_fail "$PRESYNC_PASS_STDOUT")"
+assert_contains "…\"Safe to sync\" banner prints" \
+    "All skills have matching CHANGELOG entries. Safe to sync." "$PRESYNC_PASS_STDOUT"
 
 # ============================================================
 # Authoring-source parity
