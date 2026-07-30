@@ -78,7 +78,7 @@ set -euo pipefail
 #      regenerate a catalogue describing a plugin it could not build.
 #
 # The whole run is hermetic: 13 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 27 throwaway monorepos, the syncs
+# that is deliberately never a SKILLS_HOME, 28 throwaway monorepos, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
@@ -2464,6 +2464,151 @@ assert_eq "…Fail is zero" "0" "$(presync_fail "$PRESYNC_PASS_STDOUT")"
 assert_contains "…\"Safe to sync\" banner prints" \
     "All skills have matching CHANGELOG entries. Safe to sync." "$PRESYNC_PASS_STDOUT"
 
+# ------------------------------------------------------------------
+# Issue #81's SIXTH site — validate-pre-sync.sh's own skill loop (#83)
+# ------------------------------------------------------------------
+#
+# #81 is described everywhere in this file as "five sites in sync-monorepo.sh",
+# and it is six: Task 3 folded the same conversion into validate-pre-sync.sh's
+# loop ("fixing it here avoids two tasks editing the same loop"), and Task 5
+# then built the space-name fixtures against sync-monorepo.sh's five. The fix
+# crossed a file boundary; the coverage stayed with the task that owned the
+# issue. Every earlier N-1-of-N on this branch was WITHIN one file — this is
+# the first that crossed one, which is why six review passes went by it.
+#
+# Measured, not inferred: reverting ONLY validate-pre-sync.sh's loop to
+# `for SKILL_NAME in $SKILLS` (leaving sync-monorepo.sh at HEAD) left this
+# harness at 248 PASS / 0 FAIL. Every space-named fixture above is sync-side —
+# the presync fixtures hold only presync-local-skill, presync-inrepo-skill,
+# docs and build, none of them IFS-splittable — so nothing here could tell
+# line-wise iteration from word-splitting for this script.
+#
+# A THIRD presync monorepo rather than space-named skills added to the two
+# above: those fixtures' Total/Pass/Fail assertions are load-bearing for #78
+# and pin exact counts, so growing them would mean rewriting #78's evidence to
+# test #81's. Same reasoning that gave #78 two monorepos instead of one.
+#
+# Note this is the word-splitting half only. The fd-3 half of the same loop
+# (defect 11) is NOT observable here: the body's only children are grep, sed
+# and head, all of which read a file or an internal pipe rather than the loop's
+# stdin, so no child can eat the list even when it is on stdin. The fd-3
+# conversion there is defence in depth, and the f1 mutant reflects that
+# honestly by going red only on the sync side.
+PRESYNC_MONOREPO_SPACE_FIXTURE="$SCRATCH_DIR/presync-monorepo-space"
+
+# Three skills, in-repo-source-only (no SKILLS_HOME counterpart), so this also
+# reaches skill_source_dir()'s in-repo branch with a space-named skill:
+#   "my presync skill"     v1.0.0, CHANGELOG lists only 9.9.9  -> must FAIL
+#   "my passing skill"     v1.0.0, CHANGELOG lists 1.0.0       -> must PASS
+#   presync-plain-skill    ordinary name, matching CHANGELOG   -> control
+#
+# One space-named skill on each side of the report, because "examined" has two
+# possible correct outcomes and a fix that reached only one of the two lists
+# would otherwise look complete. The failing one also makes the run's EXIT
+# STATUS a discriminator: word-split, its three fragments each fail
+# skill_source_dir(), it never enters TOTAL, and the run prints "Safe to sync"
+# and exits 0 over a genuinely broken skill — #78's defect shape reached
+# through #81's bug.
+mkdir -p "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill" \
+         "$PRESYNC_MONOREPO_SPACE_FIXTURE/my passing skill" \
+         "$PRESYNC_MONOREPO_SPACE_FIXTURE/presync-plain-skill"
+
+cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill/SKILL.md" <<'EOF'
+---
+name: my presync skill
+description: Throwaway fixture — space-named, CHANGELOG deliberately mismatched (#83, #81's sixth site).
+version: 1.0.0
+---
+
+# My Presync Skill
+EOF
+cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [9.9.9] - 2026-01-01
+
+Deliberately not 1.0.0 — this skill must be REPORTED as failing, not dropped.
+EOF
+
+cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my passing skill/SKILL.md" <<'EOF'
+---
+name: my passing skill
+description: Throwaway fixture — space-named, CHANGELOG matches (#83, #81's sixth site).
+version: 1.0.0
+---
+
+# My Passing Skill
+EOF
+cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my passing skill/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.0.0] - 2026-01-01
+
+Matches SKILL.md — this skill must reach the PASS list under its whole name.
+EOF
+
+cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/presync-plain-skill/SKILL.md" <<'EOF'
+---
+name: presync-plain-skill
+description: Throwaway fixture with an ordinary name — the control that survives word-splitting either way (#83).
+version: 1.0.0
+---
+
+# Presync Plain Skill
+EOF
+cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/presync-plain-skill/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.0.0] - 2026-01-01
+
+Matches SKILL.md.
+EOF
+
+PRESYNC_SPACE_STDOUT_LOG="$SCRATCH_DIR/presync-space.stdout"
+PRESYNC_SPACE_STDERR_LOG="$SCRATCH_DIR/presync-space.stderr"
+PRESYNC_SPACE_RC=0
+run_presync "$PRESYNC_SKILLS_HOME_FIXTURE" "$PRESYNC_MONOREPO_SPACE_FIXTURE" \
+    "$PRESYNC_SPACE_STDOUT_LOG" "$PRESYNC_SPACE_STDERR_LOG" || PRESYNC_SPACE_RC=$?
+PRESYNC_SPACE_STDOUT="$(cat "$PRESYNC_SPACE_STDOUT_LOG")"
+PRESYNC_SPACE_STDERR="$(cat "$PRESYNC_SPACE_STDERR_LOG")"
+
+# --- Assertions. Verified red against a scratch build with ONLY
+# validate-pre-sync.sh's loop reverted to `for SKILL_NAME in $SKILLS` and
+# sync-monorepo.sh left at HEAD: Total drops 3 -> 1, Pass 2 -> 1, Fail 1 -> 0,
+# the run exits 0 instead of 1, and stderr fills with "SKIP (not a skill: no
+# SKILL.md)" lines for the fragments "my", "presync", "passing" and "skill". ---
+assert_eq "presync: a space-named skill with a mismatched CHANGELOG makes the run exit 1" \
+    "1" "$PRESYNC_SPACE_RC"
+assert_eq "…all three skills are examined, not just the one whose name survives word-splitting" \
+    "3" "$(presync_total "$PRESYNC_SPACE_STDOUT")"
+assert_eq "…Pass is the plain skill plus the passing space-named one" \
+    "2" "$(presync_pass "$PRESYNC_SPACE_STDOUT")"
+assert_eq "…Fail is exactly the mismatched space-named skill" \
+    "1" "$(presync_fail "$PRESYNC_SPACE_STDOUT")"
+
+# Whole-line matches on the report rows: a substring check for "my presync
+# skill" would also be satisfied by a fragment line, which is the thing under
+# test. The FAIL row carries both versions, so it also proves the skill was
+# actually READ (its v1.0.0 and its CHANGELOG's 9.9.9) rather than merely named.
+assert_line_present "…the space-named failure is reported under its whole name, with both versions" \
+    "FAIL  my presync skill — SKILL.md says v1.0.0 but CHANGELOG latest is v9.9.9" \
+    "$PRESYNC_SPACE_STDOUT"
+assert_line_present "…and the space-named PASS reaches the pass list under its whole name" \
+    "PASS  my passing skill v1.0.0" "$PRESYNC_SPACE_STDOUT"
+assert_line_present "positive control: the ordinary-named skill is unaffected either way" \
+    "PASS  presync-plain-skill v1.0.0" "$PRESYNC_SPACE_STDOUT"
+
+# The fragments must not appear anywhere, on either stream. Under the unquoted
+# form each one is announced as "SKIP (not a skill: no SKILL.md)" on stderr —
+# the report stays superficially tidy while the skill vanishes, so stderr is
+# where the bug is loudest and is asserted directly.
+for _frag in my presync passing skill; do
+    assert_line_absent "…no \"$_frag\" fragment was skipped as a non-skill" \
+        "  SKIP (not a skill: no SKILL.md)  $_frag" "$PRESYNC_SPACE_STDERR"
+done
+assert_not_contains "…and the run never claims it is safe to sync over a failing skill" \
+    "Safe to sync" "$PRESYNC_SPACE_STDOUT"
+
 # ============================================================
 # Issue #81 — unquoted iteration IFS-splits any skill/plugin name containing
 # a space, and the closing summary reported the discovered count rather than
@@ -2476,7 +2621,14 @@ assert_contains "…\"Safe to sync\" banner prints" \
 # the main sync loop, the manifest-skill-names check inside the auto-build
 # stage's reversion guard, the published-plugin catalogue loop, the
 # install-all command builder, and the CHANGELOG skill-inventory builder. All
-# five are now `while IFS= read -r … done <<< "$LIST"`. The closing "Sync
+# five are now `while IFS= read -r … done <<< "$LIST"`.
+#
+# "Five" counts sync-monorepo.sh only. There is a SIXTH site in
+# validate-pre-sync.sh, converted by the same issue but in a different task, and
+# the fixtures below never covered it — see defect 17 in the header and the
+# presync-space section above. Do not read "all five" here as "all of #81".
+#
+# The closing "Sync
 # complete. N skills synced" line is also fixed: it read SKILL_COUNT
 # (discovered) rather than SKILLS_RESOLVED_COUNT (actually resolved), so a
 # name that failed to resolve was still counted as synced.
@@ -2852,6 +3004,14 @@ assert_eq "…and matches its catalogue row count" \
 #      twice: two stanzas, two identical catalogue rows, two identical `cp -r`
 #      install lines published as instructions, and a doubled count in three
 #      places, all agreeing with each other. Now `sort -u`.
+#
+#  17. #81 had SIX conversion sites, not five: validate-pre-sync.sh's own skill
+#      loop is the sixth, and it had no coverage at all — reverting it alone to
+#      `for SKILL_NAME in $SKILLS` left this harness at 248 PASS / 0 FAIL. The
+#      space-name fixtures were all built sync-side. Fixed with a third presync
+#      monorepo carrying space-named skills on both sides of the report; see the
+#      section following the #78 assertions for why the coverage was missed and
+#      why it needed its own fixture rather than growing an existing one.
 
 SKILLS_HOME_FIXROUND_FIXTURE="$SCRATCH_DIR/skills-home-fixround"
 MONOREPO_DRAIN_FIXTURE="$SCRATCH_DIR/monorepo-drain"

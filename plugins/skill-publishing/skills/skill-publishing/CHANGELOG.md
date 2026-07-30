@@ -114,7 +114,19 @@ from those paths needs re-checking before upgrading.
   stdin — a property of today's `gh`, not a guarantee. All five sites in `sync-monorepo.sh`
   and the one in `validate-pre-sync.sh` now bind the list to **fd 3** (`read … <&3` /
   `done 3<<<`), leaving the body's stdin inherited from the caller so no child can reach
-  the list at all. (#83)
+  the list at all. Only the main sync loop and the plugin-catalogue loop have
+  stdin-consuming children today; the other four are defence in depth, and the regression
+  harness's mutants report that honestly rather than claiming a fail-first at all six. (#83)
+
+- **The line-wise conversion above had a sixth site with no test coverage at all.** It is
+  described everywhere as five sites in `sync-monorepo.sh`; the sixth is
+  `validate-pre-sync.sh`'s own skill loop, converted by the same issue but in a different
+  task, after which the space-name fixtures were built entirely sync-side. Reverting *that
+  loop alone* to `for SKILL_NAME in $SKILLS` left the regression harness fully green. No
+  behaviour changed here — the loop was already correct — but a correct loop with no test
+  is one refactor away from being an incorrect one, and this is the first N-1-of-N on this
+  work that crossed a file boundary rather than sitting inside one. Now covered by a third
+  presync fixture with space-named skills on both sides of the report. (#83)
 
 - The plugin auto-build stage's `manifest_skill_names … 2>/dev/null || true` was documented
   as keeping "the pre-existing tolerance of an unreadable manifest". Only half true: the
