@@ -615,7 +615,7 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
         # under the open descriptor and leave it reading empty.
         _BUILD_DIR="$_AUTO_BUILD_TMP/$_MANIFEST_NAME"
         _BUILD_LOG="$_AUTO_BUILD_TMP/$_MANIFEST_NAME.log"
-        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" "$_MANIFEST" >"$_BUILD_LOG" 2>&1; then
+        if "$PREPARE_SCRIPT" --output-dir "$_BUILD_DIR" --github-user "$GITHUB_USER" "$_MANIFEST" >"$_BUILD_LOG" 2>&1; then
           if [[ -d "$_BUILD_DIR/.claude-plugin" ]]; then
             # Preserve hand-written README if it exists in destination
             _PRESERVED_README=""

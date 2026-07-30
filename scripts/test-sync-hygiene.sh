@@ -219,13 +219,21 @@ listed_skill_count() {
 # gh shim — keeps the run genuinely offline
 # ============================================================
 #
-# Three `gh` calls happen per sync even with --github-user supplied:
-# sync-monorepo.sh's `gh repo view <user>/<skill>` probe (once per synced skill)
-# and the auto-build child prepare-plugin.sh's `gh api user` lookup, which the
-# auto-build stage does not forward --github-user to. All three are
-# failure-tolerant, so a non-zero stub reproduces the unauthenticated-CI path
-# exactly while guaranteeing no network I/O. GH_SHIM_LOG records each call so
-# the "offline" claim can be asserted rather than asserted-in-a-comment.
+# `gh` calls happen per sync even with --github-user supplied: sync-monorepo.sh's
+# `gh repo view <user>/<skill>` probe, once per synced skill (two for the main
+# fixture: demo-skill and inrepo-skill). Historically there was a third — the
+# auto-build child prepare-plugin.sh's own `gh api user` lookup — because the
+# auto-build stage did not forward --github-user to it (issue #79). Now that it
+# does, GITHUB_USER is always non-empty at that call site (resolve_github_user
+# guarantees it before the auto-build stage runs at all), so the child never
+# reaches its own gh api user fallback and the count drops to one call per
+# synced skill. Both are failure-tolerant, so a non-zero stub reproduces the
+# unauthenticated-CI path exactly while guaranteeing no network I/O. GH_SHIM_LOG
+# records each call so the "offline" claim can be asserted rather than
+# asserted-in-a-comment. The Issue #79 section below asserts the forwarding
+# itself, through generated README content rather than the shim log — a shimmed
+# `gh api user` always fails regardless of whether it was reached, so the log
+# can prove the call happened but not what prepare-plugin.sh did as a result.
 GH_SHIM_DIR="$SCRATCH_DIR/shim-bin"
 GH_SHIM_LOG="$SCRATCH_DIR/gh-invocations.log"
 mkdir -p "$GH_SHIM_DIR"
@@ -295,6 +303,14 @@ MONOREPO_BUILDFAIL_FIXTURE="$SCRATCH_DIR/monorepo-buildfail"
 MONOREPO_GITIGNORE_FIXTURE="$SCRATCH_DIR/monorepo-gitignore"
 RUN_CWD="$SCRATCH_DIR/run-cwd"
 
+# Issue #77 (hooks.source) and #79 (--github-user forwarding) fixtures. A
+# separate SKILLS_HOME/monorepo pair, for the same reason SKILLS_HOME_BUILDFAIL_FIXTURE
+# is separate: the auto-build stage scans $SKILLS_HOME/*/plugin-manifest.json on
+# every invocation, so these four manifests would otherwise print their own
+# AUTO-SYNCED / ERROR lines into all nine runs above and perturb their counts.
+SKILLS_HOME_HOOKS_FIXTURE="$SCRATCH_DIR/skills-home-hooks"
+MONOREPO_HOOKS_FIXTURE="$SCRATCH_DIR/monorepo-hooks"
+
 # The source path the broken manifest names. Absolute, so resolve_source_path
 # returns it untouched and the error text is fixed rather than carrying this
 # run's scratch path — the assertion below can then match the whole line.
@@ -327,6 +343,11 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin" \
          "$MONOREPO_BUILDFAIL_FIXTURE" \
          "$MONOREPO_GITIGNORE_FIXTURE" \
+         "$SKILLS_HOME_HOOKS_FIXTURE/hooks-none-plugin" \
+         "$SKILLS_HOME_HOOKS_FIXTURE/hooks-null-plugin" \
+         "$SKILLS_HOME_HOOKS_FIXTURE/hooks-empty-plugin" \
+         "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src" \
+         "$MONOREPO_HOOKS_FIXTURE" \
          "$RUN_CWD"
 
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
@@ -494,6 +515,86 @@ EOF
     done
 } > "$MONOREPO_FIXTURE/CHANGELOG.md"
 
+# Four plugin manifests covering issue #77's three legal no-ops plus its one
+# real error, all built in a single sync so the no-op cases can't hide behind
+# each other:
+#   hooks-none-plugin   — no "hooks" key at all (HOOK_COUNT stays 0)
+#   hooks-null-plugin   — "hooks": {"source": null}
+#   hooks-empty-plugin  — "hooks": {"source": ""}
+#   hooks-ok-plugin     — "hooks": {"source": "./hooks-src"}, a real directory —
+#                         the positive control: without the #77 fix (or with a
+#                         fix patched to reject hooks unconditionally), this is
+#                         the one manifest that would either silently drop
+#                         hooks/ or fail to build at all.
+for _hp in hooks-none-plugin hooks-null-plugin hooks-empty-plugin hooks-ok-plugin; do
+    cat > "$SKILLS_HOME_HOOKS_FIXTURE/$_hp/SKILL.md" <<EOF
+---
+name: $_hp
+description: Throwaway fixture skill backing the $_hp plugin manifest, used only by the sync-hygiene harness's hooks assertions.
+version: 0.1.0
+---
+
+# ${_hp}
+
+Fixture content.
+EOF
+done
+
+cat > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-none-plugin/plugin-manifest.json" <<EOF
+{
+  "name": "hooks-none-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin with no hooks key at all — must remain a legal no-op.",
+  "skills": [
+    { "name": "hooks-none-plugin", "source": "." }
+  ],
+  "commands": []
+}
+EOF
+
+cat > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-null-plugin/plugin-manifest.json" <<EOF
+{
+  "name": "hooks-null-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin with hooks.source explicitly null — must remain a legal no-op.",
+  "skills": [
+    { "name": "hooks-null-plugin", "source": "." }
+  ],
+  "commands": [],
+  "hooks": { "source": null }
+}
+EOF
+
+cat > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-empty-plugin/plugin-manifest.json" <<EOF
+{
+  "name": "hooks-empty-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin with hooks.source as an empty string — must remain a legal no-op.",
+  "skills": [
+    { "name": "hooks-empty-plugin", "source": "." }
+  ],
+  "commands": [],
+  "hooks": { "source": "" }
+}
+EOF
+
+cat > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/plugin-manifest.json" <<EOF
+{
+  "name": "hooks-ok-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin whose hooks.source names a real directory.",
+  "skills": [
+    { "name": "hooks-ok-plugin", "source": "." }
+  ],
+  "commands": [],
+  "hooks": { "source": "./hooks-src" }
+}
+EOF
+
+echo "#!/usr/bin/env bash" > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src/pre-tool-use.sh"
+echo "# Throwaway fixture hook, present only to prove hooks/ survives the build." \
+    >> "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src/pre-tool-use.sh"
+
 # ============================================================
 # Sync invocations
 # ============================================================
@@ -508,6 +609,10 @@ EOF
 #   7. --add , on monorepo-addcomma/      — must fail loudly, not silently abort
 #   8. plain sync of monorepo-buildfail/  — a failing auto-build must stay diagnosable
 #   9. plain sync of monorepo-gitignore/  — a pre-existing .gitignore with no /build/
+#  10. plain sync of monorepo-hooks/      — issue #77's three no-ops plus its positive control
+#  11. second sync of monorepo-hooks/     — issue #77's error path, after the hooks source
+#                                           is removed and the fixture's SKILL.md is bumped
+#                                           to force a rebuild attempt
 #
 # Run 2 exists because sync-monorepo.sh filters at two independent sites and a
 # single no-`--add` invocation executes only one of them. Reverting the filter
@@ -540,6 +645,28 @@ EOF
 # is the only way to reach write_file's "already exists" branch — the branch an
 # already-published monorepo takes on every sync, and the one the template fix
 # cannot reach.
+#
+# Run 10 exercises issue #77's three legal no-ops (hooks absent, hooks.source
+# null, hooks.source "") and its one positive control (hooks.source naming a
+# real directory) in a single sync, plus issue #79: this run's own generated
+# READMEs — root and all four auto-built plugins' — are asserted to carry the
+# --github-user value forwarded to it rather than the "USERNAME" fallback
+# prepare-plugin.sh's own `gh api user` lookup produces when unauthenticated
+# (the gh shim above guarantees that path is always unauthenticated).
+#
+# Run 11 is the only run that touches monorepo-hooks/ a second time. Between
+# runs 10 and 11, hooks-ok-plugin's hooks-src/ is deleted and its SKILL.md is
+# rewritten to a new version, so the auto-build stage's drift check (comparing
+# SKILL.md between skills-home and the already-published monorepo copy) forces
+# a rebuild attempt rather than skipping it as unchanged. That rebuild must fail
+# --- a declared, non-empty hooks.source that no longer resolves to a directory
+# is issue #77's actual error case, not a fourth no-op --- and the already-
+# published plugins/hooks-ok-plugin/hooks/ from run 10 must survive, because
+# the sync's existing rsync --delete only runs on the success branch (the same
+# structure run 8's BUILDFAIL fixture already proves for a missing skill
+# source). This is why the fixture needs two runs rather than one: run 10 alone
+# cannot exercise the "already published, must not be deleted" half of the #77
+# error case.
 #
 # SKILLS_HOME is an explicit first argument rather than an environment prefix on
 # the call (`VAR=x run_sync …`): whether such an assignment persists past a shell
@@ -653,6 +780,48 @@ GITIGNORE_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_GITIGNORE_FIXTURE" "$GITIGNORE_STDOUT_LOG" "$GITIGNORE_STDERR_LOG" || GITIGNORE_RC=$?
 GITIGNORE_STDOUT="$(cat "$GITIGNORE_STDOUT_LOG")"
 
+# Run 10: the four hooks manifests, all built in one pass. --github-user is
+# harness-fixture-user for every run in this file (run_sync hardcodes it); the
+# README assertions below check that value, not the illustrative "probe" named
+# in the issue.
+HOOKS_STDOUT_LOG="$SCRATCH_DIR/hooks.stdout"
+HOOKS_STDERR_LOG="$SCRATCH_DIR/hooks.stderr"
+HOOKS_RC=0
+run_sync "$SKILLS_HOME_HOOKS_FIXTURE" "$MONOREPO_HOOKS_FIXTURE" "$HOOKS_STDOUT_LOG" "$HOOKS_STDERR_LOG" || HOOKS_RC=$?
+HOOKS_STDOUT="$(cat "$HOOKS_STDOUT_LOG")"
+HOOKS_STDERR="$(cat "$HOOKS_STDERR_LOG")"
+
+# Mutate the fixture between runs 10 and 11: remove the real hooks source and
+# bump the skill's SKILL.md to a new version, so the auto-build stage's drift
+# check (SKILL.md diff between skills-home and the published monorepo copy)
+# forces a rebuild attempt instead of skipping hooks-ok-plugin as unchanged.
+# The version goes forward (0.1.0 -> 0.2.0), not backward, so this cannot trip
+# the reversion guard — that guard only refuses a source that is OLDER than
+# what is already published.
+rm -rf "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src"
+cat > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/SKILL.md" <<EOF
+---
+name: hooks-ok-plugin
+description: Throwaway fixture skill backing the hooks-ok-plugin manifest, used only by the sync-hygiene harness's hooks assertions.
+version: 0.2.0
+---
+
+# hooks-ok-plugin
+
+Fixture content, version-bumped to force run 11's rebuild attempt.
+EOF
+
+# Run 11: the forced rebuild, with hooks-src gone. Expected to exit 0 — the
+# sync layer's existing "warn and keep going" handling for a failed auto-build
+# (proven by run 8's BUILDFAIL fixture) is deliberately left alone here; #73's
+# hard-failure behaviour is out of scope for this task.
+HOOKS2_STDOUT_LOG="$SCRATCH_DIR/hooks2.stdout"
+HOOKS2_STDERR_LOG="$SCRATCH_DIR/hooks2.stderr"
+HOOKS2_RC=0
+run_sync "$SKILLS_HOME_HOOKS_FIXTURE" "$MONOREPO_HOOKS_FIXTURE" "$HOOKS2_STDOUT_LOG" "$HOOKS2_STDERR_LOG" || HOOKS2_RC=$?
+HOOKS2_STDOUT="$(cat "$HOOKS2_STDOUT_LOG")"
+HOOKS2_STDERR="$(cat "$HOOKS2_STDERR_LOG")"
+
 snapshot_mktemp_parent > "$TMP_AFTER"
 
 # ============================================================
@@ -670,6 +839,8 @@ assert_eq "--skills -n run exits 0 on the fixture" "0" "$SKILLSN_RC"
 assert_eq "--add -n run exits 0 on the fixture" "0" "$ADDN_RC"
 assert_eq "failing-auto-build run exits 0 on the fixture" "0" "$BUILDFAIL_RC"
 assert_eq "pre-existing-.gitignore run exits 0 on the fixture" "0" "$GITIGNORE_RC"
+assert_eq "hooks no-ops + positive-control run exits 0 on the fixture" "0" "$HOOKS_RC"
+assert_eq "hooks forced-rebuild-failure run exits 0 on the fixture (soft warn, #73 out of scope)" "0" "$HOOKS2_RC"
 
 assert_contains "control: the plugin auto-build stage actually ran" \
     "AUTO-SYNCED  plugins/$DEMO_PLUGIN_NAME/" "$SYNC_STDOUT"
@@ -1003,6 +1174,89 @@ assert_eq "--add , fails with a deliberate, explained exit rather than an unexpl
     "1" "$ADDCOMMA_RC"
 assert_contains "--add , explains itself on stderr, naming the offending argument" \
     "Error: --add produced no skill names from: ','" "$ADDCOMMA_STDERR"
+
+# ============================================================
+# Issue #77 — a declared, non-empty hooks.source that does not resolve to a
+# directory must error, not silently skip; the three legal no-ops must survive
+# ============================================================
+
+assert_contains "control: hooks-none-plugin was auto-built" \
+    "AUTO-SYNCED  plugins/hooks-none-plugin/" "$HOOKS_STDOUT"
+assert_contains "control: hooks-null-plugin was auto-built" \
+    "AUTO-SYNCED  plugins/hooks-null-plugin/" "$HOOKS_STDOUT"
+assert_contains "control: hooks-empty-plugin was auto-built" \
+    "AUTO-SYNCED  plugins/hooks-empty-plugin/" "$HOOKS_STDOUT"
+assert_contains "control: hooks-ok-plugin was auto-built" \
+    "AUTO-SYNCED  plugins/hooks-ok-plugin/" "$HOOKS_STDOUT"
+
+# The three no-op cases must not carry a hooks/ directory into the published
+# plugin — there was never a real source to copy.
+assert_eq "hooks-none-plugin (no hooks key) has no hooks/ dir" "ABSENT" \
+    "$([[ -d "$MONOREPO_HOOKS_FIXTURE/plugins/hooks-none-plugin/hooks" ]] && echo PRESENT || echo ABSENT)"
+assert_eq "hooks-null-plugin (hooks.source: null) has no hooks/ dir" "ABSENT" \
+    "$([[ -d "$MONOREPO_HOOKS_FIXTURE/plugins/hooks-null-plugin/hooks" ]] && echo PRESENT || echo ABSENT)"
+assert_eq "hooks-empty-plugin (hooks.source: \"\") has no hooks/ dir" "ABSENT" \
+    "$([[ -d "$MONOREPO_HOOKS_FIXTURE/plugins/hooks-empty-plugin/hooks" ]] && echo PRESENT || echo ABSENT)"
+
+# The positive control: a real hooks.source must actually land in the build.
+# Without this, a fix that rejected every hooks.source unconditionally (a guard
+# stuck ON) would still pass every assertion above.
+assert_file_exists "positive control: hooks-ok-plugin's hooks/ was copied" \
+    "$MONOREPO_HOOKS_FIXTURE/plugins/hooks-ok-plugin/hooks/pre-tool-use.sh"
+
+# None of the four no-op/positive-control builds may have errored.
+HOOKS_ERROR_LINES=$(printf '%s\n%s\n' "$HOOKS_STDOUT" "$HOOKS_STDERR" | grep 'ERROR' || true)
+assert_eq "no ERROR line from the run-10 hooks fixtures" "" "$HOOKS_ERROR_LINES"
+
+# Run 11: hooks-src is gone and the SKILL.md version bump forced a rebuild
+# attempt. The child must refuse — matching the skills/commands/agents
+# siblings' error shape — and the sync layer must surface that refusal rather
+# than reporting success.
+assert_contains "control: run 11 actually attempted to rebuild hooks-ok-plugin" \
+    "Warning: prepare-plugin.sh failed for" "$HOOKS2_STDOUT"
+assert_line_present "the child's hooks-source error reaches the operator" \
+    "    |   ERROR: hooks source not found: $SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/./hooks-src" \
+    "$HOOKS2_STDERR"
+assert_not_contains "the failed hooks rebuild is not also reported as synced" \
+    "AUTO-SYNCED  plugins/hooks-ok-plugin/" "$HOOKS2_STDOUT"
+
+# The load-bearing assertion for #77's second half: the already-published
+# plugin from run 10 must survive a failed rebuild attempt untouched, because
+# the destructive `rsync --delete` only runs on the child's success branch.
+# Without prepare-plugin.sh refusing first, this is exactly the shape #77
+# describes: the missing source is skipped, the child reports success, and
+# `rsync --delete` removes hooks/ from the published plugin.
+assert_file_exists "the already-published hooks/ survives a failed rebuild attempt" \
+    "$MONOREPO_HOOKS_FIXTURE/plugins/hooks-ok-plugin/hooks/pre-tool-use.sh"
+
+# ============================================================
+# Issue #79 — the auto-build stage must forward --github-user, not fall back
+# to prepare-plugin.sh's own (shimmed-to-fail) `gh api user` lookup
+# ============================================================
+#
+# Every README this run generates — the monorepo root and all four auto-built
+# plugins' — must carry the value this run passed via --github-user
+# (harness-fixture-user, hardcoded in run_sync) rather than the literal
+# "USERNAME" prepare-plugin.sh falls back to when it resolves its own GitHub
+# user and gh fails. The root README is not itself part of #79 (sync-monorepo.sh
+# substitutes {{GITHUB_USER}} into it directly, independent of prepare-plugin.sh)
+# but is asserted anyway per the issue's own test list, and as a control that a
+# fix which broke --github-user forwarding entirely couldn't hide behind a root
+# README that was never wrong to begin with.
+
+ROOT_README_CONTENT="$(cat "$MONOREPO_HOOKS_FIXTURE/README.md" 2>/dev/null || true)"
+assert_contains "root README carries the forwarded --github-user" \
+    "harness-fixture-user" "$ROOT_README_CONTENT"
+assert_not_contains "root README does not fall back to USERNAME" \
+    "USERNAME" "$ROOT_README_CONTENT"
+
+for _hp in hooks-none-plugin hooks-null-plugin hooks-empty-plugin hooks-ok-plugin; do
+    _hp_readme="$(cat "$MONOREPO_HOOKS_FIXTURE/plugins/$_hp/README.md" 2>/dev/null || true)"
+    assert_contains "plugins/$_hp/README.md carries the forwarded --github-user" \
+        "harness-fixture-user" "$_hp_readme"
+    assert_not_contains "plugins/$_hp/README.md does not fall back to USERNAME" \
+        "USERNAME" "$_hp_readme"
+done
 
 # ============================================================
 # Authoring-source parity

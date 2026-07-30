@@ -249,6 +249,9 @@ if [[ $HOOK_COUNT -gt 0 ]]; then
         rsync -a --exclude='.DS_Store' "$HOOKS_SRC/" "$OUTPUT_DIR/hooks/"
         echo "  COPIED  hooks/"
       fi
+    else
+      echo "  ERROR: hooks source not found: $HOOKS_SRC" >&2
+      exit 1
     fi
   fi
 fi
