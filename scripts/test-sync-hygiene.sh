@@ -361,6 +361,14 @@ MONOREPO_SKILLSCOMMA_FIXTURE="$SCRATCH_DIR/monorepo-skillscomma"
 MONOREPO_SKILLSBAD_FIXTURE="$SCRATCH_DIR/monorepo-skillsbad"
 MONOREPO_SKILLSGOOD_FIXTURE="$SCRATCH_DIR/monorepo-skillsgood"
 
+# A dedicated SKILLS_HOME for the --skills-nosuchskill fixture only (not shared
+# with SKILLS_HOME_FIXTURE): its plugin-manifest.json is added *between* the
+# populate run and the guard-triggering run (see that section below) so the
+# auto-build stage still has real work to do — a manifest published at
+# populate time would already be built and drift-free by the second run,
+# making "no AUTO-SYNCED line" true whether or not the guard actually fired.
+SKILLS_HOME_SKILLSBAD_FIXTURE="$SCRATCH_DIR/skills-home-skillsbad"
+
 SKILLS_HOME_BUILDFAIL_FIXTURE="$SCRATCH_DIR/skills-home-buildfail"
 MONOREPO_BUILDFAIL_FIXTURE="$SCRATCH_DIR/monorepo-buildfail"
 MONOREPO_GITIGNORE_FIXTURE="$SCRATCH_DIR/monorepo-gitignore"
@@ -473,6 +481,7 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
          "$MONOREPO_SKILLSCOMMA_FIXTURE/demo-skill" \
          "$MONOREPO_SKILLSBAD_FIXTURE/demo-skill" \
          "$MONOREPO_SKILLSGOOD_FIXTURE/demo-skill" \
+         "$SKILLS_HOME_SKILLSBAD_FIXTURE/demo-skill" \
          "$SKILLS_HOME_BUILDFAIL_FIXTURE/broken-plugin" \
          "$MONOREPO_BUILDFAIL_FIXTURE" \
          "$MONOREPO_GITIGNORE_FIXTURE" \
@@ -1219,6 +1228,21 @@ ADDCOMMA_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_ADDCOMMA_FIXTURE" "$ADDCOMMA_STDOUT_LOG" "$ADDCOMMA_STDERR_LOG" --add , || ADDCOMMA_RC=$?
 ADDCOMMA_STDERR="$(cat "$ADDCOMMA_STDERR_LOG")"
 
+# --add and --skills together: they're parsed independently with no mutual
+# exclusion in the argument loop, and discover_skills() returns from the
+# --add branch without ever reading SKILLS_LIST — but the #80 post-loop guard
+# gates on SKILLS_LIST alone. Before the mutual-exclusion check, this
+# combination on a monorepo with no existing skill dirs would abort correctly
+# but MISDIAGNOSE it: "--skills matched no valid skills ... from: 'anything'",
+# naming a flag whose value was never actually consulted. The monorepo
+# argument doesn't need to exist — the rejection is at parse time, before any
+# directory is ever touched.
+ADDSKILLS_STDOUT_LOG="$SCRATCH_DIR/addskills-conflict.stdout"
+ADDSKILLS_STDERR_LOG="$SCRATCH_DIR/addskills-conflict.stderr"
+ADDSKILLS_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$SCRATCH_DIR/monorepo-addskills-conflict-unused" "$ADDSKILLS_STDOUT_LOG" "$ADDSKILLS_STDERR_LOG" --add nosuchskill --skills anything || ADDSKILLS_RC=$?
+ADDSKILLS_STDERR="$(cat "$ADDSKILLS_STDERR_LOG")"
+
 # Runs 7a-7c: issue #80 — a --skills value that resolves to zero real skills
 # must refuse rather than silently republish the catalogue. Each of the three
 # fixtures below is first "populated" with a genuine sync (no --skills), which
@@ -1239,15 +1263,56 @@ SKILLSCOMMA_STDERR="$(cat "$SKILLSCOMMA_STDERR_LOG")"
 SKILLSCOMMA_README_AFTER="$(cat "$MONOREPO_SKILLSCOMMA_FIXTURE/README.md" 2>/dev/null || true)"
 SKILLSCOMMA_ROWS_AFTER="$(skill_catalog_row_count "$MONOREPO_SKILLSCOMMA_FIXTURE/README.md")"
 
+# SKILLS_HOME_SKILLSBAD_FIXTURE starts with a plain demo-skill and NO
+# plugin-manifest.json, so the populate run below cannot build a plugin yet —
+# the manifest is added afterwards (see below), between the populate run and
+# the guard-triggering one, so the latter is the run that would attempt the
+# very first build if the guard did not stop it first.
+cat > "$SKILLS_HOME_SKILLSBAD_FIXTURE/demo-skill/SKILL.md" <<'EOF'
+---
+name: demo-skill
+description: Throwaway fixture skill used only by the sync-hygiene harness's --skills-nosuchskill guard-placement assertion.
+version: 0.1.0
+---
+
+# Demo Skill
+
+Fixture content.
+EOF
+
 SKILLSBAD_POPULATE_RC=0
-run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSBAD_FIXTURE" "$SCRATCH_DIR/skillsbad-populate.stdout" "$SCRATCH_DIR/skillsbad-populate.stderr" || SKILLSBAD_POPULATE_RC=$?
+run_sync "$SKILLS_HOME_SKILLSBAD_FIXTURE" "$MONOREPO_SKILLSBAD_FIXTURE" "$SCRATCH_DIR/skillsbad-populate.stdout" "$SCRATCH_DIR/skillsbad-populate.stderr" || SKILLSBAD_POPULATE_RC=$?
 SKILLSBAD_README_BEFORE="$(cat "$MONOREPO_SKILLSBAD_FIXTURE/README.md" 2>/dev/null || true)"
 SKILLSBAD_ROWS_BEFORE="$(skill_catalog_row_count "$MONOREPO_SKILLSBAD_FIXTURE/README.md")"
+
+# Mutate between the populate run and the guard-triggering run: add the
+# manifest now, so the second run is the first one that ever sees it. Without
+# the #80 guard, this run's plugin auto-build stage would find no
+# plugins/skillsbad-plugin/.claude-plugin on disk yet and attempt a real
+# first build (printing "AUTO-SYNCED"), proving the "aborts before auto-build"
+# assertion below is not vacuous — a manifest present since populate time
+# would already be built and drift-free, making that line absent regardless
+# of whether the guard fired at all.
+cat > "$SKILLS_HOME_SKILLSBAD_FIXTURE/demo-skill/plugin-manifest.json" <<'EOF'
+{
+  "name": "skillsbad-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin used only by the sync-hygiene harness's --skills-nosuchskill guard-placement assertion.",
+  "skills": [
+    {
+      "name": "demo-skill",
+      "source": "."
+    }
+  ],
+  "commands": []
+}
+EOF
 
 SKILLSBAD_STDOUT_LOG="$SCRATCH_DIR/skillsbad.stdout"
 SKILLSBAD_STDERR_LOG="$SCRATCH_DIR/skillsbad.stderr"
 SKILLSBAD_RC=0
-run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSBAD_FIXTURE" "$SKILLSBAD_STDOUT_LOG" "$SKILLSBAD_STDERR_LOG" --skills nosuchskill || SKILLSBAD_RC=$?
+run_sync "$SKILLS_HOME_SKILLSBAD_FIXTURE" "$MONOREPO_SKILLSBAD_FIXTURE" "$SKILLSBAD_STDOUT_LOG" "$SKILLSBAD_STDERR_LOG" --skills nosuchskill || SKILLSBAD_RC=$?
+SKILLSBAD_STDOUT="$(cat "$SKILLSBAD_STDOUT_LOG")"
 SKILLSBAD_STDERR="$(cat "$SKILLSBAD_STDERR_LOG")"
 SKILLSBAD_README_AFTER="$(cat "$MONOREPO_SKILLSBAD_FIXTURE/README.md" 2>/dev/null || true)"
 SKILLSBAD_ROWS_AFTER="$(skill_catalog_row_count "$MONOREPO_SKILLSBAD_FIXTURE/README.md")"
@@ -1256,6 +1321,14 @@ SKILLSBAD_ROWS_AFTER="$(skill_catalog_row_count "$MONOREPO_SKILLSBAD_FIXTURE/REA
 # invocation (not just the zero-resolving ones) would pass both checks above.
 SKILLSGOOD_POPULATE_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_SKILLSGOOD_FIXTURE" "$SCRATCH_DIR/skillsgood-populate.stdout" "$SCRATCH_DIR/skillsgood-populate.stderr" || SKILLSGOOD_POPULATE_RC=$?
+
+# Remove the README the populate run just wrote before the real test run: a
+# genuine rewrite is byte-identical to the populate output, so "was the row
+# written by THIS run" is not observable from content alone once the file is
+# already there. Deleting it first turns the row's mere presence afterwards
+# into real proof the guard-triggering run itself performed the write, rather
+# than the assertion passing vacuously off populate's leftover file.
+rm -f "$MONOREPO_SKILLSGOOD_FIXTURE/README.md"
 
 SKILLSGOOD_STDOUT_LOG="$SCRATCH_DIR/skillsgood.stdout"
 SKILLSGOOD_STDERR_LOG="$SCRATCH_DIR/skillsgood.stderr"
@@ -1884,6 +1957,16 @@ assert_contains "--add , explains itself on stderr, naming the offending argumen
     "Error: --add produced no skill names from: ','" "$ADDCOMMA_STDERR"
 
 # ============================================================
+# --add and --skills together must be rejected, with the right diagnosis
+# ============================================================
+assert_eq "--add and --skills together are rejected at parse time" \
+    "1" "$ADDSKILLS_RC"
+assert_contains "...names the actual conflict" \
+    "Error: --add and --skills are mutually exclusive" "$ADDSKILLS_STDERR"
+assert_not_contains "...does not misattribute the failure to --skills, whose value --add's presence means was never consulted" \
+    "matched no valid skills" "$ADDSKILLS_STDERR"
+
+# ============================================================
 # Issue #80 — a --skills value resolving to zero real skills must refuse
 # rather than publish an empty (or silently unchanged-but-misleading) catalog
 # ============================================================
@@ -1929,12 +2012,28 @@ assert_eq "--skills nosuchskill leaves the catalogue row count unchanged" \
 assert_eq "--skills nosuchskill leaves the README byte-for-byte unchanged" \
     "$SKILLSBAD_README_BEFORE" "$SKILLSBAD_README_AFTER"
 
+# Placement proof: the guard is sited before the plugin auto-build stage, not
+# just before the literal README/CHANGELOG write, so a doomed --skills call
+# cannot leave plugins/ mutated on disk beside a catalogue that no longer
+# describes it (see task report for the full reasoning — this mirrors #77's
+# own "exit before anything is written" contract). The manifest added between
+# the populate and guard-triggering runs above means this run is genuinely the
+# first one that would ever attempt to build skillsbad-plugin, so "no
+# AUTO-SYNCED line" is proof the guard fired before reaching that stage, not
+# an accident of the plugin already being built and drift-free.
+assert_not_contains "--skills nosuchskill aborts before the plugin auto-build stage" \
+    "AUTO-SYNCED" "$SKILLSBAD_STDOUT"
+
 # Positive control: --skills naming a real skill still succeeds and is synced.
 assert_eq "positive control: --skills demo-skill exits 0" \
     "0" "$SKILLSGOOD_RC"
 assert_line_present "positive control: --skills demo-skill names it in the synced list" \
     "demo-skill" "$(synced_names "$SKILLSGOOD_STDOUT")"
-assert_contains "positive control: --skills demo-skill's catalogue row is (re)written" \
+# The README is removed between the populate run and this one (below, at the
+# run-7c call site) so a row's presence here is proof this run wrote it, not
+# a leftover from populate — a byte-identical rewrite is otherwise
+# content-indistinguishable from "the run never touched the file".
+assert_contains "positive control: --skills demo-skill's catalogue row is present after the run" \
     "[demo-skill](./demo-skill/)" "$SKILLSGOOD_README_AFTER"
 
 # ============================================================

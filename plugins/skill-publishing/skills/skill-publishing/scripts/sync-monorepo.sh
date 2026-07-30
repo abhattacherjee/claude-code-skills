@@ -33,7 +33,9 @@ generated root README containing a catalog table and plugin section.
 Options:
   --dry-run              Preview changes without writing
   --skills <list>        Comma-separated skill names (default: all in monorepo)
-  --add <skill-name>     Add a new skill to the monorepo
+                         Mutually exclusive with --add.
+  --add <skill-name>     Add a new skill to the monorepo. Mutually exclusive
+                         with --skills.
   --add-plugin <name>    Add a plugin from ./build/<name>/ to plugins/
   --github-user NAME     GitHub username (default: auto-detect via gh api)
   --author NAME          Name for LICENSE copyright (default: Abhishek)
@@ -100,6 +102,19 @@ while [[ $# -gt 0 ]]; do
     *)              MONOREPO_DIR="$1"; shift ;;
   esac
 done
+
+# Mutually exclusive: discover_skills() returns from the --add branch without
+# ever reading SKILLS_LIST (#80's post-loop guard, further down, gates on
+# SKILLS_LIST alone). Silently letting one win would mean --skills's value is
+# accepted on the command line but never actually consulted — and worse, a
+# --skills value that matched nothing would still surface as an error naming
+# the *wrong* flag's value, since the guard has no way to know which flag
+# actually produced the (empty) list it is refusing. Reject the combination
+# outright rather than pick a silent winner.
+if [[ -n "$ADD_SKILL" && -n "$SKILLS_LIST" ]]; then
+  echo "Error: --add and --skills are mutually exclusive; pass one or the other" >&2
+  exit 1
+fi
 
 if [[ -z "$MONOREPO_DIR" ]]; then
   echo "Error: monorepo directory is required" >&2
