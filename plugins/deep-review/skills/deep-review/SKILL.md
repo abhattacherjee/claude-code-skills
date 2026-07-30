@@ -220,13 +220,15 @@ Summarize for the user:
 - **Accept a planted-regression test that can pass vacuously.** Every new guard/check needs a
   fail-first negative: confirm the assertion FAILS when the code is broken. A test asserting on a
   static string that's always present is the classic vacuous trap.
-- **Accept an "expect nothing" assertion with no positive control.** A negative fixture catches a
-  guard stuck ON; only a positive fixture catches one stuck OFF, and "correctly reports nothing" is
-  indistinguishable from "hardcoded empty" without one. Require both directions for any detector or
-  guard, and prefer proving it by mutation — patch the guard to `false &&`, confirm the suite goes
-  red — over inspection. **A fixture that cannot reach the failing half is the same defect wearing a
-  passing badge:** check that each assertion's fixture can actually express the failure, not merely
-  that the assertion exists.
+- **Accept an "expect nothing" assertion with no positive control.** An absent-pattern fixture
+  catches a guard stuck ON; only a present-pattern fixture catches one stuck OFF, where "correctly
+  reports nothing" and "hardcoded empty" produce the same green. (Downstream side effects can
+  sometimes tell them apart — assert on what the code was supposed to *write*, not only on what it
+  reported.) Require both directions for any detector or guard, and prefer proving it by mutation —
+  patch the guard to `false &&`, confirm the suite goes red — over inspection. **Fixture
+  reachability is a third axis, independent of both:** a fixture that cannot reach the failing half
+  yields a green assertion over an uncovered path, so check that each assertion's fixture can
+  actually express the failure, not merely that the assertion exists.
 - **Let the adversarial pass rubber-stamp.** The point is the *opposing* model. If running
   Claude-only, use a genuinely independent second agent and say cross-model confirmation was
   skipped.
