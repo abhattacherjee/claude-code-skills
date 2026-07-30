@@ -139,6 +139,17 @@ from those paths needs re-checking before upgrading.
   stdin, turning a truncation into a hang on an interactive terminal. `--help` states both
   halves and which one is load-bearing. (#81)
 
+- **Process note, recorded because it caught a fifth instance.** Four half-true safety
+  comments shipped on this branch, and twice the correction produced another. The shape is
+  mechanical: an absolute — "no", "never", "always", "still", "only", "cannot" — describing
+  a property that is actually conditional. Grepping this branch's own added comment lines
+  for those words and testing each against a counterexample found one more that had
+  survived review: "`_UNREADABLE_MANIFESTS` is the only one of the three a `--dry-run` can
+  produce". It is not — `_BARE_ENTRY_MANIFESTS` is too, since the main sync loop's guard is
+  not gated on `DRY_RUN` either, verified by running a `--dry-run` over an already-published
+  plugin with `"agents": ["x"]` and getting exit 1. Two further absolutes were tightened in
+  the same pass. The check is cheap and belongs in review, not in hindsight. (#81)
+
 - **The line-wise conversion above had a sixth site with no test coverage at all.** It is
   described everywhere as five sites in `sync-monorepo.sh`; the sixth is
   `validate-pre-sync.sh`'s own skill loop, converted by the same issue but in a different

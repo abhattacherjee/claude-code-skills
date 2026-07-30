@@ -278,8 +278,11 @@ discover_skills() {
     # to rewrite the README, CHANGELOG and marketplace at exit 0 — the same
     # "reports success while not doing its job" shape #80 closed for --skills.
     # #80's post-loop guard cannot catch it: it fires only when *zero* names
-    # resolved, and a populated monorepo always contributes resolvable names
-    # through $existing, so SKILLS_RESOLVED_COUNT is never 0. #85 tracked the
+    # resolved, and any monorepo holding at least one real skill contributes
+    # resolvable names through $existing — filter_skill_candidates() only emits
+    # names that already have a SKILL.md — so SKILLS_RESOLVED_COUNT is non-zero
+    # there. (It IS zero for a monorepo holding no skills at all, which is the
+    # narrower case #85 covered and this check also now catches.) #85 tracked the
     # narrower empty-monorepo case, where the count IS 0 but the guard is gated
     # on $SKILLS_LIST rather than $ADD_SKILL; a per-name check here subsumes it,
     # and fires earlier — before the sync loop writes anything at all.
@@ -804,11 +807,14 @@ AUTO_BUILT_PLUGINS=""
 # stage and acted on once, together with _BARE_ENTRY_MANIFESTS from the main
 # sync loop, in the combined check after this block.
 #
-# _UNREADABLE_MANIFESTS is the only one of the three a --dry-run can produce
-# from this stage: the build never runs under --dry-run, but the manifest is
-# read regardless, so a structurally broken manifest fails a dry run too. That
-# is deliberate — it is a defect --dry-run can genuinely see, so it should say
-# so rather than predict a clean run that will not happen.
+# Which of the three a --dry-run can produce: _UNREADABLE_MANIFESTS from this
+# stage (the build does not run under --dry-run, but the manifest is read
+# regardless), and _BARE_ENTRY_MANIFESTS from the main sync loop, whose guard is
+# not gated on DRY_RUN either — verified: a --dry-run over an already-published
+# plugin with `"agents": ["x"]` exits 1. Only _FAILED_BUILDS is unreachable under
+# --dry-run, because only it needs a build to have been attempted. That is
+# deliberate: both of the others are defects a dry run can genuinely see, so it
+# should say so rather than predict a clean run that will not happen.
 _FAILED_BUILDS=""
 _UNREADABLE_MANIFESTS=""
 
@@ -1393,9 +1399,10 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # one real skill into two bogus, non-functional `cp -r` lines instead of the
   # one correct command — wrong instructions published with a straight face,
   # not merely a miscount. Here-string, not a pipe: INSTALL_ALL_CMDS is read
-  # immediately after this loop. On fd 3, not stdin: see the main sync loop's
-  # comment — pure-bash body today, uniform treatment so a later addition
-  # cannot reintroduce the truncation silently.
+  # immediately after this loop. On fd 3 plus `</dev/null`, not stdin: see the
+  # main sync loop's comment — pure-bash body today, uniform treatment so a
+  # later addition cannot reintroduce the STDIN truncation silently. It is not
+  # proof against a child that names fd 3 outright; nothing here is.
   while IFS= read -r SKILL_NAME <&3; do
     [[ -z "$SKILL_NAME" ]] && continue
     INSTALL_ALL_CMDS="${INSTALL_ALL_CMDS}cp -r /tmp/claude-code-skills/$SKILL_NAME ~/.claude/skills/$SKILL_NAME
@@ -1760,9 +1767,9 @@ if [[ $PLUGIN_COUNT -gt 0 ]]; then
   # process substitution on plain stdin is the loop body's stdin exactly as a
   # here-string is. None of those children reads stdin today — but that is the
   # argument already rejected at the install-all loop, whose comment reads
-  # "pure-bash body today, uniform treatment so a later addition cannot
-  # reintroduce the truncation silently". Leaving this one out would have made
-  # that rule apply everywhere except the one loop that actually spawns things.
+  # "uniform treatment so a later addition cannot reintroduce the STDIN
+  # truncation silently". Leaving this one out would have made that rule apply
+  # everywhere except the one loop that actually spawns things.
   while IFS= read -r pjson <&3; do
     pdir=$(dirname "$(dirname "$pjson")")
     pname=$(jq -r '.name // ""' "$pjson" 2>/dev/null)
