@@ -2,7 +2,7 @@
 name: spec-review
 description: "Reviews and enriches story specifications with codebase-verified technical sub-tasks, architecture alignment checks, design simplification suggestions, and API test plans. Dynamically discovers project architecture at runtime. Use when: (1) a new story spec needs review before implementation, (2) a spec has high-level tasks but lacks implementation-ready detail, (3) need to verify spec assumptions against actual codebase, (4) a spec references API changes but has no test plan, (5) reviewing specs that reference data shapes or pipeline ordering, (6) spec subtasks mention add field X to object Y or call function at line N."
 metadata:
-  version: 2.2.1
+  version: 2.2.2
 ---
 
 # Spec Review

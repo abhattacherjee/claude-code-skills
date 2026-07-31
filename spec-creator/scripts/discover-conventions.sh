@@ -72,9 +72,9 @@ count_specs() {
 detect_epic_structure() {
     local spec_dir="$1"
     [[ -z "$spec_dir" ]] && { echo "flat"; return; }
-    if ls -d "$spec_dir"/epic-* 2>/dev/null | head -1 > /dev/null 2>&1; then
+    if compgen -G "$spec_dir/epic-*" > /dev/null; then
         echo "epic-subdirs"
-    elif ls -d "$spec_dir"/[0-9]* 2>/dev/null | head -1 > /dev/null 2>&1; then
+    elif compgen -G "$spec_dir/[0-9]*" > /dev/null; then
         echo "numbered-subdirs"
     else
         echo "flat"

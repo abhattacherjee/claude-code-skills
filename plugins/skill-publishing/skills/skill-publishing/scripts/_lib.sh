@@ -108,6 +108,13 @@ copy_file() {
     return
   fi
 
+  # Source and destination are the same file (in-repo source directory):
+  # `cp a a` fails, and under `set -e` that aborts the whole sync. `-ef`
+  # compares device + inode, so symlink and hardlink aliases are caught too.
+  if [[ "$src" -ef "$dst" ]]; then
+    return
+  fi
+
   if $DRY_RUN; then
     if [[ -f "$dst" ]]; then
       echo "  WOULD UPDATE  $label"
@@ -165,4 +172,145 @@ resolve_github_user() {
 # Usage: resolve_tilde <path>
 resolve_tilde() {
   echo "${1/#\~/$HOME}"
+}
+
+# Resolve a manifest-declared source path.
+#   $1 = the raw source string from the manifest
+#   $2 = the directory containing the manifest
+# A leading ~ expands to $HOME. An absolute path is returned unchanged. A
+# relative path resolves against the MANIFEST's directory, not the caller's
+# cwd, so in-repo-source manifests work from anywhere. An empty source stays
+# empty so callers report "source not found" rather than silently assembling
+# the manifest's own directory.
+resolve_source_path() {
+  local raw="$1" manifest_dir="$2" expanded
+  if [[ -z "$raw" ]]; then
+    echo ""
+    return
+  fi
+  expanded="$(resolve_tilde "$raw")"
+  case "$expanded" in
+    /*) echo "$expanded" ;;
+    *)  echo "${manifest_dir%/}/$expanded" ;;
+  esac
+}
+
+# Resolve a skill's authoring source: the local skills home if present, else an
+# in-repo top-level directory (the arrangement introduced when skills moved into
+# the monorepo). Local-first precedence keeps behaviour identical while both
+# copies exist, and hands over automatically once the local copy is removed.
+# Echoes nothing when the skill has no source anywhere.
+# Usage: skill_source_dir <skill-name>
+# Requires: SKILLS_HOME set by the caller. Deliberately unwrapped, unlike
+#   MONOREPO_DIR below — an unset SKILLS_HOME must abort rather than silently
+#   resolve to "/<name>/SKILL.md".
+#
+#   An earlier version said "every current caller sets it before sourcing this
+#   file". That is FALSE: "before sourcing this file" ties "caller" to the
+#   scripts that source _lib.sh, and two of the six do not set SKILLS_HOME.
+#   Measured, because the first correction of this comment ALSO got it wrong —
+#   it said three, having inherited the list from the MONOREPO_DIR paragraph
+#   below without re-deriving it:
+#
+#     script                     sets SKILLS_HOME   calls skill_source_dir
+#     prepare-plugin.sh                 no                   no
+#     prepare-skill-repo.sh             no                   no
+#     release-monorepo.sh               yes                  no
+#     sync-individual-repos.sh          yes                  no      <- sets it
+#     sync-monorepo.sh                  yes                  yes
+#     validate-pre-sync.sh              yes                  yes
+#
+#   What is true is narrower: every caller of this FUNCTION sets it. Sourcing
+#   is not calling, and the two that do not set it never call it.
+#
+#   Note this is the same shape as the MONOREPO_DIR case documented two
+#   paragraphs down — correct today only because the call site that would break
+#   it does not exist yet. Stated here too so the two read consistently rather
+#   than one carrying the caveat and the other implying a guarantee.
+#
+#   Hence the explicit guard below. `set -u` alone reports
+#   "_lib.sh: line NNN: SKILLS_HOME: unbound variable", which blames THIS file
+#   for a contract the caller broke; the guard names the calling script instead.
+#   It does not disturb the ratified bare-$SKILLS_HOME decision — an unset value
+#   still aborts loudly rather than silently resolving to "/<name>/SKILL.md".
+#
+# References ${MONOREPO_DIR:-}, not $MONOREPO_DIR: this file is sourced by
+# scripts (prepare-plugin.sh, prepare-skill-repo.sh, sync-individual-repos.sh)
+# that never set MONOREPO_DIR, and under `set -u` an unset variable referenced
+# inside a *called* function still aborts the script. Callers that do have a
+# monorepo directory (sync-monorepo.sh, validate-pre-sync.sh) already set
+# MONOREPO_DIR before calling this, so their behaviour is unchanged.
+#
+# The elif guards with `-n` explicitly rather than relying on `-f "${x:-}/…"`
+# alone: with MONOREPO_DIR unset, "${MONOREPO_DIR:-}/$name/SKILL.md" collapses
+# to "/$name/SKILL.md" — a root-relative path outside both trees that a
+# caller with no monorepo directory could still match by accident (e.g.
+# name=tmp against a real /tmp/SKILL.md). Unreachable today only because no
+# current caller without MONOREPO_DIR set calls this function at all — which
+# is exactly the "correct only because the next call site doesn't exist yet"
+# shape this batch exists to close.
+skill_source_dir() {
+  local name="$1"
+  if [[ -z "${SKILLS_HOME:-}" ]]; then
+    # rc 2, matching the usage-error code the entry-point scripts already use,
+    # because this IS a usage error — a caller-contract breach, not a lookup
+    # failure. $0 names the script that forgot, which is the whole point.
+    echo "Error: skill_source_dir() requires SKILLS_HOME; it is unset (caller: $0)." >&2
+    echo "       Sourcing _lib.sh does not set it. sync-monorepo.sh and" >&2
+    echo "       validate-pre-sync.sh default it to \$HOME/.claude/skills." >&2
+    return 2
+  fi
+  if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
+    echo "$SKILLS_HOME/$name"
+  elif [[ -n "${MONOREPO_DIR:-}" && -f "${MONOREPO_DIR}/$name/SKILL.md" ]]; then
+    echo "${MONOREPO_DIR}/$name"
+  fi
+}
+
+# --- Manifest shape (issue #73) ----------------------------------------------
+#
+# A legacy plugin-manifest.json declares skills as bare strings:
+#     "skills": ["my-skill"]
+# rather than the current object form:
+#     "skills": [{"name": "my-skill", "source": "."}]
+# A bare string means "the skill lives in this manifest's own directory", so
+# {"name": <string>, "source": "."} is the faithful normalisation —
+# resolve_source_path "." "$MANIFEST_DIR" yields the manifest's own directory.
+#
+# Bare strings are normalisable in skills[] ONLY. A skill's source is a
+# directory, so "." has a meaning there; commands[] and agents[] sources are
+# *files*, for which there is no defensible default. Callers reject a bare
+# string in those rather than guessing — see prepare-plugin.sh.
+
+# Write a shape-normalised copy of a manifest.
+#   $1 = source manifest, $2 = destination path (overwritten)
+# Callers point every subsequent `.skills[…]` read at the copy instead of
+# teaching each read site the legacy shape: prepare-plugin.sh has eight such
+# reads, and a fix that converts some of them still dies with
+# `jq: error … Cannot index string with "name"` from whichever it missed.
+#
+# `.skills = ((.skills // []) | map(…))`, deliberately not the terser
+# `(.skills // []) |= map(…)`: the latter is not a valid path expression when
+# `.skills` is absent — jq 1.7.1 fails with "Invalid path expression with
+# result []" — which would turn a manifest declaring no skills at all (legal
+# today: `.skills | length` is 0) into a hard error.
+normalize_manifest() {
+  local src="$1" dst="$2"
+  jq '.skills = ((.skills // []) | map(if type == "string" then {name: ., source: "."} else . end))' \
+    "$src" > "$dst"
+}
+
+# Emit a manifest's skill names, one per line, tolerating the legacy
+# bare-string form. For callers that need only the names and so do not need a
+# normalised copy on disk. Entries with no name are skipped rather than
+# emitting a blank line.
+manifest_skill_names() {
+  jq -r '(.skills // [])[] | (if type == "string" then . else .name end) // empty' "$1"
+}
+
+# Emit the bare-string entries of manifest $1's array $2 ("commands"/"agents"),
+# comma-joined; empty when the array is absent or fully object-form.
+manifest_bare_entries() {
+  jq -r --arg key "$2" \
+    '[(.[$key] // [])[] | select(type == "string")] | join(", ")' "$1"
 }

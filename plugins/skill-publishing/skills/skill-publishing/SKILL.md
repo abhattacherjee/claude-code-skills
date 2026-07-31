@@ -2,7 +2,7 @@
 name: skill-publishing
 description: "Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos. Use when: (1) user says 'publish', 'share', or 'sync' a skill, (2) a skill needs to be made installable by others, (3) syncing skills/plugins to the monorepo, (4) creating a versioned monorepo release, (5) assembling a plugin from skills + commands, (6) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 4.1.0
+  version: 4.3.0
 ---
 
 # Publish Skills & Plugins
@@ -140,6 +140,28 @@ Use `AskUserQuestion` with `multiSelect: true`. **Default: Plugin is pre-selecte
 >   "commands": []
 > }
 > ```
+
+**`source` resolution rules** — two supported forms:
+
+- **`~`-prefixed or absolute** — resolves as written (e.g. `~/.claude/skills/skill-name`).
+- **Relative** — resolves against the *manifest file's own directory*, not the caller's
+  working directory. This is what lets a skill's authoring source live inside the monorepo:
+  when the manifest sits inside the skill directory it describes (the
+  `<skill>/plugin-manifest.json` layout the `spec-*` plugins use), the correct value is
+  `"source": "."` — `"source": "<skill-name>"` resolves to `<skill>/<skill>` and fails.
+
+`sync-monorepo.sh` uses **local-first** precedence when both forms exist for the same skill:
+`$SKILLS_HOME/<name>` wins over an in-repo source directory, and the sync log records a
+`SKIP (shadowed)` note naming both paths when it dedupes.
+
+**Reversion guard** — local-first is *not* unconditional. A stale local copy left behind after a
+skill moved into the monorepo would otherwise overwrite newer in-repo content. When the in-repo
+`SKILL.md` version is strictly newer than the local one, that skill is **REFUSED**: the skill
+sync, the plugin auto-build, and the plugin resync all skip it (logging `SKIP (reversion guard)`),
+its catalog/CHANGELOG metadata is read from the in-repo copy instead, the rest of the sync still
+runs, and the script exits **3** — completed, but see below for the full exit-code contract.
+Resolve it by deleting the stale local copy so the in-repo copy becomes the source, or re-run
+with `--force-local` to let the local copy win deliberately.
 
 If user agrees, create the manifest and proceed with plugin publishing.
 
@@ -328,10 +350,8 @@ This creates the directory, syncs the default skills (conversation-search, skill
 ```bash
 # Preview changes
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --dry-run ~/dev/claude-code-skills
-
 # Sync
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh ~/dev/claude-code-skills
-
 # Then commit and push
 cd ~/dev/claude-code-skills
 git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
@@ -342,6 +362,10 @@ git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
 ```bash
 ~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
 ```
+
+`--skills a,b` replaces the synced set; `--add` appends. **They are mutually exclusive** — passing both is rejected at parse time with exit 1, rather than one silently winning. Both de-duplicate repeats, but they refuse on **different thresholds**: `--add` refuses if *any* name it contributes is unresolvable; `--skills` refuses only if *all* of them are — so a typo in a `--skills` list still publishes the rest. And **`--skills` rewrites the catalogue to exactly the named subset**: skills left out stay on disk but lose their catalogue row, the published count and their CHANGELOG entry until the next full sync. Prefer `--add` to introduce one skill without disturbing the rest.
+
+**Exit codes**: `0` success; `1` usage/setup error (bad names) or a manifest that could not be published — build failed, unreadable `skills[]`, or a bare-string `agents[]` entry — and `1` beats `3` (completed, refused above). `--dry-run` predicts `3` and both manifest-shape `1`s, but not a build-failure `1`.
 
 ## Workflow C: Sync Individual Repos
 
@@ -409,7 +433,7 @@ plugin-name/
 ├── commands/                    # Slash commands (.md files)
 ├── skills/skill-name/           # Skills (SKILL.md + scripts/ + references/)
 ├── agents/                      # Subagents (.md files, optional)
-└── hooks/                       # hooks.json + scripts (optional)
+└── hooks/                       # hooks.json + scripts (optional — see note below)
 ```
 
 ### Step 1: Create Build Manifest
@@ -425,6 +449,8 @@ Create `plugin-manifest.json` in the skill directory that anchors the plugin:
   "commands": [{ "name": "cmd-name", "source": "~/.claude/commands/cmd-name.md" }]
 }
 ```
+
+`skills[]` also accepts a legacy bare string (normalised to `source: "."`); bare strings in `commands[]`/`agents[]` are hard errors instead. A declared `hooks.source` that doesn't resolve is fatal too (absent/`null` remain no-ops).
 
 ### Step 2: Assemble
 

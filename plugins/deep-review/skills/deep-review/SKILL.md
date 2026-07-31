@@ -2,7 +2,7 @@
 name: deep-review
 description: "Use when the user wants a thorough, high-assurance review of code changes — phrases like \"review this until it's clean\", \"converge to zero issues\", \"adversarial review\", \"have Gemini and Claude review\", \"deep review this PR\", or \"make this change ironclad\". Runs TWO phases on a PR or working-tree diff: (1) iterative multi-reviewer review that loops fix->re-review until a round finds zero actionable issues, then (2) a multi-round Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Repeatable across any project/PR. Use when: (1) the user wants a thorough, high-assurance review that converges to zero actionable issues, (2) the user asks for an adversarial or Gemini-and-Claude cross-examination review of a code diff, (3) deep-reviewing a PR or working-tree diff before merge, (4) the user wants to make a change ironclad."
 metadata:
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # Deep Review
@@ -220,6 +220,15 @@ Summarize for the user:
 - **Accept a planted-regression test that can pass vacuously.** Every new guard/check needs a
   fail-first negative: confirm the assertion FAILS when the code is broken. A test asserting on a
   static string that's always present is the classic vacuous trap.
+- **Accept an "expect nothing" assertion with no positive control.** An absent-pattern fixture
+  catches a guard stuck ON; only a present-pattern fixture catches one stuck OFF, where "correctly
+  reports nothing" and "hardcoded empty" produce the same green. (Downstream side effects can
+  sometimes tell them apart — assert on what the code was supposed to *write*, not only on what it
+  reported.) Require both directions for any detector or guard, and prefer proving it by mutation —
+  patch the guard to `false &&`, confirm the suite goes red — over inspection. **Fixture
+  reachability is a third axis, independent of both:** a fixture that cannot reach the failing half
+  yields a green assertion over an uncovered path, so check that each assertion's fixture can
+  actually express the failure, not merely that the assertion exists.
 - **Let the adversarial pass rubber-stamp.** The point is the *opposing* model. If running
   Claude-only, use a genuinely independent second agent and say cross-model confirmation was
   skipped.

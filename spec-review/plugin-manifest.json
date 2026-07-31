@@ -1,11 +1,11 @@
 {
   "name": "spec-review",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.",
   "skills": [
     {
       "name": "spec-review",
-      "source": "spec-review"
+      "source": "."
     }
   ],
   "commands": []
