@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-07-30
+
 ### Fixed
 
 - **spec-creator** 2.4.1 -> 2.4.2: `detect_epic_structure`'s `| head -1 > /dev/null &&` guard always exited `0`, so every project was reported as using `epic-subdirs` regardless of actual layout, silently losing epics for flat-layout `story-*.md` projects. `discover-conventions.sh` now tests the glob directly and a regression harness covers both layouts. (#62)
