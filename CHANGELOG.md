@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+## [3.17.0] - 2026-08-05
+
 ### Changed
 
 - Authoring source for **deep-review** moved into the monorepo, completing the plugin-only migration the `spec-*` family received in #59. `deep-review/` is now a top-level source directory whose manifest uses the in-repo `"source": "."` form; `plugins/deep-review/` is regenerated from it and the local bare skill at `~/.claude/skills/deep-review` has been removed, so the marketplace plugin is the single distribution channel and the plugin is rebuildable from a clone. This also retires deep-review's instance of the resolve-by-`source` vs resolve-by-`name` detector mismatch tracked in #92 — nothing now depends on `$SKILLS_HOME/deep-review` existing. **Not a general fix for #92:** `custom-statusline` remains affected and that issue stays open. (#101)
