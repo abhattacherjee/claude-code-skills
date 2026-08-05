@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.4.0] - 2026-08-05
+
+### Fixed
+
+- `extract_field()` in `_lib.sh` read a frontmatter field as raw text rather than as a YAML scalar, which produced three defects at once. All are closed together by one awk-based scalar reader, because they share that root cause. (#37, #102)
+  - **Block scalars (#37).** A `description: >-` or `|-` carries no text on its own line, so the reader returned the literal indicator and `prepare-plugin.sh` wrote it into the generated README. In Markdown `>-` renders as an empty blockquote, so the corruption was invisible in the rendered page. No monorepo skill uses a folded description today, but four unpublished authoring skills do (`sentry-dashboard-builder`, `sentry-deploy-notifications`, `vercel-cli-agent-auth`, `vercel-rewrite-platform-routes`) and would have leaked on first sync.
+  - **Double-quoted scalars (#102).** Only the outer quote pair was stripped, so every internal `\"` reached the README verbatim. Live on exactly two files — both copies of `deep-review/SKILL.md`. The other 38 double-quoted descriptions in the repo are escape-free and so looked fine while traversing the same broken path.
+  - **Plain scalars that merely begin or end with a quote (previously unfiled).** `s/^["']//; s/["']$//` fired on the first and last character unconditionally and independently, so `description: "quoted" is a word` silently lost its leading `"`. Quotes are now stripped only when the same character both opens and closes the value.
+- `short_desc()` used `echo "$1"`, which mangles any value beginning with `-n`/`-e`. Now `printf '%s\n'`.
+
+### Changed
+
+- Minor rather than patch: output that was previously mangled now differs. Measured across all 44 `SKILL.md` files in the monorepo — **42 extract byte-identically, 2 change** (the `deep-review` pair, which is the bug being fixed). Plain-scalar behaviour is unchanged by construction and covered by a regression control.
+- `scripts/test-sync-hygiene.sh` gains 24 assertions covering folded, literal, double-quoted, single-quoted, and plain-opening-with-a-quote scalars. Each style carries a **positive control** as well as a leaked-syntax negative, because an `assert_not_contains`-only test passes identically for a working parser and one that returns nothing. Twelve of the 24 go red against the old parser; the remaining twelve are run-level and descriptionless-fallback guards that the old parser cannot trip (it returned non-empty garbage, not nothing), so they were separately verified against an empty-returning stub. Neither arm alone is sufficient evidence and both were run.
+
+### Decided
+
+- `plugins/deep-review/README.md` **stays hand-curated.** #102 asked for an explicit call. The generated form is a bare section-heading list where the curated one has written feature bullets, so regenerating would flatten it. The leak was why it was at *risk* of being overwritten, not why it is curated; with the parser fixed, an auto-build no longer corrupts it. Recorded here so this is not re-litigated.
+
+### Known gaps (audited, not sampled)
+
+- A **quoted** scalar wrapped across multiple lines is read as its first line only; block scalars are the supported way to wrap. `\uXXXX`/`\xXX` numeric escapes yield the literal letter. Flow collections, anchors, and aliases are unparsed. All four audited across the 44 monorepo `SKILL.md` files: zero occurrences, so latent rather than live.
+- `extract_version()` has the same class of defect independently — its `grep "version:"` is unanchored, so a description containing `version:` would hijack it, and it repeats the unconditional quote strip. Verified no `SKILL.md` triggers it today. Deliberately out of scope here to keep the fail-first evidence for #37/#102 unambiguous; filed separately.
+- `validate-skill.sh` still carries its own single-argument `extract_field` which folds block scalars but does not unescape, so it has defect 2 independently. Merging the two readers is a separate change.
+
 ## [4.3.0] - 2026-07-30
 
 Minor, not patch. Five of the six defects below share one shape — a write path that

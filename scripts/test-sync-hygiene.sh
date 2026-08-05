@@ -3878,6 +3878,12 @@ assert_contains "…and the collected-failure summary survives the sed that cann
 #      string, which is lossy for a directory name containing a comma — the
 #      same "names are unconstrained free text" premise #81 rests on. Only the
 #      user-typed value is comma-split now.
+#
+#  24. #37/#102: _lib.sh's extract_field read `description:` as raw text, so the
+#      generated plugin README carried whatever YAML syntax the author had
+#      written — a bare `>-` for a folded scalar, literal `\"` for a
+#      double-quoted one, and (unfiled) a plain scalar's leading quote eaten by
+#      an unconditional strip. One awk parser now decodes every scalar style.
 
 # ------------------------------------------------------------------
 # Defect 20 — a hooks object with no source key
@@ -4257,6 +4263,209 @@ assert_eq "…with both catalogue rows written" \
     "2" "$(skill_catalog_row_count "$MONOREPO_COMMA_FIXTURE/README.md")"
 assert_contains "…including the comma-named skill's own row, whole" \
     "| [alpha,beta](./alpha,beta/) |" "$COMMA_README"
+
+# ------------------------------------------------------------------
+# Defect 24 — YAML scalar styles leaking into the generated README
+# ------------------------------------------------------------------
+#
+# One fixture plugin per scalar style, each built by the real prepare-plugin.sh.
+# The description is read at two INDEPENDENT sites — FULL_DESC feeds
+# "## What It Does" (prepare-plugin.sh:420/522) and SDESC feeds the "### Skills"
+# list (prepare-plugin.sh:462/466) — so both are asserted; a partial fix that
+# closed one read would otherwise pass.
+#
+# Every style is asserted in BOTH directions. A negative alone
+# (assert_not_contains ">-") is satisfied identically by a working parser and by
+# one that returns the empty string, so each style also carries a positive
+# control: a distinctive ALL-CAPS marker that can only appear in the README if
+# the scalar was decoded correctly.
+#
+# The bare-row assertions are the guard for prepare-plugin.sh:464/504
+# (`[[ -n "$SDESC_SHORT" && "$SDESC_SHORT" != "." ]]`): on an empty parse those
+# take the else branch and emit `- \`name\`` with no description at all — a
+# silent degradation nothing else in this suite catches. Asserting the row whole,
+# em-dash and text included, is what makes an empty parse fail rather than pass
+# quietly.
+mkdir -p "$PREPARE_FIXTURE_DIR/foldedscalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/dquotescalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/squotescalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/plainscalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/plainregress-plugin"
+
+# #37: a folded block scalar carries no text on its key line.
+cat > "$PREPARE_FIXTURE_DIR/foldedscalar-plugin/SKILL.md" <<'EOF'
+---
+name: foldedscalar-skill
+description: >-
+  FOLDED-SCALAR-MARKER — a description written as a folded block scalar that
+  spans two source lines. Use when: (1) the generator folds it into one line.
+version: 0.1.0
+---
+
+# foldedscalar-skill
+EOF
+
+# #102: a double-quoted scalar whose internal quotes are backslash-escaped.
+cat > "$PREPARE_FIXTURE_DIR/dquotescalar-plugin/SKILL.md" <<'EOF'
+---
+name: dquotescalar-skill
+description: "DQUOTE-SCALAR-MARKER — phrases like \"review this\" and \"converge to zero\" must survive intact. Use when: (1) the generator decodes a double-quoted scalar."
+version: 0.1.0
+---
+
+# dquotescalar-skill
+EOF
+
+# The third scalar style. YAML's only single-quote escape is a doubled quote,
+# which the old reader never collapsed because it only ever stripped the outer
+# pair.
+cat > "$PREPARE_FIXTURE_DIR/squotescalar-plugin/SKILL.md" <<'EOF'
+---
+name: squotescalar-skill
+description: 'SQUOTE-SCALAR-MARKER — it''s a single-quoted scalar, kept whole. Use when: (1) the doubled quote collapses to one.'
+version: 0.1.0
+---
+
+# squotescalar-skill
+EOF
+
+# The unfiled defect: a PLAIN scalar that merely opens with a quote. The old
+# `s/^["']//` fired unconditionally and ate it. Note the correct output CONTAINS
+# the mangled output as a substring, so this one is asserted on whole lines —
+# assert_not_contains would go red against the fix as well as against the bug.
+cat > "$PREPARE_FIXTURE_DIR/plainscalar-plugin/SKILL.md" <<'EOF'
+---
+name: plainscalar-skill
+description: "PLAIN-OPENQUOTE-MARKER" stays whole when the scalar is plain. Use when: (1) nothing is stripped.
+version: 0.1.0
+---
+
+# plainscalar-skill
+EOF
+
+# Regression control, and deliberately NOT a fail-first assertion: an ordinary
+# plain scalar must read identically before and after the parser swap. It passes
+# against both builds by design — that is what "unchanged" means — so it is the
+# one fixture here whose green result proves nothing about the fix and
+# everything about what the fix did not disturb. 42 of the 44 SKILL.md
+# descriptions in this repo are this shape.
+cat > "$PREPARE_FIXTURE_DIR/plainregress-plugin/SKILL.md" <<'EOF'
+---
+name: plainregress-skill
+description: PLAINREGRESS-MARKER — an ordinary plain scalar with no quoting at all. Use when: (1) plain-scalar output is unchanged.
+version: 0.1.0
+---
+
+# plainregress-skill
+EOF
+
+for _sc in foldedscalar dquotescalar squotescalar plainscalar plainregress; do
+    cat > "$PREPARE_FIXTURE_DIR/$_sc-plugin/plugin-manifest.json" <<EOF
+{
+  "name": "$_sc-plugin",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin exercising one YAML description scalar style (harness defect 24).",
+  "skills": [ { "name": "$_sc-skill", "source": "." } ],
+  "commands": []
+}
+EOF
+done
+
+SCALAR_FOLDED_RC=0
+run_prepare foldedscalar-plugin "$SCRATCH_DIR/scalar-folded.stdout" \
+    "$SCRATCH_DIR/scalar-folded.stderr" || SCALAR_FOLDED_RC=$?
+SCALAR_FOLDED_README="$(cat "$PREPARE_OUT_DIR/foldedscalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_DQUOTE_RC=0
+run_prepare dquotescalar-plugin "$SCRATCH_DIR/scalar-dquote.stdout" \
+    "$SCRATCH_DIR/scalar-dquote.stderr" || SCALAR_DQUOTE_RC=$?
+SCALAR_DQUOTE_README="$(cat "$PREPARE_OUT_DIR/dquotescalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_SQUOTE_RC=0
+run_prepare squotescalar-plugin "$SCRATCH_DIR/scalar-squote.stdout" \
+    "$SCRATCH_DIR/scalar-squote.stderr" || SCALAR_SQUOTE_RC=$?
+SCALAR_SQUOTE_README="$(cat "$PREPARE_OUT_DIR/squotescalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_PLAIN_RC=0
+run_prepare plainscalar-plugin "$SCRATCH_DIR/scalar-plain.stdout" \
+    "$SCRATCH_DIR/scalar-plain.stderr" || SCALAR_PLAIN_RC=$?
+SCALAR_PLAIN_README="$(cat "$PREPARE_OUT_DIR/plainscalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_REGRESS_RC=0
+run_prepare plainregress-plugin "$SCRATCH_DIR/scalar-regress.stdout" \
+    "$SCRATCH_DIR/scalar-regress.stderr" || SCALAR_REGRESS_RC=$?
+SCALAR_REGRESS_README="$(cat "$PREPARE_OUT_DIR/plainregress-plugin/README.md" 2>/dev/null || true)"
+
+# --- Verified red against the pre-fix build: the folded README's "What It Does"
+# read ">-" and its skills row was "- `foldedscalar-skill` — >-"; the
+# double-quoted and single-quoted READMEs carried \" and '' verbatim; and the
+# plain-scalar row had lost its leading quote. All five builds exited 0 both
+# before and after, so rc is a run-level control here, not the discriminator. ---
+
+assert_eq "the folded-scalar fixture builds" "0" "$SCALAR_FOLDED_RC"
+assert_eq "the double-quoted-scalar fixture builds" "0" "$SCALAR_DQUOTE_RC"
+assert_eq "the single-quoted-scalar fixture builds" "0" "$SCALAR_SQUOTE_RC"
+assert_eq "the plain-open-quote fixture builds" "0" "$SCALAR_PLAIN_RC"
+assert_eq "the plain-scalar regression fixture builds" "0" "$SCALAR_REGRESS_RC"
+
+# --- #37, folded ---
+assert_contains "a folded description is folded into the README's What It Does" \
+    "FOLDED-SCALAR-MARKER — a description written as a folded block scalar that spans two source lines." \
+    "$SCALAR_FOLDED_README"
+assert_line_present "…and into its skills row, whole" \
+    '- `foldedscalar-skill` — FOLDED-SCALAR-MARKER — a description written as a folded block scalar that spans two source lines.' \
+    "$SCALAR_FOLDED_README"
+assert_not_contains "…with no raw block-scalar indicator left anywhere in the README" \
+    ">-" "$SCALAR_FOLDED_README"
+assert_line_absent "…and the skills row is not the descriptionless fallback" \
+    '- `foldedscalar-skill`' "$SCALAR_FOLDED_README"
+
+# --- #102, double-quoted ---
+assert_contains "a double-quoted description reaches What It Does unescaped" \
+    'DQUOTE-SCALAR-MARKER — phrases like "review this" and "converge to zero" must survive intact.' \
+    "$SCALAR_DQUOTE_README"
+assert_line_present "…and its skills row, whole" \
+    '- `dquotescalar-skill` — DQUOTE-SCALAR-MARKER — phrases like "review this" and "converge to zero" must survive intact.' \
+    "$SCALAR_DQUOTE_README"
+assert_not_contains "…with no literal backslash-quote sequence surviving" \
+    '\"' "$SCALAR_DQUOTE_README"
+assert_line_absent "…and the skills row is not the descriptionless fallback" \
+    '- `dquotescalar-skill`' "$SCALAR_DQUOTE_README"
+
+# --- single-quoted ---
+assert_contains "a single-quoted description reaches What It Does with '' collapsed" \
+    "SQUOTE-SCALAR-MARKER — it's a single-quoted scalar, kept whole." \
+    "$SCALAR_SQUOTE_README"
+assert_line_present "…and its skills row, whole" \
+    "- \`squotescalar-skill\` — SQUOTE-SCALAR-MARKER — it's a single-quoted scalar, kept whole." \
+    "$SCALAR_SQUOTE_README"
+assert_not_contains "…with no doubled single quote surviving" \
+    "it''s" "$SCALAR_SQUOTE_README"
+assert_line_absent "…and the skills row is not the descriptionless fallback" \
+    '- `squotescalar-skill`' "$SCALAR_SQUOTE_README"
+
+# --- unfiled: a plain scalar that opens with a quote ---
+assert_contains "a plain scalar opening with a quote keeps it in What It Does" \
+    '"PLAIN-OPENQUOTE-MARKER" stays whole when the scalar is plain.' \
+    "$SCALAR_PLAIN_README"
+assert_line_present "…and its skills row keeps it too" \
+    '- `plainscalar-skill` — "PLAIN-OPENQUOTE-MARKER" stays whole when the scalar is plain.' \
+    "$SCALAR_PLAIN_README"
+assert_line_absent "…not the row an unconditional leading-quote strip produces" \
+    '- `plainscalar-skill` — PLAIN-OPENQUOTE-MARKER" stays whole when the scalar is plain.' \
+    "$SCALAR_PLAIN_README"
+assert_line_absent "…and not the descriptionless fallback either" \
+    '- `plainscalar-skill`' "$SCALAR_PLAIN_README"
+
+# --- regression control (green before AND after the fix, by design) ---
+assert_contains "control: an ordinary plain scalar is unchanged in What It Does" \
+    "PLAINREGRESS-MARKER — an ordinary plain scalar with no quoting at all." \
+    "$SCALAR_REGRESS_README"
+assert_line_present "control: …and unchanged in its skills row" \
+    '- `plainregress-skill` — PLAINREGRESS-MARKER — an ordinary plain scalar with no quoting at all.' \
+    "$SCALAR_REGRESS_README"
+assert_line_absent "control: …and never degraded to the descriptionless fallback" \
+    '- `plainregress-skill`' "$SCALAR_REGRESS_README"
 
 # ============================================================
 # Authoring-source parity

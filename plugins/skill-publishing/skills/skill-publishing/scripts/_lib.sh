@@ -14,13 +14,136 @@ fi
 # Frontmatter extraction
 # ============================================================
 
-# Extract a top-level field from SKILL.md YAML frontmatter
+# Extract a top-level field from SKILL.md YAML frontmatter, decoding the YAML
+# scalar style it is written in.
 # Usage: extract_field <skill_md_path> <field_name>
+#
+# The previous implementation was `grep "^field:" | head -1 | sed` with two
+# unconditional quote strips, which had three defects at once (issues #37, #102,
+# and one unfiled). All three share a root cause — reading the line as raw text
+# rather than as a YAML scalar — so they are closed together:
+#
+#   >- / |-   a block scalar carries no text on its own line, so the old reader
+#             returned the literal indicator ">-" and prepare-plugin.sh wrote
+#             that into the generated README (#37). In Markdown ">-" renders as
+#             an empty blockquote, so the failure was silent.
+#   "\"…\""   only the OUTER quote pair was removed, so every internal \" was
+#             emitted verbatim into the README (#102).
+#   unfiled   `s/^["']//; s/["']$//` fires on the first and last character
+#             unconditionally and independently, so a PLAIN scalar that merely
+#             starts with a quote — `description: "quoted" is a word` — lost its
+#             leading ". Quotes are now stripped only when the value genuinely
+#             opens and closes with the same quote character.
+#
+# awk rather than a YAML library: awk is already a dependency of this file
+# (extract_section, extract_headings) and of validate-skill.sh, so this adds no
+# new runtime requirement. validate-skill.sh:96 has its OWN single-argument
+# extract_field which folds block scalars but does not unescape; it is the
+# reference for the folding logic here, not shared code — the signatures differ.
+#
+# Portability: POSIX awk only, so this runs on macOS BSD awk and gawk alike. The
+# quote characters are written as the octal escapes \047 and \042 so that no
+# literal ' has to appear inside the shell-single-quoted program body.
+#
+# Not handled, deliberately — this list is exhaustive as of the audit below, not
+# a sample:
+#   - a trailing `# comment` on a plain scalar is preserved rather than stripped
+#     (the old reader kept it too; changing that is unrelated scope);
+#   - flow collections/anchors/aliases are not parsed;
+#   - a QUOTED scalar wrapped across several lines (valid YAML line folding) is
+#     read as its first line only, so it keeps a leading quote and loses the
+#     rest. Block scalars are the supported way to wrap, and are handled above.
+#   - double-quoted \uXXXX / \xXX numeric escapes yield the literal letter, not
+#     the code point; only \n, \t, \r are decoded specially.
+# Audited across all 44 SKILL.md files in the monorepo: none uses a flow
+# collection, anchor, numeric escape, or a multi-line quoted scalar for a
+# top-level field, so every one of these is latent rather than live. Re-run that
+# audit before relying on this list.
 extract_field() {
   local skill_md="$1"
   local field="$2"
-  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "^${field}:" | head -1 | \
-    sed "s/^${field}:[[:space:]]*//; s/^[\"']//; s/[\"']$//"
+  awk -v field="$field" '
+    BEGIN { SQ = "\047"; DQ = "\042" }
+
+    # Double-quoted YAML: \n, \t and \r become the control characters; every
+    # other \<c> yields a literal <c>, which is what turns \" into " and \\
+    # into \. Scanned left to right in ONE pass so a trailing \\" cannot be
+    # mistaken for an escaped quote.
+    function unescape_double(s,   out, i, n, c) {
+      out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+          i++
+          c = substr(s, i, 1)
+          if (c == "n")      out = out "\n"
+          else if (c == "t") out = out "\t"
+          else if (c == "r") out = out "\r"
+          else               out = out c
+        } else {
+          out = out c
+        }
+      }
+      return out
+    }
+
+    # Single-quoted YAML has exactly one escape: a doubled quote.
+    function unescape_single(s,   out, i, n, c) {
+      out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == SQ && substr(s, i + 1, 1) == SQ) { out = out SQ; i++ }
+        else out = out c
+      }
+      return out
+    }
+
+    # Collect the frontmatter into an array rather than streaming it: a block
+    # scalar needs the lines AFTER the key, which a line-at-a-time reader
+    # cannot see.
+    $0 == "---" { d++; if (d >= 2) exit; next }
+    d == 1 { fm[++nf] = $0 }
+
+    END {
+      pat = "^" field ":"
+      for (i = 1; i <= nf; i++) if (fm[i] ~ pat) { idx = i; break }
+      if (!idx) exit 0
+
+      val = fm[idx]
+      sub(pat "[ \t]*", "", val)
+      sub(/[ \t]+$/, "", val)
+
+      # Block scalar: > or |, with optional indentation and chomping indicators
+      # and an optional trailing comment.
+      if (val ~ /^[|>][0-9]*[+-]?[ \t]*(#.*)?$/) {
+        fold = (substr(val, 1, 1) == ">")
+        out = ""; first = 1
+        for (i = idx + 1; i <= nf; i++) {
+          line = fm[i]
+          if (line ~ /^[^ \t]/) break        # a non-indented line ends the block
+          if (line ~ /^[ \t]*$/) continue    # skip blanks (no double separators)
+          sub(/^[ \t]+/, "", line)
+          if (first) { out = line; first = 0 }
+          else       { out = out (fold ? " " : "\n") line }
+        }
+        printf "%s\n", out
+        exit 0
+      }
+
+      # Quoted scalar: strip ONLY when the same quote both opens and closes the
+      # value. `"quoted" is a word` opens with a quote but does not close with
+      # one, so it is a plain scalar and is returned untouched.
+      n = length(val)
+      if (n >= 2) {
+        f = substr(val, 1, 1); l = substr(val, n, 1)
+        if (f == DQ && l == DQ) { printf "%s\n", unescape_double(substr(val, 2, n - 2)); exit 0 }
+        if (f == SQ && l == SQ) { printf "%s\n", unescape_single(substr(val, 2, n - 2)); exit 0 }
+      }
+
+      # printf "%s", never a bare value used as a format: descriptions contain %.
+      printf "%s\n", val
+    }
+  ' "$skill_md"
 }
 
 # Extract metadata.version from SKILL.md frontmatter
@@ -33,8 +156,13 @@ extract_version() {
 
 # Trim description at "Use when:" to produce a short description
 # Usage: short_desc <description_text>
+#
+# printf, not `echo "$1"`: bash's builtin echo consumes a leading -n/-e/-E as an
+# option, so a description legitimately starting with one would lose it (and,
+# for -n, the trailing newline too). Unreachable in today's catalogue, which is
+# exactly why it would not be noticed when it stops being unreachable.
 short_desc() {
-  echo "$1" | sed 's/\. Use when:.*/\./'
+  printf '%s\n' "$1" | sed 's/\. Use when:.*/\./'
 }
 
 # Extract content under a ## heading (returns lines until next ## or EOF)

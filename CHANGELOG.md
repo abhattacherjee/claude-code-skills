@@ -7,6 +7,16 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Fixed
+
+- **skill-publishing** 4.3.0 -> 4.4.0: `extract_field()` read a frontmatter field as raw text rather than as a YAML scalar, producing three defects at once — a block scalar (`>-`/`|-`) returned the literal indicator into the generated README (#37, invisible because `>-` renders as an empty blockquote); a double-quoted scalar kept every internal `\"` (#102); and a plain scalar that merely began or ended with a quote silently lost that character (previously unfiled). One awk-based scalar reader closes all three, since they share the root cause. Measured across all 44 monorepo `SKILL.md` files: **42 extract byte-identically, 2 change** — the `deep-review` pair, which is the bug. `short_desc()`'s `echo "$1"` also replaced with `printf` (mangled values starting with `-n`/`-e`). Minor rather than patch because previously-mangled output now differs. (#37, #102)
+- **skill-publishing** 4.3.0 -> 4.4.0: `scripts/test-sync-hygiene.sh` gains 24 assertions across folded, literal, double-quoted, single-quoted and plain-opening-with-a-quote scalars. Twelve go red against the old parser; the other twelve are run-level and descriptionless-fallback guards the old parser **cannot** trip, because it returned non-empty garbage rather than nothing — those were verified separately against an empty-returning stub. Both arms were run; neither alone is sufficient evidence. Every style carries a positive control alongside its leaked-syntax negative, since an absence-only assertion passes identically for a working parser and one that emits nothing.
+
+### Changed
+
+- `plugins/deep-review/README.md` **stays hand-curated** — the explicit decision #102 asked for. The generated form is a bare section-heading list where the curated one has written feature bullets. The leak was why it was at risk of being overwritten, not why it is curated. (#102)
+- `plugins/skill-publishing/README.md` was **also** excluded from its rebuild in this change, for an unrelated defect filed as **#106**: the generator inlines SKILL.md body sections verbatim, and `skill-publishing`'s body documents a template, so regenerating emits a literal `https://github.com/<github-user>/<skill-name>`. Two manual README exclusions is a pattern — the generator is not yet safe to run unattended. (#106)
+
 ## [3.17.0] - 2026-08-05
 
 ### Changed
