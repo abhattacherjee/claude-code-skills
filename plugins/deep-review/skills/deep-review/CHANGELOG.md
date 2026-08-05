@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.2.1] - 2026-08-05
+
+### Changed
+
+- Authoring source moved into the `claude-code-skills` monorepo as a top-level `deep-review/`
+  directory, and the manifest switched from `"source": "~/.claude/skills/deep-review"` to the
+  in-repo form `"source": "."`. The plugin could previously only be assembled on the maintainer's
+  machine; it is now rebuildable from a clone, and the local bare skill at
+  `~/.claude/skills/deep-review` has been removed so the marketplace plugin is the single
+  distribution channel. Same migration `spec-creator`/`spec-review`/`spec-implement` received in
+  #59. Also removes this skill's instance of the resolve-by-`source` vs resolve-by-`name` drift
+  mismatch tracked in #92 — the detectors no longer depend on `$SKILLS_HOME/deep-review` existing.
+  (#101)
+
+### Fixed
+
+- Skill-relative reference links are no longer ambiguous against target-project paths. The two
+  `references/delegated-verification.md` links (Phase 1 Step 3, Phase 2 Step 2.5) are now
+  `./references/…`, a Path-convention note after the title states the rule, and the Step 2.1 note
+  about `scripts/gemini-review.sh` now names the `adversarial-review` plugin that owns it — bare
+  `scripts/`/`references/` elsewhere in this skill means the project under review. (#101)
+
 ## [1.2.0] - 2026-07-30
 
 ### Added
