@@ -1,0 +1,12 @@
+{
+  "name": "deep-review",
+  "version": "1.2.1",
+  "description": "Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.",
+  "author": "Abhishek",
+  "license": "MIT",
+  "skills": [
+    { "name": "deep-review", "source": "." }
+  ],
+  "commands": [],
+  "agents": []
+}

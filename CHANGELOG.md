@@ -7,6 +7,15 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Changed
+
+- Authoring source for **deep-review** moved into the monorepo, completing the plugin-only migration the `spec-*` family received in #59. `deep-review/` is now a top-level source directory whose manifest uses the in-repo `"source": "."` form; `plugins/deep-review/` is regenerated from it and the local bare skill at `~/.claude/skills/deep-review` has been removed, so the marketplace plugin is the single distribution channel and the plugin is rebuildable from a clone. This also retires deep-review's instance of the resolve-by-`source` vs resolve-by-`name` detector mismatch tracked in #92 — nothing now depends on `$SKILLS_HOME/deep-review` existing. **Not a general fix for #92:** `custom-statusline` remains affected and that issue stays open. (#101)
+- **deep-review** 1.2.0 -> 1.2.1: skill-relative reference links disambiguated — both `references/delegated-verification.md` links are now `./references/…` under a Path-convention note, and the Step 2.1 `scripts/gemini-review.sh` note names the `adversarial-review` plugin that owns it, so bare `scripts/`/`references/` unambiguously means the project under review. (#101)
+
+### Fixed
+
+- `plugins/deep-review/README.md` is hand-curated (written at #33, never regenerated) and was **deliberately excluded** from the #101 rebuild rather than overwritten. `prepare-plugin.sh`'s generator reads the SKILL.md `description:` line raw instead of YAML-parsing it, so a double-quoted scalar containing `\"` escapes — which deep-review's is — emits literal backslash-quote sequences into the README body. Same class as #37 (folded `>-` leak), filed as #102; until it is fixed, a full `sync-monorepo.sh` auto-build would regress this README. (#101, #102)
+
 ## [3.16.0] - 2026-07-30
 
 ### Fixed
