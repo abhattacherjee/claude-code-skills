@@ -4286,11 +4286,35 @@ assert_contains "…including the comma-named skill's own row, whole" \
 # silent degradation nothing else in this suite catches. Asserting the row whole,
 # em-dash and text included, is what makes an empty parse fail rather than pass
 # quietly.
+# Each "## What It Does" paragraph is asserted with assert_line_present on the
+# BARE paragraph text, not assert_contains. The skills-row needle
+# (`- \`name\` — <text>`) contains the paragraph needle as a byte-for-byte
+# substring, so an assert_contains for the paragraph is SUBSUMED by the row
+# assertion beside it: deleting the whole "## What It Does" section (e.g.
+# FULL_DESC="" at prepare-plugin.sh:420) left every one of them green. The bare
+# line only ever appears under that heading, and the heading itself is asserted
+# separately per fixture.
 mkdir -p "$PREPARE_FIXTURE_DIR/foldedscalar-plugin" \
          "$PREPARE_FIXTURE_DIR/dquotescalar-plugin" \
          "$PREPARE_FIXTURE_DIR/squotescalar-plugin" \
          "$PREPARE_FIXTURE_DIR/plainscalar-plugin" \
-         "$PREPARE_FIXTURE_DIR/plainregress-plugin"
+         "$PREPARE_FIXTURE_DIR/plainregress-plugin" \
+         "$PREPARE_FIXTURE_DIR/litscalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/overcapture-plugin" \
+         "$PREPARE_FIXTURE_DIR/bareblock-plugin" \
+         "$PREPARE_FIXTURE_DIR/plusblock-plugin" \
+         "$PREPARE_FIXTURE_DIR/chompindent-plugin" \
+         "$PREPARE_FIXTURE_DIR/dquoteplain-plugin" \
+         "$PREPARE_FIXTURE_DIR/escwsscalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/trailws-plugin" \
+         "$PREPARE_FIXTURE_DIR/pctscalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/nodesc-plugin" \
+         "$PREPARE_FIXTURE_DIR/emptydesc-plugin" \
+         "$PREPARE_FIXTURE_DIR/dashescalar-plugin" \
+         "$PREPARE_FIXTURE_DIR/badblock-plugin" \
+         "$PREPARE_FIXTURE_DIR/dblspace-plugin" \
+         "$PREPARE_FIXTURE_DIR/dblspaceesc-plugin" \
+         "$PREPARE_FIXTURE_DIR/crbyte-plugin"
 
 # #37: a folded block scalar carries no text on its key line.
 cat > "$PREPARE_FIXTURE_DIR/foldedscalar-plugin/SKILL.md" <<'EOF'
@@ -4347,8 +4371,15 @@ EOF
 # plain scalar must read identically before and after the parser swap. It passes
 # against both builds by design — that is what "unchanged" means — so it is the
 # one fixture here whose green result proves nothing about the fix and
-# everything about what the fix did not disturb. 42 of the 44 SKILL.md
-# descriptions in this repo are this shape.
+# everything about what the fix did not disturb.
+#
+# It is NOT the representative shape, though. Census of the 44 SKILL.md files in
+# this repo: 40 double-quoted, 4 plain, 0 block, 0 single-quoted. The
+# representative regression control is therefore `dquoteplain` below — an
+# escape-free double-quoted scalar, the shape 38 of those 40 use. (An earlier
+# version of this comment claimed "42 of the 44 descriptions in this repo are
+# this shape". 42 is the number that extract byte-identically across the parser
+# swap, which is a different measurement entirely.)
 cat > "$PREPARE_FIXTURE_DIR/plainregress-plugin/SKILL.md" <<'EOF'
 ---
 name: plainregress-skill
@@ -4359,7 +4390,269 @@ version: 0.1.0
 # plainregress-skill
 EOF
 
-for _sc in foldedscalar dquotescalar squotescalar plainscalar plainregress; do
+# A LITERAL block scalar. Previously uncovered entirely, so the `|` arm of the
+# parser had zero tests: only `>` was exercised. The parser folds `|` to spaces
+# exactly like `>` — deliberately, because extract_field must never return more
+# than one line (its value is spliced into a Markdown table row at
+# sync-monorepo.sh:604) — so the whole description must arrive as ONE line, and
+# is asserted with assert_line_present on the entire row for that reason.
+cat > "$PREPARE_FIXTURE_DIR/litscalar-plugin/SKILL.md" <<'EOF'
+---
+name: litscalar-skill
+description: |-
+  LITERAL-SCALAR-MARKER — a description written as a literal block scalar whose
+  two source lines must still arrive as one. Use when: (1) a literal block folds
+  to spaces rather than preserving its newline.
+version: 0.1.0
+---
+
+# litscalar-skill
+EOF
+
+# Block-scalar OVER-CAPTURE. Deleting the terminator in _lib.sh
+# (`if (line ~ /^[^ \t]/) break`) left the whole suite green, because every
+# other block fixture carries a "Use when:" clause and short_desc truncates
+# there — cutting off the over-captured tail before any assertion could see it.
+# So: no "Use when:" anywhere in this description, and a SIBLING frontmatter key
+# immediately after it whose value is a sentinel that can only reach the README
+# by over-capture. `version:` alone would not do — its text ("version: 0.1.0")
+# is unremarkable enough to slip past a reader scanning the README.
+cat > "$PREPARE_FIXTURE_DIR/overcapture-plugin/SKILL.md" <<'EOF'
+---
+name: overcapture-skill
+description: >-
+  OVERCAPTURE-MARKER — a folded description deliberately written with no
+  use-when clause, so nothing downstream trims an over-captured tail before the
+  assertions see it.
+tagline: OVERCAPTURE-SENTINEL
+version: 0.1.0
+---
+
+# overcapture-skill
+EOF
+
+# The remaining legal block headers. The block-scalar regex was ~90% untested:
+# narrowing it all the way to /^>-$/ passed green, because `>-` was the only
+# header any fixture used. A bare `>`, a keep indicator `>+`, and chomping
+# written BEFORE the indentation indicator (`>-2`, which YAML permits and the
+# first version of this parser rejected — returning the literal ">-2", issue
+# #37's own failure surviving inside issue #37's fix).
+cat > "$PREPARE_FIXTURE_DIR/bareblock-plugin/SKILL.md" <<'EOF'
+---
+name: bareblock-skill
+description: >
+  BAREBLOCK-MARKER — a folded scalar whose header carries no chomping and no
+  indentation indicator. Use when: (1) the bare header parses.
+version: 0.1.0
+---
+
+# bareblock-skill
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/plusblock-plugin/SKILL.md" <<'EOF'
+---
+name: plusblock-skill
+description: >+
+  PLUSBLOCK-MARKER — a folded scalar carrying the keep chomping indicator. Use
+  when: (1) the keep indicator parses.
+version: 0.1.0
+---
+
+# plusblock-skill
+EOF
+
+cat > "$PREPARE_FIXTURE_DIR/chompindent-plugin/SKILL.md" <<'EOF'
+---
+name: chompindent-skill
+description: >-2
+  CHOMPINDENT-MARKER — a folded scalar whose header writes chomping before the
+  indentation indicator. Use when: (1) chomping-before-indentation parses.
+version: 0.1.0
+---
+
+# chompindent-skill
+EOF
+
+# The REPRESENTATIVE double-quoted shape: no escapes at all. 40 of the 44
+# SKILL.md descriptions in this repo are double-quoted and only 2 of those carry
+# an internal \", so the dquotescalar fixture above — the \" one — guards two
+# files while leaving the other 38 unguarded. Asserted byte-identical: the outer
+# quotes come off and nothing else changes.
+cat > "$PREPARE_FIXTURE_DIR/dquoteplain-plugin/SKILL.md" <<'EOF'
+---
+name: dquoteplain-skill
+description: "DQUOTEPLAIN-MARKER — an escape-free double-quoted description, the shape 38 of the 40 double-quoted SKILL.md files in this repo use. Use when: (1) the outer quotes come off and nothing else changes."
+version: 0.1.0
+---
+
+# dquoteplain-skill
+EOF
+
+# Whitespace ESCAPES inside a double-quoted scalar. `\n`, `\t` and `\r` decode
+# to a SPACE, never to the control character: extract_field must never return
+# more than one line, because sync-monorepo.sh:604 splices the value into a
+# Markdown table row and a tab or newline there produces a broken table at exit
+# 0. Runs of spaces so created are collapsed, which is what the `\n\n` below
+# pins. Asserted as whole lines: a control character would split the row in two
+# and neither half would match.
+cat > "$PREPARE_FIXTURE_DIR/escwsscalar-plugin/SKILL.md" <<'EOF'
+---
+name: escwsscalar-skill
+description: "ESCWS-MARKER — a double-quoted description carrying a\nnewline escape, a\ttab escape and a\n\ndoubled newline escape, every one of which must decode to a single space. Use when: (1) the description stays on one line."
+version: 0.1.0
+---
+
+# escwsscalar-skill
+EOF
+
+# TRAILING WHITESPACE after the closing quote. `sub(/[ \t]+$/, "", val)` in
+# extract_field is load-bearing and was untested: deleting it survived the whole
+# suite. Without the trim the last character is a space, not a quote, so the
+# `f == DQ && l == DQ` test fails and the value falls through to the plain-scalar
+# path — keeping BOTH outer quotes and every internal \" verbatim.
+#
+# Written with printf rather than a heredoc so that the one byte under test — a
+# trailing space — cannot be silently deleted by a whitespace-trimming editor,
+# lint hook, or reviewer.
+TRAILWS_DESC_LINE='description: "TRAILWS-MARKER — a double-quoted description carrying a \"nested\" quoted phrase, written with one trailing space after its closing quote. Use when: (1) the trailing space is trimmed before the quote test."'
+printf '%s\n%s\n%s \n%s\n%s\n\n%s\n' \
+    '---' 'name: trailws-skill' "$TRAILWS_DESC_LINE" 'version: 0.1.0' '---' \
+    '# trailws-skill' > "$PREPARE_FIXTURE_DIR/trailws-plugin/SKILL.md"
+
+# A `%` in the description, including a bare printf conversion. Pins the
+# `printf "%s\n", val` in extract_field and the `printf '%s\n'` in short_desc
+# against a reintroduced `print val` / `printf val`, which would consume it.
+cat > "$PREPARE_FIXTURE_DIR/pctscalar-plugin/SKILL.md" <<'EOF'
+---
+name: pctscalar-skill
+description: PCTSCALAR-MARKER — a plain description that is 100% printf conversions, %s included. Use when: (1) a percent is data, not a format.
+version: 0.1.0
+---
+
+# pctscalar-skill
+EOF
+
+# No `description` key at all: extract_field must return nothing, and
+# prepare-plugin.sh must then emit the descriptionless fallback row and omit
+# "## What It Does" entirely rather than writing an empty section.
+cat > "$PREPARE_FIXTURE_DIR/nodesc-plugin/SKILL.md" <<'EOF'
+---
+name: nodesc-skill
+version: 0.1.0
+---
+
+# nodesc-skill
+EOF
+
+# A `description:` key with no value — a different code path from the absent
+# key: the field IS found, and the value is the empty string, which must not
+# match the block-scalar header regex on its way out.
+cat > "$PREPARE_FIXTURE_DIR/emptydesc-plugin/SKILL.md" <<'EOF'
+---
+name: emptydesc-skill
+description:
+version: 0.1.0
+---
+
+# emptydesc-skill
+EOF
+
+# A description that bash's `echo` builtin would eat as an option. This pins the
+# echo -> printf change in short_desc().
+#
+# The description is the bare string `-e`, with no ALL-CAPS marker, because
+# nothing longer discriminates: bash's echo consumes an argument only when the
+# WHOLE argument is option-shaped, so `echo "-e FOO"` prints `-e FOO` intact and
+# a marker-carrying fixture would pass against the buggy build too. Measured, not
+# assumed. With `echo`, short_desc returns empty and the row degrades to the
+# descriptionless fallback; with printf it returns `-e`.
+cat > "$PREPARE_FIXTURE_DIR/dashescalar-plugin/SKILL.md" <<'EOF'
+---
+name: dashescalar-skill
+description: -e
+version: 0.1.0
+---
+
+# dashescalar-skill
+EOF
+
+# An UNRECOGNIZED block-scalar header. `>10` is not legal YAML — the indentation
+# indicator is a single digit — and the header regex was FAILING OPEN on it:
+# measured, `description: >10` returned the literal `[>10]` and `>--` returned
+# `[>--]`, i.e. the block indicator became the description. That is issue #37's
+# failure mode, arrived at from a third direction, and it is silent.
+#
+# extract_field now writes a diagnostic to stderr and exits 3. This is the ONLY
+# fixture in this section whose build must FAIL: under `set -eu` the exit
+# propagates out of prepare-plugin.sh's primary `FULL_DESC=$(extract_field …)`
+# read (prepare-plugin.sh:420) and kills the build, which is the intended
+# contract — a description the reader cannot decode must stop the build rather
+# than become a corrupt artifact at exit 0. rc is asserted as exactly 3 rather
+# than "non-zero" so that an unrelated crash cannot satisfy it.
+cat > "$PREPARE_FIXTURE_DIR/badblock-plugin/SKILL.md" <<'EOF'
+---
+name: badblock-skill
+description: >10
+  BADBLOCK-MARKER — the continuation text under an illegal block header, which
+  must never reach the README because the build stops first.
+version: 0.1.0
+---
+
+# badblock-skill
+EOF
+
+# A DELIBERATE double space, with no escape anywhere in the value. The decoded
+# whitespace collapse must not touch it. This is the control for the fixture
+# below: on its own it passes under both the old flag-based collapse and the new
+# sentinel-based one, which is precisely why it cannot be the only arm.
+cat > "$PREPARE_FIXTURE_DIR/dblspace-plugin/SKILL.md" <<'EOF'
+---
+name: dblspace-skill
+description: "DBLSPACE-MARKER — the cost is  100  USD and stays that way. Use when: (1) no escape appears anywhere in the value."
+version: 0.1.0
+---
+
+# dblspace-skill
+EOF
+
+# The same deliberate double space, with a `\t` escape added at the END. The
+# earlier implementation set a `sawws` flag and then collapsed every run of
+# spaces in the whole value, which made the rewrite NON-LOCAL: measured,
+# "Cost:  100  USD." kept its double spaces but "Cost:  100  USD.\tNote." had its
+# BEGINNING silently reformatted because a tab appeared at the end. The collapse
+# now acts only on the whitespace the decode introduced, so the double spaces
+# survive and only the tab becomes a space.
+#
+# This fixture is the discriminator; the one above is the regression control.
+cat > "$PREPARE_FIXTURE_DIR/dblspaceesc-plugin/SKILL.md" <<'EOF'
+---
+name: dblspaceesc-skill
+description: "DBLESC-MARKER — the cost is  100  USD and stays that way,\teven with a tab escape at the far END of the value. Use when: (1) the collapse is local to the decoded whitespace."
+version: 0.1.0
+---
+
+# dblspaceesc-skill
+EOF
+
+# A LITERAL carriage return byte in the source line. CR is not a YAML escape, so
+# nothing in the parser had any reason to touch it and it travelled straight
+# into the value — and thence into a Markdown table cell (sync-monorepo.sh:604)
+# and a list item, where a bare CR corrupts the row. It is now mapped to a space
+# at extract_field's single emit() point, the same meaning `\r` already has when
+# written as an escape.
+#
+# Written with printf rather than a heredoc for the same reason as the trailws
+# fixture: the one byte under test must not be silently normalised away by an
+# editor, lint hook, or reviewer.
+CRBYTE_DESC_LINE="$(printf 'description: CRBYTE-MARKER — a plain description carrying a literal carriage return byte right here:\rand ordinary text after it. Use when: (1) the byte is replaced with a space.')"
+printf '%s\n%s\n%s\n%s\n%s\n\n%s\n' \
+    '---' 'name: crbyte-skill' "$CRBYTE_DESC_LINE" 'version: 0.1.0' '---' \
+    '# crbyte-skill' > "$PREPARE_FIXTURE_DIR/crbyte-plugin/SKILL.md"
+
+for _sc in foldedscalar dquotescalar squotescalar plainscalar plainregress \
+           litscalar overcapture bareblock plusblock chompindent dquoteplain \
+           escwsscalar trailws pctscalar nodesc emptydesc dashescalar \
+           badblock dblspace dblspaceesc crbyte; do
     cat > "$PREPARE_FIXTURE_DIR/$_sc-plugin/plugin-manifest.json" <<EOF
 {
   "name": "$_sc-plugin",
@@ -4396,6 +4689,94 @@ run_prepare plainregress-plugin "$SCRATCH_DIR/scalar-regress.stdout" \
     "$SCRATCH_DIR/scalar-regress.stderr" || SCALAR_REGRESS_RC=$?
 SCALAR_REGRESS_README="$(cat "$PREPARE_OUT_DIR/plainregress-plugin/README.md" 2>/dev/null || true)"
 
+SCALAR_LITERAL_RC=0
+run_prepare litscalar-plugin "$SCRATCH_DIR/scalar-literal.stdout" \
+    "$SCRATCH_DIR/scalar-literal.stderr" || SCALAR_LITERAL_RC=$?
+SCALAR_LITERAL_README="$(cat "$PREPARE_OUT_DIR/litscalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_OVERCAP_RC=0
+run_prepare overcapture-plugin "$SCRATCH_DIR/scalar-overcap.stdout" \
+    "$SCRATCH_DIR/scalar-overcap.stderr" || SCALAR_OVERCAP_RC=$?
+SCALAR_OVERCAP_README="$(cat "$PREPARE_OUT_DIR/overcapture-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_BAREBLOCK_RC=0
+run_prepare bareblock-plugin "$SCRATCH_DIR/scalar-bareblock.stdout" \
+    "$SCRATCH_DIR/scalar-bareblock.stderr" || SCALAR_BAREBLOCK_RC=$?
+SCALAR_BAREBLOCK_README="$(cat "$PREPARE_OUT_DIR/bareblock-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_PLUSBLOCK_RC=0
+run_prepare plusblock-plugin "$SCRATCH_DIR/scalar-plusblock.stdout" \
+    "$SCRATCH_DIR/scalar-plusblock.stderr" || SCALAR_PLUSBLOCK_RC=$?
+SCALAR_PLUSBLOCK_README="$(cat "$PREPARE_OUT_DIR/plusblock-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_CHOMPIND_RC=0
+run_prepare chompindent-plugin "$SCRATCH_DIR/scalar-chompind.stdout" \
+    "$SCRATCH_DIR/scalar-chompind.stderr" || SCALAR_CHOMPIND_RC=$?
+SCALAR_CHOMPIND_README="$(cat "$PREPARE_OUT_DIR/chompindent-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_DQPLAIN_RC=0
+run_prepare dquoteplain-plugin "$SCRATCH_DIR/scalar-dqplain.stdout" \
+    "$SCRATCH_DIR/scalar-dqplain.stderr" || SCALAR_DQPLAIN_RC=$?
+SCALAR_DQPLAIN_README="$(cat "$PREPARE_OUT_DIR/dquoteplain-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_ESCWS_RC=0
+run_prepare escwsscalar-plugin "$SCRATCH_DIR/scalar-escws.stdout" \
+    "$SCRATCH_DIR/scalar-escws.stderr" || SCALAR_ESCWS_RC=$?
+SCALAR_ESCWS_README="$(cat "$PREPARE_OUT_DIR/escwsscalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_TRAILWS_RC=0
+run_prepare trailws-plugin "$SCRATCH_DIR/scalar-trailws.stdout" \
+    "$SCRATCH_DIR/scalar-trailws.stderr" || SCALAR_TRAILWS_RC=$?
+SCALAR_TRAILWS_README="$(cat "$PREPARE_OUT_DIR/trailws-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_PCT_RC=0
+run_prepare pctscalar-plugin "$SCRATCH_DIR/scalar-pct.stdout" \
+    "$SCRATCH_DIR/scalar-pct.stderr" || SCALAR_PCT_RC=$?
+SCALAR_PCT_README="$(cat "$PREPARE_OUT_DIR/pctscalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_NODESC_RC=0
+run_prepare nodesc-plugin "$SCRATCH_DIR/scalar-nodesc.stdout" \
+    "$SCRATCH_DIR/scalar-nodesc.stderr" || SCALAR_NODESC_RC=$?
+SCALAR_NODESC_README="$(cat "$PREPARE_OUT_DIR/nodesc-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_EMPTYDESC_RC=0
+run_prepare emptydesc-plugin "$SCRATCH_DIR/scalar-emptydesc.stdout" \
+    "$SCRATCH_DIR/scalar-emptydesc.stderr" || SCALAR_EMPTYDESC_RC=$?
+SCALAR_EMPTYDESC_README="$(cat "$PREPARE_OUT_DIR/emptydesc-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_DASHE_RC=0
+run_prepare dashescalar-plugin "$SCRATCH_DIR/scalar-dashe.stdout" \
+    "$SCRATCH_DIR/scalar-dashe.stderr" || SCALAR_DASHE_RC=$?
+SCALAR_DASHE_README="$(cat "$PREPARE_OUT_DIR/dashescalar-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_BADBLOCK_RC=0
+run_prepare badblock-plugin "$SCRATCH_DIR/scalar-badblock.stdout" \
+    "$SCRATCH_DIR/scalar-badblock.stderr" || SCALAR_BADBLOCK_RC=$?
+SCALAR_BADBLOCK_STDERR="$(cat "$SCRATCH_DIR/scalar-badblock.stderr")"
+SCALAR_BADBLOCK_README="$(cat "$PREPARE_OUT_DIR/badblock-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_DBLSPACE_RC=0
+run_prepare dblspace-plugin "$SCRATCH_DIR/scalar-dblspace.stdout" \
+    "$SCRATCH_DIR/scalar-dblspace.stderr" || SCALAR_DBLSPACE_RC=$?
+SCALAR_DBLSPACE_README="$(cat "$PREPARE_OUT_DIR/dblspace-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_DBLESC_RC=0
+run_prepare dblspaceesc-plugin "$SCRATCH_DIR/scalar-dblesc.stdout" \
+    "$SCRATCH_DIR/scalar-dblesc.stderr" || SCALAR_DBLESC_RC=$?
+SCALAR_DBLESC_README="$(cat "$PREPARE_OUT_DIR/dblspaceesc-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_CRBYTE_RC=0
+run_prepare crbyte-plugin "$SCRATCH_DIR/scalar-crbyte.stdout" \
+    "$SCRATCH_DIR/scalar-crbyte.stderr" || SCALAR_CRBYTE_RC=$?
+SCALAR_CRBYTE_README="$(cat "$PREPARE_OUT_DIR/crbyte-plugin/README.md" 2>/dev/null || true)"
+
+# The literal-block fold is deliberate but it can change meaning, so it now
+# announces itself. Both stderr logs are read: the `|` one to prove the note is
+# emitted, the `>` one to prove it is not emitted for a folded scalar, where
+# folding is exactly what the author asked for.
+SCALAR_LITERAL_STDERR="$(cat "$SCRATCH_DIR/scalar-literal.stderr")"
+SCALAR_FOLDED_STDERR="$(cat "$SCRATCH_DIR/scalar-folded.stderr")"
+
 # --- Verified red against the pre-fix build: the folded README's "What It Does"
 # read ">-" and its skills row was "- `foldedscalar-skill` — >-"; the
 # double-quoted and single-quoted READMEs carried \" and '' verbatim; and the
@@ -4407,10 +4788,30 @@ assert_eq "the double-quoted-scalar fixture builds" "0" "$SCALAR_DQUOTE_RC"
 assert_eq "the single-quoted-scalar fixture builds" "0" "$SCALAR_SQUOTE_RC"
 assert_eq "the plain-open-quote fixture builds" "0" "$SCALAR_PLAIN_RC"
 assert_eq "the plain-scalar regression fixture builds" "0" "$SCALAR_REGRESS_RC"
+assert_eq "the literal-block-scalar fixture builds" "0" "$SCALAR_LITERAL_RC"
+assert_eq "the block-over-capture fixture builds" "0" "$SCALAR_OVERCAP_RC"
+assert_eq "the bare-> block fixture builds" "0" "$SCALAR_BAREBLOCK_RC"
+assert_eq "the >+ block fixture builds" "0" "$SCALAR_PLUSBLOCK_RC"
+assert_eq "the >-2 chomping-before-indentation fixture builds" "0" "$SCALAR_CHOMPIND_RC"
+assert_eq "the escape-free double-quoted fixture builds" "0" "$SCALAR_DQPLAIN_RC"
+assert_eq "the whitespace-escape fixture builds" "0" "$SCALAR_ESCWS_RC"
+assert_eq "the trailing-whitespace fixture builds" "0" "$SCALAR_TRAILWS_RC"
+assert_eq "the percent-in-description fixture builds" "0" "$SCALAR_PCT_RC"
+assert_eq "the absent-description fixture builds" "0" "$SCALAR_NODESC_RC"
+assert_eq "the empty-description fixture builds" "0" "$SCALAR_EMPTYDESC_RC"
+assert_eq "the echo-option description fixture builds" "0" "$SCALAR_DASHE_RC"
+assert_eq "the deliberate-double-space fixture builds" "0" "$SCALAR_DBLSPACE_RC"
+assert_eq "the double-space-plus-escape fixture builds" "0" "$SCALAR_DBLESC_RC"
+assert_eq "the literal-CR-byte fixture builds" "0" "$SCALAR_CRBYTE_RC"
 
 # --- #37, folded ---
-assert_contains "a folded description is folded into the README's What It Does" \
+assert_contains "the folded fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_FOLDED_README"
+assert_line_present "a folded description is folded into the README's What It Does" \
     "FOLDED-SCALAR-MARKER — a description written as a folded block scalar that spans two source lines." \
+    "$SCALAR_FOLDED_README"
+assert_line_present "…and its Use when: clause is split out into bullets" \
+    "- the generator folds it into one line." \
     "$SCALAR_FOLDED_README"
 assert_line_present "…and into its skills row, whole" \
     '- `foldedscalar-skill` — FOLDED-SCALAR-MARKER — a description written as a folded block scalar that spans two source lines.' \
@@ -4421,7 +4822,9 @@ assert_line_absent "…and the skills row is not the descriptionless fallback" \
     '- `foldedscalar-skill`' "$SCALAR_FOLDED_README"
 
 # --- #102, double-quoted ---
-assert_contains "a double-quoted description reaches What It Does unescaped" \
+assert_contains "the double-quoted fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_DQUOTE_README"
+assert_line_present "a double-quoted description reaches What It Does unescaped" \
     'DQUOTE-SCALAR-MARKER — phrases like "review this" and "converge to zero" must survive intact.' \
     "$SCALAR_DQUOTE_README"
 assert_line_present "…and its skills row, whole" \
@@ -4433,7 +4836,9 @@ assert_line_absent "…and the skills row is not the descriptionless fallback" \
     '- `dquotescalar-skill`' "$SCALAR_DQUOTE_README"
 
 # --- single-quoted ---
-assert_contains "a single-quoted description reaches What It Does with '' collapsed" \
+assert_contains "the single-quoted fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_SQUOTE_README"
+assert_line_present "a single-quoted description reaches What It Does with '' collapsed" \
     "SQUOTE-SCALAR-MARKER — it's a single-quoted scalar, kept whole." \
     "$SCALAR_SQUOTE_README"
 assert_line_present "…and its skills row, whole" \
@@ -4445,7 +4850,9 @@ assert_line_absent "…and the skills row is not the descriptionless fallback" \
     '- `squotescalar-skill`' "$SCALAR_SQUOTE_README"
 
 # --- unfiled: a plain scalar that opens with a quote ---
-assert_contains "a plain scalar opening with a quote keeps it in What It Does" \
+assert_contains "the plain-open-quote fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_PLAIN_README"
+assert_line_present "a plain scalar opening with a quote keeps it in What It Does" \
     '"PLAIN-OPENQUOTE-MARKER" stays whole when the scalar is plain.' \
     "$SCALAR_PLAIN_README"
 assert_line_present "…and its skills row keeps it too" \
@@ -4458,7 +4865,9 @@ assert_line_absent "…and not the descriptionless fallback either" \
     '- `plainscalar-skill`' "$SCALAR_PLAIN_README"
 
 # --- regression control (green before AND after the fix, by design) ---
-assert_contains "control: an ordinary plain scalar is unchanged in What It Does" \
+assert_contains "the plain-scalar control fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_REGRESS_README"
+assert_line_present "control: an ordinary plain scalar is unchanged in What It Does" \
     "PLAINREGRESS-MARKER — an ordinary plain scalar with no quoting at all." \
     "$SCALAR_REGRESS_README"
 assert_line_present "control: …and unchanged in its skills row" \
@@ -4466,6 +4875,222 @@ assert_line_present "control: …and unchanged in its skills row" \
     "$SCALAR_REGRESS_README"
 assert_line_absent "control: …and never degraded to the descriptionless fallback" \
     '- `plainregress-skill`' "$SCALAR_REGRESS_README"
+
+# --- literal block scalar: the `|` arm, previously untested ---
+#
+# The row is asserted as a WHOLE LINE, which is the point of the fixture: if the
+# parser preserved the literal newline the way YAML says it should, the row
+# would be two lines and neither would match.
+assert_contains "the literal-block fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_LITERAL_README"
+assert_line_present "a literal block scalar arrives in What It Does as ONE line" \
+    "LITERAL-SCALAR-MARKER — a description written as a literal block scalar whose two source lines must still arrive as one." \
+    "$SCALAR_LITERAL_README"
+assert_line_present "…and its skills row is one whole line, not two" \
+    '- `litscalar-skill` — LITERAL-SCALAR-MARKER — a description written as a literal block scalar whose two source lines must still arrive as one.' \
+    "$SCALAR_LITERAL_README"
+assert_not_contains "…with no raw literal-block indicator left anywhere in the README" \
+    "|-" "$SCALAR_LITERAL_README"
+assert_line_absent "…and the skills row is not the descriptionless fallback" \
+    '- `litscalar-skill`' "$SCALAR_LITERAL_README"
+
+# --- block over-capture: the terminator at _lib.sh's `if (line ~ /^[^ \t]/) break` ---
+assert_contains "the over-capture fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_OVERCAP_README"
+assert_line_present "a block scalar with no Use when: still reads correctly" \
+    "OVERCAPTURE-MARKER — a folded description deliberately written with no use-when clause, so nothing downstream trims an over-captured tail before the assertions see it." \
+    "$SCALAR_OVERCAP_README"
+assert_line_present "…and its skills row is exactly the description, nothing after it" \
+    '- `overcapture-skill` — OVERCAPTURE-MARKER — a folded description deliberately written with no use-when clause, so nothing downstream trims an over-captured tail before the assertions see it.' \
+    "$SCALAR_OVERCAP_README"
+assert_not_contains "…and the sibling frontmatter key after the block is NOT swallowed into it" \
+    "OVERCAPTURE-SENTINEL" "$SCALAR_OVERCAP_README"
+
+# --- the rest of the legal block headers ---
+assert_contains "the bare-> fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_BAREBLOCK_README"
+assert_line_present "a bare > header parses as a block scalar" \
+    "BAREBLOCK-MARKER — a folded scalar whose header carries no chomping and no indentation indicator." \
+    "$SCALAR_BAREBLOCK_README"
+assert_line_present "…and reaches its skills row" \
+    '- `bareblock-skill` — BAREBLOCK-MARKER — a folded scalar whose header carries no chomping and no indentation indicator.' \
+    "$SCALAR_BAREBLOCK_README"
+assert_line_absent "…rather than leaking the bare indicator as the description" \
+    '- `bareblock-skill` — >' "$SCALAR_BAREBLOCK_README"
+
+assert_contains "the >+ fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_PLUSBLOCK_README"
+assert_line_present "a >+ keep indicator parses as a block scalar" \
+    "PLUSBLOCK-MARKER — a folded scalar carrying the keep chomping indicator." \
+    "$SCALAR_PLUSBLOCK_README"
+assert_line_present "…and reaches its skills row" \
+    '- `plusblock-skill` — PLUSBLOCK-MARKER — a folded scalar carrying the keep chomping indicator.' \
+    "$SCALAR_PLUSBLOCK_README"
+assert_not_contains "…with no raw >+ indicator left anywhere in the README" \
+    ">+" "$SCALAR_PLUSBLOCK_README"
+
+# `>-2` is chomping written BEFORE the indentation indicator, which YAML permits
+# and the first version of this parser rejected — returning the literal ">-2",
+# i.e. issue #37's own failure mode reproduced inside issue #37's fix.
+assert_contains "the >-2 fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_CHOMPIND_README"
+assert_line_present "chomping written before the indentation indicator parses" \
+    "CHOMPINDENT-MARKER — a folded scalar whose header writes chomping before the indentation indicator." \
+    "$SCALAR_CHOMPIND_README"
+assert_line_present "…and reaches its skills row" \
+    '- `chompindent-skill` — CHOMPINDENT-MARKER — a folded scalar whose header writes chomping before the indentation indicator.' \
+    "$SCALAR_CHOMPIND_README"
+assert_not_contains "…with no raw >-2 indicator left anywhere in the README" \
+    ">-2" "$SCALAR_CHOMPIND_README"
+
+# --- the representative double-quoted shape: no escapes at all ---
+assert_contains "the escape-free double-quoted fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_DQPLAIN_README"
+assert_line_present "an escape-free double-quoted description survives byte-identically" \
+    "DQUOTEPLAIN-MARKER — an escape-free double-quoted description, the shape 38 of the 40 double-quoted SKILL.md files in this repo use." \
+    "$SCALAR_DQPLAIN_README"
+assert_line_present "…and reaches its skills row byte-identically" \
+    '- `dquoteplain-skill` — DQUOTEPLAIN-MARKER — an escape-free double-quoted description, the shape 38 of the 40 double-quoted SKILL.md files in this repo use.' \
+    "$SCALAR_DQPLAIN_README"
+assert_not_contains "…with the outer quotes stripped, not carried through" \
+    '"DQUOTEPLAIN-MARKER' "$SCALAR_DQPLAIN_README"
+
+# --- whitespace escapes inside a double-quoted scalar ---
+assert_contains "the whitespace-escape fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_ESCWS_README"
+assert_line_present "\\n, \\t and \\r decode to a space, keeping the value on ONE line" \
+    "ESCWS-MARKER — a double-quoted description carrying a newline escape, a tab escape and a doubled newline escape, every one of which must decode to a single space." \
+    "$SCALAR_ESCWS_README"
+assert_line_present "…and the skills row is that one line, whole" \
+    '- `escwsscalar-skill` — ESCWS-MARKER — a double-quoted description carrying a newline escape, a tab escape and a doubled newline escape, every one of which must decode to a single space.' \
+    "$SCALAR_ESCWS_README"
+assert_not_contains "…with no undecoded escape sequence surviving" \
+    '\n' "$SCALAR_ESCWS_README"
+
+# --- trailing whitespace after the closing quote ---
+#
+# Without extract_field's `sub(/[ \t]+$/, "", val)` the last character is a space
+# rather than a quote, the same-quote-at-both-ends test fails, and the value
+# falls through to the plain path with BOTH quotes and every \" intact.
+assert_contains "the trailing-whitespace fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_TRAILWS_README"
+assert_line_present "a trailing space after the closing quote is trimmed before the quote test" \
+    'TRAILWS-MARKER — a double-quoted description carrying a "nested" quoted phrase, written with one trailing space after its closing quote.' \
+    "$SCALAR_TRAILWS_README"
+assert_line_present "…and the skills row is the decoded value, not the raw quoted one" \
+    '- `trailws-skill` — TRAILWS-MARKER — a double-quoted description carrying a "nested" quoted phrase, written with one trailing space after its closing quote.' \
+    "$SCALAR_TRAILWS_README"
+assert_not_contains "…with no literal backslash-quote sequence surviving" \
+    '\"' "$SCALAR_TRAILWS_README"
+
+# --- a percent sign in the description ---
+assert_contains "the percent fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_PCT_README"
+assert_line_present "a description containing printf conversions is emitted as data" \
+    "PCTSCALAR-MARKER — a plain description that is 100% printf conversions, %s included." \
+    "$SCALAR_PCT_README"
+assert_line_present "…and reaches its skills row with the conversions intact" \
+    '- `pctscalar-skill` — PCTSCALAR-MARKER — a plain description that is 100% printf conversions, %s included.' \
+    "$SCALAR_PCT_README"
+
+# --- no description key, and a description key with no value ---
+#
+# Both must reach the descriptionless fallback rather than emitting an empty
+# "## What It Does" section or a dangling em-dash in the skills row.
+assert_line_present "a skill with no description key gets the descriptionless row" \
+    '- `nodesc-skill`' "$SCALAR_NODESC_README"
+assert_not_contains "…and no empty What It Does section" \
+    "## What It Does" "$SCALAR_NODESC_README"
+assert_line_present 'a bare `description:` with no value gets the descriptionless row' \
+    '- `emptydesc-skill`' "$SCALAR_EMPTYDESC_README"
+assert_not_contains "…and no empty What It Does section either" \
+    "## What It Does" "$SCALAR_EMPTYDESC_README"
+
+# --- a description bash's echo would eat as an option ---
+#
+# Deliberately the bare string `-e`: bash's echo consumes an argument only when
+# the WHOLE argument is option-shaped, so `echo "-e FOO"` prints `-e FOO` intact
+# and a marker-carrying fixture would pass against the echo-based build too.
+assert_contains "the echo-option fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_DASHE_README"
+assert_line_present "a description of exactly -e is not eaten as an echo option" \
+    "-e" "$SCALAR_DASHE_README"
+assert_line_present "…and reaches its skills row" \
+    '- `dashescalar-skill` — -e' "$SCALAR_DASHE_README"
+assert_line_absent "…rather than degrading to the descriptionless fallback" \
+    '- `dashescalar-skill`' "$SCALAR_DASHE_README"
+
+# --- an unrecognized block-scalar header must FAIL, not fall through ---
+#
+# The only fixture in this section whose build is required to fail. Three
+# assertions, because each on its own is satisfiable by the wrong thing: rc
+# alone is satisfied by any crash, the stderr message alone is satisfied by a
+# build that printed the diagnostic and carried on, and the README assertion
+# alone is satisfied by a build that never ran. rc is pinned to exactly 3 —
+# extract_field's own code, propagated out of prepare-plugin.sh by `set -eu` —
+# rather than to "non-zero".
+assert_eq "an unrecognized block-scalar header fails the build with extract_field's own rc" \
+    "3" "$SCALAR_BADBLOCK_RC"
+assert_contains "…and says so on stderr, naming the field and the header" \
+    "unrecognized block-scalar header for description: >10" "$SCALAR_BADBLOCK_STDERR"
+assert_eq "…and no README is produced for it" "" "$SCALAR_BADBLOCK_README"
+
+# --- the collapse of decoded whitespace is LOCAL ---
+#
+# The pair is the point. The no-escape fixture is green under both the old
+# flag-based collapse and the new sentinel-based one; only the second fixture
+# discriminates, because under the old implementation a single `\t` at the END
+# of the value collapsed every run of spaces in the whole string — including the
+# ones at the beginning, which no escape went anywhere near.
+assert_contains "the deliberate-double-space fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_DBLSPACE_README"
+assert_line_present "a deliberate double space survives when no escape is present" \
+    "DBLSPACE-MARKER — the cost is  100  USD and stays that way." \
+    "$SCALAR_DBLSPACE_README"
+assert_line_present "…and reaches its skills row unreformatted" \
+    '- `dblspace-skill` — DBLSPACE-MARKER — the cost is  100  USD and stays that way.' \
+    "$SCALAR_DBLSPACE_README"
+assert_not_contains "…with no single-spaced rewrite of it anywhere in the README" \
+    "the cost is 100 USD" "$SCALAR_DBLSPACE_README"
+
+assert_contains "the double-space-plus-escape fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_DBLESC_README"
+assert_line_present "a deliberate double space survives an escape elsewhere in the value" \
+    "DBLESC-MARKER — the cost is  100  USD and stays that way, even with a tab escape at the far END of the value." \
+    "$SCALAR_DBLESC_README"
+assert_line_present "…and reaches its skills row with only the tab collapsed" \
+    '- `dblspaceesc-skill` — DBLESC-MARKER — the cost is  100  USD and stays that way, even with a tab escape at the far END of the value.' \
+    "$SCALAR_DBLESC_README"
+assert_not_contains "…and the beginning of the value is NOT reformatted by an escape at the end" \
+    "the cost is 100 USD" "$SCALAR_DBLESC_README"
+assert_not_contains "…with the tab escape itself decoded, not carried through" \
+    '\t' "$SCALAR_DBLESC_README"
+
+# --- a literal CR byte in the source line ---
+assert_contains "the literal-CR fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_CRBYTE_README"
+assert_line_present "a literal carriage return byte becomes a space" \
+    "CRBYTE-MARKER — a plain description carrying a literal carriage return byte right here: and ordinary text after it." \
+    "$SCALAR_CRBYTE_README"
+assert_line_present "…and its skills row is one whole line with the byte replaced" \
+    '- `crbyte-skill` — CRBYTE-MARKER — a plain description carrying a literal carriage return byte right here: and ordinary text after it.' \
+    "$SCALAR_CRBYTE_README"
+assert_not_contains "…with no raw CR byte anywhere in the README" \
+    "$(printf '\r')" "$SCALAR_CRBYTE_README"
+
+# --- folding a literal block is announced ---
+#
+# Folding `|` is correct here (the single-line contract) but it can change
+# meaning, and it used to do so in complete silence. The `>` arm is asserted
+# too: for a folded scalar the fold is what the author asked for, so a note
+# there would be noise, and without this arm a note emitted unconditionally
+# would pass.
+assert_contains "folding a multi-line literal (|) block is announced on stderr" \
+    "is a literal (|) block scalar of 3 lines" "$SCALAR_LITERAL_STDERR"
+assert_contains "…naming the field, and suggesting > instead" \
+    "description is a literal (|) block scalar" "$SCALAR_LITERAL_STDERR"
+assert_not_contains "…and a folded (>) scalar is NOT announced, since folding is what it asked for" \
+    "block scalar of" "$SCALAR_FOLDED_STDERR"
 
 # ============================================================
 # Authoring-source parity

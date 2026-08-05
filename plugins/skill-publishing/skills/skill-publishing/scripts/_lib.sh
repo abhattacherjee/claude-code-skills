@@ -45,8 +45,50 @@ fi
 # quote characters are written as the octal escapes \047 and \042 so that no
 # literal ' has to appear inside the shell-single-quoted program body.
 #
-# Not handled, deliberately — this list is exhaustive as of the audit below, not
-# a sample:
+# SINGLE-LINE OUTPUT IS A CONTRACT, not an accident of the implementation. Every
+# consumer splices this value into a single-line context: sync-monorepo.sh:604
+# builds a Markdown TABLE ROW out of it, and prepare-plugin.sh emits it as a
+# `- \`name\` — <desc>` list item. A newline in the value breaks the table at
+# exit 0 — a corrupt artifact with a green run. The old `grep | head -1` reader
+# was structurally incapable of returning two lines; this one has to enforce
+# that deliberately, at the single point where the value is built rather than at
+# each of the five consumers. Three consequences, all intentional:
+#   - a LITERAL `|` block scalar is FOLDED to spaces exactly like `>`, so it does
+#     NOT preserve newlines the way YAML says it should. validate-skill.sh:121-131
+#     folds `|` and `>` identically too, so the two readers agree on this point.
+#     Folding a `|` block can CHANGE MEANING (two imperative lines become one
+#     run-on sentence), so a multi-line `|` now emits a note on stderr naming the
+#     file and field. It is a note rather than an error because the fold is the
+#     contract; the author who wrote `|` is simply not getting what they asked
+#     for and nothing else would tell them.
+#   - `\n`, `\t` and `\r` in a double-quoted scalar decode to a SPACE, not to the
+#     control character, so `"a\n\nb"` yields `a b`. The collapse acts on exactly
+#     the whitespace the decode introduced — see unescape_double below — so a
+#     deliberate double space anywhere in the value survives regardless of what
+#     escapes appear elsewhere in it.
+#   - a literal CR/VT/FF byte in the source line is replaced with a space at the
+#     single emit() point. None of the three is a YAML escape, so they otherwise
+#     travel into the value untouched and land inside a Markdown table cell.
+#
+# UNRECOGNIZED BLOCK HEADERS FAIL, they do not fall through. A value that begins
+# with `|` or `>` but does not match the header grammar (`>10`, `>--`, `>2x`)
+# used to reach the plain-scalar path and be returned AS the description — the
+# literal indicator in the generated README, which is issue #37 exactly. That
+# fail-open shape has now produced #37 three times, so extract_field writes a
+# diagnostic to stderr and exits 3 instead. Under `set -eu` that aborts
+# prepare-plugin.sh at its primary `FULL_DESC=$(extract_field …)` read
+# (prepare-plugin.sh:420), which is the intended outcome: a description the
+# reader cannot decode must stop the build, not become a corrupt artifact at
+# exit 0. Its three SECONDARY reads (prepare-plugin.sh:462/481/502) already wrap
+# the call in `2>/dev/null || echo ""`, so for a non-primary skill, command, or
+# agent the guard degrades to an empty description with the diagnostic
+# suppressed — pre-existing behaviour, not introduced here, and named so the
+# next reader does not mistake the guard for total coverage.
+#
+# Not handled, deliberately. Treat this as the audit's findings at the time it
+# was run, NOT as a proof of exhaustiveness — the previous version of this
+# comment claimed to be exhaustive and was already missing the block-scalar
+# newline and blank-line cases now listed below:
 #   - a trailing `# comment` on a plain scalar is preserved rather than stripped
 #     (the old reader kept it too; changing that is unrelated scope);
 #   - flow collections/anchors/aliases are not parsed;
@@ -54,7 +96,17 @@ fi
 #     read as its first line only, so it keeps a leading quote and loses the
 #     rest. Block scalars are the supported way to wrap, and are handled above.
 #   - double-quoted \uXXXX / \xXX numeric escapes yield the literal letter, not
-#     the code point; only \n, \t, \r are decoded specially.
+#     the code point; only \n, \t, \r are given a meaning of their own (a space).
+#   - a BLANK LINE inside a block scalar is dropped rather than becoming the
+#     paragraph break YAML gives it, for the same single-line reason.
+#   - chomping and indentation indicators are ACCEPTED but ignored: `>`, `>-`,
+#     `>+`, `>2`, `>-2` and `>2-` all parse, and all fold the same way. Trailing
+#     newlines are meaningless once the value is one line. Anything else after a
+#     `|`/`>` is rejected rather than ignored — see the guard above.
+#   - a literal SOH (\001) byte in a double-quoted scalar becomes a space: that
+#     byte is used as the internal marker for decoded whitespace, so it is
+#     neutralised on entry. Other stray control bytes reach emit(), which maps
+#     CR/VT/FF to a space and passes the rest through.
 # Audited across all 44 SKILL.md files in the monorepo: none uses a flow
 # collection, anchor, numeric escape, or a multi-line quoted scalar for a
 # top-level field, so every one of these is latent rather than live. Re-run that
@@ -63,26 +115,61 @@ extract_field() {
   local skill_md="$1"
   local field="$2"
   awk -v field="$field" '
-    BEGIN { SQ = "\047"; DQ = "\042" }
+    BEGIN {
+      SQ = "\047"; DQ = "\042"
+      # Internal marker for whitespace this parser DECODED, so the collapse
+      # below can tell it apart from whitespace the author wrote. SOH is not
+      # legal content in a description; unescape_double neutralises any literal
+      # occurrence on entry so it cannot be confused with a marker.
+      SENT = "\001"
+      SENTRUN = "[ \t]*" SENT "([ \t]*" SENT ")*[ \t]*"
+    }
 
-    # Double-quoted YAML: \n, \t and \r become the control characters; every
-    # other \<c> yields a literal <c>, which is what turns \" into " and \\
-    # into \. Scanned left to right in ONE pass so a trailing \\" cannot be
-    # mistaken for an escaped quote.
+    # The SINGLE output point, so every exit path gets the same scrub. A literal
+    # CR, VT or FF byte in the source line is not a YAML escape and so reaches
+    # here untouched, and the value is spliced into a Markdown table row
+    # (sync-monorepo.sh:604) and a list item, where a bare CR corrupts the cell.
+    # They become a space — the same meaning \r already has when written as an
+    # escape. printf "%s", never a bare value used as a format: descriptions
+    # contain %.
+    function emit(s) {
+      gsub(/[\r\v\f]/, " ", s)
+      printf "%s\n", s
+    }
+
+    # Double-quoted YAML: \n, \t and \r become a SPACE (see the single-line
+    # contract above — a control character here would break the Markdown table
+    # row this value ends up in); every other \<c> yields a literal <c>, which
+    # is what turns \" into " and \\ into \. Scanned left to right in ONE pass
+    # so a trailing \\" cannot be mistaken for an escaped quote.
+    #
+    # The decoded whitespace is written as SENT rather than as a space directly,
+    # so the collapse acts on EXACTLY the whitespace this function introduced.
+    # The earlier version set a `sawws` flag and then collapsed every run of
+    # spaces in the whole value, which made the rewrite NON-LOCAL: measured,
+    # "Cost:  100  USD." kept its double spaces, but appending "\tNote." to the
+    # END silently reformatted the BEGINNING. A run of SENT (with any literal
+    # spaces or tabs touching it) becomes one space; at either end it disappears.
+    # With no escape decoded there is no SENT, so nothing is rewritten and the
+    # value is returned byte-for-byte.
     function unescape_double(s,   out, i, n, c) {
+      gsub(SENT, " ", s)
       out = ""; n = length(s)
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
         if (c == "\\" && i < n) {
           i++
           c = substr(s, i, 1)
-          if (c == "n")      out = out "\n"
-          else if (c == "t") out = out "\t"
-          else if (c == "r") out = out "\r"
-          else               out = out c
+          if (c == "n" || c == "t" || c == "r") out = out SENT
+          else                                  out = out c
         } else {
           out = out c
         }
+      }
+      if (index(out, SENT)) {
+        sub("^" SENTRUN, "", out)
+        sub(SENTRUN "$", "", out)
+        gsub(SENTRUN, " ", out)
       }
       return out
     }
@@ -113,35 +200,73 @@ extract_field() {
       sub(pat "[ \t]*", "", val)
       sub(/[ \t]+$/, "", val)
 
+      # FAIL-CLOSED on a `|`/`>` that is not a legal block header. This test runs
+      # BEFORE the block branch on purpose: without it an unrecognized header
+      # falls through to the plain-scalar path and the INDICATOR is returned as
+      # the description — `description: >10` measured as `[>10]`, `>--` as
+      # `[>--]`. That is the failure mode of issue #37, and the fail-open shape has
+      # now produced it three times. See the caller analysis in the header
+      # comment for why exit 3 is the right contract at prepare-plugin.sh:420.
+      if (val ~ /^[|>]/ && val !~ /^[|>]([0-9][+-]?|[+-][0-9]?)?[ \t]*(#.*)?$/) {
+        printf "extract_field: %s: unrecognized block-scalar header for %s: %s\n", FILENAME, field, val > "/dev/stderr"
+        exit 3
+      }
+
       # Block scalar: > or |, with optional indentation and chomping indicators
       # and an optional trailing comment.
-      if (val ~ /^[|>][0-9]*[+-]?[ \t]*(#.*)?$/) {
-        fold = (substr(val, 1, 1) == ">")
-        out = ""; first = 1
+      #
+      # The indicators may appear in EITHER order — YAML permits chomping before
+      # indentation — so `>-2` and `>2-` are both legal headers. The earlier
+      # `[0-9]*[+-]?` accepted only the second, which meant `description: >-2`
+      # fell through to the plain-scalar path and returned the literal ">-2":
+      # the exact failure of issue #37, reproduced inside the fix for #37. Hence the
+      # explicit two-branch alternation rather than a looser character class,
+      # which would also match nonsense like `>--` or `>22`.
+      if (val ~ /^[|>]([0-9][+-]?|[+-][0-9]?)?[ \t]*(#.*)?$/) {
+        # NOT `fold = (substr(val,1,1) == ">")`: | folds to spaces too, because
+        # the return value must stay single-line. See the contract above.
+        out = ""; first = 1; nlines = 0
         for (i = idx + 1; i <= nf; i++) {
           line = fm[i]
           if (line ~ /^[^ \t]/) break        # a non-indented line ends the block
           if (line ~ /^[ \t]*$/) continue    # skip blanks (no double separators)
           sub(/^[ \t]+/, "", line)
+          sub(/[ \t]+$/, "", line)           # else the join would double-space
+          nlines++
           if (first) { out = line; first = 0 }
-          else       { out = out (fold ? " " : "\n") line }
+          else       { out = out " " line }
         }
-        printf "%s\n", out
+        # Folding a LITERAL block is correct here (single-line contract) but it
+        # can change MEANING, and did so silently: measured, a `|` block of
+        # "Deletes the cache" / "Only when --force is given" comes back as one
+        # run-on sentence. An author who wrote `|` asked for newlines; nothing
+        # else in the pipeline would tell them they are not getting any. A note,
+        # not an error — the fold is deliberate.
+        if (substr(val, 1, 1) == "|" && nlines > 1) {
+          printf "extract_field: %s: %s is a literal (|) block scalar of %d lines, folded to one line to keep the value single-line; write it as > if the fold is intended\n", FILENAME, field, nlines > "/dev/stderr"
+        }
+        emit(out)
         exit 0
       }
 
       # Quoted scalar: strip ONLY when the same quote both opens and closes the
       # value. `"quoted" is a word` opens with a quote but does not close with
       # one, so it is a plain scalar and is returned untouched.
+      #
+      # This NARROWS the ambiguity, it does not resolve it: `"a" and "b"` also
+      # opens and closes with `"` and is still stripped (to `a" and "b`), as is
+      # any plain scalar whose first and last characters happen to be the same
+      # quote. Distinguishing those needs a real YAML parse of the whole line;
+      # the old reader mangled both this case and the far commoner
+      # `"quoted" is a word`, and only the latter is closed here.
       n = length(val)
       if (n >= 2) {
         f = substr(val, 1, 1); l = substr(val, n, 1)
-        if (f == DQ && l == DQ) { printf "%s\n", unescape_double(substr(val, 2, n - 2)); exit 0 }
-        if (f == SQ && l == SQ) { printf "%s\n", unescape_single(substr(val, 2, n - 2)); exit 0 }
+        if (f == DQ && l == DQ) { emit(unescape_double(substr(val, 2, n - 2))); exit 0 }
+        if (f == SQ && l == SQ) { emit(unescape_single(substr(val, 2, n - 2))); exit 0 }
       }
 
-      # printf "%s", never a bare value used as a format: descriptions contain %.
-      printf "%s\n", val
+      emit(val)
     }
   ' "$skill_md"
 }

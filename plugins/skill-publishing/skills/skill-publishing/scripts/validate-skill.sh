@@ -105,7 +105,20 @@ extract_field() {
   # only the text is needed for the length / "Use when:" / third-person checks, not exact
   # newline semantics. Continuation lines are assumed uniformly indented: a non-indented
   # line ends the block (per YAML), so a mis-indented line legitimately stops folding.
-  if printf '%s' "$val" | grep -qE '^[|>][0-9]*[+-]?[[:space:]]*(#.*)?$'; then
+  #
+  # The header grammar is kept in step with _lib.sh's extract_field DELIBERATELY: this
+  # validator is the CI gate for the same frontmatter that _lib.sh renders into published
+  # artifacts, so a header one reader accepts and the other does not is a file that passes
+  # validation and publishes corrupt (or the reverse). The two indicators may appear in
+  # EITHER order — YAML permits chomping before indentation — so `>-2` and `>2-` are both
+  # legal. The earlier `[0-9]*[+-]?` accepted only the second and read `>-2` as a plain
+  # scalar whose text is the literal ">-2".
+  #
+  # Not in step, and deliberately so: _lib.sh EXITS 3 on a `|`/`>` that matches no legal
+  # header (`>10`, `>--`), because there it would otherwise become the description of a
+  # published README. Here the same value falls through to the plain-scalar branch and is
+  # checked as ordinary text, where the length and "Use when:" rules reject it anyway.
+  if printf '%s' "$val" | grep -qE '^[|>]([0-9][+-]?|[+-][0-9]?)?[[:space:]]*(#.*)?$'; then
     printf '%s\n' "$fm" | awk -v f="^${field}:" '
       $0 ~ f { grab = 1; next }
       grab {
