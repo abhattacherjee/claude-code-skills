@@ -75,15 +75,64 @@ fi
 # used to reach the plain-scalar path and be returned AS the description — the
 # literal indicator in the generated README, which is issue #37 exactly. That
 # fail-open shape has now produced #37 three times, so extract_field writes a
-# diagnostic to stderr and exits 3 instead. Under `set -eu` that aborts
-# prepare-plugin.sh at its primary `FULL_DESC=$(extract_field …)` read
-# (prepare-plugin.sh:420), which is the intended outcome: a description the
-# reader cannot decode must stop the build, not become a corrupt artifact at
-# exit 0. Its three SECONDARY reads (prepare-plugin.sh:462/481/502) already wrap
-# the call in `2>/dev/null || echo ""`, so for a non-primary skill, command, or
-# agent the guard degrades to an empty description with the diagnostic
-# suppressed — pre-existing behaviour, not introduced here, and named so the
-# next reader does not mistake the guard for total coverage.
+# diagnostic to stderr and exits 3 instead.
+#
+# WHAT `exit 3` DOES IS A PROPERTY OF THE CALL SITE, NOT OF THIS FUNCTION. The
+# previous version of this paragraph analysed prepare-plugin.sh's four reads and
+# no others, which left three of the six calling scripts undescribed and implied
+# a uniformity the code does not have. Every call site, in the same table form
+# as the SKILLS_HOME analysis further down (line numbers are the assignment):
+#
+#     call site                          shape of the read            effect of exit 3
+#     prepare-plugin.sh:420              bare `X=$(extract_field …)`  ABORTS the run
+#     prepare-skill-repo.sh:69,70        bare `X=$(extract_field …)`  ABORTS the run
+#     sync-monorepo.sh:579,580           bare `X=$(extract_field …)`  ABORTS the run
+#     sync-monorepo.sh:1633              bare `X=$(extract_field …)`  ABORTS the run
+#     sync-individual-repos.sh:219,220   bare `X=$(extract_field …)`  ABORTS the run
+#     release-monorepo.sh:172            bare `X=$(extract_field …)`  ABORTS the run
+#     prepare-plugin.sh:462,481,502      `2>/dev/null || echo ""`     SUPPRESSED to ""
+#
+#   (validate-skill.sh:159/188 are NOT in this table: that script has its own
+#   single-argument extract_field — see the note above — and never calls this
+#   one.)
+#
+#   ABORTS is the intended contract: a description the reader cannot decode must
+#   stop the build, not become a corrupt artifact at exit 0. It holds only
+#   because each of those is a bare assignment from a SINGLE command
+#   substitution, whose rc is the command's and which `set -e` therefore acts
+#   on. Two rewrites of that shape silently give the rc away, and BOTH have
+#   already happened in this directory:
+#
+#     - `X=$(extract_field … | sed …)` — the rc is the PIPELINE's, i.e. the last
+#       command's, i.e. sed's, and no script here sets `pipefail`. exit 3
+#       arrived as rc 0 with an empty $X: a description-less CHANGELOG/release
+#       inventory row written at exit 0, which is precisely the fail-open shape
+#       this guard exists to remove. That was sync-monorepo.sh:1633 and
+#       release-monorepo.sh:172 until they were rewritten as two statements.
+#     - `X=$(short_desc "$(extract_field …)")` — measured, this swallows it too.
+#       The assignment's rc is the OUTER substitution's (short_desc's, i.e.
+#       sed's, i.e. 0); the inner substitution's 3 is discarded. So the fix is
+#       deliberately `X=$(extract_field …)` then `Y=$(short_desc "$X")`, and any
+#       future site that nests this read inside another command's word reopens
+#       the hole with no visible change at the call.
+#
+#   SUPPRESSED is prepare-plugin.sh's three SECONDARY reads (462/481/502), which
+#   already wrap the call in `2>/dev/null || echo ""`: for a non-primary skill,
+#   command or agent the guard degrades to an empty description with the
+#   diagnostic suppressed. Pre-existing behaviour, not introduced here, and named
+#   so the next reader does not mistake the guard for total coverage.
+#
+#   TEST COVERAGE OF THIS TABLE IS PARTIAL, stated rather than implied.
+#   scripts/test-sync-hygiene.sh drives a bad-header fixture through
+#   prepare-plugin.sh:420 (rc pinned to exactly 3), through sync-monorepo.sh's
+#   main loop at 579/580 (rc pinned to exactly 3, and no catalogue row or
+#   CHANGELOG written), and through release-monorepo.sh:172 (rc pinned to exactly
+#   3, and no versioned CHANGELOG entry written). sync-monorepo.sh:1633 has no
+#   rc assertion and cannot get one: its own main loop reads every description
+#   at 579/580 first, so a bad header can never reach line 1633 — what is pinned
+#   there is the OUTPUT of the rewrite (the short_desc trailing period), not its
+#   rc. prepare-skill-repo.sh and sync-individual-repos.sh have no harness
+#   coverage at all, and the SUPPRESSED row is asserted only indirectly.
 #
 # Not handled, deliberately. Treat this as the audit's findings at the time it
 # was run, NOT as a proof of exhaustiveness — the previous version of this

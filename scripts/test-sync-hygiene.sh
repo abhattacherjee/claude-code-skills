@@ -145,6 +145,17 @@ if [[ ! -x "$PRESYNC_SCRIPT" ]]; then
     exit 1
 fi
 
+# The release path is a THIRD independent consumer of _lib.sh's extract_field,
+# and the only one where the `| sed` swallow of its exit-3 guard was live: it
+# reads each skill's description in its own inventory loop with nothing having
+# read it earlier in the same run. Taken from beside SYNC_SCRIPT for the same
+# reason as the two above.
+RELEASE_SCRIPT="$(dirname "$SYNC_SCRIPT")/release-monorepo.sh"
+if [[ ! -x "$RELEASE_SCRIPT" ]]; then
+    echo "FATAL: no executable release-monorepo.sh beside SYNC_SCRIPT: $RELEASE_SCRIPT" >&2
+    exit 1
+fi
+
 FAIL_COUNT=0
 SKIPPED_COUNT=0
 
@@ -4312,6 +4323,7 @@ mkdir -p "$PREPARE_FIXTURE_DIR/foldedscalar-plugin" \
          "$PREPARE_FIXTURE_DIR/emptydesc-plugin" \
          "$PREPARE_FIXTURE_DIR/dashescalar-plugin" \
          "$PREPARE_FIXTURE_DIR/badblock-plugin" \
+         "$PREPARE_FIXTURE_DIR/blankline-plugin" \
          "$PREPARE_FIXTURE_DIR/dblspace-plugin" \
          "$PREPARE_FIXTURE_DIR/dblspaceesc-plugin" \
          "$PREPARE_FIXTURE_DIR/crbyte-plugin"
@@ -4429,6 +4441,31 @@ version: 0.1.0
 ---
 
 # overcapture-skill
+EOF
+
+# A BLANK LINE inside a block scalar. Deleting _lib.sh's blank-line skip
+# (`if (line ~ /^[ \t]*$/) continue`) left the whole suite green, because every
+# other block fixture is a run of ADJACENT non-blank lines and so never executes
+# that branch at all. Without the skip the blank line is trimmed to "" and still
+# joined with a separator, so the two paragraphs come back with a DOUBLE space
+# between them.
+#
+# Asserted as a whole row for that reason: a substring check on either side of
+# the join passes unchanged on the mutant, and only the full line — which
+# contains the join — distinguishes them. No "Use when:" clause anywhere, so
+# short_desc cannot truncate the value before the join is visible.
+cat > "$PREPARE_FIXTURE_DIR/blankline-plugin/SKILL.md" <<'EOF'
+---
+name: blankline-skill
+description: >-
+  BLANKLINE-MARKER — a folded description whose first paragraph ends here.
+
+  And whose second paragraph follows a blank line, which must be dropped rather
+  than folded in as an extra separator.
+version: 0.1.0
+---
+
+# blankline-skill
 EOF
 
 # The remaining legal block headers. The block-scalar regex was ~90% untested:
@@ -4652,7 +4689,7 @@ printf '%s\n%s\n%s\n%s\n%s\n\n%s\n' \
 for _sc in foldedscalar dquotescalar squotescalar plainscalar plainregress \
            litscalar overcapture bareblock plusblock chompindent dquoteplain \
            escwsscalar trailws pctscalar nodesc emptydesc dashescalar \
-           badblock dblspace dblspaceesc crbyte; do
+           badblock blankline dblspace dblspaceesc crbyte; do
     cat > "$PREPARE_FIXTURE_DIR/$_sc-plugin/plugin-manifest.json" <<EOF
 {
   "name": "$_sc-plugin",
@@ -4755,6 +4792,11 @@ run_prepare badblock-plugin "$SCRATCH_DIR/scalar-badblock.stdout" \
 SCALAR_BADBLOCK_STDERR="$(cat "$SCRATCH_DIR/scalar-badblock.stderr")"
 SCALAR_BADBLOCK_README="$(cat "$PREPARE_OUT_DIR/badblock-plugin/README.md" 2>/dev/null || true)"
 
+SCALAR_BLANKLINE_RC=0
+run_prepare blankline-plugin "$SCRATCH_DIR/scalar-blankline.stdout" \
+    "$SCRATCH_DIR/scalar-blankline.stderr" || SCALAR_BLANKLINE_RC=$?
+SCALAR_BLANKLINE_README="$(cat "$PREPARE_OUT_DIR/blankline-plugin/README.md" 2>/dev/null || true)"
+
 SCALAR_DBLSPACE_RC=0
 run_prepare dblspace-plugin "$SCRATCH_DIR/scalar-dblspace.stdout" \
     "$SCRATCH_DIR/scalar-dblspace.stderr" || SCALAR_DBLSPACE_RC=$?
@@ -4800,6 +4842,7 @@ assert_eq "the percent-in-description fixture builds" "0" "$SCALAR_PCT_RC"
 assert_eq "the absent-description fixture builds" "0" "$SCALAR_NODESC_RC"
 assert_eq "the empty-description fixture builds" "0" "$SCALAR_EMPTYDESC_RC"
 assert_eq "the echo-option description fixture builds" "0" "$SCALAR_DASHE_RC"
+assert_eq "the blank-line-in-block fixture builds" "0" "$SCALAR_BLANKLINE_RC"
 assert_eq "the deliberate-double-space fixture builds" "0" "$SCALAR_DBLSPACE_RC"
 assert_eq "the double-space-plus-escape fixture builds" "0" "$SCALAR_DBLESC_RC"
 assert_eq "the literal-CR-byte fixture builds" "0" "$SCALAR_CRBYTE_RC"
@@ -5034,6 +5077,271 @@ assert_eq "an unrecognized block-scalar header fails the build with extract_fiel
 assert_contains "…and says so on stderr, naming the field and the header" \
     "unrecognized block-scalar header for description: >10" "$SCALAR_BADBLOCK_STDERR"
 assert_eq "…and no README is produced for it" "" "$SCALAR_BADBLOCK_README"
+
+# ------------------------------------------------------------------
+# The exit-3 guard on the SYNC and RELEASE paths, not just run_prepare
+# ------------------------------------------------------------------
+#
+# The badblock fixture above reaches exactly ONE of extract_field's ten call
+# sites — prepare-plugin.sh:420 — and `exit 3` does three different things
+# across the rest (see the caller table in _lib.sh's header comment):
+#
+#   ABORTS      bare `X=$(extract_field …)`: prepare-plugin.sh:420,
+#               prepare-skill-repo.sh:69/70, sync-monorepo.sh:579/580 and :1633,
+#               sync-individual-repos.sh:219/220, release-monorepo.sh:172
+#   SUPPRESSED  `2>/dev/null || echo ""`: prepare-plugin.sh:462/481/502
+#
+# sync-monorepo.sh:1633 and release-monorepo.sh:172 used to be a THIRD group:
+# `X=$(extract_field … | sed 's/\. Use when:.*//')`. A pipeline's rc is its last
+# command's, and no script here sets `pipefail`, so exit 3 arrived as rc 0 with
+# an empty description — a description-less inventory row at exit 0, which is
+# the fail-open shape the guard exists to remove. Both are now two statements
+# (extract, then short_desc); `X=$(short_desc "$(extract_field …)")` was
+# measured and does NOT work, because the assignment takes the outer
+# substitution's rc and discards the inner 3.
+#
+# Three runs, because each covers something the others cannot:
+#
+#   S1 sync of a GOOD skill whose description carries a "Use when:" clause.
+#      This is the only assertion that can see sync-monorepo.sh:1633 at all: a
+#      bad header can never reach that line, because the same script's main loop
+#      reads every description at 579/580 first and aborts there. What it pins
+#      is the OUTPUT of the rewrite — short_desc keeps the sentence's period
+#      (`s/\. Use when:.*/\./`) where the deleted inline sed dropped it
+#      (`s/\. Use when:.*//`) — and that the CHANGELOG inventory row and the
+#      README catalogue row are now the same text, built by the same function.
+#   S2 sync of a BAD-header skill: the fail-closed contract on the sync path,
+#      at sync-monorepo.sh:579/580.
+#   R  release of a BAD-header skill: the fail-closed contract at
+#      release-monorepo.sh:172, the site where the swallow was actually live.
+#
+# Each fixture gets its own SKILLS_HOME and its own monorepo: a deliberately
+# undecodable SKILL.md in a shared home would abort every other run that shares
+# it, and the sync's auto-build stage scans $SKILLS_HOME/*/plugin-manifest.json
+# on every invocation. None of these fixtures carries a manifest, so no plugin
+# is built for them.
+
+SKILLS_HOME_USEWHEN_FIXTURE="$SCRATCH_DIR/skills-home-usewhen"
+MONOREPO_USEWHEN_FIXTURE="$SCRATCH_DIR/monorepo-usewhen"
+SKILLS_HOME_BADHDR_FIXTURE="$SCRATCH_DIR/skills-home-badhdr"
+MONOREPO_BADHDR_FIXTURE="$SCRATCH_DIR/monorepo-badhdr"
+mkdir -p "$SKILLS_HOME_USEWHEN_FIXTURE/usewhen-skill" "$MONOREPO_USEWHEN_FIXTURE" \
+         "$SKILLS_HOME_BADHDR_FIXTURE/badhdr-skill" "$MONOREPO_BADHDR_FIXTURE"
+
+cat > "$SKILLS_HOME_USEWHEN_FIXTURE/usewhen-skill/SKILL.md" <<'EOF'
+---
+name: usewhen-skill
+description: USEWHEN-MARKER — a throwaway fixture whose description carries a use-when clause, so short_desc actually truncates. Use when: (1) the trailing period is preserved.
+version: 1.0.0
+---
+
+# usewhen-skill
+EOF
+
+cat > "$SKILLS_HOME_BADHDR_FIXTURE/badhdr-skill/SKILL.md" <<'EOF'
+---
+name: badhdr-skill
+description: >10
+  BADHDR-MARKER — the continuation text under an illegal block header, which
+  must never reach a catalogue row, a CHANGELOG inventory row or a README,
+  because the sync stops first.
+version: 1.0.0
+---
+
+# badhdr-skill
+EOF
+
+# `--skills <name>`, not a bare sync: default discovery walks the MONOREPO for
+# existing skill directories, so a skill that exists only under SKILLS_HOME is
+# invisible to it and the run would exit 0 having synced nothing — a green
+# assertion set proving nothing. --skills takes the name straight through to
+# skill_source_dir(), which resolves it local-first out of SKILLS_HOME.
+USEWHEN_RC=0
+run_sync "$SKILLS_HOME_USEWHEN_FIXTURE" "$MONOREPO_USEWHEN_FIXTURE" \
+    "$SCRATCH_DIR/usewhen.stdout" "$SCRATCH_DIR/usewhen.stderr" \
+    --skills usewhen-skill || USEWHEN_RC=$?
+USEWHEN_README="$(cat "$MONOREPO_USEWHEN_FIXTURE/README.md" 2>/dev/null || true)"
+USEWHEN_CHANGELOG="$(cat "$MONOREPO_USEWHEN_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+
+BADHDR_RC=0
+run_sync "$SKILLS_HOME_BADHDR_FIXTURE" "$MONOREPO_BADHDR_FIXTURE" \
+    "$SCRATCH_DIR/badhdr.stdout" "$SCRATCH_DIR/badhdr.stderr" \
+    --skills badhdr-skill || BADHDR_RC=$?
+BADHDR_STDERR="$(cat "$SCRATCH_DIR/badhdr.stderr")"
+BADHDR_README="$(cat "$MONOREPO_BADHDR_FIXTURE/README.md" 2>/dev/null || true)"
+BADHDR_CHANGELOG="$(cat "$MONOREPO_BADHDR_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+
+# --- S1: the rewritten inventory read at sync-monorepo.sh:1633 ---
+#
+# Verified red against a scratch revert of that one line to the pipeline form:
+# the inventory row came back as "…so short_desc actually truncates" with no
+# terminating period, so both the whole-line assertion and the "same text as the
+# catalogue row" assertion failed while the run still exited 0.
+assert_eq "the use-when sync run exits 0 on the fixture" "0" "$USEWHEN_RC"
+assert_contains "control: the use-when skill reached the catalogue at all" \
+    "USEWHEN-MARKER" "$USEWHEN_README"
+assert_line_present "the CHANGELOG inventory row is built by short_desc, period included" \
+    '- `usewhen-skill` v1.0.0 — USEWHEN-MARKER — a throwaway fixture whose description carries a use-when clause, so short_desc actually truncates.' \
+    "$USEWHEN_CHANGELOG"
+# A real comparison of the two artifacts, not two independent needles. An
+# earlier draft asserted a literal catalogue-cell substring and called it
+# "byte-identical to the catalogue row": that needle lives entirely on the
+# catalogue side (built by short_desc at sync-monorepo.sh:582, which the
+# pipeline defect never touched), so it stayed green under a revert of the
+# inventory read and the assertion's own name was the only thing claiming a
+# comparison had happened. Extracting both cells and comparing them is the
+# claim the name makes. The control above it is what stops the comparison
+# passing vacuously on two empty strings.
+USEWHEN_CATALOGUE_DESC="$(sed -n 's/^| \[usewhen-skill\](\.\/usewhen-skill\/) | 1\.0\.0 | \(.*\) | .* |$/\1/p' <<< "$USEWHEN_README")"
+USEWHEN_INVENTORY_DESC="$(sed -n 's/^- `usewhen-skill` v1\.0\.0 — //p' <<< "$USEWHEN_CHANGELOG")"
+assert_contains "control: the catalogue cell was extracted, so the comparison below is not two empty strings" \
+    "USEWHEN-MARKER" "$USEWHEN_CATALOGUE_DESC"
+assert_eq "…and the inventory description is byte-identical to it — one short_desc, not two seds" \
+    "$USEWHEN_CATALOGUE_DESC" "$USEWHEN_INVENTORY_DESC"
+
+# --- S2: the fail-closed contract on the sync path ---
+#
+# rc is pinned to exactly 3 — extract_field's own code, propagated out of
+# sync-monorepo.sh's main loop by `set -eu` — rather than to "non-zero", so an
+# unrelated crash cannot satisfy it. The artifact assertions are not redundant
+# with it: a build that printed the diagnostic and carried on would satisfy the
+# stderr assertion alone, and a run that never started would satisfy the
+# artifact assertions alone.
+assert_eq "a bad block header aborts the SYNC path with extract_field's own rc" \
+    "3" "$BADHDR_RC"
+assert_contains "…naming the field and the header on stderr" \
+    "unrecognized block-scalar header for description: >10" "$BADHDR_STDERR"
+assert_not_contains "…and no catalogue row is published for it" \
+    "badhdr-skill" "$BADHDR_README"
+assert_not_contains "…nor the raw block indicator as its description" \
+    "BADHDR-MARKER" "$BADHDR_README"
+assert_not_contains "…and no CHANGELOG inventory row either" \
+    "badhdr-skill" "$BADHDR_CHANGELOG"
+
+# --- R: the fail-closed contract on the RELEASE path ---
+#
+# release-monorepo.sh:172 is the site where the swallow was LIVE — it is the
+# first and only description read in that script, so nothing aborts ahead of it.
+# Pre-fix, a monorepo containing one undecodable SKILL.md produced a release
+# CHANGELOG entry and a git tag body carrying "- `badrel-skill` v1.0.0 — " with
+# an empty description, at exit 0.
+#
+# Not --dry-run: the dry run prints only "WOULD UPDATE CHANGELOG.md" and never
+# emits SKILL_INVENTORY, so it cannot distinguish an empty description from a
+# correct one. The real run writes CHANGELOG.md before it commits, so the file
+# on disk is the evidence; the run then dies at `git push origin main --tags`
+# (the fixture has no remote), which is why rc is only asserted for the arm
+# where it is the discriminator.
+RELEASE_GOOD_FIXTURE="$SCRATCH_DIR/release-good"
+RELEASE_BAD_FIXTURE="$SCRATCH_DIR/release-bad"
+
+# `git init` + `symbolic-ref`, not `git init -b main`: -b needs git 2.28+.
+# commit.gpgsign is forced off — a developer with global signing on would
+# otherwise fail the fixture commit for reasons that have nothing to do with
+# what is under test. release-monorepo.sh refuses to run on a dirty tree, so
+# everything must be committed before it is invoked.
+init_release_fixture() {
+    local dir="$1"
+    git -C "$dir" init -q
+    git -C "$dir" symbolic-ref HEAD refs/heads/main
+    git -C "$dir" config user.name "Harness Fixture"
+    git -C "$dir" config user.email "harness@example.invalid"
+    git -C "$dir" config commit.gpgsign false
+    git -C "$dir" add -A
+    git -C "$dir" commit -q -m "feat: release fixture baseline"
+}
+
+run_release() {
+    local monorepo="$1" stdout_log="$2" stderr_log="$3"
+    shift 3
+    local rc=0
+    (
+        cd "$RUN_CWD"
+        PATH="$GH_SHIM_DIR:$PATH" \
+            "$RELEASE_SCRIPT" --github-user harness-fixture-user "$@" "$monorepo"
+    ) >"$stdout_log" 2>"$stderr_log" || rc=$?
+    return "$rc"
+}
+
+RELEASE_BASE_CHANGELOG='# Changelog
+
+## [0.0.0] - 2026-01-01
+
+Baseline entry, so the header/entry split has something to work with.
+'
+
+mkdir -p "$RELEASE_GOOD_FIXTURE/relgood-skill" "$RELEASE_BAD_FIXTURE/badrel-skill"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$RELEASE_GOOD_FIXTURE/CHANGELOG.md"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$RELEASE_BAD_FIXTURE/CHANGELOG.md"
+cat > "$RELEASE_GOOD_FIXTURE/relgood-skill/SKILL.md" <<'EOF'
+---
+name: relgood-skill
+description: RELGOOD-MARKER — a throwaway release fixture whose description carries a use-when clause. Use when: (1) the release inventory keeps the period.
+version: 1.0.0
+---
+
+# relgood-skill
+EOF
+cat > "$RELEASE_BAD_FIXTURE/badrel-skill/SKILL.md" <<'EOF'
+---
+name: badrel-skill
+description: >10
+  BADREL-MARKER — the continuation text under an illegal block header, which
+  must never reach a release CHANGELOG entry because the release stops first.
+version: 1.0.0
+---
+
+# badrel-skill
+EOF
+init_release_fixture "$RELEASE_GOOD_FIXTURE"
+init_release_fixture "$RELEASE_BAD_FIXTURE"
+
+RELEASE_GOOD_RC=0
+run_release "$RELEASE_GOOD_FIXTURE" "$SCRATCH_DIR/release-good.stdout" \
+    "$SCRATCH_DIR/release-good.stderr" patch || RELEASE_GOOD_RC=$?
+RELEASE_GOOD_CHANGELOG="$(cat "$RELEASE_GOOD_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+
+RELEASE_BAD_RC=0
+run_release "$RELEASE_BAD_FIXTURE" "$SCRATCH_DIR/release-bad.stdout" \
+    "$SCRATCH_DIR/release-bad.stderr" patch || RELEASE_BAD_RC=$?
+RELEASE_BAD_STDERR="$(cat "$SCRATCH_DIR/release-bad.stderr")"
+RELEASE_BAD_CHANGELOG="$(cat "$RELEASE_BAD_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
+
+# The positive control. Without it the two "no entry was written" assertions
+# below are satisfied by a release script that cannot run at all in this
+# harness — a missing git binary, a refused dirty tree, an argument change.
+assert_contains "control: the release path writes a versioned CHANGELOG entry on a good fixture" \
+    "## [0.0.1]" "$RELEASE_GOOD_CHANGELOG"
+assert_line_present "…whose inventory row is built by short_desc, period included" \
+    '- `relgood-skill` v1.0.0 — RELGOOD-MARKER — a throwaway release fixture whose description carries a use-when clause.' \
+    "$RELEASE_GOOD_CHANGELOG"
+
+assert_eq "a bad block header aborts the RELEASE path with extract_field's own rc" \
+    "3" "$RELEASE_BAD_RC"
+assert_contains "…naming the field and the header on stderr" \
+    "unrecognized block-scalar header for description: >10" "$RELEASE_BAD_STDERR"
+assert_not_contains "…and no versioned CHANGELOG entry is written at all" \
+    "## [0.0.1]" "$RELEASE_BAD_CHANGELOG"
+assert_not_contains "…so no description-less inventory row can be published" \
+    'badrel-skill' "$RELEASE_BAD_CHANGELOG"
+
+# --- a blank line inside a block scalar ---
+#
+# The guard for _lib.sh's `if (line ~ /^[ \t]*$/) continue`, which had NO
+# coverage: deleting it left all 434 assertions green, because every other block
+# fixture is a run of adjacent non-blank lines. Verified red against that mutant
+# — both whole-row assertions failed and the double-space negative fired, with
+# the README reading "…ends here.  And whose second paragraph…".
+assert_contains "the blank-line-in-block fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_BLANKLINE_README"
+assert_line_present "a blank line inside a block scalar is dropped, not folded in as a separator" \
+    "BLANKLINE-MARKER — a folded description whose first paragraph ends here. And whose second paragraph follows a blank line, which must be dropped rather than folded in as an extra separator." \
+    "$SCALAR_BLANKLINE_README"
+assert_line_present "…and its skills row is that one line, join included" \
+    '- `blankline-skill` — BLANKLINE-MARKER — a folded description whose first paragraph ends here. And whose second paragraph follows a blank line, which must be dropped rather than folded in as an extra separator.' \
+    "$SCALAR_BLANKLINE_README"
+assert_not_contains "…with no doubled separator at the join the blank line sat on" \
+    "ends here.  And whose" "$SCALAR_BLANKLINE_README"
 
 # --- the collapse of decoded whitespace is LOCAL ---
 #
