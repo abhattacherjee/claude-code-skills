@@ -4326,7 +4326,12 @@ mkdir -p "$PREPARE_FIXTURE_DIR/foldedscalar-plugin" \
          "$PREPARE_FIXTURE_DIR/blankline-plugin" \
          "$PREPARE_FIXTURE_DIR/dblspace-plugin" \
          "$PREPARE_FIXTURE_DIR/dblspaceesc-plugin" \
-         "$PREPARE_FIXTURE_DIR/crbyte-plugin"
+         "$PREPARE_FIXTURE_DIR/crbyte-plugin" \
+         "$PREPARE_FIXTURE_DIR/crquote-plugin" \
+         "$PREPARE_FIXTURE_DIR/crblock-plugin" \
+         "$PREPARE_FIXTURE_DIR/crhdr-plugin" \
+         "$PREPARE_FIXTURE_DIR/cronly-plugin" \
+         "$PREPARE_FIXTURE_DIR/crblank-plugin"
 
 # #37: a folded block scalar carries no text on its key line.
 cat > "$PREPARE_FIXTURE_DIR/foldedscalar-plugin/SKILL.md" <<'EOF'
@@ -4675,8 +4680,13 @@ EOF
 # nothing in the parser had any reason to touch it and it travelled straight
 # into the value — and thence into a Markdown table cell (sync-monorepo.sh:604)
 # and a list item, where a bare CR corrupts the row. It is now mapped to a space
-# at extract_field's single emit() point, the same meaning `\r` already has when
-# written as an escape.
+# as each frontmatter line is COLLECTED, and again at emit().
+#
+# This fixture puts the byte MID-VALUE in a PLAIN scalar, which is the one
+# position where the emit()-only scrub was already sufficient — nothing between
+# the read and emit() looks at the middle of a plain value. That is why it stayed
+# green while #102 was live, and it is kept as the control for the five fixtures
+# below, which put CR in the positions that actually decide something.
 #
 # Written with printf rather than a heredoc for the same reason as the trailws
 # fixture: the one byte under test must not be silently normalised away by an
@@ -4686,10 +4696,107 @@ printf '%s\n%s\n%s\n%s\n%s\n\n%s\n' \
     '---' 'name: crbyte-skill' "$CRBYTE_DESC_LINE" 'version: 0.1.0' '---' \
     '# crbyte-skill' > "$PREPARE_FIXTURE_DIR/crbyte-plugin/SKILL.md"
 
+# --- CR in the positions that DECIDE something (#102 reopened) -------------
+#
+# extract_field used to scrub CR/VT/FF only at emit(), which is the single OUTPUT
+# point — true, and exactly why it read as sufficient. It runs LAST. Every step
+# that depends on those bytes being gone runs FIRST, and every one of them
+# matches only [ \t]. The five fixtures below are one per decision CR defeats;
+# the mid-value crbyte fixture above reaches none of them.
+#
+# All five are built with printf so the CR bytes survive the file being written,
+# read, linted and reviewed. The `---` fences are deliberately LF-terminated:
+# the frontmatter delimiter test is an exact `$0 == "---"` compare that runs
+# before the collection rule, so CRLF fences would make every field read back
+# EMPTY and none of these fixtures would exercise the parser at all. That is a
+# separate (fail-empty, not fail-corrupt) gap, named in _lib.sh and not fixed
+# here.
+
+# 1. The DIRECT #102 regression. A double-quoted scalar carrying \" escapes, on a
+#    CRLF-terminated line. `sub(/[ \t]+$/,"",val)` does not match CR, so the last
+#    character of val stayed a CR, the `f == DQ && l == DQ` closing-quote test
+#    failed, and the value fell through to the plain-scalar path keeping BOTH
+#    outer quotes and every internal \" — the exact artifact #102 was filed for,
+#    reproduced inside its own fix. Measured on the pre-fix build:
+#    ["CRQUOTE-MARKER … like \"review this\" …" ] with a trailing space.
+CRQUOTE_DESC_LINE='description: "CRQUOTE-MARKER — phrases like \"review this\" and \"converge to zero\" must survive a CRLF line ending. Use when: (1) the CR is scrubbed before the closing-quote test runs."'
+printf '%s\n%s\n' '---' 'name: crquote-skill' > "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
+printf '%s\r\n' "$CRQUOTE_DESC_LINE" >> "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
+printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crquote-skill' \
+    >> "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
+
+# 2. A block scalar whose BODY lines are CRLF-terminated (header left clean, so
+#    this fixture isolates the join). The body trim `sub(/[ \t]+$/,"",line)`
+#    leaves the CR, so every join came back DOUBLE-spaced and the value ended in
+#    a stray space. Asserted as a whole row for the same reason as blankline: a
+#    substring check on either side of a join cannot see the join.
+printf '%s\n%s\n%s\n' '---' 'name: crblock-skill' 'description: >-' \
+    > "$PREPARE_FIXTURE_DIR/crblock-plugin/SKILL.md"
+printf '  %s\r\n' \
+    'CRBLOCK-MARKER — a folded description whose source lines are CRLF-terminated.' \
+    'Each join between them must be a single space, never two.' \
+    'And the value must not end in a stray space either.' \
+    >> "$PREPARE_FIXTURE_DIR/crblock-plugin/SKILL.md"
+printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crblock-skill' \
+    >> "$PREPARE_FIXTURE_DIR/crblock-plugin/SKILL.md"
+
+# 3. The block HEADER line itself CRLF-terminated — a legal `>-` that arrives as
+#    ">-\r". The trailing trim does not strip CR, so the header-grammar guard
+#    rejected it and extract_field exited 3: a perfectly legal CRLF SKILL.md
+#    ABORTING the build with "unrecognized block-scalar header for description:
+#    >-". Fail-closed rather than corrupt, but wrong, and invisible from the
+#    other fixtures because none of them puts a CR on the key line.
+printf '%s\n%s\n' '---' 'name: crhdr-skill' > "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
+printf '%s\r\n' 'description: >-' >> "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
+printf '  %s\n' \
+    'CRHDR-MARKER — a folded description whose block header line is CRLF-terminated.' \
+    'A legal header must stay legal with a CR on the end of it.' \
+    >> "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
+printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crhdr-skill' \
+    >> "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
+
+# 4. An INDENTED body line holding nothing but a CR. `line ~ /^[ \t]*$/` is false
+#    for it, so the blank-line skip did not fire: it became a CONTENT line,
+#    trimmed to a bare CR, joined with separators on both sides (THREE spaces at
+#    the join once emit() mapped it) and — the part no row assertion would
+#    catch — it incremented nlines, which is the count the `|`-fold stderr note
+#    reports. Hence both a whole-row assertion AND an assertion on the count.
+printf '%s\n%s\n%s\n' '---' 'name: cronly-skill' 'description: |-' \
+    > "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
+printf '  %s\n' \
+    'CRONLY-MARKER — a literal block whose paragraph break is an indented line holding nothing but a carriage return.' \
+    >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
+printf '  \r\n' >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
+printf '  %s\n' \
+    'That line must be skipped as blank rather than folded in as content.' \
+    >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
+printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# cronly-skill' \
+    >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
+
+# 5. A BARE CR-only body line — the shape a real CRLF file's paragraph break
+#    actually has. `line ~ /^[^ \t]/` MATCHES a leading CR, so the block
+#    TERMINATED there and everything after the blank line was silently dropped:
+#    measured, the second paragraph vanished from the README entirely at exit 0.
+#    Distinct from fixture 4 (indented, over-captured) — same byte, opposite
+#    failure — and the more severe of the two, since a truncation leaves a
+#    plausible-looking description behind.
+printf '%s\n%s\n%s\n' '---' 'name: crblank-skill' 'description: >-' \
+    > "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
+printf '  %s\n' \
+    'CRBLANK-MARKER — a folded description whose paragraph break is a bare carriage-return-only line.' \
+    >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
+printf '\r\n' >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
+printf '  %s\n' \
+    'This second paragraph must survive, because a bare CR line used to end the block.' \
+    >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
+printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crblank-skill' \
+    >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
+
 for _sc in foldedscalar dquotescalar squotescalar plainscalar plainregress \
            litscalar overcapture bareblock plusblock chompindent dquoteplain \
            escwsscalar trailws pctscalar nodesc emptydesc dashescalar \
-           badblock blankline dblspace dblspaceesc crbyte; do
+           badblock blankline dblspace dblspaceesc crbyte \
+           crquote crblock crhdr cronly crblank; do
     cat > "$PREPARE_FIXTURE_DIR/$_sc-plugin/plugin-manifest.json" <<EOF
 {
   "name": "$_sc-plugin",
@@ -4811,6 +4918,36 @@ SCALAR_CRBYTE_RC=0
 run_prepare crbyte-plugin "$SCRATCH_DIR/scalar-crbyte.stdout" \
     "$SCRATCH_DIR/scalar-crbyte.stderr" || SCALAR_CRBYTE_RC=$?
 SCALAR_CRBYTE_README="$(cat "$PREPARE_OUT_DIR/crbyte-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_CRQUOTE_RC=0
+run_prepare crquote-plugin "$SCRATCH_DIR/scalar-crquote.stdout" \
+    "$SCRATCH_DIR/scalar-crquote.stderr" || SCALAR_CRQUOTE_RC=$?
+SCALAR_CRQUOTE_README="$(cat "$PREPARE_OUT_DIR/crquote-plugin/README.md" 2>/dev/null || true)"
+
+SCALAR_CRBLOCK_RC=0
+run_prepare crblock-plugin "$SCRATCH_DIR/scalar-crblock.stdout" \
+    "$SCRATCH_DIR/scalar-crblock.stderr" || SCALAR_CRBLOCK_RC=$?
+SCALAR_CRBLOCK_README="$(cat "$PREPARE_OUT_DIR/crblock-plugin/README.md" 2>/dev/null || true)"
+
+# rc and stderr are read for this one, not just the README: on the pre-fix build
+# extract_field exited 3 on a CRLF-terminated `>-` header, so the failure was an
+# aborted run, not a wrong string.
+SCALAR_CRHDR_RC=0
+run_prepare crhdr-plugin "$SCRATCH_DIR/scalar-crhdr.stdout" \
+    "$SCRATCH_DIR/scalar-crhdr.stderr" || SCALAR_CRHDR_RC=$?
+SCALAR_CRHDR_README="$(cat "$PREPARE_OUT_DIR/crhdr-plugin/README.md" 2>/dev/null || true)"
+SCALAR_CRHDR_STDERR="$(cat "$SCRATCH_DIR/scalar-crhdr.stderr")"
+
+SCALAR_CRONLY_RC=0
+run_prepare cronly-plugin "$SCRATCH_DIR/scalar-cronly.stdout" \
+    "$SCRATCH_DIR/scalar-cronly.stderr" || SCALAR_CRONLY_RC=$?
+SCALAR_CRONLY_README="$(cat "$PREPARE_OUT_DIR/cronly-plugin/README.md" 2>/dev/null || true)"
+SCALAR_CRONLY_STDERR="$(cat "$SCRATCH_DIR/scalar-cronly.stderr")"
+
+SCALAR_CRBLANK_RC=0
+run_prepare crblank-plugin "$SCRATCH_DIR/scalar-crblank.stdout" \
+    "$SCRATCH_DIR/scalar-crblank.stderr" || SCALAR_CRBLANK_RC=$?
+SCALAR_CRBLANK_README="$(cat "$PREPARE_OUT_DIR/crblank-plugin/README.md" 2>/dev/null || true)"
 
 # The literal-block fold is deliberate but it can change meaning, so it now
 # announces itself. Both stderr logs are read: the `|` one to prove the note is
@@ -5385,6 +5522,92 @@ assert_line_present "…and its skills row is one whole line with the byte repla
     "$SCALAR_CRBYTE_README"
 assert_not_contains "…with no raw CR byte anywhere in the README" \
     "$(printf '\r')" "$SCALAR_CRBYTE_README"
+
+# --- CR in the positions that DECIDE something (#102 reopened) ---
+#
+# The crbyte fixture above is the control: it puts the byte mid-value in a plain
+# scalar, the one place nothing between the read and emit() inspects, and it
+# stayed green through the entire life of this defect. Each block below puts CR
+# where a [ \t]-only test reads it.
+#
+# Mutation-verified against an emit()-only scrub (the entry gsub reverted, the
+# emit() gsub kept — i.e. the shipped-and-defective shape): 17 of these 23 red,
+# spread over all five fixtures (5 + 3 + 3 + 4 + 2). The six that stay green are
+# the rc/section-heading controls, which are there so an empty or never-run
+# parse cannot satisfy the block by doing nothing. Against the same mutant the
+# 455 assertions that predate this block red ZERO, the crbyte control included —
+# which is why a green suite shipped #102.
+
+# 1. #102's direct regression: closing-quote test defeated by a trailing CR.
+assert_eq "a CRLF-terminated double-quoted description does not fail the build" \
+    "0" "$SCALAR_CRQUOTE_RC"
+assert_contains "the CRLF-quoted fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_CRQUOTE_README"
+assert_not_contains "a CRLF line ending does not leave \\\" escapes in the README" \
+    '\"' "$SCALAR_CRQUOTE_README"
+assert_not_contains "…nor the outer quote pair the closing-quote test failed to strip" \
+    '"CRQUOTE-MARKER' "$SCALAR_CRQUOTE_README"
+assert_line_present "…and the unescaped text arrives whole" \
+    'CRQUOTE-MARKER — phrases like "review this" and "converge to zero" must survive a CRLF line ending.' \
+    "$SCALAR_CRQUOTE_README"
+# The TAIL of the value, asserted separately: the paragraph above is the value
+# truncated at "Use when:", so on its own it cannot show that the CR at the very
+# END of the line was handled. The pre-fix build put the unstripped closing
+# quote right here.
+assert_line_present "…and the use-when tail keeps no stray closing quote from the CR" \
+    '- the CR is scrubbed before the closing-quote test runs.' \
+    "$SCALAR_CRQUOTE_README"
+assert_line_present "…and its skills row is that one line, quotes decoded" \
+    '- `crquote-skill` — CRQUOTE-MARKER — phrases like "review this" and "converge to zero" must survive a CRLF line ending.' \
+    "$SCALAR_CRQUOTE_README"
+
+# 2. CRLF body lines: the trim leaves the CR, so every join doubles.
+assert_eq "a block scalar with CRLF body lines does not fail the build" \
+    "0" "$SCALAR_CRBLOCK_RC"
+assert_contains "the CRLF-body block fixture gets a What It Does section at all" \
+    "## What It Does" "$SCALAR_CRBLOCK_README"
+assert_line_present "CRLF-terminated block body lines join with single spaces" \
+    'CRBLOCK-MARKER — a folded description whose source lines are CRLF-terminated. Each join between them must be a single space, never two. And the value must not end in a stray space either.' \
+    "$SCALAR_CRBLOCK_README"
+assert_line_present "…and the same whole line reaches its skills row" \
+    '- `crblock-skill` — CRBLOCK-MARKER — a folded description whose source lines are CRLF-terminated. Each join between them must be a single space, never two. And the value must not end in a stray space either.' \
+    "$SCALAR_CRBLOCK_README"
+assert_not_contains "…with no doubled separator at either join" \
+    "CRLF-terminated.  Each" "$SCALAR_CRBLOCK_README"
+
+# 3. A CRLF-terminated block HEADER used to abort the build at rc 3.
+assert_eq "a CRLF-terminated \`>-\` header is still a legal header" \
+    "0" "$SCALAR_CRHDR_RC"
+assert_not_contains "…and is not reported as an unrecognized block-scalar header" \
+    "unrecognized block-scalar header" "$SCALAR_CRHDR_STDERR"
+assert_line_present "…and its block body is folded and reaches the skills row" \
+    '- `crhdr-skill` — CRHDR-MARKER — a folded description whose block header line is CRLF-terminated. A legal header must stay legal with a CR on the end of it.' \
+    "$SCALAR_CRHDR_README"
+
+# 4. An indented CR-only body line: over-captured as content, and counted.
+assert_eq "an indented CR-only body line does not fail the build" \
+    "0" "$SCALAR_CRONLY_RC"
+assert_line_present "an indented CR-only body line is skipped as blank, not folded in" \
+    'CRONLY-MARKER — a literal block whose paragraph break is an indented line holding nothing but a carriage return. That line must be skipped as blank rather than folded in as content.' \
+    "$SCALAR_CRONLY_README"
+assert_not_contains "…leaving no three-space join where it sat" \
+    "carriage return.   That line" "$SCALAR_CRONLY_README"
+# The row assertion alone cannot see the count: nlines drives the |-fold note,
+# and an over-captured blank line inflates it without changing any other output.
+assert_contains "…and is not counted as one of the folded lines" \
+    "description is a literal (|) block scalar of 2 lines" "$SCALAR_CRONLY_STDERR"
+assert_not_contains "…so the fold note does not report the phantom third line" \
+    "block scalar of 3 lines" "$SCALAR_CRONLY_STDERR"
+
+# 5. A bare CR-only body line used to TERMINATE the block, silently.
+assert_eq "a bare CR-only body line does not fail the build" \
+    "0" "$SCALAR_CRBLANK_RC"
+assert_line_present "a bare CR-only body line ends a paragraph, not the block" \
+    'CRBLANK-MARKER — a folded description whose paragraph break is a bare carriage-return-only line. This second paragraph must survive, because a bare CR line used to end the block.' \
+    "$SCALAR_CRBLANK_README"
+assert_line_present "…and the whole value, both paragraphs, reaches the skills row" \
+    '- `crblank-skill` — CRBLANK-MARKER — a folded description whose paragraph break is a bare carriage-return-only line. This second paragraph must survive, because a bare CR line used to end the block.' \
+    "$SCALAR_CRBLANK_README"
 
 # --- folding a literal block is announced ---
 #

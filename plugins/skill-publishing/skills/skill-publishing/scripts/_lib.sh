@@ -66,9 +66,39 @@ fi
 #     the whitespace the decode introduced — see unescape_double below — so a
 #     deliberate double space anywhere in the value survives regardless of what
 #     escapes appear elsewhere in it.
-#   - a literal CR/VT/FF byte in the source line is replaced with a space at the
-#     single emit() point. None of the three is a YAML escape, so they otherwise
-#     travel into the value untouched and land inside a Markdown table cell.
+#   - a literal CR/VT/FF byte in the source line is replaced with a space at TWO
+#     points: on ENTRY, as each frontmatter line is collected, and again in
+#     emit(). None of the three is a YAML escape, so they otherwise travel into
+#     the value untouched and land inside a Markdown table cell.
+#
+#     THE ORDER IS THE WHOLE POINT, and getting it wrong is issue #102 reopened.
+#     An emit()-only scrub is the SINGLE output point — true, and it is exactly
+#     why it reads as sufficient — but it runs LAST, after every decision that
+#     depends on those bytes being absent has already been made, and each of
+#     those decisions only knows space and tab:
+#       * `sub(/[ \t]+$/, "", val)` does not match CR, so on a CRLF-terminated
+#         `description: "…"` line the last character of val is CR, the
+#         `f == DQ && l == DQ` closing-quote test fails, the value falls to the
+#         plain-scalar path and keeps BOTH outer quotes and every internal \".
+#         Measured before the entry scrub: `["CRPROOF — phrases like \"review
+#         this\" must survive." ]` where the same file without the CR gives
+#         `[CRPROOF — phrases like "review this" must survive.]`.
+#       * the block-scalar body trim leaves the CR in place, so the join
+#         double-spaces.
+#       * `line ~ /^[ \t]*$/` is false for a CR-only body line, so it becomes a
+#         content line (three spaces) and inflates nlines, which is the count
+#         reported in the `|`-fold stderr note.
+#       * a CRLF-terminated plain scalar gains a trailing space.
+#     Scrubbing on entry makes the trims, the blank test and the quote test all
+#     see normalised input. emit()'s gsub is KEPT as belt and braces — it is the
+#     backstop for any future path that builds a value from something other than
+#     fm[], and it costs one gsub on an already-clean string.
+#
+#     NOT scrubbed, stated rather than implied: the `$0 == "---"` delimiter test
+#     runs before the collection rule and is an exact compare, so a SKILL.md
+#     whose `---` fences are themselves CRLF-terminated never enters d == 1 and
+#     every field reads back empty. That is a different failure (empty, not
+#     corrupt) and is left alone here.
 #
 # UNRECOGNIZED BLOCK HEADERS FAIL, they do not fall through. A value that begins
 # with `|` or `>` but does not match the header grammar (`>10`, `>--`, `>2x`)
@@ -154,8 +184,9 @@ fi
 #     `|`/`>` is rejected rather than ignored — see the guard above.
 #   - a literal SOH (\001) byte in a double-quoted scalar becomes a space: that
 #     byte is used as the internal marker for decoded whitespace, so it is
-#     neutralised on entry. Other stray control bytes reach emit(), which maps
-#     CR/VT/FF to a space and passes the rest through.
+#     neutralised on entry. CR/VT/FF are mapped to a space on entry (and again
+#     in emit()); every other stray control byte reaches emit() and is passed
+#     through.
 # Audited across all 44 SKILL.md files in the monorepo: none uses a flow
 # collection, anchor, numeric escape, or a multi-line quoted scalar for a
 # top-level field, so every one of these is latent rather than live. Re-run that
@@ -174,9 +205,16 @@ extract_field() {
       SENTRUN = "[ \t]*" SENT "([ \t]*" SENT ")*[ \t]*"
     }
 
-    # The SINGLE output point, so every exit path gets the same scrub. A literal
-    # CR, VT or FF byte in the source line is not a YAML escape and so reaches
-    # here untouched, and the value is spliced into a Markdown table row
+    # The SINGLE output point — but being the single output point is NOT the
+    # same as being sufficient, and an earlier version of this comment implied
+    # that it was. This gsub is the SECOND of two scrubs; the load-bearing one
+    # is on ENTRY, in the `d == 1` collection rule below, because the trims,
+    # the blank-line test and the closing-quote test all run before this point
+    # and none of them knows about CR. See "THE ORDER IS THE WHOLE POINT" in
+    # the header comment for what an emit()-only scrub lets through (#102).
+    # This one is kept as the backstop for any future exit path that emits a
+    # value not built from fm[]. A literal CR, VT or FF byte is not a YAML
+    # escape, and the value is spliced into a Markdown table row
     # (sync-monorepo.sh:604) and a list item, where a bare CR corrupts the cell.
     # They become a space — the same meaning \r already has when written as an
     # escape. printf "%s", never a bare value used as a format: descriptions
@@ -237,8 +275,13 @@ extract_field() {
     # Collect the frontmatter into an array rather than streaming it: a block
     # scalar needs the lines AFTER the key, which a line-at-a-time reader
     # cannot see.
+    #
+    # CR/VT/FF are neutralised HERE, on entry, not only at emit(). Everything
+    # downstream — the trailing-whitespace trims, the blank-line skip, the
+    # closing-quote test — matches only [ \t], so a CRLF-terminated line that
+    # reaches them unscrubbed defeats all three at once. That was #102.
     $0 == "---" { d++; if (d >= 2) exit; next }
-    d == 1 { fm[++nf] = $0 }
+    d == 1 { _l = $0; gsub(/[\r\v\f]/, " ", _l); fm[++nf] = _l }
 
     END {
       pat = "^" field ":"
