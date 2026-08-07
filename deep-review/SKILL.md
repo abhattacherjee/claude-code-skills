@@ -2,7 +2,7 @@
 name: deep-review
 description: "Use when the user wants a thorough, high-assurance review of code changes — phrases like \"review this until it's clean\", \"converge to zero issues\", \"adversarial review\", \"have Gemini and Claude review\", \"deep review this PR\", or \"make this change ironclad\". Runs TWO phases on a PR or working-tree diff: (1) iterative multi-reviewer review that loops fix->re-review until a round finds zero actionable issues, then (2) a multi-round Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Repeatable across any project/PR. Use when: (1) the user wants a thorough, high-assurance review that converges to zero actionable issues, (2) the user asks for an adversarial or Gemini-and-Claude cross-examination review of a code diff, (3) deep-reviewing a PR or working-tree diff before merge, (4) the user wants to make a change ironclad."
 metadata:
-  version: 1.2.1
+  version: 1.3.0
 ---
 
 # Deep Review
@@ -74,6 +74,11 @@ silently skip a phase.
 4. Give every reviewer the **intent context** that isn't obvious from the diff (e.g. "this module
    is deliberately retired", "this file is the live regression guard"). Grounding context prevents
    wasted cycles re-flagging intentional decisions — but never use it to suppress a real defect.
+5. Record any **environment or toolchain coverage gaps** relevant to the diff. If a portability
+   concern depends on a toolchain the review host cannot execute (for example GNU `tar` or `gawk`
+   behaviour from a macOS/BSD environment), label it explicitly as **not executed locally** and
+   **deferred to CI**. Recommend a concrete cross-platform check when feasible (`gtar`, `gawk`, or a
+   Linux container), and never treat the local suite as covering the unavailable environment.
 
 ---
 
@@ -217,6 +222,8 @@ Summarize for the user:
 - Phase 2: R1 counts, what survived cross-examination, what was dismissed and why, any unresolved
   judgment call escalated to them.
 - Verification evidence (test results, exit codes), commits/SHAs, push + CI status.
+- Portability concerns that were not executable locally, the exact CI/toolchain coverage they were
+  deferred to, and any concrete command recommended for pre-CI reproduction.
 
 ## Red Flags — do not
 
@@ -245,6 +252,9 @@ Summarize for the user:
 - **Fix in the parent context.** Dispatch an implementer sub-agent (clean context, no router
   friction); the parent orchestrates.
 - **Skip syncing deployed artifacts** after changing a suite/config the runtime consumes.
+- **Imply portability coverage from an unavailable toolchain.** A green BSD/macOS run does not
+  verify GNU/Linux behaviour (or vice versa). State what was not executed, defer that concern to the
+  matching CI job, and recommend a concrete alternate-toolchain check where possible.
 - **Hand a fix to re-review without self-checking it.** A new guard needs its planted-regression in the *same* edit; retiring/disabling/renaming code needs a sweep of *every* descriptor string (manifest, README tagline, comments), not just the banner — don't let the next round be the first to catch your fix's new gap.
 
 ## Integration

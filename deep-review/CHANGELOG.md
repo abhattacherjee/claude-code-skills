@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.3.0] - 2026-08-06
+
+### Added
+
+- Phase 0 gained a fifth scoping step: record environment/toolchain coverage gaps relevant to the
+  diff (e.g. GNU `tar` or `gawk` behaviour that a macOS/BSD review host cannot execute), label them
+  explicitly **not executed locally** and **deferred to CI**, and recommend a concrete
+  cross-platform check (`gtar`, `gawk`, a Linux container) when feasible.
+- Final report now includes a dedicated bullet for portability concerns that were not executable
+  locally: the exact CI/toolchain coverage they were deferred to, and any concrete command
+  recommended for pre-CI reproduction.
+- Red Flags gained "Imply portability coverage from an unavailable toolchain" — a green BSD/macOS
+  run does not verify GNU/Linux behaviour (or vice versa); state what was not executed, defer to the
+  matching CI job, and recommend a concrete alternate-toolchain check where possible.
+
+This change was originally merged into closed PR #98, which targeted `main` from a docs branch
+whose head branch no longer exists; that PR patched the generated plugin copy
+(`plugins/deep-review/...`) rather than this authoring source, so a subsequent `prepare-plugin.sh`
+rebuild would have silently discarded it. Re-applied here to the source. Motivating case: a
+deep-review run asserted BSD-vs-`gawk` awk portability it could not actually execute because `gawk`
+was not installed on the review host.
+
 ## [1.2.1] - 2026-08-05
 
 ### Changed
