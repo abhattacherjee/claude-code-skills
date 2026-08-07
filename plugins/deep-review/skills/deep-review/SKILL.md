@@ -122,8 +122,9 @@ dimension** AND the previous round's fixes introduced nothing new.
 - That round was a re-review *after* the latest fixes (so "converged" reflects the current tree),
   and
 - Fixes were verified by running tests/build, not by inspection alone — except concerns explicitly
-  recorded under Phase 0 step 5 as not executable locally, which converge as *deferred to CI* (or
-  *UNCOVERED*) rather than as verified.
+  recorded under Phase 0 step 5 as not executable locally, **recorded during Phase 0, before any fix
+  round** (a concern added to that list after a fix cannot retroactively excuse it), which converge
+  as *deferred to CI* (or *UNCOVERED*) rather than as verified.
 
 Commit Phase 1 with a clear message summarizing rounds + classes of issues fixed. Follow the
 repo's commit discipline (run any preflight; if a hook requires preflight and commit as separate
@@ -226,8 +227,9 @@ Summarize for the user:
 - Phase 2: R1 counts, what survived cross-examination, what was dismissed and why, any unresolved
   judgment call escalated to them.
 - Verification evidence (test results, exit codes), commits/SHAs, push + CI status.
-- Portability concerns that were not executable locally, the exact CI/toolchain coverage they were
-  deferred to, and any concrete command recommended for pre-CI reproduction.
+- Portability concerns that were not executable locally: for each, either the exact CI/toolchain
+  coverage it was deferred to, or an explicit **UNCOVERED** marker when no CI job covers that
+  environment — plus any concrete command recommended for pre-CI reproduction.
 
 ## Red Flags — do not
 
@@ -258,7 +260,8 @@ Summarize for the user:
 - **Skip syncing deployed artifacts** after changing a suite/config the runtime consumes.
 - **Imply portability coverage from an unavailable toolchain.** A green BSD/macOS run does not
   verify GNU/Linux behaviour (or vice versa). State what was not executed, defer that concern to the
-  matching CI job, and recommend a concrete alternate-toolchain check where possible.
+  matching CI job **(or mark it UNCOVERED when no such job exists)**, and recommend a concrete
+  alternate-toolchain check where possible.
 - **Hand a fix to re-review without self-checking it.** A new guard needs its planted-regression in the *same* edit; retiring/disabling/renaming code needs a sweep of *every* descriptor string (manifest, README tagline, comments), not just the banner — don't let the next round be the first to catch your fix's new gap.
 
 ## Integration

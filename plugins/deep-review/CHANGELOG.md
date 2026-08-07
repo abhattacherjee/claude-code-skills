@@ -5,8 +5,9 @@
 ### Added
 
 - Phase 0 gained a fifth scoping step: record environment/toolchain coverage gaps relevant to the
-  diff (e.g. GNU `tar` or `gawk` behaviour that a macOS/BSD review host cannot execute), label them
-  explicitly **not executed locally** and **deferred to CI**, and recommend a concrete
+  diff (e.g. GNU `tar` or `gawk` behaviour that a macOS/BSD review host cannot execute), label
+  them explicitly **not executed locally**, then either **deferred to CI** after confirming a CI
+  job actually covers that environment, or **UNCOVERED** when none does; recommend a concrete
   cross-platform check (`gtar`, `gawk`, a Linux container) when feasible.
 - Final report now includes a dedicated bullet for portability concerns that were not executable
   locally: the exact CI/toolchain coverage they were deferred to, and any concrete command
@@ -14,6 +15,16 @@
 - Red Flags gained "Imply portability coverage from an unavailable toolchain" — a green BSD/macOS
   run does not verify GNU/Linux behaviour (or vice versa); state what was not executed, defer to the
   matching CI job, and recommend a concrete alternate-toolchain check where possible.
+
+### Fixed
+
+- The **UNCOVERED** label (used when no CI job covers the unavailable environment) had no reporting
+  path: the final report bullet and the portability Red Flag both presumed a matching CI job exists,
+  so an UNCOVERED concern could converge and then fall out of the report the user reads. Both now
+  name UNCOVERED as an explicit alternative to a named CI/toolchain coverage target.
+- The Phase 1 convergence carve-out for concerns recorded under Phase 0 step 5 now requires the
+  record to predate any fix round, so a late addition to the Phase 0 list can no longer
+  retroactively excuse an unverified fix.
 
 This change was originally proposed in PR #98, closed unmerged, which targeted `main` from a docs
 branch whose head branch no longer exists; that PR patched the generated plugin copy
