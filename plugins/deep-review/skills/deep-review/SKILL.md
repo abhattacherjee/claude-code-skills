@@ -77,7 +77,9 @@ silently skip a phase.
 5. Record any **environment or toolchain coverage gaps** relevant to the diff. If a portability
    concern depends on a toolchain the review host cannot execute (for example GNU `tar` or `gawk`
    behaviour from a macOS/BSD environment), label it explicitly as **not executed locally** and
-   **deferred to CI**. Recommend a concrete cross-platform check when feasible (`gtar`, `gawk`, or a
+   **deferred to CI** — after confirming a CI job actually covers that environment
+   (`ls .github/workflows`, check the job's `runs-on`). If none does, label it **UNCOVERED**, not
+   deferred. Recommend a concrete cross-platform check when feasible (`gtar`, `gawk`, or a
    Linux container), and never treat the local suite as covering the unavailable environment.
 
 ---
@@ -119,7 +121,9 @@ dimension** AND the previous round's fixes introduced nothing new.
 - Every dimension returned CONVERGED in the SAME round, and
 - That round was a re-review *after* the latest fixes (so "converged" reflects the current tree),
   and
-- Fixes were verified by running tests/build, not by inspection alone.
+- Fixes were verified by running tests/build, not by inspection alone — except concerns explicitly
+  recorded under Phase 0 step 5 as not executable locally, which converge as *deferred to CI* (or
+  *UNCOVERED*) rather than as verified.
 
 Commit Phase 1 with a clear message summarizing rounds + classes of issues fixed. Follow the
 repo's commit discipline (run any preflight; if a hook requires preflight and commit as separate

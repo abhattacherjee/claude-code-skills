@@ -15,12 +15,16 @@
   run does not verify GNU/Linux behaviour (or vice versa); state what was not executed, defer to the
   matching CI job, and recommend a concrete alternate-toolchain check where possible.
 
-This change was originally merged into closed PR #98, which targeted `main` from a docs branch
-whose head branch no longer exists; that PR patched the generated plugin copy
+This change was originally proposed in PR #98, closed unmerged, which targeted `main` from a docs
+branch whose head branch no longer exists; that PR patched the generated plugin copy
 (`plugins/deep-review/...`) rather than this authoring source, so a subsequent `prepare-plugin.sh`
-rebuild would have silently discarded it. Re-applied here to the source. Motivating case: a
-deep-review run asserted BSD-vs-`gawk` awk portability it could not actually execute because `gawk`
-was not installed on the review host.
+rebuild would have silently discarded it. Re-applied here to the source. Original change proposed by
+@lntutor in #98.
+
+Motivating case, from this repo: `_lib.sh:44` (shipped in #107) asserts "POSIX awk only, so this
+runs on macOS BSD awk and gawk alike" — a portability claim the review host could not execute,
+because `gawk` is not installed on it. Step 5 is the rule that would have required labelling it
+*not executed locally* up front.
 
 ## [1.2.1] - 2026-08-05
 
