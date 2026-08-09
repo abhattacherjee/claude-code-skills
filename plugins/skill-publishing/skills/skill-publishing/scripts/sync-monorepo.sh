@@ -1611,7 +1611,27 @@ while IFS= read -r SKILL_NAME <&3; do
   fi
   if [[ -f "$SKILL_MD" ]]; then
     VERSION=$(extract_version "$SKILL_MD")
-    SHORT_DESC=$(extract_field "$SKILL_MD" "description" | sed 's/\. Use when:.*//')
+    # TWO statements, and a short_desc() call rather than a fourth inline copy of
+    # its sed. Both halves are load-bearing:
+    #
+    #   - `X=$(extract_field … | sed …)` takes the PIPELINE's rc, which is
+    #     sed's, and nothing in this directory sets `pipefail`. extract_field's
+    #     `exit 3` on an unrecognized block-scalar header therefore arrived here
+    #     as rc 0 with an empty $SHORT_DESC — a description-less inventory row
+    #     written at exit 0, the exact fail-open shape the guard was added to
+    #     remove. A bare assignment from a single command propagates rc, so
+    #     `set -e` acts on it.
+    #   - `X=$(short_desc "$(extract_field …)")` would NOT fix that: measured,
+    #     the assignment takes the OUTER substitution's rc (short_desc's, i.e.
+    #     sed's, i.e. 0) and discards the inner 3. Hence two statements.
+    #
+    # The inline sed was `s/\. Use when:.*//`, which DROPPED the sentence's
+    # period; short_desc's is `s/\. Use when:.*/\./`, which keeps it. This row
+    # therefore gains a trailing "." for any description carrying a "Use when:"
+    # clause — a deliberate change, and now the same text as the catalogue row
+    # built from short_desc at line 582 of this file.
+    INVENTORY_DESC=$(extract_field "$SKILL_MD" "description")
+    SHORT_DESC=$(short_desc "$INVENTORY_DESC")
     SKILL_INVENTORY="${SKILL_INVENTORY}
 - \`$SKILL_NAME\` v${VERSION:-?.?.?}${INVENTORY_REFUSED_NOTE} — $SHORT_DESC"
   fi

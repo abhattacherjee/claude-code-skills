@@ -36,7 +36,7 @@
       "name": "deep-review",
       "source": "./plugins/deep-review",
       "description": "Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.",
-      "version": "1.2.1"
+      "version": "1.3.0"
     },
     {
       "name": "figma-ui-designer",
@@ -66,7 +66,7 @@
       "name": "skill-publishing",
       "source": "./plugins/skill-publishing",
       "description": "Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos",
-      "version": "4.3.0"
+      "version": "4.4.0"
     },
     {
       "name": "smart-screen-recorder",

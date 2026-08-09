@@ -153,9 +153,26 @@ while IFS= read -r skill_md; do
   skill_dir=$(dirname "$skill_md")
   skill_name=$(basename "$skill_dir")
   version=$(extract_version "$skill_md")
-  short_desc=$(extract_field "$skill_md" "description" | sed 's/\. Use when:.*//')
+  # TWO statements, and short_desc() rather than an inline copy of its sed —
+  # see the long note at sync-monorepo.sh's matching inventory loop. Short
+  # form: `X=$(extract_field … | sed …)` takes the pipeline's rc (sed's), no
+  # script here sets `pipefail`, so extract_field's `exit 3` on an
+  # unrecognized block-scalar header became rc 0 with an empty description —
+  # a description-less release inventory, and a git tag body to match, at
+  # exit 0. `X=$(short_desc "$(extract_field …)")` swallows it identically
+  # (the assignment takes the OUTER substitution's rc), hence two statements.
+  #
+  # This site is the one where that swallow was actually LIVE: sync-monorepo.sh
+  # reads every skill's description earlier in its own main loop and aborts
+  # there first, whereas this loop is the first and only read in this script.
+  #
+  # short_desc keeps the sentence's period (`s/\. Use when:.*/\./`) where the
+  # inline sed dropped it (`s/\. Use when:.*//`), so inventory rows for
+  # descriptions with a "Use when:" clause now end in ".".
+  skill_desc=$(extract_field "$skill_md" "description")
+  skill_short_desc=$(short_desc "$skill_desc")
   SKILL_INVENTORY="${SKILL_INVENTORY}
-- \`$skill_name\` v${version:-?.?.?} — $short_desc"
+- \`$skill_name\` v${version:-?.?.?} — $skill_short_desc"
 done < <(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" -not -path "./plugins/*" | sort)
 
 # --- Build plugin inventory ---
