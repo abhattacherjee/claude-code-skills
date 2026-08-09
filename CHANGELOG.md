@@ -7,6 +7,14 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Security
+
+- **`scripts/bump-version.sh`: hardening inherited from the harden-repo template, plus a real base-10 bugfix (harden-repo#55):** the shared template fed parsed version components into bash arithmetic without validating them, allowing an array-subscript payload in the version source to run as a command substitution. **This repo was not exploitable by that route** — it has no version file, deriving the version from `git describe --tags`, and the only payload shape that executes in bash arithmetic (an array subscript) cannot be a tag name, because `git check-ref-format` refuses any ref containing `[`. Both halves of that were verified rather than assumed. The guard is therefore defense-in-depth here.
+
+  The base-10 half is a live bug regardless: without `10#`, a zero-padded tag such as `v1.08.09` was read as an invalid octal literal, and the bump silently produced an empty version and exited 0. It now yields `1.08.10`.
+
+  Also included: `CURRENT_VERSION` is semver-validated before any arithmetic with each core component bounded to 9 digits; any `-prerelease` / `+build` suffix is stripped before the components are split, so only digit runs reach `$(( ))`; and a symmetric guard refuses a `NEW_VERSION` that is not semver-shaped, which converts the silent empty-version exit 0 above into a clean failure.
+
 ## [3.18.0] - 2026-08-09
 
 ### Added
