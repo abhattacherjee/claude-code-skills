@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+## [3.18.0] - 2026-08-09
+
 ### Added
 
 - **deep-review** 1.2.1 -> 1.3.0: Phase 0 gained a fifth scoping step to record environment/toolchain coverage gaps (e.g. GNU `tar`/`gawk` behaviour unreachable from a macOS/BSD review host), labeling them **not executed locally**, then either **deferred to CI** after confirming a CI job actually covers that environment, or **UNCOVERED** when none does, with a recommended cross-platform check; the Final report gained a matching portability-coverage bullet; and Red Flags gained "Imply portability coverage from an unavailable toolchain." Re-applied from closed PR #98, which targeted `main` from a docs branch whose head branch no longer exists and had patched the generated plugin copy rather than this authoring source — a rebuild would have silently discarded it. Motivating case, from this repo: `_lib.sh:44` (shipped in #107) asserts "POSIX awk only, so this runs on macOS BSD awk and gawk alike" — a portability claim the review host could not execute, because `gawk` is not installed on it. Original change proposed by @lntutor in #98. (#50)
