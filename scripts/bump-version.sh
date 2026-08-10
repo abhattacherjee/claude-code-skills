@@ -51,16 +51,45 @@ if [[ -z "$CURRENT_VERSION" ]]; then
   print_error "Could not determine current version from git tags"
   exit 1
 fi
+# Validate BEFORE the arithmetic below. `$(( ))` recursively expands the
+# *contents* of the variables it evaluates, so an array-subscript payload in the
+# version string -- e.g. `x[$(rm -rf ~)].0.0` -- executes as a command substitution
+# during the bump. Here the version comes from `git describe --tags`, so a
+# crafted tag name is the untrusted input, and only a semver-shaped string is
+# allowed through: X.Y.Z plus an optional `-prerelease` / `+build` suffix
+# limited to alphanumerics, dots, `+` and `-`, and each core component is
+# bounded to 9 digits so the arithmetic below cannot overflow into a wrapped
+# value. This filter is NOT by itself what makes the arithmetic safe -- the
+# suffix strip further down is. See the comment there before widening either.
+if [[ ! "$CURRENT_VERSION" =~ ^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}([-+][0-9A-Za-z.+-]+)?$ ]]; then
+  print_error "Malformed version from git tag: $CURRENT_VERSION (expected X.Y.Z)"
+  exit 1
+fi
 print_info "Current version: $CURRENT_VERSION"
 
 # ── Calculate new version ─────────────────────────────────────
 
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+# The regex above pins the three core components to digit runs, but a permitted
+# `-prerelease` / `+build` suffix would otherwise ride along inside PATCH and
+# reach `$(( ))`. That is not safe. Arithmetic does not need a literal `$` or
+# backtick to execute something: a bare identifier inside `$(( ))` is looked up
+# and its *value* re-evaluated as an arithmetic expression, so `1.2.3-zz` with
+# `zz='x[$(cmd)]'` exported runs cmd and still exits 0 reporting success -- the
+# same recursion this fix exists to stop, reached one level of indirection
+# later. A numeric suffix is just as bad the other way: `1.2.3-4` evaluates
+# `10#3-4 + 1` to 0 and silently DOWNGRADES to 1.2.0, which is semver-shaped so
+# the write guard below cannot catch it.
+#
+# Stripping at the first `-` or `+` guarantees every component that reaches the
+# arithmetic is digits-only, which is the property that actually makes it safe.
+IFS='.' read -r MAJOR MINOR PATCH <<< "${CURRENT_VERSION%%[-+]*}"
 
+# `10#` forces base 10: without it a zero-padded component like `08` is read as
+# an invalid octal literal and the bump silently produces an empty version.
 case "$TYPE" in
-  major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
-  minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
-  patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+  major) NEW_VERSION="$((10#$MAJOR + 1)).0.0" ;;
+  minor) NEW_VERSION="$((10#$MAJOR)).$((10#$MINOR + 1)).0" ;;
+  patch) NEW_VERSION="$((10#$MAJOR)).$((10#$MINOR)).$((10#$PATCH + 1))" ;;
   *)
     if [[ ! "$TYPE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       print_error "Invalid version format: $TYPE (expected X.Y.Z)"
@@ -69,6 +98,17 @@ case "$TYPE" in
     NEW_VERSION="$TYPE"
     ;;
 esac
+
+# Symmetric guard: an arithmetic expansion that fails (bash does not treat that
+# as fatal even under `set -e`) leaves NEW_VERSION empty or truncated. This repo
+# has no version file to clobber -- the version lives in git tags -- but without
+# this guard the release flow below reports a bogus (often empty) version and
+# still exits 0, which is how a `v1.08.09` tag used to bump to nothing at all.
+# Refuse to continue with anything that is not semver-shaped.
+if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+  print_error "Refusing to continue with malformed version: '$NEW_VERSION' (computed from $CURRENT_VERSION)"
+  exit 1
+fi
 
 print_info "New version: $NEW_VERSION"
 
