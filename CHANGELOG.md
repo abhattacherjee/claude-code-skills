@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Added
+
+- **`deep-review`: a Red Flag for a negative control that re-implements the assertion instead of invoking it.** A control built from the guard's own logic tests the copy, not the guard — gut the real assertion and the control still passes, so the suite stays green over an unguarded path. Measured on openclaw#336: a doc-contract test added specifically to prevent vacuous assertions carried three controls of this shape, and three mutations each gutting a real assertion all survived. The rule is that a control must call the same function the suite calls, or parametrize over the same table it does.
+
 ### Security
 
 - **`scripts/bump-version.sh`: hardening inherited from the harden-repo template, plus a real base-10 bugfix (harden-repo#55):** the shared template fed parsed version components into bash arithmetic without validating them, allowing an array-subscript payload in the version source to run as a command substitution. **This repo was not exploitable by that route** — it has no version file, deriving the version from `git describe --tags`, and the only payload shape that executes in bash arithmetic (an array subscript) cannot be a tag name, because `git check-ref-format` refuses any ref containing `[`. Both halves of that were verified rather than assumed. The guard is therefore defense-in-depth here.
