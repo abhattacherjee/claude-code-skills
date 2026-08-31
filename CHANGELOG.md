@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Changed
+
+- **Refreshed the harden-repo hooks and scripts to the released v1.2.0 templates.** The installed copies predated upstream #43, #73, #83 and #84, so this repo was running guards with two live bypasses: a `cd` to a path that does not exist turned all four guards off while the command still ran here, and the secret scan could not see `scripts/`. Also gains the command parser, worktree-stable preflight identity, and the advisory drift check. Two artifacts were missing and are now installed: `scripts/check-assertion-strength.sh` and `.github/workflows/ci.yml` — the CI file ships with its `__HARDEN_LINT_JOB__` / `__HARDEN_TEST_JOB__` blocks still on the installer placeholder (comments, so the YAML is valid), and it adds a secret-scan and a CHANGELOG gate to pull requests alongside the existing `validate-skill.yml`. Left alone as locally modified: `scripts/bump-version.sh` (UNRECOGNIZED) and `scripts/commit-preflight.sh` (no harden marker blocks, so the doctor cannot classify it).
+
 ### Added
 
 - **`deep-review`: a Red Flag for a negative control that re-implements the assertion instead of invoking it.** A control built from the guard's own logic tests the copy, not the guard — gut the real assertion and the control still passes, so the suite stays green over an unguarded path. Measured on openclaw#336: a doc-contract test added specifically to prevent vacuous assertions carried three controls of this shape, and three mutations each gutting a real assertion all survived. The rule is that a control must call the same function the suite calls, or parametrize over the same table it does.
