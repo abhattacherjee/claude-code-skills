@@ -286,6 +286,12 @@ done
 
 [[ "$BRANCH_TYPE" == "hotfix" || "$BRANCH_TYPE" == "release" ]] || die "branch-type must be 'hotfix' or 'release', got '$BRANCH_TYPE'"
 
+# The one remaining `| grep -q` under `pipefail`, and deliberately kept: the
+# producer is a builtin `echo` of a version string, orders of magnitude under the
+# pipe buffer, so it has always finished writing before `grep -q` can close the
+# pipe — there is no SIGPIPE to propagate. It also fails CLOSED if one ever did
+# (a non-zero pipeline runs `die`), unlike the sync-merge guard below, which
+# failed open. See that guard's comment for the mechanism.
 echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$' || die "Version must follow semver (e.g., v1.0.6 or v1.0.6-beta.1), got '$VERSION'"
 
 VERSION_NUMBER="${VERSION#v}"
@@ -415,7 +421,19 @@ EOF
   # the merge commit on main (e.g., "Merge hotfix/v1.0.9 into main") is
   # not an ancestor of develop — even though file content is identical.
   git fetch origin main
-  if git log origin/main --not HEAD --oneline | grep -q .; then
+  # Not `git log … | grep -q .`: under `set -o pipefail` that inverts itself on
+  # exactly the repos that need the merge. `grep -q` exits on its first match and
+  # closes the pipe, so once `git log`'s output exceeds the pipe buffer (~1000+
+  # commits on main that develop lacks) the producer dies on SIGPIPE, pipefail
+  # makes 141 the status of the whole pipeline, the `if` takes the ELSE branch,
+  # and the script logs `Develop already includes all main commits` and skips the
+  # sync merge. Demonstrated with `seq 1 200000 | grep -q .` (else) vs
+  # `seq 1 3 | grep -q .` (then). Capture and test for emptiness instead, and
+  # treat a failing `git log` as fatal rather than as "nothing to merge".
+  if ! MAIN_ONLY_COMMITS=$(git log origin/main --not HEAD --oneline); then
+    die "Could not compare origin/main against develop — refusing to guess whether the sync merge is needed"
+  fi
+  if [ -n "$MAIN_ONLY_COMMITS" ]; then
     log "Syncing main merge commit into develop ancestry..."
     if git merge origin/main -m "Merge main into develop (sync $VERSION merge commit)
 
@@ -458,7 +476,7 @@ else
   # Stage known version files. Explicit allowlist beats `git add -A`:
   # it keeps runtime artifacts out of the dev-bump commit. Keep this list in
   # sync with bump-version.sh targets. Add project-specific files here if needed.
-  for vf in .claude-plugin/plugin.json .claude-plugin/marketplace.json package.json pyproject.toml Cargo.toml version.txt; do
+  for vf in .claude-plugin/plugin.json .claude-plugin/marketplace.json package.json pyproject.toml Cargo.toml version.txt VERSION; do
     [ -f "$vf" ] && git add "$vf"
   done
 
