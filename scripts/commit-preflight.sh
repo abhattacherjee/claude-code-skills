@@ -16,7 +16,13 @@ set -e
 
 # Project-scoped token path (must match require-preflight.py)
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT_HASH=$(python3 -c "import hashlib, sys; print(hashlib.md5(sys.argv[1].encode()).hexdigest()[:8])" "$(realpath "$PROJECT_DIR")")
+PROJECT_KEY="$(git -C "$PROJECT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [ -n "$PROJECT_KEY" ] && [ -d "$PROJECT_KEY" ]; then
+    PROJECT_KEY="$(cd "$PROJECT_KEY" && pwd -P)"
+else
+    PROJECT_KEY="$(realpath "$PROJECT_DIR")"
+fi
+PROJECT_HASH=$(python3 -c "import hashlib, sys; print(hashlib.md5(sys.argv[1].encode()).hexdigest()[:8])" "$PROJECT_KEY")
 TOKEN_FILE="/tmp/.preflight-token-${PROJECT_HASH}"
 TOKEN_EXPIRY_SECONDS=300  # Token valid for 5 minutes
 
