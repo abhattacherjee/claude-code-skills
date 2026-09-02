@@ -18,6 +18,31 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ### Security
 
+- **Refreshed the harden-repo hooks to the released v1.2.1 templates.** The installed copies were
+  v1.2.0, which the doctor classified as `DRIFTED-BEHIND` with no local edits, so the repair
+  overwrote nothing of this repo's own. All four hooks are now byte-identical to the v1.2.1
+  templates and compile clean.
+
+  v1.2.1 closes nineteen ways to push a protected branch past the guard, every one of them open in
+  the copies this repo was running. The guard judged a push by how it was **spelled** rather than by
+  what it would do, so `git push origin HEAD:refs/heads/main` was allowed while the short `main`
+  spelling was denied. Also closed: `heads/main`, globs and the matching refspec, `--all`,
+  `--branches`, `--mirror` and any unambiguous abbreviation git accepts (`--al`, `--b`, `--mir`),
+  the bare `:` and `+:` refspecs, `--tags HEAD` from a protected branch, a shell substitution or
+  `$VAR` hiding the destination until after the guard had decided, `git -C` and subshell scope
+  escapes, four shapes of the failed-`cd` hole, and the two git-config cases
+  (`push.default = matching`, `remote.<remote>.mirror = true`) that make a plain `git push` push
+  everything.
+
+  Separately, the Git Flow finish block had never been executed by a single test on any generation:
+  every fixture built HEAD with `commit --allow-empty`, so `rev-parse HEAD^2` always failed and the
+  block was skipped. Four mutations inside it survived a fully green suite, one allowing ANY push to
+  `main` or `develop` whenever HEAD is a merge commit.
+
+  Verified in this repo rather than inherited from upstream: 18 rows driven through the installed
+  hook — 14 bypass shapes all denied, and a feature push, `-u`, a tag push and a genuine `cd` to
+  another repo all still allowed. No false denials.
+
 - **`scripts/bump-version.sh`: hardening inherited from the harden-repo template, plus a real base-10 bugfix (harden-repo#55):** the shared template fed parsed version components into bash arithmetic without validating them, allowing an array-subscript payload in the version source to run as a command substitution. **This repo was not exploitable by that route** — it has no version file, deriving the version from `git describe --tags`, and the only payload shape that executes in bash arithmetic (an array subscript) cannot be a tag name, because `git check-ref-format` refuses any ref containing `[`. Both halves of that were verified rather than assumed. The guard is therefore defense-in-depth here.
 
   The base-10 half is a live bug regardless: without `10#`, a zero-padded tag such as `v1.08.09` was read as an invalid octal literal, and the bump silently produced an empty version and exited 0. It now yields `1.08.10`.
