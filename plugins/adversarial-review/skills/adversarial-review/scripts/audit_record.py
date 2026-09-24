@@ -143,3 +143,43 @@ def parse_marker(body):
         "round": int(match["round"]), "index": int(match["index"]),
         "marker": match.group(0),
     }
+
+_PK = "PRIVATE" + " KEY"
+SECRET_PATTERNS = [
+    ("github-token", re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),
+    ("aws-key-id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}")),
+    ("openai-key", re.compile(r"sk-(?!ant-)[A-Za-z0-9_-]{20,}")),
+    ("private-key", re.compile(
+        r"-----BEGIN [A-Z ]*" + _PK + r"-----[\s\S]*?(?:-----END [A-Z ]*" + _PK + r"-----|\Z)")),
+    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
+]
+TRUNC_NOTE = "\n\n… truncated ({n} chars); full record in the run dir"
+
+
+def redact(text):
+    """Replace known secret formats with [REDACTED:<type>]. Returns (text, counts)."""
+    counts = Counter()
+    for name, rx in SECRET_PATTERNS:
+        text, n = rx.subn(f"[REDACTED:{name}]", text)
+        if n:
+            counts[name] += n
+    return text, counts
+
+
+def truncate(text, limit=MAX_BODY):
+    """Cut text at a line boundary so the result, note included, fits in limit."""
+    if len(text) <= limit:
+        return text
+    room = limit - 100
+    cut = text.rfind("\n", 0, room)
+    if cut <= 0:
+        cut = room
+    return text[:cut] + TRUNC_NOTE.format(n=len(text) - cut)
+
+
+def finalize(content, mark):
+    """Redact, truncate to leave room for the marker, then append the marker."""
+    body, counts = redact(content)
+    body = truncate(body, MAX_BODY - len(mark) - 1)
+    return body + "\n" + mark, counts

@@ -96,5 +96,63 @@ class MarkerTests(unittest.TestCase):
         self.assertIsNone(ar.parse_marker(ar.summary_marker("ar-test-1", 2, 1)))
 
 
+FAKE_GH = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+
+
+class RedactTests(unittest.TestCase):
+    def test_github_token_is_redacted(self):
+        text, counts = ar.redact(f"token is {FAKE_GH} here")
+        self.assertNotIn(FAKE_GH, text)
+        self.assertIn("[REDACTED:github-token]", text)
+        self.assertEqual(counts["github-token"], 1)
+
+    def test_token_inside_url_is_redacted(self):
+        text, _ = ar.redact(f"https://x:{FAKE_GH}@github.com/o/r.git")
+        self.assertNotIn(FAKE_GH, text)
+
+    def test_anthropic_key_is_not_counted_as_openai(self):
+        _, counts = ar.redact("sk-ant-" + "a" * 30)
+        self.assertEqual(counts["anthropic-key"], 1)
+        self.assertEqual(counts["openai-key"], 0)
+
+    def test_pem_key_block_is_redacted(self):
+        pk = "PRIVATE" + " KEY"
+        block = f"-----BEGIN RSA {pk}-----\nMIIEow\n-----END RSA {pk}-----"
+        text, counts = ar.redact(f"x\n{block}\ny")
+        self.assertNotIn("MIIEow", text)
+        self.assertEqual(counts["private-key"], 1)
+
+    def test_aws_and_jwt_are_redacted(self):
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlLXZhbHVl"
+        text, counts = ar.redact(f"{"AKIA" + "ABCDEFGHIJKLMNOP"} {jwt}")
+        self.assertEqual(counts["aws-key-id"], 1)
+        self.assertEqual(counts["jwt"], 1)
+        self.assertNotIn(jwt, text)
+
+    def test_ordinary_text_is_untouched(self):
+        text, counts = ar.redact("skip-list sk- is fine; eyJ alone too")
+        self.assertEqual(text, "skip-list sk- is fine; eyJ alone too")
+        self.assertEqual(sum(counts.values()), 0)
+
+
+class TruncateTests(unittest.TestCase):
+    def test_short_text_is_unchanged(self):
+        self.assertEqual(ar.truncate("abc", 100), "abc")
+
+    def test_long_text_is_cut_at_a_line_and_noted(self):
+        text = ("line of text\n" * 1000)
+        out = ar.truncate(text, 500)
+        self.assertLessEqual(len(out), 500)
+        self.assertIn("truncated", out)
+        self.assertTrue(out.split("\n\n… truncated")[0].endswith("line of text"))
+
+    def test_finalize_keeps_marker_and_fits(self):
+        mark = ar.marker("ar-test-1", "X-001", 1, 0)
+        body, _ = ar.finalize("x" * 70000, mark)
+        self.assertLessEqual(len(body), ar.MAX_BODY)
+        self.assertTrue(body.endswith(mark))
+        self.assertIn("truncated", body)
+
+
 if __name__ == "__main__":
     unittest.main()
