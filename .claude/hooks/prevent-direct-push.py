@@ -1244,9 +1244,144 @@ except (json.JSONDecodeError, ValueError):
     print(json.dumps(output))
     sys.exit(0)
 
+if not isinstance(input_data, dict):
+    # Valid JSON that is not an object reaches `.get` and raises
+    # AttributeError, which the JSONDecodeError/ValueError handler above does
+    # not catch -- exit 1, a non-blocking error, so the push proceeds.
+    # Pre-existing, and the harness always sends an object, but this is the
+    # same fail-closed shape already adopted for `tool_input` and `command`.
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "Push guard received a non-object payload and cannot read the "
+                "tool call. Blocking as a safety measure.")
+        }
+    }))
+    sys.exit(0)
+
 tool_name = input_data.get("tool_name", "")
 tool_input = input_data.get("tool_input", {})
-command = tool_input.get("command", "")
+def _brace_group_map(text, mask):
+    """`{` index -> index just past the `}` of every group bash EXPANDS.
+
+    One left-to-right pass with a stack, not a rescan per `{`. The previous
+    shape was linear per group but the caller restarted a full forward scan at
+    every unmasked `{`, so a run of unclosed braces was quadratic overall:
+    2 000 braces took 0.15s, 8 000 took 1.55s, 24 000 took 13.6s. The hook is
+    registered with a 10s timeout and a killed hook is a NON-BLOCKING error,
+    so `git push origin main #{{{{...` pushed main. That is the same failure
+    the regex this replaced had, at 24 KB instead of 500 KB.
+
+    A separator counts at ANY depth, matching bash: `{main,{develop}}` expands
+    to `main {develop}`, so the outer group is expandable even though only the
+    inner one is nested. That is why a popped group propagates its separator
+    flag outward.
+
+    An unquoted blank abandons every open group: it makes the construct a
+    group COMMAND, not an expansion. Measured in bash:
+
+        {a,b}   -> a b            {a, b}  -> {a, b}
+        {main,develop} -> main develop    {a,b c} -> {a,b c}
+        {{main,develop},x} -> main develop x
+        {main,{develop}}   -> main {develop}
+        {a\\,b} -> {a,b}          {a b}{c,d} -> {a b} expands only the second
+
+    Without that, `{ git push origin main; echo a,b; }` had its whole group --
+    the push with it -- replaced by the sentinel, turning a DENY into ALLOW.
+    The mask is consulted for the blank and the separator alike, because bash
+    does not treat a QUOTED or ESCAPED one as either.
+    """
+    ends = {}
+    stack = []
+    index = 0
+    total = len(text)
+    while index < total:
+        if not mask[index]:
+            char = text[index]
+            if char in " \t\n":
+                stack = []
+            elif char == "{":
+                stack.append([index, False])
+            elif char == "}":
+                if stack:
+                    open_index, saw_separator = stack.pop()
+                    if saw_separator:
+                        ends[open_index] = index + 1
+                        if stack:
+                            stack[-1][1] = True
+            elif stack and (
+                    char == "," or
+                    (char == "." and index + 1 < total and
+                     text[index + 1] == "." and not mask[index + 1])):
+                stack[-1][1] = True
+        index += 1
+    return ends
+
+# The rewritten form. It is `$`-prefixed so `_has_unresolved_expansion` denies
+# it through the path that already exists, and named so the deny below can say
+# BRACE EXPANSION rather than "a shell substitution or variable" -- which is
+# what the generic message would claim, sending the reader hunting for a `$`
+# that was never in what they typed.
+_BRACE_SENTINEL = "$__brace_expansion__"
+
+
+def _neutralise_brace_expansion(text):
+    """Rewrite each UNQUOTED brace group to `$BRACE` before anything scans.
+
+    Bash expands braces before word splitting, so `git push origin
+    {main,develop}` reaches git as `origin main develop`. The damage is done
+    upstream of every destination test: `_split_statements_with_depth` treats
+    `{` and `}` as statement boundaries, so it SEVERS the command --
+
+        "git push origin {main,develop}"
+        -> [("git push origin", 0), ("main,develop", 0)]
+
+    -- and the push statement loses its destination altogether, leaving
+    something indistinguishable from a bare `git push origin`. No check
+    downstream can recover it, which is why teaching `_dest_hits_protected`
+    about `{` does not help: the token never arrives.
+
+    Rewriting to `$BRACE` puts a single word back in destination position and
+    reuses the machinery that already exists: `_has_unresolved_expansion`
+    denies it, with the message that already tells the user to name the
+    branch. Doing it on the RAW text also scopes it correctly for free --
+    `mkdir -p a/{x,y} && git push origin feature/x` keeps the brace in a
+    different statement, so the push is untouched.
+
+    Only the forms bash actually expands are rewritten. Measured with bash:
+
+        {main,develop} -> main develop      {main} -> {main}
+        ma{in,ster}    -> main master       {abc}  -> {abc}
+        {a..c}         -> a b c             a{b}c  -> a{b}c
+        {{main,develop},x} -> main develop x     {main,{develop}} -> main {develop}
+        {a{b,c}d,main}     -> abd acd main       {a\\,b}           -> {a,b}
+
+    so a group needs a comma or a `..` range. A plain `{word}` is a literal
+    and is left alone, or every `{x}` branch name would falsely deny.
+
+    QUOTED groups are left alone too, because bash does not expand them:
+    `git push origin '{main,develop}'` really does name one branch called
+    `{main,develop}`, and `git check-ref-format` accepts that name. This is
+    the one place the distinction is still visible -- push tokens have been
+    through `shlex.split()` by the time any later check sees them, and the
+    quotes are gone.
+    """
+    mask, _ = _quote_mask(text)
+    ends = _brace_group_map(text, mask)
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "{" and not mask[i] and i in ends:
+            out.append(_BRACE_SENTINEL)
+            i = ends[i]
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
 
 # Only validate git push commands.
 #
@@ -1256,6 +1391,33 @@ command = tool_input.get("command", "")
 # behaviour — a parse failure must never cause this guard to be skipped.
 if tool_name != "Bash":
     sys.exit(0)
+
+# These run AFTER the tool_name gate on purpose. They used to sit above it,
+# so a non-Bash tool carrying a non-string `command` was denied by the PUSH
+# guard with a message about push destinations. Unreachable with the shipped
+# `"matcher": "Bash"` config, but live the moment anyone broadens the matcher,
+# and a non-Bash call is not this hook's business.
+command = tool_input.get("command", "") if isinstance(tool_input, dict) else None
+if not isinstance(command, str):
+    # The `""` default only covers an ABSENT key. A present non-string value
+    # flowed into the scanner and raised, and under the hook contract any exit
+    # other than 0 or 2 is a non-blocking error -- the push proceeds. Denying
+    # matches how the invalid-JSON handler above already fails closed.
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "Push guard received a non-string command and cannot read the "
+                "push destination. Blocking as a safety measure.")
+        }
+    }))
+    sys.exit(0)
+
+# Before ANY scanning: bash expands braces before word splitting, and the
+# statement splitter severs `{ ... }` into a statement of its own, which drops
+# the push destination on the floor. See _neutralise_brace_expansion.
+command = _neutralise_brace_expansion(command)
 
 try:
     _push_stmts = _find_statements(command, ["git", "push"])
@@ -1439,6 +1601,27 @@ _config_stmts = _push_stmts if _scanner_ok else [["git", "push"] + push_tokens]
 # or a backtick span, or a parameter reference `$VAR` / `${VAR}`. A bare
 # trailing `$` is not one, so it is not matched.
 _UNRESOLVED_EXPANSION_RE = re.compile(r"`|\$[({A-Za-z_0-9@*#?$!-]")
+
+# Bash performs BRACE EXPANSION before word splitting, so `git push origin
+# {main,develop}` reaches git as `origin main develop` -- two refs this hook
+# never saw. `_dest_hits_protected` cannot catch it: that test keys on `*?[`
+# and is load-bearing precisely because git REFUSES those characters in a ref
+# name. `{` is different -- `git check-ref-format refs/heads/foo{bar}` ACCEPTS
+# it -- so a brace cannot be read as "this token must be a pattern".
+#
+# It is read as UNRESOLVABLE instead, the same fail-closed answer the hook
+# already gives `$BRANCH`. Only the forms bash actually expands count.
+# Measured with bash:
+#     {main,develop} -> main develop      {main} -> {main}
+#     ma{in,ster}    -> main master       {abc}  -> {abc}
+#     {a..c}         -> a b c             a{b}c  -> a{b}c
+# A group needs a comma or a `..` range; a plain `{word}` is a literal and
+# must stay ALLOWED, or every `{x}` branch name would falsely deny.
+#
+# Quoting cannot be consulted here: push tokens have already been through
+# `shlex.split()`, so `'{main,develop}'` and `{main,develop}` are the same
+# string by this point. A branch genuinely named `{a,b}` therefore denies --
+# accepted, because it fails closed and such a name is pathological.
 
 
 def _has_unresolved_expansion(token):
@@ -1920,6 +2103,69 @@ pushes_every_branch = (
     any(_statement_pushes_every_branch(_argv, _HOOK_CWD)
         for _argv in _config_stmts)
 )
+
+# Whether the push DESTROYS or REWRITES remote history, as opposed to adding
+# to it. The Git Flow exemptions below consult this: finishing a release
+# legitimately pushes main and develop, but it never force-pushes them,
+# deletes them, or mirrors the whole repo. Splitting the two lets the
+# exemption keep its real job while refusing the operations that made it a
+# blanket bypass.
+#
+# `push_tokens` is read rather than `push_words`, because `push_words` has
+# already stripped the leading `+` that marks a force refspec.
+_FORCE_OR_DELETE_OPTS = (
+    "--force", "--force-with-lease", "--force-if-includes",
+    "--delete", "--prune", "--mirror",
+)
+def _destructive_opt(token):
+    """Whether *token* is a force/delete option, or an abbreviation of one.
+
+    git's parse-options accepts any unambiguous prefix, so exact matching was
+    a bypass: `--de`, `--del`, `--delet`, `--pru` and `--force-with-l` all
+    parse as their full options and all walked past the gate. Measured against
+    real git, and against the shipped hook, where each one turned a DENY into
+    an ALLOW on every exempted branch.
+
+    Prefix matching over-matches a prefix git itself rejects as ambiguous
+    (`--fo`), which costs a denial of a command that cannot run. That is the
+    same trade `_pushes_every_branch_opt` already took, for the same reason:
+    tracking which prefixes are ambiguous in which git version is exactly the
+    enumeration this avoids.
+
+    The length floor excludes the bare `--` end-of-options marker, which is a
+    prefix of every long option and means none of them.
+    """
+    if token.startswith("--"):
+        if len(token) < 3:
+            return False
+        head = token.split("=", 1)[0]
+        return any(opt.startswith(head) for opt in _FORCE_OR_DELETE_OPTS)
+    # Short forms, including bundles such as `-fu` or `-du`. `git push -h`
+    # lists -f -d -u -n -q -v -4 -6 and -o; only `f` and `d` are destructive.
+    # `-o` takes a value that may be attached (`-oci.skip`), so a payload
+    # containing `f` or `d` reads as destructive -- an over-deny, never a
+    # bypass, and the reason this is "conservative" rather than "exact".
+    if token.startswith("-o") and len(token) > 2:
+        # `-o<value>` is a push OPTION with an attached payload. Scanning the
+        # payload for `f`/`d` denied `git push -omerge_request.draft origin
+        # main` -- which is the Git Flow finish push the exemption exists to
+        # permit -- while the spaced form was allowed.
+        return False
+    return (token.startswith("-") and
+            any(char in token[1:] for char in "fd"))
+
+
+_destructive_opts_present = (
+    # `push_tokens` is read rather than `push_words` throughout: `push_words`
+    # drops every `-`-prefixed token outright AND strips a leading `+`, so
+    # neither the option clauses nor the `+refspec` clause could see their
+    # own subject there.
+    any(_destructive_opt(t) for t in push_tokens) or
+    # `+refspec` is the force spelling that carries no option at all.
+    any(t.startswith("+") for t in push_tokens) or
+    # `:branch` with an empty source deletes the remote branch.
+    any(w.startswith(":") for w in push_words)
+)
 targets_protected_branch = pushes_every_branch or any(
     _dest_hits_protected(_dest_ref(w)) for w in push_words
 )
@@ -1999,6 +2245,53 @@ pushes_current_branch = any(
     w in ("HEAD", "@") or _dest_ref(w) == current_branch
     for w in push_words
 )
+
+# Whether this push DESTROYS or REWRITES protected history, as opposed to
+# adding to it. The Git Flow exemptions below consult this: finishing a
+# release legitimately pushes main and develop, but it never force-pushes
+# them, deletes them, or mirrors the whole repo.
+#
+# The destructive OPTION alone is deliberately not enough. `git push origin
+# --delete release/v1.2.1` is the branch cleanup the release flow itself runs,
+# and it is destructive only to a branch nothing protects. Gating on the
+# TARGET as well keeps that working while still refusing `--delete origin
+# main`. `pushes_every_branch` needs no target test -- `--mirror` and a bare
+# `:` reach every branch, protected ones included, naming none of them.
+def _statement_is_destructive_shaped(argv):
+    """Whether ONE push invocation carries a force/delete shape.
+
+    Judged per statement, not over the union of every push statement's tokens.
+    `push_tokens` unions them, so a harmless first push supplied the
+    positionals that made a second, refspec-less force push look like it named
+    a target: `git push origin feature/x && git push --force` force-updated
+    main while the gate read False. `pushes_every_branch` already evaluates
+    per statement at its own site, with a comment explaining this exact
+    borrowing hazard; this did not, and repeated it.
+    """
+    args = _statement_args(argv, ["git", "push"])
+    words = [w[1:] if w.startswith("+") else w
+             for w in args if not w.startswith("-")]
+    if not (any(_destructive_opt(t) for t in args) or
+            any(t.startswith("+") for t in args) or
+            any(w.startswith(":") for w in words)):
+        return False
+    # The TARGET half. `targets_protected_branch` and `dest_unknown` are read
+    # over the union deliberately: using the broader value can only make this
+    # answer "destructive" more often, which is the fail-closed direction.
+    return (
+        targets_protected_branch or
+        dest_unknown or
+        (current_branch in ("main", "develop") and (
+            any(w in ("HEAD", "@") or _dest_ref(w) == current_branch
+                for w in words) or
+            len(_push_positional_args(args)) < 2
+        ))
+    )
+
+
+_is_destructive_push = pushes_every_branch or any(
+    _statement_is_destructive_shaped(_argv) for _argv in _config_stmts
+)
 #
 # `dest_unknown` suppresses this exit for the same reason as the `--delete`
 # one: `git push origin --tags $X` looks like a pure tag push only because the
@@ -2014,7 +2307,7 @@ is_release_or_hotfix_finish = (
     current_branch.startswith("hotfix/")
 )
 
-if is_release_or_hotfix_finish:
+if is_release_or_hotfix_finish and not _is_destructive_push:
     sys.exit(0)
 
 # Git Flow finish: on main or develop, HEAD is a merge from a Git Flow branch
@@ -2038,7 +2331,8 @@ if current_branch in ["main", "develop"]:
             allowed = ["release/", "hotfix/"]
         else:
             allowed = ["feature/", "release/", "hotfix/", "Merge main into develop"]
-        if any(pattern in merge_msg for pattern in allowed):
+        if any(pattern in merge_msg for pattern in allowed) \
+                and not _is_destructive_push:
             sys.exit(0)
     except subprocess.CalledProcessError:
         # HEAD is not a merge commit — check for version bump after Git Flow finish
@@ -2049,7 +2343,8 @@ if current_branch in ["main", "develop"]:
                     stderr=subprocess.DEVNULL,
                     text=True
                 ).strip()
-                if any(p in recent_msgs for p in ["release/", "hotfix/"]):
+                if any(p in recent_msgs for p in ["release/", "hotfix/"]) \
+                        and not _is_destructive_push:
                     sys.exit(0)
             except subprocess.CalledProcessError:
                 pass
@@ -2058,12 +2353,32 @@ if current_branch in ["main", "develop"]:
 # closed. This sits BELOW the release/hotfix and Git-Flow-finish exemptions on
 # purpose: those branches may push main and develop anyway, so denying an
 # unknown destination there would be a false denial with no security value.
+def _dest_unknown_reason():
+    """Name the construct that actually made the destination unreadable.
+
+    Brace expansion and `$VAR` fail closed for the same reason but read
+    nothing alike to whoever typed the command, and the generic wording sent
+    a brace user looking for a variable that was never there.
+    """
+    if any(_BRACE_SENTINEL in t for t in push_tokens):
+        return ("Cannot determine the push destination: bash expands "
+                "`{a,b}` into several words before git sees them. An "
+                "unquoted brace group containing a comma or a `..` range is "
+                "refused whatever it expands to; a plain `{word}` is left "
+                "alone. Name the branch explicitly: git push origin "
+                "<branch>, or quote the braces if they are part of the "
+                "branch name.")
+    return ("Cannot determine the push destination (it contains a shell "
+            "substitution or variable). Name the branch explicitly: "
+            "git push origin <branch>")
+
+
 if dest_unknown:
     output = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": "Cannot determine the push destination (it contains a shell substitution or variable). Name the branch explicitly: git push origin <branch>"
+            "permissionDecisionReason": _dest_unknown_reason()
         }
     }
     print(json.dumps(output))

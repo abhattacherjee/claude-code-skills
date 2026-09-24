@@ -18,10 +18,10 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ### Security
 
-- **Refreshed the harden-repo hooks to the released v1.2.1 templates.** The installed copies were
+- **Refreshed the harden-repo hooks to the released v1.2.2 templates.** The installed copies were
   v1.2.0, which the doctor classified as `DRIFTED-BEHIND` with no local edits, so the repair
-  overwrote nothing of this repo's own. All four hooks are now byte-identical to the v1.2.1
-  templates and compile clean.
+  overwrote nothing of this repo's own. All four hooks are now byte-identical to the v1.2.2
+  templates and compile clean. Only `prevent-direct-push.py` changed between v1.2.1 and v1.2.2.
 
   v1.2.1 closes nineteen ways to push a protected branch past the guard, every one of them open in
   the copies this repo was running. The guard judged a push by how it was **spelled** rather than by
@@ -39,9 +39,24 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
   block was skipped. Four mutations inside it survived a fully green suite, one allowing ANY push to
   `main` or `develop` whenever HEAD is a merge commit.
 
-  Verified in this repo rather than inherited from upstream: 18 rows driven through the installed
-  hook — 14 bypass shapes all denied, and a feature push, `-u`, a tag push and a genuine `cd` to
-  another repo all still allowed. No false denials.
+  v1.2.2 closes two more bypasses that v1.2.1 still had (harden-repo #93, #94). Brace expansion:
+  `git push origin {main,develop}` split into a bare `git push origin` plus a stray statement, so
+  it was allowed, and bash then pushed `main` and `develop`. Any unquoted brace group in a push is
+  now denied. The Git Flow exemptions: on `develop` with a Git Flow merge HEAD, which is the normal
+  state after every PR merge, the hook allowed the whole command, so `git push --force origin main`
+  and `git push --mirror origin` got through. The same held on `release/*` and `hotfix/*` branches,
+  and on `develop` when a recent subject named a release or hotfix. The exemptions now only allow
+  non-destructive pushes.
+
+  Verified in this repo, not taken from upstream. Each command below went through the installed
+  hook, with `CLAUDE_PROJECT_DIR` set to the repo under test and the `develop` rows run in a
+  `develop` worktree whose HEAD is the #129 merge. v1.2.2 denies all 13 bypass shapes: the brace
+  forms, the refspec, mirror, abbreviation, substitution and failed-`cd` forms, and on `develop`
+  `--force origin main` and `--mirror`. It still allows a feature push, `-u`, a tag push and a bare
+  `git push`. As a control, the v1.2.1 hook allowed 5 of those 13. Two behaviours are by design
+  and are not bypasses: a brace group naming only unprotected branches is also denied, and on
+  `develop` with a Git Flow merge HEAD a non-destructive push of `main` is allowed, because that is
+  the finish push the exemption exists for.
 
 - **`scripts/bump-version.sh`: hardening inherited from the harden-repo template, plus a real base-10 bugfix (harden-repo#55):** the shared template fed parsed version components into bash arithmetic without validating them, allowing an array-subscript payload in the version source to run as a command substitution. **This repo was not exploitable by that route** — it has no version file, deriving the version from `git describe --tags`, and the only payload shape that executes in bash arithmetic (an array subscript) cannot be a tag name, because `git check-ref-format` refuses any ref containing `[`. Both halves of that were verified rather than assumed. The guard is therefore defense-in-depth here.
 
