@@ -58,6 +58,13 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
   `develop` with a Git Flow merge HEAD a non-destructive push of `main` is allowed, because that is
   the finish push the exemption exists for.
 
+  **Still open in v1.2.2**, all tracked upstream in harden-repo. Measured here: an apostrophe in a
+  `#` comment or heredoc turns the brace fix off (#105), and a `remote.<name>.push` refspec from
+  config or `git -c` pushes into `main` from any branch, forced or not (#106). Reported upstream,
+  not re-tested here: `${IFS}` defeats the command scanner (#98), and a tag push in the same
+  command excuses a force push (#99). This refresh
+  narrows the push guard. It does not make it complete.
+
 - **`scripts/bump-version.sh`: hardening inherited from the harden-repo template, plus a real base-10 bugfix (harden-repo#55):** the shared template fed parsed version components into bash arithmetic without validating them, allowing an array-subscript payload in the version source to run as a command substitution. **This repo was not exploitable by that route** — it has no version file, deriving the version from `git describe --tags`, and the only payload shape that executes in bash arithmetic (an array subscript) cannot be a tag name, because `git check-ref-format` refuses any ref containing `[`. Both halves of that were verified rather than assumed. The guard is therefore defense-in-depth here.
 
   The base-10 half is a live bug regardless: without `10#`, a zero-padded tag such as `v1.08.09` was read as an invalid octal literal, and the bump silently produced an empty version and exited 0. It now yields `1.08.10`.
