@@ -139,5 +139,141 @@ class LocalTests(unittest.TestCase):
         self.assertEqual([c["argv"][:2] for c in h.calls()], [["auth", "status"]])
 
 
+class PostTests(unittest.TestCase):
+    def test_first_round_opens_threads_and_posts_summary(self):
+        h = Harness(self)
+        rec = record([finding(events=[ev("verdict", verdict="confirm")]),
+                      finding("X-002", path=None, title="No location")])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        threads = h.posted("thread")
+        self.assertEqual(len(threads), 1)
+        body = threads[0]["input"]
+        self.assertEqual(body["commit_id"], SHA1)
+        self.assertEqual((body["path"], body["line"], body["side"]), ("src/a.py", 41, "RIGHT"))
+        self.assertTrue(body["body"].endswith("<!-- audit:v1 run=ar-test-1 finding=X-001 event=1.0 -->"))
+        self.assertEqual(len(h.posted("reply")), 1)
+        reviews = h.posted("review")
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]["input"]["event"], "COMMENT")
+        self.assertEqual(reviews[0]["input"]["commit_id"], SHA1)
+        summary = reviews[0]["input"]["body"]
+        self.assertIn("| X-002 | important | codex | confirmed | no thread: no path |", summary)
+        self.assertIn("Findings with no inline thread", summary)
+        self.assertIn("posted 3,", res.stdout)
+
+    def test_second_round_replies_to_existing_thread(self):
+        h = Harness(self)
+        self.assertEqual(h.post(record([finding()])).returncode, 0)
+        second = record([finding(events=[ev("resolution", resolution="fixed", sha=SHA2)])],
+                        rnd=2, head=SHA2, prev=SHA1)
+        res = h.post(second, "round2.json")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.posted("thread")), 1)
+        replies = h.posted("reply")
+        self.assertEqual(len(replies), 1)
+        self.assertIn("/comments/1001/replies", " ".join(replies[0]["argv"]))
+        self.assertIn("fixed in `2222222`", replies[0]["input"]["body"])
+        self.assertEqual(h.resolves(), [])
+
+    def test_refuted_is_resolved_in_same_run(self):
+        h = Harness(self)
+        rec = record([finding(status="rejected", events=[ev("verdict", verdict="refute")])])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.resolves()), 1)
+        self.assertEqual(h.state()["resolved"], [1001])
+        self.assertIn("resolved 1,", res.stdout)
+
+    def test_fixed_stays_open_until_recheck(self):
+        h = Harness(self)
+        h.post(record([finding()]))
+        h.post(record([finding(events=[ev("resolution", resolution="fixed", sha=SHA2)])],
+                      rnd=2, head=SHA2), "r2.json")
+        self.assertEqual(h.resolves(), [])
+        h.post(record([finding(events=[ev("recheck", by="codex", result="resolved")])],
+                      rnd=3, head=SHA3), "r3.json")
+        self.assertEqual(len(h.resolves()), 1)
+
+    def test_422_falls_back_to_file_then_summary(self):
+        h = Harness(self, reject_inline=[["src/a.py", 41], ["src/b.py", 9]], reject_file=["src/b.py"])
+        rec = record([finding(), finding("X-002", path="src/b.py", line=9)])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        file_level = [c["input"] for c in h.posted("thread") if c["input"].get("subject_type") == "file"]
+        self.assertEqual([c["path"] for c in file_level], ["src/a.py", "src/b.py"])
+        comments = h.state()["comments"]
+        self.assertEqual([c["path"] for c in comments], ["src/a.py"])
+        summary = h.posted("review")[0]["input"]["body"]
+        self.assertIn("| X-002 | important | codex | confirmed | no thread: GitHub rejected", summary)
+
+    def test_rerun_posts_nothing(self):
+        h = Harness(self)
+        rec = record([finding(status="rejected", events=[ev("verdict", verdict="refute")])])
+        h.post(rec)
+        before = len(h.calls())
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        new = h.calls()[before:]
+        self.assertEqual([c for c in new if "-X" in c["argv"]], [])
+        self.assertIn("posted 0,", res.stdout)
+        self.assertIn("skipped 3 already on the PR", res.stdout)
+
+    def test_partial_rerun_posts_only_missing(self):
+        h = Harness(self, fail=["reply"])
+        rec = record([finding(events=[ev("verdict", verdict="confirm"), ev("counter", by="codex")])])
+        first = h.post(rec)
+        self.assertEqual(first.returncode, 1)
+        state = h.state()
+        state["fail"] = []
+        h.state_path.write_text(json.dumps(state))
+        second = h.post(rec)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        bodies = [c["body"] for c in h.state()["comments"] if c["in_reply_to_id"]]
+        self.assertEqual(len(bodies), 2)
+        self.assertEqual(len(h.posted("thread")), 1)
+
+    def test_partial_failure_exits_1_and_names_the_finding(self):
+        h = Harness(self, fail=["reply"])
+        rec = record([finding(events=[ev("verdict", verdict="confirm")])])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("FAILED X-001 reply 1.1", res.stderr)
+        self.assertIn("failed 1,", res.stdout)
+        self.assertIn("Posting failures: 1", h.posted("review")[0]["input"]["body"])
+
+    def test_secret_is_redacted_everywhere(self):
+        h = Harness(self)
+        rec = record([finding(rationale=f"leaked {FAKE_GH}",
+                              events=[ev("verdict", verdict="confirm", text=f"saw {FAKE_GH}")])])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        for c in h.calls():
+            self.assertNotIn(FAKE_GH, json.dumps(c))
+        self.assertIn("Redacted: 2", h.posted("review")[0]["input"]["body"])
+
+    def test_oversize_rationale_is_truncated(self):
+        h = Harness(self)
+        res = h.post(record([finding(rationale="x" * 70000)]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        body = h.posted("thread")[0]["input"]["body"]
+        self.assertLessEqual(len(body), 60000)
+        self.assertIn("truncated", body)
+        self.assertTrue(body.endswith("event=1.0 -->"))
+
+    def test_other_run_ids_open_new_threads(self):
+        h = Harness(self)
+        h.post(record([finding()]))
+        h.post(record([finding()], run_id="ar-test-2"), "other.json")
+        self.assertEqual(len(h.posted("thread")), 2)
+
+    def test_unknown_pr_exits_1_cleanly(self):
+        h = Harness(self, fail=["read"])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("could not read PR #7", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
