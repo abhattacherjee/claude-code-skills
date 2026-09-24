@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.1] - 2026-09-24
+
+### Added
+
+- Red Flags gained "Accept a negative control that re-implements the assertion instead of
+  invoking it". A control built from the guard's own logic tests the copy, not the guard: gut the
+  real assertion and the control still passes. The control must call the same function the suite
+  calls, or parametrize over the same table.
+
 ## [1.3.0] - 2026-08-06
 
 ### Added
