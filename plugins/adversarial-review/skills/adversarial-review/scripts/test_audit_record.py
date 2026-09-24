@@ -40,7 +40,7 @@ class ValidateTests(unittest.TestCase):
 
     def test_short_head_sha_is_rejected(self):
         with self.assertRaises(ar.RecordError) as cm:
-            ar.validate(record(head="abc123"))
+            ar.validate(record(head="abc1234"))
         self.assertIn("head_sha", str(cm.exception))
 
     def test_every_problem_is_listed(self):
