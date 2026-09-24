@@ -287,9 +287,65 @@ def post_round(rec, args):
     return 1 if failures else 0
 
 
+def _as_line(value):
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if value >= 1 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value) or None
+    return None
+
+
+def cmd_record(args):
+    try:
+        with open(args.report_json, encoding="utf-8") as fh:
+            report = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"pr-audit: cannot read {args.report_json}: {exc}", file=sys.stderr)
+        return 2
+    findings = []
+    for f in report.get("findings", []):
+        origin = f.get("origin")
+        if origin == "claude":
+            judge, verdict = args.adversary, f.get("gemini_verdict")
+        else:
+            judge, verdict = "claude", f.get("claude_verdict")
+        events = []
+        if args.adversary != "claude-only" and verdict in ("confirm", "refute"):
+            events.append({"by": judge, "kind": "verdict", "verdict": verdict,
+                           "text": f.get("verdict_reason") or f.get("kill_reason") or ""})
+        findings.append({
+            "id": f.get("id"), "origin": origin, "path": f.get("path") or None,
+            "line": _as_line(f.get("line")), "severity": f.get("severity"),
+            "category": f.get("category") or "other", "title": f.get("title") or "(no title)",
+            "rationale": f.get("rationale") or "", "status": f.get("status"), "events": events,
+        })
+    rec = {"schema": ar.SCHEMA, "run_id": args.run_id, "skill": args.skill, "phase": args.phase,
+           "round": args.round, "adversary": args.adversary, "head_sha": args.head_sha,
+           "prev_head_sha": args.prev_head_sha, "findings": findings}
+    try:
+        ar.validate(rec)
+    except ar.RecordError as exc:
+        print(f"pr-audit: report does not make a valid record: {exc}", file=sys.stderr)
+        return 2
+    with open(args.out, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, indent=2)
+    print(f"pr-audit: wrote {args.out} ({len(findings)} findings)")
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(description="Save a review round's model exchange on a PR.")
     sub = p.add_subparsers(dest="cmd", required=True)
+    rec = sub.add_parser("record")
+    rec.add_argument("--report-json", required=True)
+    rec.add_argument("--run-id", required=True)
+    rec.add_argument("--skill", required=True, choices=sorted(ar.SKILLS))
+    rec.add_argument("--phase", required=True)
+    rec.add_argument("--round", type=int, required=True)
+    rec.add_argument("--adversary", required=True, choices=sorted(ar.ADVERSARIES))
+    rec.add_argument("--head-sha", required=True)
+    rec.add_argument("--prev-head-sha")
+    rec.add_argument("--out", required=True)
     post = sub.add_parser("post")
     post.add_argument("--pr", type=int, required=True)
     post.add_argument("--record", required=True)
@@ -303,6 +359,8 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.cmd == "record":
+        return cmd_record(args)
     if args.cmd == "post":
         return cmd_post(args)
     return cmd_local(args)

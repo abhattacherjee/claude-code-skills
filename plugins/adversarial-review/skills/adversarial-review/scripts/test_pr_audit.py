@@ -307,5 +307,62 @@ class ForgeryTests(unittest.TestCase):
         self.assertEqual(len(threads), 1)
 
 
+REPORT = {"summary": {}, "findings": [
+    {"id": "C-001", "origin": "claude", "path": "src/a.py", "line": 41, "severity": "important",
+     "category": "bug", "title": "Off by one", "rationale": "Loop skips the last item.",
+     "status": "survivor", "gemini_verdict": "confirm", "claude_verdict": None,
+     "verdict_reason": "Reproduced with a 3-item list.", "kill_reason": None},
+    {"id": "G-001", "origin": "gemini", "path": "", "line": "12", "severity": "minor",
+     "category": "convention", "title": "Name", "rationale": None, "status": "rejected",
+     "gemini_verdict": None, "claude_verdict": "refute", "verdict_reason": None,
+     "kill_reason": "The name matches the module convention."},
+    {"id": "C-002", "origin": "claude", "path": "src/c.py", "line": None, "severity": "minor",
+     "category": None, "title": "Unjudged", "rationale": "x", "status": "unconfirmed",
+     "gemini_verdict": None, "claude_verdict": None},
+]}
+
+
+class RecordTests(unittest.TestCase):
+    def build(self, h, adversary="gemini"):
+        report = h.write(json.dumps(REPORT), "report.json")
+        out = h.dir / "round-1.json"
+        res = h.run("record", "--report-json", report, "--run-id", "ar-20260924-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", adversary, "--head-sha", SHA1, "--out", out)
+        return res, out
+
+    def test_record_maps_verdicts_to_events(self):
+        h = Harness(self)
+        res, out = self.build(h)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rec = json.loads(out.read_text())
+        by_id = {f["id"]: f for f in rec["findings"]}
+        self.assertEqual(by_id["C-001"]["events"], [
+            {"by": "gemini", "kind": "verdict", "verdict": "confirm",
+             "text": "Reproduced with a 3-item list."}])
+        self.assertEqual(by_id["G-001"]["events"][0]["by"], "claude")
+        self.assertEqual(by_id["G-001"]["events"][0]["text"], "The name matches the module convention.")
+        self.assertEqual((by_id["G-001"]["path"], by_id["G-001"]["line"]), (None, 12))
+        self.assertEqual(by_id["G-001"]["rationale"], "")
+        self.assertEqual(by_id["C-002"]["events"], [])
+        self.assertEqual(by_id["C-002"]["category"], "other")
+
+    def test_claude_only_writes_no_verdicts(self):
+        h = Harness(self)
+        res, out = self.build(h, adversary="claude-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(all(f["events"] == [] for f in json.loads(out.read_text())["findings"]))
+
+    def test_record_output_posts_cleanly(self):
+        # C-001 opens an inline thread. C-002 has a path but no line, so it opens a
+        # file-level thread. G-001 has no path, so it appears in the summary only.
+        h = Harness(self)
+        _, out = self.build(h)
+        res = h.run("post", "--pr", "7", "--repo", "octo/demo", "--record", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.posted("thread")), 2)
+        self.assertEqual(len(h.posted("review")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

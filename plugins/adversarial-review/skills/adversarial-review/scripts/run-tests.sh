@@ -2030,6 +2030,30 @@ assert_contains "presence P4: cross-examiner.md has cannot-point-to-proving-line
   "$CROSS_EXAMINER_CONTENT"
 
 # ====================================================================
+# synthesize.py — verdict_reason recorded for every judged finding
+# ====================================================================
+section "synthesize.py — verdict_reason recorded for every judged finding"
+
+VR_JSON="$TMP_DIR/vr-report.json"
+run_capture VR_OUT VR_EXIT python3 "$SYNTHESIZE" \
+  --claude-findings "$FIXTURES_DIR/r1_claude_findings.json" \
+  --gemini-findings "$FIXTURES_DIR/r1_gemini_findings.json" \
+  --gemini-verdicts "$FIXTURES_DIR/r2_gemini_verdicts.json" \
+  --claude-verdicts "$FIXTURES_DIR/r2_claude_verdicts.json" \
+  --md "$TMP_DIR/vr-report.md" \
+  --json "$VR_JSON"
+assert_exit_code "synthesize exits 0 for verdict_reason fixture" "0" "$VR_EXIT"
+VR_CHECK="$(python3 - "$VR_JSON" <<'PYEOF'
+import json, sys
+fs = json.load(open(sys.argv[1]))["findings"]
+judged = [f for f in fs if (f.get("gemini_verdict") or f.get("claude_verdict"))]
+bad = [f["id"] for f in judged if not isinstance(f.get("verdict_reason"), str)]
+print("ok" if judged and not bad else f"bad {bad} judged={len(judged)}")
+PYEOF
+)"
+assert_eq "every judged finding carries verdict_reason" "ok" "$VR_CHECK"
+
+# ====================================================================
 # FINAL SUMMARY
 # ====================================================================
 echo ""
