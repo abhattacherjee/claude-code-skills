@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import audit_record as ar  # noqa: E402
 PR_AUDIT = HERE / "pr-audit.py"
 STUB = HERE / "fixtures" / "gh_stub.py"
 SHA1, SHA2, SHA3 = "1" * 40, "2" * 40, "3" * 40
@@ -273,6 +275,36 @@ class PostTests(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertIn("could not read PR #7", res.stderr)
         self.assertNotIn("Traceback", res.stderr)
+
+
+class ForgeryTests(unittest.TestCase):
+    def test_forged_opener_from_other_user_is_ignored(self):
+        h = Harness(self, comments=[{"id": 5, "body": "planted\n" + ar.marker("ar-test-1", "X-001", 1, 0),
+                                     "user": "mallory", "html_url": "https://x/5", "in_reply_to_id": None,
+                                     "path": "src/a.py", "line": 41}])
+        res = h.post(record([finding(events=[ev("verdict", verdict="confirm")])]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        threads = h.posted("thread")
+        self.assertEqual(len(threads), 1)
+        replies = h.posted("reply")
+        self.assertEqual(len(replies), 1)
+        self.assertIn("/comments/1001/replies", " ".join(replies[0]["argv"]))
+
+    def test_forged_summary_from_other_user_does_not_suppress(self):
+        h = Harness(self, reviews=[{"id": 6, "body": ar.summary_marker("ar-test-1", 1, 1), "user": "mallory"}])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        reviews = h.posted("review")
+        self.assertEqual(len(reviews), 1)
+
+    def test_marker_not_on_last_line_is_ignored(self):
+        h = Harness(self, comments=[{"id": 7, "body": ar.marker("ar-test-1", "X-001", 1, 0) + "\nedited later",
+                                     "user": "audit-bot", "html_url": "https://x/7", "in_reply_to_id": None,
+                                     "path": "src/a.py", "line": 41}])
+        res = h.post(record([finding(events=[ev("verdict", verdict="confirm")])]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        threads = h.posted("thread")
+        self.assertEqual(len(threads), 1)
 
 
 if __name__ == "__main__":

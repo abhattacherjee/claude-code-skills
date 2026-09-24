@@ -126,13 +126,16 @@ class GitHub:
         self.repo, self.pr = repo, pr
         self.base = f"repos/{repo}/pulls/{pr}"
 
+    def login(self):
+        return gh(["api", "user", "-q", ".login"]).strip()
+
     def comments(self):
         return json_lines(gh(["api", "--paginate", f"{self.base}/comments?per_page=100",
-                              "--jq", ".[] | {id, body, html_url}"]))
+                              "--jq", ".[] | {id, body, html_url, user: .user.login}"]))
 
-    def review_bodies(self):
-        return [r.get("body") or "" for r in json_lines(gh(
-            ["api", "--paginate", f"{self.base}/reviews?per_page=100", "--jq", ".[] | {id, body}"]))]
+    def reviews(self):
+        return json_lines(gh(["api", "--paginate", f"{self.base}/reviews?per_page=100",
+                              "--jq", ".[] | {id, body, user: .user.login}"]))
 
     def new_thread(self, sha, path, line, body):
         payload = {"body": body, "commit_id": sha, "path": path}
@@ -196,15 +199,18 @@ def post_round(rec, args):
         repo = args.repo or gh(["repo", "view", "--json", "nameWithOwner",
                                 "-q", ".nameWithOwner"]).strip()
         hub = GitHub(repo, args.pr)
+        me = hub.login()
         existing = hub.comments()
-        review_text = "\n".join(hub.review_bodies())
+        reviews = hub.reviews()
     except GhError as exc:
         print(f"pr-audit: could not read PR #{args.pr}: {exc}", file=sys.stderr)
         return 1
 
     posted_markers, openers = set(), {}
     for c in existing:
-        m = ar.parse_marker(c.get("body"))
+        if c.get("user") != me:
+            continue
+        m = ar.parse_marker(ar.trailing_line(c.get("body")))
         if m:
             posted_markers.add(m["marker"])
             if m["run"] == rec["run_id"] and m["index"] == 0:
@@ -263,8 +269,9 @@ def post_round(rec, args):
     details, red = ar.no_thread_details(rec, no_thread)
     redacted += red
     total_redacted = sum(redacted.values())
+    own_summary_lines = {ar.trailing_line(r.get("body")) for r in reviews if r.get("user") == me}
     for i, body in enumerate(ar.summary_bodies(rec, rows, total_redacted, len(failures), details), 1):
-        if ar.summary_marker(rec["run_id"], rec["round"], i) in review_text:
+        if ar.summary_marker(rec["run_id"], rec["round"], i) in own_summary_lines:
             n_skipped += 1
             continue
         try:

@@ -11,7 +11,7 @@ import re
 import sys
 
 DEFAULT = {
-    "auth": True, "repo": "octo/demo", "comments": [], "reviews": [], "resolved": [],
+    "auth": True, "repo": "octo/demo", "login": "audit-bot", "comments": [], "reviews": [], "resolved": [],
     "reject_inline": [], "reject_file": [], "fail": [], "next_id": 1000,
 }
 
@@ -75,6 +75,17 @@ def main(argv):
     if not argv or argv[0] != "api":
         die(f"gh stub: unsupported command {argv}")
     args = argv[1:]
+    if argv[:2] == ["api", "user"]:
+        if "-q" in argv:
+            # Handle jq filter
+            q_idx = argv.index("-q") + 1
+            if q_idx < len(argv) and argv[q_idx] == ".login":
+                print(state["login"])
+            else:
+                print(json.dumps({"login": state["login"]}))
+        else:
+            print(json.dumps({"login": state["login"]}))
+        return
     if args[0] == "graphql":
         graphql(state, args[1:])
         return
@@ -90,14 +101,18 @@ def main(argv):
         if "read" in state["fail"]:
             die("gh: Not Found (HTTP 404)")
         for item in state["comments" if kind == "comments" else "reviews"]:
-            print(json.dumps({"id": item["id"], "body": item["body"], "html_url": item.get("html_url")}))
+            out = {"id": item["id"], "body": item["body"], "user": item.get("user", state["login"])}
+            if kind == "comments":
+                out["html_url"] = item.get("html_url")
+            print(json.dumps(out))
         return
     if kind == "reviews":
         if "review" in state["fail"]:
             die("gh: Server Error (HTTP 500)")
         state["next_id"] += 1
         state["reviews"].append({"id": state["next_id"], "body": payload["body"],
-                                 "commit_id": payload.get("commit_id"), "event": payload.get("event")})
+                                 "commit_id": payload.get("commit_id"), "event": payload.get("event"),
+                                 "user": state["login"]})
         save(state)
         print(json.dumps({"id": state["next_id"]}))
         return
@@ -117,6 +132,7 @@ def main(argv):
         new["in_reply_to_id"] = None
     state["next_id"] += 1
     new["id"] = state["next_id"]
+    new["user"] = state["login"]
     new["html_url"] = f"https://github.com/{state['repo']}/pull/{pr}#discussion_r{new['id']}"
     state["comments"].append(new)
     save(state)

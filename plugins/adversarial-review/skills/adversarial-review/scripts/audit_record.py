@@ -306,6 +306,18 @@ def no_thread_details(rec, findings):
     return redact("\n".join(parts))
 
 
+def trailing_line(body):
+    """Last non-empty line of a comment body, stripped ("" if none)."""
+    if not body:
+        return ""
+    lines = body.strip().split("\n")
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
 def markdown(rec):
     prev_txt = _prev_suffix(rec)
     lines = [

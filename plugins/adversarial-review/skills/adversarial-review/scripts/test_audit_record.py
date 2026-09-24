@@ -260,5 +260,20 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("<!-- audit:v1", md)
 
 
+class TrailingLineTests(unittest.TestCase):
+    def test_marker_on_last_line(self):
+        mark = "<!-- audit:v1 run=ar-test-1 finding=X-001 event=1.0 -->"
+        self.assertEqual(ar.trailing_line(f"a\n\n{mark}\n\n"), mark)
+
+    def test_empty_body_returns_empty_string(self):
+        self.assertEqual(ar.trailing_line(""), "")
+
+    def test_none_body_returns_empty_string(self):
+        self.assertEqual(ar.trailing_line(None), "")
+
+    def test_body_with_only_whitespace_returns_empty_string(self):
+        self.assertEqual(ar.trailing_line("  \n\n  \t"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
