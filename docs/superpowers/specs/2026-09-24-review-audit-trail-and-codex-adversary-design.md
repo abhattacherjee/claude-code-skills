@@ -83,9 +83,13 @@ existing findings shape with `events`, the ordered exchange for that round.
 - `events[].by` is `claude`, `codex` or `gemini`. `events[].kind` is one of:
   - `verdict`, with `verdict: confirm|refute`
   - `counter`
-  - `resolution`, with `resolution: fixed|pushback|deferred` and `sha` when fixed
+  - `resolution`, with `resolution: fixed|pushback|deferred`, and `sha` when the fix is committed.
+    `sha` is optional because deep-review Phase 1 commits only at the end of the phase. A `fixed`
+    event without `sha` renders as "fixed (not yet committed)".
   - `recheck`, with `result: resolved|partly|missed`
 - A finding can appear in several rounds. Only that round's new events go in each record.
+- Finding ids match `^[A-Z][A-Z0-9]{0,3}-\d{3,}$` and are unique within a run. deep-review Phase 1
+  uses `R-001…`; Phase 2 keeps `C-`, `G-` and, with Codex, `X-`.
 
 ### `scripts/pr-audit.py`
 
@@ -93,6 +97,8 @@ It lives in `plugins/adversarial-review/skills/adversarial-review/scripts/` and 
 
 - `pr-audit.py post --pr N [--repo owner/name] --record round.json`
 - `pr-audit.py local --record round.json --out <file>`
+- `pr-audit.py record --report-json report.json …` builds a round record from adversarial-review's
+  `report.json`, so that skill never hand-writes the JSON.
 
 `post` does the following, in order:
 
@@ -101,12 +107,14 @@ It lives in `plugins/adversarial-review/skills/adversarial-review/scripts/` and 
 2. Check that `gh` exists and is logged in. If not, fall back to `local` and print why.
 3. Fetch the PR's review comments once (paginated). Build a map from marker to comment id.
 4. For each finding:
-   - **No thread yet:** add an inline comment to this round's review.
+   - **No thread yet:** post it as its own review comment
+     (`POST /repos/{o}/{r}/pulls/{N}/comments`, with `commit_id: head_sha`). Posting each thread
+     separately means one line GitHub rejects cannot sink the others.
    - **Thread exists:** post each new event as a reply
      (`POST /repos/{o}/{r}/pulls/{N}/comments/{id}/replies`).
    - Skip any comment whose marker is already on the PR. This makes re-running safe.
-5. Post the round's review (`POST /repos/{o}/{r}/pulls/{N}/reviews`, `event: COMMENT`,
-   `commit_id: head_sha`). It carries the summary as its body and the new inline comments.
+5. Post the round's summary as a review (`POST /repos/{o}/{r}/pulls/{N}/reviews`,
+   `event: COMMENT`, `commit_id: head_sha`), after the threads, so its table can link to them.
 6. Resolve threads with GraphQL `resolveReviewThread`, following the rules below.
 7. Print the posted, skipped and failed counts. Exit 0 if nothing failed. Exit 1 on any failure,
    listing each failed id with the `gh` error text.
@@ -197,7 +205,6 @@ narrow. It stops a model quoting a secret from the diff. It is not general data-
 - A comment body over 60,000 characters is cut at a line boundary and ends with
   `… truncated (N chars); full record in the run dir`.
 - A summary table that would pass the limit is split into `Round 2 (1/2)`, `(2/2)`.
-- A round with more than 50 new inline comments posts them in several reviews of up to 50 each.
 
 ### Changes to the callers
 
@@ -205,7 +212,8 @@ narrow. It stops a model quoting a secret from the diff. It is not general data-
 
 - `sink.sh`: replace `deliver_pr` with a call to `pr-audit.py post`. Delete the `pr-review-cli.sh`
   lookup (`sink.sh:133-163`). Print the script's counts, and never print a success line when
-  anything failed.
+  anything failed. A new exit code 4 means the report was delivered but the audit trail is
+  incomplete.
 - `SKILL.md`: after synthesis, write `round-1.json` from the R1 findings and R2 verdicts, including
   refuted findings. Add `--no-post`.
 
