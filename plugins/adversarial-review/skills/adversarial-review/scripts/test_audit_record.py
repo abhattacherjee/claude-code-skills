@@ -180,13 +180,23 @@ class RenderTests(unittest.TestCase):
             self.assertTrue(ar.event_content(rec, event).startswith(head), head)
 
     def test_resolution_rules(self):
-        self.assertTrue(ar.should_resolve(finding(status="rejected")))
+        rec = record()
+        self.assertTrue(ar.should_resolve(finding(status="rejected"), rec))
         fixed = finding(events=[ev("resolution", resolution="fixed", sha=SHA2)])
-        self.assertFalse(ar.should_resolve(fixed))
+        self.assertFalse(ar.should_resolve(fixed, rec))
         rechecked = finding(events=[ev("recheck", by="codex", result="resolved")])
-        self.assertTrue(ar.should_resolve(rechecked))
+        self.assertTrue(ar.should_resolve(rechecked, rec))
         missed = finding(events=[ev("recheck", by="codex", result="missed")])
-        self.assertFalse(ar.should_resolve(missed))
+        self.assertFalse(ar.should_resolve(missed, rec))
+
+    def test_resolution_requires_latest_adversary_recheck(self):
+        rec = record()
+        rec_claude_only = record(adversary="claude-only")
+        self.assertTrue(ar.should_resolve(finding(events=[ev("recheck", by="codex", result="resolved")]), rec))
+        self.assertFalse(ar.should_resolve(finding(events=[ev("recheck", by="claude", result="resolved")]), rec))
+        self.assertFalse(ar.should_resolve(finding(events=[ev("recheck", by="codex", result="resolved"), ev("recheck", by="codex", result="missed")]), rec))
+        self.assertTrue(ar.should_resolve(finding(events=[ev("recheck", by="claude", result="resolved")]), rec_claude_only))
+        self.assertFalse(ar.should_resolve(finding(events=[ev("resolution", resolution="pushback")]), rec))
 
     def test_outcomes(self):
         self.assertEqual(ar.outcome(finding(status="rejected")), "refuted")
@@ -228,6 +238,15 @@ class RenderTests(unittest.TestCase):
                  "new": True, "thread": None, "note": "a|b"}]
         b = ar.summary_bodies(record(), rows, 0, 0)[0]
         self.assertIn("no thread: a\\|b |", b)
+
+    def test_summary_redacts_notes_before_sizing(self):
+        rows = [{"id": "X-001", "severity": "minor", "origin": "codex", "outcome": "confirmed",
+                 "new": True, "thread": None, "note": f"secret {FAKE_GH} here"}]
+        limit = 3000
+        bodies = ar.summary_bodies(record(), rows, 0, 0, limit=limit)
+        for b in bodies:
+            self.assertNotIn(FAKE_GH, b)
+            self.assertLessEqual(len(b), limit)
 
     def test_no_thread_details_and_markdown(self):
         f = finding(path=None, events=[ev("verdict", verdict="confirm")])

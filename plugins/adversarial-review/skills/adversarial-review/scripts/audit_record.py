@@ -217,11 +217,14 @@ def event_content(rec, ev):
     )
 
 
-def should_resolve(f):
-    """Refuted findings close at once. Others close only on an adversary re-check."""
+def should_resolve(f, rec):
+    """Refuted findings close at once. Others close only on the adversary's latest re-check."""
     if f["status"] == "rejected":
         return True
-    return any(e["kind"] == "recheck" and e.get("result") == "resolved" for e in f["events"])
+    for e in reversed(f["events"]):
+        if e["kind"] == "recheck":
+            return e.get("result") == "resolved" and (e["by"] == rec["adversary"] or rec["adversary"] == "claude-only")
+    return False
 
 
 def outcome(f):
@@ -235,13 +238,18 @@ def outcome(f):
     return "confirmed" if f["status"] == "survivor" else "unconfirmed"
 
 
+def _prev_suffix(rec):
+    """Return ' (previous `<sha7>`)' or '' for prev_head_sha."""
+    prev = rec.get("prev_head_sha")
+    return f" (previous `{_sha7(prev)}`)" if prev else ""
+
+
 def _cell(text):
     return str(text).replace("|", "\\|").replace("\n", " ")
 
 
 def summary_bodies(rec, rows, redacted, failures, details="", limit=MAX_BODY):
-    prev = rec.get("prev_head_sha")
-    prev_txt = f" (previous `{_sha7(prev)}`)" if prev else ""
+    prev_txt = _prev_suffix(rec)
     title = f"**{rec['skill']} · {rec['phase']} · Round {rec['round']}"
     tail = f"** · adversary: {rec['adversary']} · reviewed `{_sha7(rec['head_sha'])}`{prev_txt}"
     counts = Counter(r["outcome"] for r in rows)
@@ -250,7 +258,9 @@ def summary_bodies(rec, rows, redacted, failures, details="", limit=MAX_BODY):
     table_head = "| id | severity | origin | this round | thread |\n|---|---|---|---|---|"
     lines = []
     for r in rows:
-        link = f"[thread]({r['thread']})" if r["thread"] else f"no thread: {_cell(r['note'] or 'unknown')}"
+        note = r['note'] or 'unknown'
+        note, _ = redact(note)
+        link = f"[thread]({r['thread']})" if r["thread"] else f"no thread: {_cell(note)}"
         lines.append(f"| {_cell(r['id'])} | {_cell(r['severity'])} | {_cell(r['origin'])} | "
                      f"{_cell(r['outcome'])} | {link} |")
     footer = f"Redacted: {redacted} · Posting failures: {failures}"
@@ -297,8 +307,7 @@ def no_thread_details(rec, findings):
 
 
 def markdown(rec):
-    prev = rec.get("prev_head_sha")
-    prev_txt = f" (previous `{_sha7(prev)}`)" if prev else ""
+    prev_txt = _prev_suffix(rec)
     lines = [
         f"## {rec['skill']} · {rec['phase']} · Round {rec['round']}", "",
         f"Adversary: {rec['adversary']} · reviewed `{_sha7(rec['head_sha'])}`{prev_txt}", "",
