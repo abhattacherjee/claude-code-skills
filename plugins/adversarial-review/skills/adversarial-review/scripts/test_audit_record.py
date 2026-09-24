@@ -154,5 +154,92 @@ class TruncateTests(unittest.TestCase):
         self.assertIn("truncated", body)
 
 
+def ev(kind, by="claude", text="because", **kw):
+    e = {"by": by, "kind": kind, "text": text}
+    e.update(kw)
+    return e
+
+
+class RenderTests(unittest.TestCase):
+    def test_opener_tags_origin_and_severity(self):
+        body = ar.opener_content(record(), finding())
+        self.assertTrue(body.startswith("**[Codex] [important] bug** — Retry loop"))
+        self.assertIn("Round 1 · phase2 · reviewed at `1111111`", body)
+
+    def test_event_heads(self):
+        rec = record()
+        cases = [
+            (ev("verdict", verdict="refute"), "**[Claude] verdict: refute** — because"),
+            (ev("counter", by="codex"), "**[Codex] counter** — because"),
+            (ev("resolution", resolution="fixed", sha=SHA2), "**[Claude] fixed in `2222222`**"),
+            (ev("resolution", resolution="fixed"), "**[Claude] fixed (not yet committed)**"),
+            (ev("resolution", resolution="pushback"), "**[Claude] pushback**"),
+            (ev("recheck", by="codex", result="partly"), "**[Codex] re-check: partly**"),
+        ]
+        for event, head in cases:
+            self.assertTrue(ar.event_content(rec, event).startswith(head), head)
+
+    def test_resolution_rules(self):
+        self.assertTrue(ar.should_resolve(finding(status="rejected")))
+        fixed = finding(events=[ev("resolution", resolution="fixed", sha=SHA2)])
+        self.assertFalse(ar.should_resolve(fixed))
+        rechecked = finding(events=[ev("recheck", by="codex", result="resolved")])
+        self.assertTrue(ar.should_resolve(rechecked))
+        missed = finding(events=[ev("recheck", by="codex", result="missed")])
+        self.assertFalse(ar.should_resolve(missed))
+
+    def test_outcomes(self):
+        self.assertEqual(ar.outcome(finding(status="rejected")), "refuted")
+        self.assertEqual(ar.outcome(finding()), "confirmed")
+        self.assertEqual(ar.outcome(finding(status="unconfirmed")), "unconfirmed")
+        f = finding(events=[ev("resolution", resolution="fixed"), ev("recheck", by="codex", result="resolved")])
+        self.assertEqual(ar.outcome(f), "re-check: resolved")
+
+    def test_summary_single_part(self):
+        rows = [{"id": "X-001", "severity": "important", "origin": "codex", "outcome": "confirmed",
+                 "new": True, "thread": "https://t/1", "note": None},
+                {"id": "X-002", "severity": "minor", "origin": "codex", "outcome": "refuted",
+                 "new": True, "thread": None, "note": "no path"}]
+        bodies = ar.summary_bodies(record(prev=SHA2), rows, redacted=1, failures=0)
+        self.assertEqual(len(bodies), 1)
+        b = bodies[0]
+        self.assertIn("**deep-review · phase2 · Round 1** · adversary: codex · reviewed `1111111` (previous `2222222`)", b)
+        self.assertIn("2 findings: 2 new · 1 confirmed · 1 refuted", b)
+        self.assertIn("| X-001 | important | codex | confirmed | [thread](https://t/1) |", b)
+        self.assertIn("| X-002 | minor | codex | refuted | no thread: no path |", b)
+        self.assertIn("Redacted: 1 · Posting failures: 0", b)
+        self.assertTrue(b.endswith(ar.summary_marker("ar-test-1", 1, 1)))
+
+    def test_summary_splits_and_numbers_parts(self):
+        rows = [{"id": f"X-{i:03d}", "severity": "minor", "origin": "codex", "outcome": "confirmed",
+                 "new": False, "thread": f"https://github.com/o/r/pull/7#discussion_r{i}", "note": None}
+                for i in range(1, 101)]
+        bodies = ar.summary_bodies(record(), rows, 0, 0, limit=3000)
+        self.assertGreater(len(bodies), 1)
+        n = len(bodies)
+        for i, b in enumerate(bodies, 1):
+            self.assertLessEqual(len(b), 3000)
+            self.assertIn(f"Round 1 ({i}/{n})**", b)
+            self.assertTrue(b.endswith(ar.summary_marker("ar-test-1", 1, i)))
+        self.assertEqual(sum(b.count("| X-") for b in bodies), 100)
+
+    def test_pipe_in_title_does_not_break_table(self):
+        rows = [{"id": "X-001", "severity": "minor", "origin": "codex", "outcome": "confirmed",
+                 "new": True, "thread": None, "note": "a|b"}]
+        b = ar.summary_bodies(record(), rows, 0, 0)[0]
+        self.assertIn("no thread: a\\|b |", b)
+
+    def test_no_thread_details_and_markdown(self):
+        f = finding(path=None, events=[ev("verdict", verdict="confirm")])
+        details, _ = ar.no_thread_details(record(findings=[f]), [f])
+        self.assertIn("<details>", details)
+        self.assertIn("**X-001** · **[Codex] [important] bug**", details)
+        self.assertIn("> **[Claude] verdict: confirm**", details)
+        md, _ = ar.markdown(record(findings=[f]))
+        self.assertIn("## deep-review · phase2 · Round 1", md)
+        self.assertIn(ar.opener_content(record(findings=[f]), f), md)
+        self.assertNotIn("<!-- audit:v1", md)
+
+
 if __name__ == "__main__":
     unittest.main()

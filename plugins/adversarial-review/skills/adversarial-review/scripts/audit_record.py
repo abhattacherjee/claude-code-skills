@@ -184,3 +184,129 @@ def finalize(content, mark):
     body, counts = redact(content)
     body = truncate(body, MAX_BODY - len(mark) - 1)
     return body + "\n" + mark, counts
+
+
+def _sha7(sha):
+    return sha[:7]
+
+
+def opener_content(rec, f):
+    return (
+        f"**[{TAG[f['origin']]}] [{f['severity']}] {f['category']}** — {f['title']}\n\n"
+        f"{f['rationale']}\n\n"
+        f"Round {rec['round']} · {rec['phase']} · reviewed at `{_sha7(rec['head_sha'])}`"
+    )
+
+
+def event_content(rec, ev):
+    kind = ev["kind"]
+    if kind == "verdict":
+        head = f"verdict: {ev['verdict']}"
+    elif kind == "counter":
+        head = "counter"
+    elif kind == "resolution":
+        if ev["resolution"] == "fixed":
+            head = f"fixed in `{_sha7(ev['sha'])}`" if ev.get("sha") else "fixed (not yet committed)"
+        else:
+            head = ev["resolution"]
+    else:
+        head = f"re-check: {ev['result']}"
+    return (
+        f"**[{TAG[ev['by']]}] {head}** — {ev['text']}\n\n"
+        f"Round {rec['round']} · reviewed at `{_sha7(rec['head_sha'])}`"
+    )
+
+
+def should_resolve(f):
+    """Refuted findings close at once. Others close only on an adversary re-check."""
+    if f["status"] == "rejected":
+        return True
+    return any(e["kind"] == "recheck" and e.get("result") == "resolved" for e in f["events"])
+
+
+def outcome(f):
+    if f["status"] == "rejected":
+        return "refuted"
+    for e in reversed(f["events"]):
+        if e["kind"] == "recheck":
+            return f"re-check: {e['result']}"
+        if e["kind"] == "resolution":
+            return e["resolution"]
+    return "confirmed" if f["status"] == "survivor" else "unconfirmed"
+
+
+def _cell(text):
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def summary_bodies(rec, rows, redacted, failures, details="", limit=MAX_BODY):
+    prev = rec.get("prev_head_sha")
+    prev_txt = f" (previous `{_sha7(prev)}`)" if prev else ""
+    title = f"**{rec['skill']} · {rec['phase']} · Round {rec['round']}"
+    tail = f"** · adversary: {rec['adversary']} · reviewed `{_sha7(rec['head_sha'])}`{prev_txt}"
+    counts = Counter(r["outcome"] for r in rows)
+    parts = [f"{sum(1 for r in rows if r['new'])} new"] + [f"{n} {k}" for k, n in sorted(counts.items())]
+    count_line = f"{len(rows)} findings: " + " · ".join(parts)
+    table_head = "| id | severity | origin | this round | thread |\n|---|---|---|---|---|"
+    lines = []
+    for r in rows:
+        link = f"[thread]({r['thread']})" if r["thread"] else f"no thread: {_cell(r['note'] or 'unknown')}"
+        lines.append(f"| {_cell(r['id'])} | {_cell(r['severity'])} | {_cell(r['origin'])} | "
+                     f"{_cell(r['outcome'])} | {link} |")
+    footer = f"Redacted: {redacted} · Posting failures: {failures}"
+    fixed = len(title) + len(tail) + len(count_line) + len(table_head) + len(footer) + 200
+    budget = limit - fixed
+    chunks = [[]]
+    size = 0
+    for ln in lines:
+        if chunks[-1] and size + len(ln) + 1 > budget:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(ln)
+        size += len(ln) + 1
+    n = len(chunks)
+    bodies = []
+    for i, chunk in enumerate(chunks, 1):
+        numbered = f" ({i}/{n})" if n > 1 else ""
+        body = "\n".join([title + numbered + tail, count_line, "", table_head, *chunk, "", footer])
+        mark = summary_marker(rec["run_id"], rec["round"], i)
+        if i == n and details:
+            room = limit - len(body) - len(mark) - 4
+            if room > 200:
+                body += "\n\n" + truncate(details, room)
+        body, _ = redact(body)
+        bodies.append(body + "\n" + mark)
+    return bodies
+
+
+def _quote(text):
+    return "> " + text.replace("\n", "\n> ")
+
+
+def no_thread_details(rec, findings):
+    if not findings:
+        return "", Counter()
+    parts = ["<details><summary>Findings with no inline thread</summary>", ""]
+    for f in findings:
+        parts.append(f"**{f['id']}** · " + opener_content(rec, f))
+        for e in f["events"]:
+            parts.append(_quote(event_content(rec, e)))
+        parts.append("")
+    parts.append("</details>")
+    return redact("\n".join(parts))
+
+
+def markdown(rec):
+    prev = rec.get("prev_head_sha")
+    prev_txt = f" (previous `{_sha7(prev)}`)" if prev else ""
+    lines = [
+        f"## {rec['skill']} · {rec['phase']} · Round {rec['round']}", "",
+        f"Adversary: {rec['adversary']} · reviewed `{_sha7(rec['head_sha'])}`{prev_txt}", "",
+    ]
+    for f in rec["findings"]:
+        where = f" · `{f['path']}:{f['line']}`" if f.get("path") and f.get("line") else (
+            f" · `{f['path']}`" if f.get("path") else "")
+        lines += [f"### {f['id']} · {outcome(f)}{where}", "", opener_content(rec, f), ""]
+        for e in f["events"]:
+            lines += [_quote(event_content(rec, e)), ""]
+    return redact("\n".join(lines))
