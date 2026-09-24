@@ -94,6 +94,14 @@ _GIT_VALUE_OPTS = (
     "-C", "-c", "--git-dir", "--work-tree", "--exec-path", "--namespace",
     "--attr-source", "--config-env", "--super-prefix",
 )
+# The global options that REDIRECT git at another repository. They decide the
+# scope of the command regardless of where the shell stands -- see
+# _git_redirect_target.
+_GIT_REDIRECT_OPTS = ("-C", "--git-dir", "--work-tree")
+# Returned by the scope helpers when a redirect option IS present but does not
+# name one resolvable directory. Callers read it as "this repo", the same
+# fail-closed reading they already give a `cd` they cannot resolve.
+_SCOPE_UNKNOWN = object()
 
 
 def _quote_mask(text, quote=None):
@@ -338,8 +346,128 @@ def _substitution_bodies(text, quoting=True):
     return bodies
 
 
-def _split_statements_with_depth(cmd):
+# A character that cannot occur in a shell command line and that shlex treats
+# as an ordinary word character, so a placeholder built from it survives
+# tokenisation as ONE word. Measured: shlex.split("a \0 0 \0b c") keeps the
+# placeholder glued to `b`.
+_SUBST_MARK = "\x00"
+_SUBST_MARK_RE = re.compile(_SUBST_MARK + r"(\d+)" + _SUBST_MARK)
+
+
+def _protect_substitutions(text):
+    """``(rewritten, spans)`` with each substitution span reduced to a marker.
+
+    Returns ``(None, [])`` when a span never closes, so the caller can fall
+    back to plain tokenisation rather than inventing a boundary.
+
+    Quote handling mirrors _substitution_bodies exactly: a span inside SINGLE
+    quotes is literal text and is left alone, one inside DOUBLE quotes is real
+    and is protected (though shlex would have kept the quoted string whole
+    anyway, so that case only has to not make things worse).
+    """
+    spans = []
+    out = []
+    quote = None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and quote != "'" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if quote == "'":
+            out.append(ch)
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if quote == '"':
+            if ch == '"':
+                quote = None
+                out.append(ch)
+                i += 1
+                continue
+            # else fall through: substitutions DO expand inside double quotes
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "$" and i + 1 < n and text[i + 1] == "(":
+            end = _substitution_end(text, i + 2)
+            if end < 0:
+                return None, []
+            spans.append(text[i:end + 1])
+            out.append("%s%d%s" % (_SUBST_MARK, len(spans) - 1, _SUBST_MARK))
+            i = end + 1
+            continue
+        if ch == "`":
+            end = _backtick_end(text, i + 1)
+            if end < 0:
+                return None, []
+            spans.append(text[i:end + 1])
+            out.append("%s%d%s" % (_SUBST_MARK, len(spans) - 1, _SUBST_MARK))
+            i = end + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out), spans
+
+
+def _split_words(statement):
+    """shlex.split, but a `$( ... )` / backtick span stays ONE token.
+
+    _split_statements_with_depth already glues a substitution into a single
+    word -- "Inside `$( ... )` everything is ONE word to bash", as its own
+    comment says -- but that gluing did not survive shlex, which re-split on
+    the whitespace INSIDE the span. The consequences were not cosmetic:
+
+      * `git -C $(echo <path>) push origin main` tokenised as
+        [git, -C, $(echo, <path>), push, ...]. `-C` consumed `$(echo` as its
+        value, the scan stopped on the leftover `<path>)` before reaching
+        `push`, so _match_span found no verb run at all -- `_find_statements`
+        came back EMPTY and the hook exited at the top as "not a push
+        command". Measured: `cd /tmp && git -C <this repo> push origin main`
+        was ALLOWED with the substitution and DENIED without it.
+      * `git push origin $(echo refs/heads/main)` put a fragment, not the
+        span, in destination position.
+
+    Reducing the span to one opaque token is the fix, and it is deliberately
+    only that: the body is NOT read, and nothing inside it is matched against
+    a branch name. Reaching into the body would fight the design the stripping
+    exists to protect -- a `cd` inside `$( )` must not re-scope the parent
+    shell (issue #43). The body still reaches the scanner by the one route it
+    should, _substitution_bodies, which parses it as its own statements.
+
+    Falls back to plain tokenisation when the text already contains the marker
+    character, or when a span never closes -- both mean the protection cannot
+    be applied faithfully, and guessing a boundary is worse than the old
+    behaviour. Unbalanced QUOTES still raise ValueError out of shlex, which is
+    the fail-closed contract every caller already handles.
+    """
+    if _SUBST_MARK in statement:
+        return _shlex.split(statement)
+    protected, spans = _protect_substitutions(statement)
+    if protected is None:
+        return _shlex.split(statement)
+    words = _shlex.split(protected)
+    if not spans:
+        return words
+    return [_SUBST_MARK_RE.sub(lambda m: spans[int(m.group(1))], word)
+            for word in words]
+
+
+def _split_statements_with_depth(cmd, keep_boundaries=False):
     """``(statement, subshell_depth)`` for each statement, split as above.
+
+    With *keep_boundaries* the EMPTY statements are kept instead of dropped.
+    They are what marks a subshell opening or closing, and without them two
+    sibling subshells at the same depth are indistinguishable: in
+    `( cd /a ) && ( cd /b && git push )` both `cd`s sit at depth 1, and only
+    the empty depth-0 statements between them show that the first one is in a
+    subshell the push never entered. _cd_target needs that; every other caller
+    wants the statements alone.
 
     *subshell_depth* counts the enclosing `( ... )` subshells. A `cd` inside a
     subshell does NOT move the parent shell, so _cd_target must ignore it:
@@ -458,7 +586,10 @@ def _split_statements_with_depth(cmd):
     if quote:
         raise ValueError("unbalanced quote in command")
     statements.append(("".join(buf), paren_depth))
-    return [(s.strip(), d) for s, d in statements if s.strip()]
+    stripped = [(s.strip(), d) for s, d in statements]
+    if keep_boundaries:
+        return stripped
+    return [(s, d) for s, d in stripped if s]
 
 
 def _split_statements(cmd):
@@ -529,7 +660,7 @@ def _heredoc_feeds_runner(opener_line):
     raises from the full-text parse in _scan_commands, which runs first.
     """
     try:
-        return any(_reads_stdin_script(_shlex.split(statement))
+        return any(_reads_stdin_script(_split_words(statement))
                    for statement in _split_statements(opener_line))
     except ValueError:
         return False
@@ -550,7 +681,7 @@ def _scan_commands(cmd, _depth=0):
     scanned = []
     stripped, heredocs = _split_heredocs(cmd)
     for statement in _split_statements(stripped):
-        argv = _shlex.split(statement)
+        argv = _split_words(statement)
         if not argv:
             continue
         scanned.append(argv)
@@ -689,8 +820,65 @@ def _statement_prefix(argv, words):
     return argv[:start]
 
 
-def _cd_target(cmd):
-    """First `cd` argument among the OUTER shell's statements, or None.
+def _statement_global_opts(argv, words):
+    """The git global options sitting BETWEEN `git` and the matched verb run.
+
+    _statement_prefix stops at `git` and _statement_args starts after the verb,
+    so this span -- the one that can carry `-C <path>` -- was visible to
+    nothing. That is how `cd /tmp && git -C <this repo> push origin main` got
+    through: the `cd` said "another project", the `-C` was never read, and all
+    four guards exited 0 while the push landed HERE.
+    """
+    words = list(words)
+    start, end = _match_span(argv, words)
+    if start < 0:
+        return []
+    return argv[start + 1:end - (len(words) - 1)]
+
+
+def _normalised_cd_target(target):
+    """*target* as one canonical absolute path, or None if it is not absolute.
+
+    Two `cd`s name the SAME directory only when both are absolute -- `cd a &&
+    cd a` ends in `a/a`, so two identical RELATIVE targets are two different
+    directories and must never be folded into one. That fold would hand the
+    guard a path the command never reaches, which is the fail-open direction.
+
+    `~` counts once expanded, because it expands to an absolute path. An
+    unexpanded `$VAR` does not: expandvars leaves it verbatim, so the result
+    is not a path at all.
+
+    Deliberately a leading-slash test rather than os.path.isabs: the strings
+    here come from a POSIX shell command line, not from this process's
+    platform.
+
+    normpath, NOT realpath. bash's `cd` is logical by default (`cd -L`): it
+    folds `a/../b` textually and does not resolve symlinks, so normpath is
+    what the shell itself does. realpath would differ on a symlinked path, and
+    would also invent a resolution for a path that does not exist -- both are
+    answers about a directory the command may never reach.
+
+    Comparing the RAW strings was a false denial (Gemini G-002): `cd /other &&
+    cd /other/../other` is one directory, but the two spellings differ, so
+    _cd_target declined, the guard fell back to THIS repo, and a legitimate
+    push from another repository was blocked.
+    """
+    try:
+        expanded = os.path.expandvars(os.path.expanduser(target))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not expanded.startswith("/"):
+        return None
+    return os.path.normpath(expanded)
+
+
+def _is_absolute_cd_target(target):
+    """Whether repeating `cd <target>` lands in the SAME directory every time."""
+    return _normalised_cd_target(target) is not None
+
+
+def _cd_target(cmd, verb=None):
+    """The one `cd` that re-scopes the OUTER shell before *verb*, or None.
 
     Deliberately NOT built on _scan_commands: that returns recursed statements
     too, and a `cd` inside a `$( ... )`, a backtick span or a `bash -c` payload
@@ -703,35 +891,225 @@ def _cd_target(cmd):
     assignments) — unlike the verb search above, a `cd` appearing mid-statement
     is not a directory change, and treating it as one would fail OPEN.
 
-    Only statements at the command's OUTERMOST nesting level are considered,
-    for the same reason `$( ... )` is excluded: a deeper `( ... )` subshell's
-    `cd` does not move the shell the rest of the command runs in. That level is
-    the MINIMUM subshell depth present, not a literal 0, which keeps the two
-    opposite cases both right:
+    The answer is built by walking BACKWARDS from the verb, which is what the
+    shell itself does: the directory a command runs in is set by the `cd`s at
+    its OWN subshell depth that precede it, applied on top of the `cd`s at
+    shallower depths that precede that subshell. A `cd` deeper than the verb,
+    or in a sibling subshell the verb never entered, moved a shell that exited
+    again; a `cd` after the verb cannot move it at all. So:
 
         ( cd /elsewhere ) && git push origin main   -> None: the push runs HERE
         ( cd /elsewhere && git push origin main )   -> /elsewhere: the whole
                                                       command runs THERE
+        ( cd /here && git push origin main ) && cd /tmp
+                                                   -> /here: the trailing `cd`
+                                                      is after the push
 
     Anchoring on depth 0 alone made the first case return `/elsewhere`, so the
     hooks decided the command targeted another repo and exited 0 (fail-open).
+    Anchoring on the MINIMUM depth present fixed that but broke the third: the
+    trailing `cd /tmp` put the minimum at 0, so BOTH statements inside the
+    subshell were skipped, the verb break never ran, and a push to main was
+    allowed -- fail-open again. Depth alone cannot answer this; only the walk
+    can.
+
+    Sibling subshells need the empty boundary statements, which is why this is
+    the one caller passing `keep_boundaries=True` -- see
+    _split_statements_with_depth.
+
+    With no *verb* to anchor on -- or a verb that is not present -- the walk
+    starts at the LAST statement and at the minimum depth, which reproduces
+    the old "outermost level, no break" reading exactly.
+
+    *verb* is the guarded command's leading word run, e.g. ["git", "push"].
+    When given, the scan STOPS at the first statement CONTAINING it: that
+    command runs wherever the shell has reached by then, and no later `cd` can
+    move it. Without the stop, `git push origin main && cd /other` was read as
+    targeting /other, so the guard was skipped for a push that had already run
+    HERE.
+
+    The stop uses _match_index, the same position-tolerant matcher the verb
+    SEARCH uses, so "where is the verb" is answered identically in both
+    places. A leading-word comparison answered it differently and reopened the
+    bypass for every wrapped spelling: `git -C <path> push origin main && cd
+    /tmp` starts with `git -C`, never matched, and the trailing `cd`
+    re-scoped a push that had already run here. `sudo git push ...` and
+    `git -c k=v push ...` were the same hole.
+
+    The `cd`s seen before that point decide the answer:
+
+      * none                                  -> None
+      * exactly one                           -> that target
+      * several, all the SAME ABSOLUTE path   -> that target
+      * anything else                         -> None
+
+    None is read by both callers as "no cd" -> "assume this project": the
+    guard RUNS and the git reads inspect THIS repo. Keeping only the FIRST of
+    several was the bypass -- `cd /other && cd <here> && git push origin main`
+    ends in THIS repo, but the guard read /other and disengaged. Resolving a
+    MIXED chain properly needs to know whether each separator was `&&` or `;`,
+    because under `;` a FAILING `cd` leaves the shell where it was and the next
+    relative path resolves against the OLD directory. The statement list does
+    not record the separators, and guessing wrong in a security guard is worse
+    than declining to answer. Returning None is that decline.
+
+    Repeating the SAME absolute path carries none of that ambiguity, and
+    declining there was a false denial of a routine agent-written shape:
+    `cd /other && npm ci && cd /other && git push origin feature/x` was denied
+    because the fallback landed on THIS repo, which happened to be parked on
+    develop. The path must be ABSOLUTE for the two to be one directory --
+    `cd a && cd a` lands in `a/a`, so folding identical RELATIVE targets would
+    hand the guard a directory the command never reaches, in the fail-open
+    direction. "The same" is judged on the NORMALISED paths, so
+    `cd /other && cd /other/../other` folds too -- comparing the raw strings
+    denied that legitimate shape. See _normalised_cd_target.
 
     Propagates ValueError so callers fall back to the raw-string regex.
     """
-    statements = _split_statements_with_depth(_strip_heredocs(cmd))
-    if not statements:
+    statements = _split_statements_with_depth(_strip_heredocs(cmd),
+                                              keep_boundaries=True)
+    real = [index for index, (statement, _d) in enumerate(statements)
+            if statement]
+    if not real:
         return None
-    base_depth = min(depth for _statement, depth in statements)
-    for statement, depth in statements:
-        if depth != base_depth:
+    words = list(verb) if verb else []
+    start = -1
+    if words:
+        for index in real:
+            argv = _split_words(statements[index][0])
+            if not argv:
+                continue
+            if _match_index(argv[_env_prefix_len(argv):], words) >= 0:
+                start = index
+                break
+    if start < 0:
+        # No verb to anchor on: start past the last real statement, at the
+        # outermost level present. Same reading as before the walk existed.
+        start = real[-1] + 1
+        level = min(statements[index][1] for index in real)
+    else:
+        level = statements[start][1]
+    targets = []
+    for index in range(start - 1, -1, -1):
+        statement, depth = statements[index]
+        if depth > level:
+            continue  # deeper, or a sibling subshell: it did not move us
+        level = depth  # we have stepped out of the subshell we were in
+        if not statement:
             continue
-        argv = _shlex.split(statement)
+        argv = _split_words(statement)
         if not argv:
             continue
-        start = _env_prefix_len(argv)
-        if len(argv) > start + 1 and argv[start] == "cd":
-            return argv[start + 1]
+        rest = argv[_env_prefix_len(argv):]
+        if len(rest) > 1 and rest[0] == "cd":
+            targets.append(rest[1])
+    if not targets:
+        return None
+    if len(targets) == 1:
+        return targets[0]
+    normalised = [_normalised_cd_target(target) for target in targets]
+    if None not in normalised and len(set(normalised)) == 1:
+        return targets[0]
     return None
+
+
+def _git_redirect_target(argv, words):
+    """The directory a git global option pins the *words* run to, or None.
+
+    None means "no redirect option": the run obeys the shell's cwd, so the
+    `cd` rules answer for it. _SCOPE_UNKNOWN means a redirect IS present but
+    does not name one resolvable directory -- callers read that as this repo.
+
+    git applies `-C` first and resolves `--git-dir` / `--work-tree` from
+    there, and a push updates the GIT DIR, so `--git-dir` decides when it is
+    given. Repeating an option, or mixing `-C` with the other two, is a chain
+    this guard declines to resolve: `git -C /a -C b` lands in `/a/b`, and
+    guessing that wrong is the fail-open direction. `--work-tree` alone moves
+    only the CHECKOUT, not the repository the push updates, so it is never an
+    answer on its own. A relative path is declined for the same reason a
+    relative `cd` is not folded -- it depends on where the shell already
+    stands. Every decline is fail-closed.
+    """
+    opts = _statement_global_opts(argv, words)
+    seen = {}
+    chdir = None
+    gitdir = None
+    index = 0
+    total = len(opts)
+    while index < total:
+        token = opts[index]
+        index += 1
+        # Only LONG options take an attached `--opt=value`; git rejects the
+        # attached short form outright ("unknown option: -C/tmp"), so `-C`
+        # must never be split on `=`.
+        name, sep, value = (token.partition("=") if token.startswith("--")
+                            else (token, "", ""))
+        if name in _GIT_REDIRECT_OPTS:
+            if not sep:
+                if index >= total:
+                    return _SCOPE_UNKNOWN  # redirect option with no value
+                value = opts[index]
+                index += 1
+            seen[name] = seen.get(name, 0) + 1
+            if name == "-C":
+                chdir = value
+            elif name == "--git-dir":
+                gitdir = value
+        elif token in _GIT_VALUE_OPTS:
+            index += 1  # a value in separate-token form; not a redirect
+    if not seen:
+        return None
+    if any(count > 1 for count in seen.values()):
+        return _SCOPE_UNKNOWN
+    if "-C" in seen and len(seen) > 1:
+        return _SCOPE_UNKNOWN
+    path = gitdir if gitdir is not None else chdir
+    if path is None or not _is_absolute_cd_target(path):
+        return _SCOPE_UNKNOWN
+    return path
+
+
+def _command_scope(cmd, verb=None):
+    """The directory *verb* actually runs in, or None for "wherever we are".
+
+    An explicit git redirect BEATS a `cd`, because git obeys `-C` regardless of
+    where the shell stands. `cd /tmp && git -C <this repo> push origin main`
+    reaches /tmp, which is a real directory outside this project, so the scope
+    check called it another project's business and every guard exited 0 --
+    while the push landed on THIS repo's main. The directory the shell reaches
+    is irrelevant when the git invocation carries its own `-C`.
+
+    Every matched run is scored -- a redirected one by its redirect, a plain
+    one by wherever the `cd` rules put the shell -- and they must AGREE, since
+    one scope answer has to cover them all. Falling back to the `cd` alone as
+    soon as ONE run was plain left the same hole a level up: in
+    `cd /other && git -C <here> push origin main && git push origin x` the
+    `cd` said "another project" while the `-C` run pushed THIS repo's main.
+    Disagreement is fail-closed, like every other decline here.
+
+    Only `git` has these options, so any other verb is handed straight to
+    _cd_target. Propagates ValueError like _cd_target does.
+    """
+    words = list(verb) if verb else []
+    target = _cd_target(cmd, words or None)
+    if not words or words[0] != "git":
+        return target
+    statements = _find_statements(cmd, words)
+    if not statements:
+        return target
+    redirects = []
+    for argv in statements:
+        redirect = _git_redirect_target(argv, words)
+        if redirect is None:
+            redirect = target  # no redirect: this run obeys the shell's cwd
+        redirects.append(redirect)
+    if any(redirect is _SCOPE_UNKNOWN for redirect in redirects):
+        return _SCOPE_UNKNOWN
+    if len(redirects) == 1:
+        return redirects[0]
+    if len(set(redirects)) == 1:
+        return redirects[0]
+    return _SCOPE_UNKNOWN
 # --- END shared command scanner v1 ---
 # --- BEGIN shared repo identity v1 (keep in sync across all hook copies) ---
 # Worktree-stable repository identity.
@@ -753,9 +1131,9 @@ def _cd_target(cmd):
 # must be self-contained, matching the shared-scanner precedent above.
 #
 # DEPENDS ON the shared command scanner block above: _effective_cwd() calls
-# _cd_target(). The two blocks are pinned by SEPARATE sync tests, so removing
-# or renaming _cd_target would break _effective_cwd without this block's own
-# sync test noticing. Keep the two blocks together in every copy.
+# _command_scope(). The two blocks are pinned by SEPARATE sync tests, so
+# removing or renaming _command_scope would break _effective_cwd without this
+# block's own sync test noticing. Keep the two blocks together in every copy.
 def _git_common_dir(path):
     """Absolute, realpath'd `--git-common-dir` for `path`; None if unknown.
 
@@ -800,25 +1178,57 @@ def _same_repo(a, b):
     return common_a == common_b
 
 
-def _effective_cwd(cmd, default):
+def _effective_cwd(cmd, default, verb=None):
     """Directory the command will actually run in, as best we can tell.
 
     Hooks run in their own process, whose cwd is the project dir -- not the
     directory the command changes into. Git commands in a hook must be pinned
     to THIS, via `git -C`, or they inspect the wrong worktree and report
     another branch's state as this command's.
+
+    *verb* is forwarded to _command_scope: pass the guarded command's leading
+    word run so a `cd` AFTER it -- which cannot move it -- is ignored, so an
+    ambiguous multi-`cd` chain falls back to *default* rather than to a guess,
+    and so a `git -C <path>` on the verb itself outranks any `cd`.
     """
     try:
-        target = _cd_target(cmd)
+        target = _command_scope(cmd, verb)
     except ValueError:
         target = None
+    if target is _SCOPE_UNKNOWN:
+        # A git redirect we cannot resolve to one directory. "Cannot tell" is
+        # never "somewhere else" -- pin the reads to THIS repo.
+        return default
     if not target:
         return default
     target = os.path.expandvars(os.path.expanduser(target))
     try:
-        return os.path.realpath(target)
+        resolved = os.path.realpath(target)
     except (OSError, ValueError):
         return default
+    # A `cd` into a path that does not exist FAILS at runtime, leaving the
+    # shell's cwd unchanged -- so the rest of the command runs HERE, and every
+    # git read below must inspect THIS repo. Pinning them to the missing path
+    # made `git branch --show-current` come back empty; an explicit push
+    # target then suppressed the fail-closed branch, and a push to the
+    # CURRENT protected branch via `origin HEAD` was allowed while the shell
+    # sat on develop. The parenthesised `( cd /nope && ... )` subshell form
+    # reached the same place, which is why the older parser -- which never
+    # recognised a subshell at all -- accidentally denied what this one let
+    # through.
+    #
+    # _targets_this_project() already reasons exactly this way (#83). This is
+    # the same rule applied to the other half of the pair (#89): "cannot
+    # resolve" must never be read as "somewhere else".
+    # `isdir` is not enough: a directory with no execute bit passes stat but
+    # cannot be entered, so `cd` FAILS and the command runs HERE. Measured:
+    # mode 0o000 gives isdir=True, access(X_OK)=False, and the shell reports
+    # "Permission denied" while the next command runs in the ORIGINAL cwd.
+    # Same rule as the missing-path case -- "cannot go there" is never
+    # "somewhere else".
+    if not os.path.isdir(resolved) or not os.access(resolved, os.X_OK):
+        return default
+    return resolved
 # --- END shared repo identity v1 ---
 
 # Set once by main(), which is where the command first becomes known; every
@@ -1144,13 +1554,19 @@ def _targets_this_project(cmd):
     # body or a quoted string cannot veto this guard. Only fall back to the raw
     # regex when the command cannot be parsed at all.
     try:
-        target = _cd_target(cmd)
+        target = _command_scope(cmd, ["gh", "pr", "create"])
     except ValueError:
         target = None
         cd_match = re.search(r'(?:^|[;&|]\s*)cd\s+("([^"]+)"|\'([^\']+)\'|(\S+))', cmd)
         if cd_match:
             target = cd_match.group(2) or cd_match.group(3) or cd_match.group(4)
     if target:
+        if target is _SCOPE_UNKNOWN:
+            # A `git -C` / `--git-dir` / `--work-tree` redirect that does not
+            # resolve to one directory. "Cannot tell" is never "somewhere
+            # else": run the guard, the same fail-closed reading an
+            # unresolvable `cd` already gets below.
+            return True
         target = os.path.expanduser(target)
         target = os.path.expandvars(target)
         try:
@@ -1167,7 +1583,12 @@ def _targets_this_project(cmd):
         # unchanged, so the rest of the command runs in THIS repo. "Could not
         # resolve" is never "different project" -- that read is what let
         # `cd /nope; git push origin main` through (#83).
-        if not os.path.isdir(target):
+        # `isdir` is not enough: a directory with no execute bit passes stat
+        # but cannot be entered, so `cd` FAILS and the command runs HERE.
+        # Measured: mode 0o000 gives isdir=True, access(X_OK)=False, and the
+        # shell reports "Permission denied" while the next command runs in
+        # the ORIGINAL cwd. "Cannot go there" is never "somewhere else".
+        if not os.path.isdir(target) or not os.access(target, os.X_OK):
             return True
         try:
             return os.path.commonpath([target, project_dir]) == project_dir
@@ -1188,7 +1609,8 @@ def main():
     command = tool_input.get("command", "")
     global _HOOK_CWD
     _HOOK_CWD = _effective_cwd(
-        command, os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+        command, os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+        ["gh", "pr", "create"])
 
     # Only check for gh pr create commands
     if tool_name != "Bash":

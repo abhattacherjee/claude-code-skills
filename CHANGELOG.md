@@ -18,6 +18,53 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ### Security
 
+- **Refreshed the harden-repo hooks to the released v1.2.2 templates.** The installed copies were
+  v1.2.0, which the doctor classified as `DRIFTED-BEHIND` with no local edits, so the repair
+  overwrote nothing of this repo's own. All four hooks are now byte-identical to the v1.2.2
+  templates and compile clean. Only `prevent-direct-push.py` changed between v1.2.1 and v1.2.2.
+
+  v1.2.1 closes nineteen ways to push a protected branch past the guard, every one of them open in
+  the copies this repo was running. The guard judged a push by how it was **spelled** rather than by
+  what it would do, so `git push origin HEAD:refs/heads/main` was allowed while the short `main`
+  spelling was denied. Also closed: `heads/main`, globs and the matching refspec, `--all`,
+  `--branches`, `--mirror` and any unambiguous abbreviation git accepts (`--al`, `--b`, `--mir`),
+  the bare `:` and `+:` refspecs, `--tags HEAD` from a protected branch, a shell substitution or
+  `$VAR` hiding the destination until after the guard had decided, `git -C` and subshell scope
+  escapes, four shapes of the failed-`cd` hole, and the two git-config cases
+  (`push.default = matching`, `remote.<remote>.mirror = true`) that make a plain `git push` push
+  everything.
+
+  Separately, the Git Flow finish block had never been executed by a single test on any generation:
+  every fixture built HEAD with `commit --allow-empty`, so `rev-parse HEAD^2` always failed and the
+  block was skipped. Four mutations inside it survived a fully green suite, one allowing ANY push to
+  `main` or `develop` whenever HEAD is a merge commit.
+
+  v1.2.2 closes two more bypasses that v1.2.1 still had (harden-repo #93, #94). Brace expansion:
+  `git push origin {main,develop}` split into a bare `git push origin` plus a stray statement, so
+  it was allowed, and bash then pushed `main` and `develop`. Any unquoted brace group in a push is
+  now denied. The Git Flow exemptions: on `develop` with a Git Flow merge HEAD, which is the normal
+  state after every PR merge, the hook allowed the whole command, so `git push --force origin main`
+  and `git push --mirror origin` got through. The same held on `release/*` and `hotfix/*` branches,
+  and on `develop` when a recent subject named a release or hotfix. The exemptions now only allow
+  non-destructive pushes.
+
+  Verified in this repo, not taken from upstream. Each command below went through the installed
+  hook, with `CLAUDE_PROJECT_DIR` set to the repo under test and the `develop` rows run in a
+  `develop` worktree whose HEAD is the #129 merge. v1.2.2 denies all 13 bypass shapes: the brace
+  forms, the refspec, mirror, abbreviation, substitution and failed-`cd` forms, and on `develop`
+  `--force origin main` and `--mirror`. It still allows a feature push, `-u`, a tag push and a bare
+  `git push`. As a control, the v1.2.1 hook allowed 5 of those 13. Two behaviours are by design
+  and are not bypasses: a brace group naming only unprotected branches is also denied, and on
+  `develop` with a Git Flow merge HEAD a non-destructive push of `main` is allowed, because that is
+  the finish push the exemption exists for.
+
+  **Still open in v1.2.2**, all tracked upstream in harden-repo. Measured here: an apostrophe in a
+  `#` comment or heredoc turns the brace fix off (#105), and a `remote.<name>.push` refspec from
+  config or `git -c` pushes into `main` from any branch, forced or not (#106). Reported upstream,
+  not re-tested here: `${IFS}` defeats the command scanner (#98), and a tag push in the same
+  command excuses a force push (#99). This refresh
+  narrows the push guard. It does not make it complete.
+
 - **`scripts/bump-version.sh`: hardening inherited from the harden-repo template, plus a real base-10 bugfix (harden-repo#55):** the shared template fed parsed version components into bash arithmetic without validating them, allowing an array-subscript payload in the version source to run as a command substitution. **This repo was not exploitable by that route** — it has no version file, deriving the version from `git describe --tags`, and the only payload shape that executes in bash arithmetic (an array subscript) cannot be a tag name, because `git check-ref-format` refuses any ref containing `[`. Both halves of that were verified rather than assumed. The guard is therefore defense-in-depth here.
 
   The base-10 half is a live bug regardless: without `10#`, a zero-padded tag such as `v1.08.09` was read as an invalid octal literal, and the bump silently produced an empty version and exited 0. It now yields `1.08.10`.
