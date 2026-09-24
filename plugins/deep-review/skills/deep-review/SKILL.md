@@ -2,7 +2,7 @@
 name: deep-review
 description: "Use when the user wants a thorough, high-assurance review of code changes — phrases like \"review this until it's clean\", \"converge to zero issues\", \"adversarial review\", \"have Gemini and Claude review\", \"deep review this PR\", or \"make this change ironclad\". Runs TWO phases on a PR or working-tree diff: (1) iterative multi-reviewer review that loops fix->re-review until a round finds zero actionable issues, then (2) a multi-round Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Repeatable across any project/PR. Use when: (1) the user wants a thorough, high-assurance review that converges to zero actionable issues, (2) the user asks for an adversarial or Gemini-and-Claude cross-examination review of a code diff, (3) deep-reviewing a PR or working-tree diff before merge, (4) the user wants to make a change ironclad."
 metadata:
-  version: 1.3.0
+  version: 1.3.1
 ---
 
 # Deep Review
@@ -240,6 +240,12 @@ Summarize for the user:
 - **Accept a planted-regression test that can pass vacuously.** Every new guard/check needs a
   fail-first negative: confirm the assertion FAILS when the code is broken. A test asserting on a
   static string that's always present is the classic vacuous trap.
+- **Accept a negative control that re-implements the assertion instead of invoking it.** A control
+  built from the guard's own logic tests the copy, not the guard: gut the real assertion and the
+  control still passes. Measured on openclaw #336 — a doc-contract test added specifically to
+  prevent vacuous assertions had three controls of this shape, and three mutations each gutting a
+  real assertion all SURVIVED at `5 passed`. The control must call the same function the suite
+  calls, or parametrize over the same table it does.
 - **Accept an "expect nothing" assertion with no positive control.** An absent-pattern fixture
   catches a guard stuck ON; only a present-pattern fixture catches one stuck OFF, where "correctly
   reports nothing" and "hardcoded empty" produce the same green. (Downstream side effects can
