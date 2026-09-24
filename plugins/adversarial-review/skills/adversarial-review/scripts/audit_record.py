@@ -144,6 +144,7 @@ def parse_marker(body):
         "marker": match.group(0),
     }
 
+
 _PK = "PRIVATE" + " KEY"
 SECRET_PATTERNS = [
     ("github-token", re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),

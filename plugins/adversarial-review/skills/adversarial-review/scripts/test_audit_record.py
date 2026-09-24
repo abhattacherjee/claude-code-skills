@@ -124,7 +124,7 @@ class RedactTests(unittest.TestCase):
 
     def test_aws_and_jwt_are_redacted(self):
         jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlLXZhbHVl"
-        text, counts = ar.redact(f"{"AKIA" + "ABCDEFGHIJKLMNOP"} {jwt}")
+        text, counts = ar.redact(f'{"AKIA" + "ABCDEFGHIJKLMNOP"} {jwt}')
         self.assertEqual(counts["aws-key-id"], 1)
         self.assertEqual(counts["jwt"], 1)
         self.assertNotIn(jwt, text)
