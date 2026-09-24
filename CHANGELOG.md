@@ -16,7 +16,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ### Added
 
-- **`deep-review`: a Red Flag for a negative control that re-implements the assertion instead of invoking it.** A control built from the guard's own logic tests the copy, not the guard — gut the real assertion and the control still passes, so the suite stays green over an unguarded path. Measured on openclaw#336: a doc-contract test added specifically to prevent vacuous assertions carried three controls of this shape, and three mutations each gutting a real assertion all survived. The rule is that a control must call the same function the suite calls, or parametrize over the same table it does.
+- **`deep-review` 1.3.0 -> 1.3.1: a Red Flag for a negative control that re-implements the assertion instead of invoking it.** A control built from the guard's own logic tests the copy, not the guard — gut the real assertion and the control still passes, so the suite stays green over an unguarded path. Measured on openclaw#336: a doc-contract test added specifically to prevent vacuous assertions carried three controls of this shape, and three mutations each gutting a real assertion all survived. The rule is that a control must call the same function the suite calls, or parametrize over the same table it does.
 
 ### Security
 
