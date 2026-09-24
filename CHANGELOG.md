@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+## [3.18.1] - 2026-09-24
+
 ### Changed
 
 - **Refreshed the harden-repo hooks and scripts to the released v1.2.0 templates.** The installed copies predated upstream #43, #73, #83 and #84, so this repo was running guards with two live bypasses: a `cd` to a path that does not exist turned all four guards off while the command still ran here, and the secret scan could not see `scripts/`. Also gains the command parser, worktree-stable preflight identity, and the advisory drift check. One missing artifact is now installed: `scripts/check-assertion-strength.sh`. The doctor also offered `.github/workflows/ci.yml`, which `--fix` installs because it was MISSING; it was deliberately dropped from this PR rather than merged, because adding secret-scan and CHANGELOG gates to every pull request is a change this repo did not ask for. The existing `validate-skill.yml` is untouched. Left alone as locally modified: `scripts/bump-version.sh` (UNRECOGNIZED). `scripts/commit-preflight.sh` has no harden marker blocks so the doctor could not classify or repair it, and it was therefore left at its old generation apart from one necessary edit: its preflight token key (see below), without which the upgraded hook would have denied every commit.
