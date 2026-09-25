@@ -2054,6 +2054,81 @@ PYEOF
 assert_eq "every judged finding carries verdict_reason" "ok" "$VR_CHECK"
 
 # ====================================================================
+# pr-audit.py + audit_record.py — unit and CLI tests
+# ====================================================================
+section "pr-audit.py + audit_record.py — unit and CLI tests"
+
+run_capture UT_OUT UT_EXIT env PYTHONDONTWRITEBYTECODE=1 \
+  python3 -m unittest discover -s "$SCRIPT_DIR" -p 'test_*.py'
+assert_exit_code "python unittest suite passes" "0" "$UT_EXIT"
+[[ "$UT_EXIT" == "0" ]] || echo "$UT_OUT" | tail -30
+
+# ====================================================================
+# sink.sh — PR mode posts the audit trail through pr-audit.py
+# ====================================================================
+section "sink.sh — PR mode posts the audit trail through pr-audit.py"
+
+SINK_STUB_DIR="$TMP_DIR/sink-stub"
+SINK_REPO="$TMP_DIR/sink-repo"
+SINK_STATE="$TMP_DIR/sink-state.json"
+SINK_LOG="$TMP_DIR/sink-log.jsonl"
+mkdir -p "$SINK_STUB_DIR"
+printf '#!/usr/bin/env bash\nexec python3 "%s" "$@"\n' "$FIXTURES_DIR/gh_stub.py" >"$SINK_STUB_DIR/gh"
+chmod +x "$SINK_STUB_DIR/gh"
+git init -q "$SINK_REPO"
+printf '# report\n' >"$TMP_DIR/sink-report.md"
+printf '{"findings":[]}\n' >"$TMP_DIR/sink-report.json"
+SINK_RECORD="$FIXTURES_DIR/audit_round_min.json"
+
+# Usage: sink_run OUT_VAR EXIT_VAR STATE_JSON sink-args...
+# Runs sink.sh from inside a throwaway git repo so gitignore and local files land there.
+sink_run() {
+  local out_var="$1" exit_var="$2" state="$3"
+  shift 3
+  printf '%s' "$state" >"$SINK_STATE"
+  rm -f "$SINK_LOG"
+  run_capture "$out_var" "$exit_var" bash -c 'cd "$1" && shift && exec "$@"' _ "$SINK_REPO" \
+    env PATH="$SINK_STUB_DIR:$PATH" GH_STUB_STATE="$SINK_STATE" GH_STUB_LOG="$SINK_LOG" \
+    PYTHONDONTWRITEBYTECODE=1 bash "$SCRIPT_DIR/sink.sh" \
+    --report-md "$TMP_DIR/sink-report.md" --report-json "$TMP_DIR/sink-report.json" "$@"
+}
+
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
+assert_exit_code "sink pr mode posts and exits 0" "0" "$S_EXIT"
+assert_contains "sink pr mode prints pr-audit counts" "pr-audit: PR #7: posted 3" "$S_OUT"
+assert_contains "sink pr mode posted a summary review" "/reviews" "$(cat "$SINK_LOG" 2>/dev/null)"
+
+sink_run S_OUT S_EXIT '{"fail":["review"]}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
+assert_exit_code "sink pr mode with a failed post exits 4" "4" "$S_EXIT"
+assert_contains "sink says the audit trail is incomplete" "incomplete" "$S_OUT"
+if echo "$S_OUT" | grep -qF "PR review comments posted"; then
+  fail "sink never prints the old unconditional success line"
+else
+  pass "sink never prints the old unconditional success line"
+fi
+
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --no-post
+assert_exit_code "sink --no-post exits 0" "0" "$S_EXIT"
+if [[ -s "$SINK_LOG" ]]; then
+  fail "sink --no-post makes no gh calls" "log: $(cat "$SINK_LOG")"
+else
+  pass "sink --no-post makes no gh calls"
+fi
+assert_eq "sink --no-post writes the local report" "yes" \
+  "$([[ -f "$SINK_REPO/feature-x.adversarial-review.md" ]] && echo yes || echo no)"
+
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x
+assert_exit_code "sink pr mode without --record is a usage error" "2" "$S_EXIT"
+
+sink_run S_OUT S_EXIT '{}' --mode local --branch feature/y --record "$SINK_RECORD"
+assert_exit_code "sink local mode with a record exits 0" "0" "$S_EXIT"
+assert_contains "sink local mode appends the exchange" "**[Gemini] verdict: confirm**" \
+  "$(cat "$SINK_REPO/feature-y.adversarial-review.md")"
+
+assert_eq "sink.sh no longer references pr-review-cli" "0" \
+  "$(grep -c 'pr-review-cli' "$SCRIPT_DIR/sink.sh" || true)"
+
+# ====================================================================
 # FINAL SUMMARY
 # ====================================================================
 echo ""
