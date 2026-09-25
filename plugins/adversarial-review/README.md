@@ -61,13 +61,13 @@ No manual pre-flight is required. The `gemini` binary version 0.38.2+ supports `
 
 ### Skills
 
-- `adversarial-review` — Adversarial PR review via symmetric Claude↔Gemini independent discovery and cross-examination. Surfaces only findings both models confirm. Auto-detects PR vs local mode.
+- `adversarial-review` — Adversarial PR review via symmetric independent discovery and cross-examination between Claude and an opposing model (Codex, else Gemini). Surfaces only findings both models confirm. Auto-detects PR vs local mode.
 
 ### Agents
 
 - `adversarial-bug-hunter` (Opus) — R1 bug-hunt pass over the diff, grounded in actual source files. NOT user-invocable — spawned by the adversarial-review skill.
 - `adversarial-convention-reviewer` (Sonnet) — R1 convention and CLAUDE.md compliance scan over the diff. NOT user-invocable — spawned by the adversarial-review skill.
-- `adversarial-cross-examiner` (Opus) — R2 symmetric cross-examiner: reads Gemini's R1 findings against actual source files and returns confirm/refute verdicts. NOT user-invocable — spawned by the adversarial-review skill.
+- `adversarial-cross-examiner` (Opus) — R2 symmetric cross-examiner: reads the adversary's (Codex or Gemini) R1 findings against actual source files and returns confirm/refute verdicts. NOT user-invocable — spawned by the adversarial-review skill.
 
 ### Scripts
 

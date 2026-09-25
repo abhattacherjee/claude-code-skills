@@ -26,7 +26,7 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 
 Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `codex-review.sh --self-test` reruns the canary on demand.
 
-A pass is stamped in `$XDG_CACHE_HOME/adversarial-review/codex-isolation-<version>-<key>.ok`, one file per Codex version. The key is a short hash of: the Codex version, the isolation recipe (the required argv flags, the disabled features, the four canary surfaces above, and a `CANARY_SCHEMA` constant bumped whenever the canary itself changes), the resolved Codex binary's realpath and sha256, and `CODEX_HOME` (empty when unset). Any change to any of these — a Codex upgrade, an edited recipe, a different binary, a different `CODEX_HOME` — makes the old stamp not match, so the canary reruns. A missing, unreadable or corrupt stamp counts the same as no stamp. For an npm install, the sha256 covers only the resolved JS entry script `codex` points at, not every file `npm install` laid down — a same-version package swap that replaces other files keeps the stamp valid.
+A pass is stamped in `$XDG_CACHE_HOME/adversarial-review/codex-isolation-<version>-<key>.ok` (falling back to `~/.cache/adversarial-review/` when `XDG_CACHE_HOME` is unset), one file per Codex version. The key is a short hash of: the Codex version, the isolation recipe (the required argv flags, the disabled features, the four canary surfaces above, and a `CANARY_SCHEMA` constant bumped whenever the canary itself changes), the resolved Codex binary's realpath and sha256, and `CODEX_HOME` (empty when unset). Any change to any of these — a Codex upgrade, an edited recipe, a different binary, a different `CODEX_HOME` — makes the old stamp not match, so the canary reruns. A missing, unreadable or corrupt stamp counts the same as no stamp. For an npm install, the sha256 covers only the resolved JS entry script `codex` points at, not every file `npm install` laid down — a same-version package swap that replaces other files keeps the stamp valid.
 
 What you accept by using it: the read-only sandbox still lets Codex read any file your user can read, not only the repo. Review needs Codex's shell tool to read the repo, so this stays. Codex cannot run tests that write temp files, so a Codex claim that tests pass covers pure tests only. Codex output is untrusted: it is checked against a schema, capped (50 findings, 4000 characters per text), and redacted before anything reaches the PR.
 
@@ -218,7 +218,7 @@ $ADV_REVIEW \
   --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"
 ```
 
-**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): go to the degraded no-adversary path in Degradation Behavior.
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): go to the degraded no-adversary path in Degradation Behavior. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
 
 Both scripts emit `{"verdicts":[{"id":"C-NNN","adversary_verdict":"confirm|refute","reason":"...","confidence":...}]}`. The key is `adversary_verdict` for both models; it was `gemini_verdict` before #135, and old run files still load.
 
