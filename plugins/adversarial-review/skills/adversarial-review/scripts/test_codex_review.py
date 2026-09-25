@@ -320,9 +320,12 @@ class ArgvAllowListTests(unittest.TestCase):
         with self.assertRaises(cr.Unavailable):
             cr.assert_isolated(argv)
 
-    def test_guard_accepts_a_bare_dash_prompt_slot(self):
+    def test_guard_refuses_a_bare_dash_prompt_slot(self):
+        # build_argv never emits "-"; if Codex read it as "prompt from stdin", the
+        # untrusted diff on stdin would become the instructions.
         argv = self.argv()[:-1] + ["-"]
-        cr.assert_isolated(argv)
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
 
     def test_guard_refuses_a_flag_shaped_value(self):
         argv = self.argv()
@@ -337,7 +340,11 @@ class ArgvAllowListTests(unittest.TestCase):
         argv = argv[:-1] + ["-m", "--ignore-rules"] + [argv[-1]]
         with self.assertRaises(cr.Unavailable) as ctx:
             cr.assert_isolated(argv)
-        self.assertIn("--ignore-rules", str(ctx.exception))
+        # Tight on purpose: "--ignore-rules" alone would also match the separate
+        # flag-shaped-value violation text ("-m '--ignore-rules'"), which does not
+        # prove the value-slot presence fix. This exact "missing: ..." phrase is
+        # only emitted by the occurrence-based presence check.
+        self.assertIn("missing: --ignore-rules", str(ctx.exception))
 
     def test_guard_refuses_a_duplicate_value_flag(self):
         for flag, value in (("-C", "/other"), ("-o", "/other.json"),

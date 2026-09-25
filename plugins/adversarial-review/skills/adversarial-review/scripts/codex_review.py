@@ -408,12 +408,13 @@ def assert_isolated(argv):
     one, fails closed.
 
     The prompt (argv[-1]) is never scanned as a flag position, but it may not start
-    with '-' either, unless it is exactly '-' (the stdin marker): a flag-shaped
-    final token would otherwise let clap parse it as an option instead of a prompt."""
+    with '-' at all, not even the bare '-' stdin marker: build_argv never emits '-',
+    and if Codex read it as "take the prompt from stdin", the untrusted diff already
+    on stdin would become the instructions instead of data."""
     bad = []
     if argv:
         last = argv[-1]
-        if last != "-" and isinstance(last, str) and last.startswith("-"):
+        if isinstance(last, str) and last.startswith("-"):
             bad.append("the prompt slot looks like a flag: %r" % (last,))
     occurrences, violations = _flag_occurrences(argv)
     bad += violations
