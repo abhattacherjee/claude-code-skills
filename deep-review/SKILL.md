@@ -204,7 +204,9 @@ In one message:
     to a direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
     verdict:confirm|refute, reason}>"` call. Build a prompt file with the brief and each finding,
     and parse the JSON yourself. Codex has no such fallback: exit 3 from `codex-review.sh` means
-    Codex's verdicts are missing, and those Claude findings stay unconfirmed.
+    Codex's verdicts are missing. Write `{"verdicts":[]}` to `$RUN_DIR/r2-$ADVERSARY-verdicts.json`
+    (`synthesize.py` exits 1 on a missing file), and say in the R2 digest that Codex's verdicts
+    are missing. Those Claude findings stay unconfirmed.
 
 Emit an R2 digest (confirmed/refuted/unjudged each direction). Record the round (phase
 `phase2-r2`): record each judged finding with its `verdict` event; confirmed findings take
@@ -288,6 +290,10 @@ RECHECK_ROUND=0             # re-check rounds run so far, capped at 3 (see step 
      ./references/audit-trail.md). Leave every remaining re-check thread open, post the round
      summary you already have noting Codex became unavailable, and surface it to the user — the
      same outcome as the Gemini/Claude-only path below, reached mid-loop instead of at Step 2.0.
+   - **Exit 1** means `codex-review.sh` could not use its inputs (for example a missing
+     `--prior` or `--diff` file) or could not write `--out`. Stop the re-check loop the same way
+     as exit 3: do not retry with guessed flags, and leave the remaining threads open. Note it,
+     with the exact stderr message, in the round summary you post, and tell the user.
 3. `python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_DIR/recheck-$K.json" --round "$K" --head-sha "$FIX_SHA" --out "$RUN_DIR/round-$K.json"`,
    then post it as in ./references/audit-trail.md. A `resolved` re-check closes its thread.
    - **Exit 2** means the re-check inputs don't make a valid record (see

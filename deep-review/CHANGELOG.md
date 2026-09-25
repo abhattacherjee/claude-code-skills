@@ -14,6 +14,8 @@
 ### Fixed
 
 - Phase 2 R1 told you to call `gemini` directly because `gemini-review.sh` supposedly had no `--mode find`. It does; R1 now uses it.
+- Step 2.2: when the Codex judge exits 3, write `{"verdicts":[]}` to its verdicts file, so `synthesize.py` does not exit 1 on a missing file. Those Claude findings stay unconfirmed.
+- Step 2.6: exit 1 from `codex-review.sh` (for example a missing `--prior` file) stops the re-check loop, leaves the remaining threads open, and goes in the round summary, the same as exit 3.
 
 ## [1.3.1] - 2026-09-24
 
