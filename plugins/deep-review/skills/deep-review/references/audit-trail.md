@@ -65,7 +65,7 @@ fix the JSON and rerun. A posting failure never stops the review.
 |---|---|---|
 | Phase 1, each round | every actionable finding raised this round, ids `R-001…` continuing across rounds; plus earlier findings being re-checked; the record's adversary value is explained below | `resolution` for each fix or pushback (`fixed` has no `sha` until the Phase 1 commit); `recheck` by the re-reviewer for findings fixed last round |
 | Phase 2 R1 | all Claude (`C-`) and adversary (`G-`/`X-`) findings, `status: unconfirmed` | none |
-| Phase 2 R2 | every judged finding, `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
+| Phase 2 R2 | every judged finding; confirmed findings get `status: survivor`, refuted ones keep `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
 | Phase 2 R3 | findings whose refutation was contested, plus every other R2-refuted finding getting its final status (`rejected` or `survivor`) written | `counter` by the finding's origin, then `verdict` for the concede-or-defend answer |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
 

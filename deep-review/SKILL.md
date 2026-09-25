@@ -182,7 +182,9 @@ In one message:
     and parse it yourself; treat the direct call as primary, the wrapper as convenience.
 
 Emit an R2 digest (confirmed/refuted/unjudged each direction). Record the round (phase
-`phase2-r2`): each judged finding with its `verdict` event and updated `status`.
+`phase2-r2`): record each judged finding with its `verdict` event; confirmed findings take
+`status: survivor`, refuted ones stay `status: unconfirmed` until the R3 record (see
+./references/audit-trail.md).
 
 ### Step 2.3 — R3: counter-round (the "let the primary counter" round)
 
@@ -197,7 +199,9 @@ This is what makes it >=3 rounds and forces genuine convergence rather than a st
   either side on its real merits — if it stays split after evidence, escalate it to the user as an
   explicit decision rather than forcing a verdict.
 
-Record the round (phase `phase2-r3`): `counter` then `verdict` events for each contested finding.
+Record the round (phase `phase2-r3`): record `counter` then `verdict` events for each contested
+finding, AND include every other R2-refuted finding with its final status (`rejected` if
+uncontested or conceded, `survivor` if the refuter conceded), so every refuted thread resolves.
 
 ### Step 2.4 — Converge (survivor rule)
 
