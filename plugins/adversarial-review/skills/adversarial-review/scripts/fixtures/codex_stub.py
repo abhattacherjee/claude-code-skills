@@ -15,6 +15,11 @@ State keys:
                        `model = "..."` line there makes exec fail with "unknown model ..."
   ignore_doc_override  true: act like a Codex that reads <repo>/AGENTS.md even when
                        `-c project_doc_max_bytes=0` is passed
+  load_repo_skills     true: act like a Codex that loads <repo>/.agents/skills; on a
+                       canary run, a CANARY-SKILL-<hex> token in any SKILL.md there
+                       becomes a finding title
+  load_repo_mcp        true: act like a Codex that starts the servers in <repo>/.mcp.json;
+                       each server's command runs (with its args) before exec answers
   exec                 list of actions, one per review `codex exec` call; the last repeats:
                          out          JSON value written to the -o file; a string is written as is
                          exit         exit code (default 0)
@@ -27,6 +32,7 @@ CANARY-<hex> token in <repo>/AGENTS.md. It never uses the exec list: the stub
 answers with no findings when AGENTS.md is blocked, and with one finding titled
 with the token when it is not.
 
+A `login status` log line records argv and the environment's key names.
 Each exec log line records argv, the environment's key names, CODEX_HOME, the
 working directory, all of stdin, the --output-schema file's JSON, and whether
 it was a canary run.
@@ -43,6 +49,7 @@ STATE = os.path.join(HOME, "codex-stub.json")
 LOG = os.path.join(HOME, "codex-stub.log")
 CANARY_RE = re.compile(r"CANARY-[0-9a-f]+")
 MODEL_RE = re.compile(r'^model\s*=\s*"([^"]+)"', re.M)
+SKILL_RE = re.compile(r"CANARY-SKILL-[0-9a-f]+")
 
 
 def load():
@@ -81,6 +88,28 @@ def write_out(argv, body):
             fh.write(body if isinstance(body, str) else json.dumps(body))
 
 
+def repo_skill_token(repo):
+    root = os.path.join(repo, ".agents", "skills")
+    if not os.path.isdir(root):
+        return None
+    for name in sorted(os.listdir(root)):
+        match = SKILL_RE.search(read(os.path.join(root, name, "SKILL.md")))
+        if match:
+            return match.group(0)
+    return None
+
+
+def start_repo_mcp(repo):
+    try:
+        servers = json.loads(read(os.path.join(repo, ".mcp.json")) or "{}").get("mcpServers", {})
+    except ValueError:
+        return
+    for server in servers.values():
+        subprocess.run([server["command"]] + list(server.get("args", [])),
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=30)
+
+
 def run_exec(argv, state):
     repo = arg_after(argv, "-C") or os.getcwd()
     canary = CANARY_RE.search(read(os.path.join(repo, "AGENTS.md")))
@@ -94,7 +123,15 @@ def run_exec(argv, state):
         if model:
             print("error: unknown model " + model.group(1), file=sys.stderr)
             return 1
+    if state.get("load_repo_mcp"):
+        start_repo_mcp(repo)
     if canary:
+        skill = repo_skill_token(repo) if state.get("load_repo_skills") else None
+        if skill:
+            write_out(argv, {"findings": [{
+                "path": "a.py", "line": 2, "severity": "minor", "category": "bug",
+                "title": skill, "rationale": "followed .agents/skills"}]})
+            return 0
         blocked = "project_doc_max_bytes=0" in argv and not state.get("ignore_doc_override")
         findings = [] if blocked else [{
             "path": "a.py", "line": 2, "severity": "minor", "category": "bug",
@@ -127,7 +164,7 @@ def main(argv):
         print(state.get("version", "codex-cli 0.155.1"))
         return 0
     if argv[:2] == ["login", "status"]:
-        log({"argv": argv})
+        log({"argv": argv, "env": sorted(os.environ)})
         code = state.get("login", 0)
         if state.get("login_stdout"):
             print(state["login_stdout"])
