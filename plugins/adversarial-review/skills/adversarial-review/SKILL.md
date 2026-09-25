@@ -112,7 +112,7 @@ Tell the user Gemini is installed but lacks a headless-capable credential, and s
 Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, set `ADVERSARY="claude-only"` and proceed in **degraded Claude-only mode**.
 
 **Case C — `GEMINI_AUTHED=unknown`:**
-No user interaction needed. Proceed normally; rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails.
+No user interaction needed. Proceed normally: set `ADVERSARY="gemini"`. Rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails, which falls back per Degradation Behavior (setting `ADVERSARY="claude-only"`).
 
 **Case D — `GEMINI_INSTALLED=yes` and `GEMINI_AUTHED=yes`:**
 Adversary confirmed available. Set `ADVERSARY="gemini"`. Continue to Step 1 with no user interaction.
