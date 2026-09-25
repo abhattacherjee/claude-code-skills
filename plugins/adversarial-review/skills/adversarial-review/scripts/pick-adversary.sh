@@ -21,6 +21,10 @@ Prints eval-safe KEY='value' lines: every line from ensure-codex.sh and
 ensure-gemini.sh (for their hints), then ADVERSARY and ADVERSARY_REASON.
 On exit 3 the ADVERSARY lines are left out and the reason goes to stderr.
 
+If ensure-codex.sh or ensure-gemini.sh itself exits non-zero, or prints
+something that doesn't parse as KEY='value' lines, that adversary is treated
+as unavailable (a warning goes to stderr) rather than aborting this script.
+
 Exit codes:
   0  an adversary was chosen (claude-only counts)
   2  usage error
@@ -52,27 +56,6 @@ case "$WANT" in
   *) echo "Error: --adversary must be auto, codex or gemini, got: $WANT" >&2; exit 2 ;;
 esac
 
-CODEX_LINES="$(bash "$SCRIPT_DIR/ensure-codex.sh" --check)"
-GEMINI_LINES="$(bash "$SCRIPT_DIR/ensure-gemini.sh" --check)"
-eval "$CODEX_LINES"
-eval "$GEMINI_LINES"
-printf '%s\n%s\n' "$CODEX_LINES" "$GEMINI_LINES"
-
-if [ "$CODEX_INSTALLED" != "yes" ]; then
-  CODEX_WHY="Codex is not installed"; CODEX_FIX="Install it: $CODEX_INSTALL_HINT"
-elif [ "$CODEX_AUTHED" != "yes" ]; then
-  CODEX_WHY="Codex is not logged in"; CODEX_FIX="$CODEX_AUTH_HINT"
-else
-  CODEX_WHY=""; CODEX_FIX=""
-fi
-if [ "$GEMINI_INSTALLED" != "yes" ]; then
-  GEMINI_WHY="Gemini is not installed"; GEMINI_FIX="Install it: $INSTALL_HINT"
-elif [ "$GEMINI_AUTHED" != "yes" ]; then
-  GEMINI_WHY="Gemini has no headless credential"; GEMINI_FIX="$AUTH_HINT"
-else
-  GEMINI_WHY=""; GEMINI_FIX=""
-fi
-
 # eval-safe: KEY='value' with embedded single quotes escaped. bash 3.2's
 # ${var//pattern/replacement} does not collapse a lone backslash before a
 # quote in the replacement text, so build the '\'' escape from variables
@@ -87,6 +70,71 @@ unusable() {
   echo "ADVERSARY_UNAVAILABLE: --adversary $WANT was asked for, but $1. $2" >&2
   exit 3
 }
+
+# Detect Codex. A non-zero exit from ensure-codex.sh, or output that (once
+# eval'd) never sets CODEX_INSTALLED, means detection itself failed. That is
+# treated as "Codex is unavailable" — never a set -eu abort of this script.
+CODEX_INSTALLED=""; CODEX_VERSION="-"; CODEX_AUTHED="unknown"
+CODEX_INSTALL_HINT=""; CODEX_AUTH_HINT=""
+CODEX_RC=0
+CODEX_RAW="$(bash "$SCRIPT_DIR/ensure-codex.sh" --check)" || CODEX_RC=$?
+CODEX_DETECTED=0
+if [ "$CODEX_RC" -eq 0 ] && eval "$CODEX_RAW" 2>/dev/null && [ -n "$CODEX_INSTALLED" ]; then
+  CODEX_DETECTED=1
+  printf '%s\n' "$CODEX_RAW"
+else
+  echo "Warning: ensure-codex.sh --check did not report a usable status (exit $CODEX_RC); treating Codex as unavailable." >&2
+  CODEX_INSTALLED="no"; CODEX_VERSION="-"; CODEX_AUTHED="unknown"
+  CODEX_INSTALL_HINT="ensure-codex.sh --check failed (exit $CODEX_RC); rerun it directly to see why"
+  CODEX_AUTH_HINT="ensure-codex.sh --check failed (exit $CODEX_RC); rerun it directly to see why"
+  emit CODEX_INSTALLED "$CODEX_INSTALLED"
+  emit CODEX_VERSION "$CODEX_VERSION"
+  emit CODEX_AUTHED "$CODEX_AUTHED"
+  emit CODEX_INSTALL_HINT "$CODEX_INSTALL_HINT"
+  emit CODEX_AUTH_HINT "$CODEX_AUTH_HINT"
+fi
+
+# Detect Gemini, same treatment.
+GEMINI_INSTALLED=""; GEMINI_VERSION="-"; GEMINI_AUTHED="unknown"
+INSTALL_HINT=""; AUTH_HINT=""
+GEMINI_RC=0
+GEMINI_RAW="$(bash "$SCRIPT_DIR/ensure-gemini.sh" --check)" || GEMINI_RC=$?
+GEMINI_DETECTED=0
+if [ "$GEMINI_RC" -eq 0 ] && eval "$GEMINI_RAW" 2>/dev/null && [ -n "$GEMINI_INSTALLED" ]; then
+  GEMINI_DETECTED=1
+  printf '%s\n' "$GEMINI_RAW"
+else
+  echo "Warning: ensure-gemini.sh --check did not report a usable status (exit $GEMINI_RC); treating Gemini as unavailable." >&2
+  GEMINI_INSTALLED="no"; GEMINI_VERSION="-"; GEMINI_AUTHED="unknown"
+  INSTALL_HINT="ensure-gemini.sh --check failed (exit $GEMINI_RC); rerun it directly to see why"
+  AUTH_HINT="ensure-gemini.sh --check failed (exit $GEMINI_RC); rerun it directly to see why"
+  emit GEMINI_INSTALLED "$GEMINI_INSTALLED"
+  emit GEMINI_VERSION "$GEMINI_VERSION"
+  emit GEMINI_AUTHED "$GEMINI_AUTHED"
+  emit INSTALL_HINT "$INSTALL_HINT"
+  emit AUTH_HINT "$AUTH_HINT"
+fi
+
+if [ "$CODEX_DETECTED" -eq 0 ]; then
+  CODEX_WHY="Codex detection failed"
+  CODEX_FIX="ensure-codex.sh --check did not report a usable status (exit $CODEX_RC); rerun it directly to see why"
+elif [ "$CODEX_INSTALLED" != "yes" ]; then
+  CODEX_WHY="Codex is not installed"; CODEX_FIX="Install it: $CODEX_INSTALL_HINT"
+elif [ "$CODEX_AUTHED" != "yes" ]; then
+  CODEX_WHY="Codex is not logged in"; CODEX_FIX="$CODEX_AUTH_HINT"
+else
+  CODEX_WHY=""; CODEX_FIX=""
+fi
+if [ "$GEMINI_DETECTED" -eq 0 ]; then
+  GEMINI_WHY="Gemini detection failed"
+  GEMINI_FIX="ensure-gemini.sh --check did not report a usable status (exit $GEMINI_RC); rerun it directly to see why"
+elif [ "$GEMINI_INSTALLED" != "yes" ]; then
+  GEMINI_WHY="Gemini is not installed"; GEMINI_FIX="Install it: $INSTALL_HINT"
+elif [ "$GEMINI_AUTHED" != "yes" ]; then
+  GEMINI_WHY="Gemini has no headless credential"; GEMINI_FIX="$AUTH_HINT"
+else
+  GEMINI_WHY=""; GEMINI_FIX=""
+fi
 
 case "$WANT" in
   codex)
