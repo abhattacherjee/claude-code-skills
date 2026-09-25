@@ -175,11 +175,11 @@ In one message:
 - Claude cross-examiner (opus) judges every Gemini finding -> `confirm|refute` with reason,
   grounded in the **current** source (findings can be stale if Phase 1 already fixed them).
 - Gemini judges every Claude finding (`gemini-review.sh --diff <DIFF> --findings <claude-r1.json> [--out <r2.json>]`).
-  - **Reliability note:** the wrapper fails open to nothing if Gemini's JSON lacks `verdicts`
-    (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key` -> empty result). Fall back to a
-    direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
-    verdict:confirm|refute, reason}>"` call (build a prompt file with the brief and each finding)
-    and parse it yourself; treat the direct call as primary, the wrapper as convenience.
+  - **Reliability note:** use `gemini-review.sh` first. It can come back empty when Gemini's
+    JSON lacks `verdicts` (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key`). Only
+    then, fall back to a direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask
+    for JSON {id, verdict:confirm|refute, reason}>"` call. Build a prompt file with the brief and
+    each finding, and parse the JSON yourself.
 
 Emit an R2 digest (confirmed/refuted/unjudged each direction). Record the round (phase
 `phase2-r2`): record each judged finding with its `verdict` event; confirmed findings take
@@ -199,9 +199,9 @@ This is what makes it >=3 rounds and forces genuine convergence rather than a st
   either side on its real merits — if it stays split after evidence, escalate it to the user as an
   explicit decision rather than forcing a verdict.
 
-Record the round (phase `phase2-r3`): record `counter` then `verdict` events for each contested
-finding, AND include every other R2-refuted finding with its final status (`rejected` if
-uncontested or conceded, `survivor` if the refuter conceded), so every refuted thread resolves.
+Record the round (phase `phase2-r3`). For contested findings, record `counter` then `verdict`:
+`survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted
+finding gets `rejected`.
 
 ### Step 2.4 — Converge (survivor rule)
 

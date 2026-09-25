@@ -12,6 +12,8 @@ RUN_DIR="$(mktemp -d)"
 AUDIT="<adversarial-review plugin dir>/skills/adversarial-review/scripts/pr-audit.py"
 K=0            # round counter, shared by both phases
 PREV_HEAD=null # previous round's head SHA, JSON null for the first round
+PR=""          # the PR number in PR mode; empty in local mode
+NO_POST=false  # true when the user asked not to post to the PR
 ```
 
 ## After each round
@@ -55,28 +57,38 @@ else python3 "$AUDIT" local --record "$RUN_DIR/round-$K.json" --out "<branch wit
 
 4. `PREV_HEAD="\"<head sha>\""`.
 
-Exit 1 means some comments failed (listed on stderr). Note it for the final report and carry on;
-rerunning the same command later posts only what is missing. Exit 2 means the record is invalid:
-fix the JSON and rerun. A posting failure never stops the review.
+Exit codes:
+
+- 0: everything was posted.
+- 1: the trail is incomplete. Some posts failed (listed on stderr), or it went to the local file
+  because `gh` is unusable or the PR cannot be read. Note it for the final report and carry on.
+  Rerunning the same command later posts only what is missing and updates the summary.
+- 2: the record is invalid. Fix the JSON and rerun.
+- 3: pr-audit.py crashed. Note its one-line error for the final report and carry on.
+
+A posting failure never stops the review.
 
 ## What goes in each record
 
 | Round | Findings to include | Events |
 |---|---|---|
-| Phase 1, each round | every actionable finding raised this round, ids `R-001…` continuing across rounds; plus earlier findings being re-checked; the record's adversary value is explained below | `resolution` for each fix or pushback (`fixed` has no `sha` until the Phase 1 commit); `recheck` by the re-reviewer for findings fixed last round |
+| Phase 1, each round | every actionable finding raised this round, ids `R-001…` continuing across rounds; plus earlier findings being re-checked; `adversary: claude-only` | `resolution` for each fix or pushback (`fixed` has no `sha` until the Phase 1 commit); `recheck` by the re-reviewer for findings fixed last round |
 | Phase 2 R1 | all Claude (`C-`) and adversary (`G-`/`X-`) findings, `status: unconfirmed` | none |
 | Phase 2 R2 | every judged finding; confirmed findings get `status: survivor`, refuted ones keep `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
-| Phase 2 R3 | findings whose refutation was contested, plus every other R2-refuted finding getting its final status (`rejected` or `survivor`) written | `counter` by the finding's origin, then `verdict` for the concede-or-defend answer |
+| Phase 2 R3 | every R2-refuted finding | For contested findings, record `counter` then `verdict`: `survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted finding gets `rejected`. |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
 
-A refuted finding's thread is resolved at once — which is why a finding refuted in R2 keeps
-`status: unconfirmed` in the phase2-r2 record even though its `verdict` refute event is recorded
-there: writing `rejected` (and resolving the thread) before the R3 counter round has run would let a
-contested refutation flip the finding back to `survivor` after its thread was already closed. A
-fixed finding's thread stays open until the LATEST `recheck` event on it says `resolved` and was
-made by the record's `adversary`. Phase 1 records therefore use `"adversary": "claude-only"`, so the
-Claude re-reviewer's re-check can resolve a Phase 1 thread. Phase 2 records use the Phase 2 adversary
-(`gemini`, or `codex` later), so only that model's re-check resolves a Phase 2 thread.
+A `rejected` finding's thread is resolved at once. So a finding refuted in R2 keeps
+`status: unconfirmed` in the phase2-r2 record, even though its refute `verdict` is recorded there.
+Writing `rejected` in R2 would close the thread before the R3 counter round runs. A contested
+refutation could then flip the finding back to `survivor` after its thread was closed.
+
+A fixed finding's thread stays open until the latest `recheck` event on it in the record says
+`resolved` and was made by the record's `adversary` (with `claude-only`, any model's re-check
+counts). Phase 1 records use `"adversary": "claude-only"`, so the Claude re-reviewer's re-check can
+resolve a Phase 1 thread. Phase 2 records use the Phase 2 adversary: `gemini`, `codex` later, or
+`claude-only` when Step 2.0 degrades. With `gemini` or `codex`, only that model's re-check resolves
+a Phase 2 thread.
 
 Phase 2 has no adversary re-check round yet, so fixed Phase 2 threads stay open until the re-review
 rounds that #135 part 2 adds. On repos that require conversation resolution before merge, resolve

@@ -291,9 +291,9 @@ Pass `--no-post` when the user asked for it. Relay `sink.sh`'s `pr-audit:` line 
 
 Model text is posted as written under your GitHub account, so @mentions and #refs in it will notify people and link issues.
 
-- Exit 0: delivered. In pr mode, each finding now has a thread on the PR, the opposing model's verdict is a reply, refuted findings' threads are resolved, and one summary review (split into numbered parts if very long) lists them all.
-- Exit 4: the report was delivered but some audit comments failed. The failed ids are on stderr. Tell the user; rerunning Step 5 with the same record posts only what is missing.
-- Exit 1 or 2: delivery failed. Show the error.
+- Exit 0: posted. In pr mode, each finding with a path has a thread on the PR. The opposing model's verdict is a reply in it. Refuted findings' threads are resolved. One summary review lists every finding; it is split into numbered parts if very long. Findings without a path, or that GitHub rejected twice, appear only in the summary.
+- Exit 4: the report was delivered, but the audit trail is incomplete or went to the local file. See the `pr-audit:` lines and tell the user. Rerunning Step 5 with the same record posts only what is missing and updates the summary.
+- Exit 1 or 2: `sink.sh` itself failed. Show the error.
 
 The run directory (`$RUN_DIR`) keeps `round-1.json`. Give the user its path.
 
