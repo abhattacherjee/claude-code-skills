@@ -47,6 +47,7 @@ All notable changes to this skill will be documented in this file.
 - **Both-confirm survivor rule** — only findings confirmed by both models are survivors; UNCONFIRMED and REJECTED buckets are always surfaced
 - **PR mode + local mode** — PR detected → survivors posted as review comments; no PR → terminal report + gitignored `<branch>.adversarial-review.md`
 - **Loud adversary-unavailable degradation** — Gemini unauthenticated/parse failure → Claude-only review with `ADVERSARY UNAVAILABLE` banner; never silent
+- **Three sub-agents** — `adversarial-bug-hunter` (Opus, R1 bug-hunt) and `adversarial-convention-reviewer` (Sonnet, R1 convention scan) run R1; the R2/R3 agent shipped as `adversarial-r3-adjudicator` (Opus, cross-examination against actual source files) and was renamed and rewritten within this same release as `adversarial-cross-examiner`, which judges the adversary's (Gemini) R1 findings — not Claude's own — in the symmetric R2 cross-exam round
 - **Six scripts** — `ensure-gemini.sh`, `detect-mode.sh`, `gemini-review.sh`, `synthesize.py`, `sink.sh`, `run-tests.sh`
 - **Guided Gemini setup (Step 0)** — `ensure-gemini.sh` detects missing/unauthenticated Gemini; orchestrator offers install and API-key setup before the pipeline starts
 - **gemini-cli v0.44.x envelope extraction** — `gemini-review.sh` recovers `{"verdicts":[...]}` or `{"findings":[...]}` from the `"response"`-nested envelope shape with optional prose prefix lines

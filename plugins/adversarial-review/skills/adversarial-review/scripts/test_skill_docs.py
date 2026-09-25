@@ -95,6 +95,17 @@ class AdversarialReviewDocTests(unittest.TestCase):
             for name in cr.PASSTHROUGH_ENV:
                 self.assertIn("`%s`" % name, text, (str(path), name))
 
+    def test_plugin_and_skill_changelogs_match_after_the_intro_line(self):
+        # The skill- and plugin-level CHANGELOG.md copies drifted -- PR #138's
+        # final fix wave landed only in the skill copy. Line 3 (index 2) differs
+        # on purpose ("this project" vs "this skill"); every other line must
+        # match verbatim, or the two copies silently diverge again.
+        skill_changelog = HERE.parent / "CHANGELOG.md"
+        plugin_changelog = HERE.parent.parent.parent / "CHANGELOG.md"
+        skill_lines = skill_changelog.read_text(encoding="utf-8").splitlines()
+        plugin_lines = plugin_changelog.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(plugin_lines[3:], skill_lines[3:])
+
     def test_strict_is_documented_as_the_hardened_judge(self):
         # deep-review X-002: --strict must be described as what it does.
         self.assertIn("verbatim", section(self.text, "**Low-signal escalation:**", "- Claude rubber-stamping"))
