@@ -7,6 +7,14 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Added
+
+- **Review audit trail on the PR (#135, part 1).** `adversarial-review` 0.1.0 -> 0.2.0 and `deep-review` 1.3.1 -> 1.4.0 save every model exchange on the PR, round by round: one inline thread per finding (refuted ones included, resolved at once), verdicts, counters, fixes and re-checks as replies, and one summary review per round. A fixed finding's thread closes only when the adversary's latest re-check says resolved, and pr-audit.py trusts only markers written by its own gh user. Secrets are redacted and bodies capped before posting. A new shared script, `pr-audit.py`, does the posting; it keeps no local state, so a rerun posts only what is missing.
+
+### Fixed
+
+- **`adversarial-review` PR mode never posted a comment.** `sink.sh` called `pr-review-cli.sh --pr …`, which that CLI rejects, then printed "PR review comments posted" anyway. The suite that would have caught it never ran in CI; it does now.
+
 ## [3.18.1] - 2026-09-24
 
 ### Changed
