@@ -25,7 +25,7 @@ NO_POST=false  # true when the user asked not to post to the PR
 ```json
 {
   "schema": "audit-round/v1", "run_id": "<RUN_ID>", "skill": "deep-review",
-  "phase": "phase1 | phase2-r1 | phase2-r2 | phase2-r3 | phase2-fix",
+  "phase": "phase1 | phase2-r1 | phase2-r2 | phase2-r3 | phase2-fix | phase2-recheck",
   "round": <K>, "adversary": "gemini | codex | claude-only",
   "head_sha": "<40 hex>", "prev_head_sha": <PREV_HEAD>,
   "findings": [{
@@ -78,6 +78,7 @@ A posting failure never stops the review.
 | Phase 2 R2 | every judged finding; confirmed findings get `status: survivor`, refuted ones keep `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
 | Phase 2 R3 | every R2-refuted finding | For contested findings, record `counter` then `verdict`: `survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted finding gets `rejected`. |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
+| Phase 2 re-check (Codex only) | the findings from the last `phase2-fix` record that Codex re-checked, plus Codex's new findings | Built by `pr-audit.py recheck`, never by hand: one `recheck` event by `codex` on each re-checked finding; new findings get `status: unconfirmed` and no events |
 
 A `rejected` finding's thread is resolved at once. So a finding refuted in R2 keeps
 `status: unconfirmed` in the phase2-r2 record, even though its refute `verdict` is recorded there.
@@ -87,10 +88,21 @@ refutation could then flip the finding back to `survivor` after its thread was c
 A fixed finding's thread stays open until the latest `recheck` event on it in the record says
 `resolved` and was made by the record's `adversary` (with `claude-only`, any model's re-check
 counts). Phase 1 records use `"adversary": "claude-only"`, so the Claude re-reviewer's re-check can
-resolve a Phase 1 thread. Phase 2 records use the Phase 2 adversary: `gemini`, `codex` later, or
+resolve a Phase 1 thread. Phase 2 records use the Phase 2 adversary: `codex`, `gemini`, or
 `claude-only` when Step 2.0 degrades. With `gemini` or `codex`, only that model's re-check resolves
 a Phase 2 thread.
 
-Phase 2 has no adversary re-check round yet, so fixed Phase 2 threads stay open until the re-review
-rounds that #135 part 2 adds. On repos that require conversation resolution before merge, resolve
-those threads by hand after checking the fix.
+With Codex, Step 2.6 re-checks every fix. Build that record with `pr-audit.py recheck`:
+
+```bash
+python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_DIR/recheck-$K.json" \
+  --round "$K" --head-sha "$FIX_SHA" --out "$RUN_DIR/round-$K.json"
+```
+
+`--prior` is the last `phase2-fix` record. `--rechecks` is the output of `codex-review.sh --mode
+find --prior`. The record takes `run_id`, `skill` and `adversary` from the prior record, and its
+`prev_head_sha` is the prior head. Exit 2 means the inputs do not make a valid record; a new
+finding that reuses an earlier id is one cause (rerun `codex-review.sh` with a higher
+`--id-start`). With Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay
+open. On repos that require conversation resolution before merge, resolve those threads by hand
+after checking the fix.

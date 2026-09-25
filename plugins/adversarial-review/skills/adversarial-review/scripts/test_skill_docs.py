@@ -102,5 +102,50 @@ class PluginReadmeDocTests(unittest.TestCase):
         self.assertIn("Codex", cross_examiner_line)
 
 
+REPO = HERE.parents[4]
+DR_SOURCE = REPO / "deep-review"
+DR_COPY = REPO / "plugins" / "deep-review" / "skills" / "deep-review"
+AR_SCRIPT_NAME = re.compile(
+    r"\b((?:codex|gemini)-review\.sh|pick-adversary\.sh|ensure-(?:codex|gemini)\.sh|pr-audit\.py|synthesize\.py)\b")
+
+
+@unittest.skipUnless(DR_SOURCE.is_dir() and DR_COPY.is_dir(), "not in the monorepo checkout")
+class DeepReviewDocTests(unittest.TestCase):
+    def read(self, rel):
+        return (DR_SOURCE / rel).read_text(encoding="utf-8")
+
+    def test_published_copy_is_byte_identical(self):
+        for src in sorted(DR_SOURCE.rglob("*")):
+            if src.is_dir() or src.name == "plugin-manifest.json":
+                continue
+            rel = src.relative_to(DR_SOURCE)
+            self.assertEqual((DR_COPY / rel).read_bytes(), src.read_bytes(), str(rel))
+        for copy in sorted(DR_COPY.rglob("*")):
+            if copy.is_file():
+                self.assertTrue((DR_SOURCE / copy.relative_to(DR_COPY)).is_file(), str(copy))
+
+    def test_named_adversarial_review_scripts_exist(self):
+        text = self.read("SKILL.md") + self.read("references/audit-trail.md")
+        for name in sorted(set(AR_SCRIPT_NAME.findall(text))):
+            self.assertTrue((HERE / name).is_file(), name)
+
+    def test_phase_2_picks_the_adversary_and_never_calls_codex_directly(self):
+        phase2 = section(self.read("SKILL.md"), "## Phase 2", "## Final report")
+        self.assertIn("pick-adversary.sh", phase2)
+        self.assertIn("codex-review.sh", phase2)
+        self.assertIn("--mode counter", phase2)
+        self.assertIn("### Step 2.6", phase2)
+        self.assertIn("Never call `codex` directly", phase2)
+        # Ruling F6: eval "$(pick-adversary.sh ...)" discards pick-adversary's own
+        # exit code, so Step 2.0 must capture it explicitly, same as AR's Step 0.
+        self.assertIn("PICK_RC", phase2)
+
+    def test_recheck_rounds_use_pr_audit_recheck(self):
+        text = self.read("references/audit-trail.md")
+        self.assertIn('"$AUDIT" recheck', text)
+        self.assertIn("phase2-recheck", text)
+        self.assertNotIn("Phase 2 has no adversary re-check round yet", text)
+
+
 if __name__ == "__main__":
     unittest.main()
