@@ -5,13 +5,20 @@ synthesize.py — symmetric convergence of Claude↔Gemini adversarial review ro
 Usage:
   synthesize.py --claude-findings FILE --gemini-findings FILE
                 --gemini-verdicts FILE --claude-verdicts FILE
-                [--adversary gemini|codex] [--md FILE] [--json FILE] [--help]
+                [--adversary gemini|codex|claude-only] [--md FILE] [--json FILE] [--help]
 
   --adversary-findings and --adversary-verdicts are the same flags as
   --gemini-findings and --gemini-verdicts. The adversary's verdict on a Claude
   finding is adversary_verdict; files that still say gemini_verdict are read
   too. --adversary sets killed_by, the default origin of the adversary's
   findings, and the labels in the report and the direction lines.
+
+  --adversary claude-only is for the degraded no-adversary path: pass
+  {"findings":[]} for --adversary-findings and {"verdicts":[]} for
+  --adversary-verdicts and --claude-verdicts. Every Claude finding then comes
+  out status=unconfirmed (nothing to confirm it), and report.json's
+  summary.adversary is "claude-only", matching what `pr-audit.py record
+  --adversary claude-only` expects.
 
 Convergence rule (mechanical):
   A finding survives iff its author asserts it AND the opponent confirms it.
@@ -126,9 +133,10 @@ Exit codes:
     parser.add_argument("--gemini-verdicts", "--adversary-verdicts", dest="gemini_verdicts",
                         required=True, metavar="FILE",
                         help="Adversary judging Claude: {\"verdicts\":[{\"id\",\"adversary_verdict\",\"reason\",\"confidence\"}]}")
-    parser.add_argument("--adversary", choices=("gemini", "codex"), default="gemini",
+    parser.add_argument("--adversary", choices=("gemini", "codex", "claude-only"), default="gemini",
                         help="the adversary model: sets killed_by, the default origin of its "
-                             "findings, and the report labels (default: gemini)")
+                             "findings, and the report labels (default: gemini). claude-only "
+                             "is the degraded no-adversary path: pass empty findings/verdicts")
     parser.add_argument("--claude-verdicts", required=True, metavar="FILE",
                         help="Claude judging the adversary: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
     parser.add_argument("--md", metavar="FILE",
@@ -355,7 +363,7 @@ def classify_findings(
     return classified, gemini_verdict_map, claude_verdict_map
 
 
-ADVERSARY_LABEL = {"gemini": "Gemini", "codex": "Codex"}
+ADVERSARY_LABEL = {"gemini": "Gemini", "codex": "Codex", "claude-only": "Claude-only"}
 VERDICT_KEY = "adversary_verdict"
 LEGACY_VERDICT_KEY = "gemini_verdict"
 

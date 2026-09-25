@@ -21,7 +21,10 @@ so no local state is kept. A rerun updates its own summary in place.
 `recheck` builds the record for an adversary re-check round: each earlier
 finding the adversary re-checked gets one recheck event by the adversary, and
 its new findings are added unconfirmed. A "resolved" re-check by the adversary
-closes the thread when the record is posted.
+closes the thread when the record is posted. `recheck` is Codex-only: only
+`codex-review.sh --mode find --prior` re-checks earlier findings against
+current source, so a prior round whose adversary is not `codex` (Gemini or
+Claude-only) is refused (exit 2).
 
 When gh is missing, not logged in, or cannot read the PR, `post` says why,
 writes the same content to the local markdown file instead, and exits 1. A gh
@@ -563,7 +566,7 @@ def cmd_recheck(args):
         print(f"pr-audit: --round {args.round} must come after the prior round {prior['round']}",
               file=sys.stderr)
         return 2
-    by = prior["adversary"] if prior["adversary"] in ar.MODELS else "claude"
+    by = prior["adversary"]
     earlier = {f["id"]: f for f in prior["findings"]}
     findings, seen = [], set()
     for item in out["rechecks"]:

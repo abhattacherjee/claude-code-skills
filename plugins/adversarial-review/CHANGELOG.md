@@ -9,6 +9,17 @@ All notable changes to this project will be documented in this file.
 - PR mode saves the whole exchange on the PR: one inline thread per finding (refuted ones too), the opposing model's verdict as a reply, refuted threads resolved at once, and one summary review. Secrets in model output are redacted before posting, and bodies are capped below GitHub's size limit.
 - `scripts/pr-audit.py` with `post`, `local` and `record` modes, and `--no-post` on the skill and `sink.sh`.
 - `pr-audit.py` exit codes: 0 everything posted, 1 trail incomplete (some posts failed, or it went to the local file), 2 invalid record or report, 3 unexpected crash (the trail may be partial). `sink.sh` maps any non-zero code to 4.
+- Codex is the first-choice adversary. `pick-adversary.sh` picks Codex when it is installed and logged in, then Gemini, then Claude-only. `--adversary codex|gemini` forces one; a forced adversary that is not usable stops the run (exit 3) instead of falling back.
+- `codex-review.sh --mode find|judge|counter` runs Codex in a locked-down `codex exec`: only `PATH`, `HOME` and your own `CODEX_HOME` in its environment; user config, rules, the reviewed repo's `AGENTS.md`, apps, plugins, hooks and memories off; a read-only sandbox; the diff on a closed stdin pipe; and a timeout that kills the whole process group. Its output is checked against a schema, capped and redacted. Codex finding ids are `X-001…`.
+- Isolation is enforced, not assumed: every argv must carry all the isolation flags, and the first review on each Codex version runs a canary repo that tries to steer Codex from all four surfaces it could load — `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json`. A leak on any of the four stops the run with exit 3. `codex-review.sh --self-test` reruns the canary.
+- A pass is stamped in `codex-isolation-<version>-<key>.ok`, keyed on the Codex version, a hash of the isolation recipe, the resolved Codex binary's realpath and sha256, and `CODEX_HOME`; any change reruns the canary, and a missing or unreadable stamp counts as no stamp. For an npm install, the sha256 covers only the JS entry script `codex` points at, so a same-version package swap keeps the stamp.
+- `ensure-codex.sh --check` reports `CODEX_INSTALLED`, `CODEX_VERSION` and `CODEX_AUTHED`, from the exit code of `codex login status`.
+- `synthesize.py --adversary codex|gemini|claude-only` labels the report with the real adversary. `--adversary-findings` and `--adversary-verdicts` are new names for the Gemini-named flags. `claude-only` is the degraded no-adversary path (pass empty findings/verdicts files) so `pr-audit.py record --adversary claude-only` never trips its adversary/summary mismatch guard.
+- `pr-audit.py recheck` turns Codex's re-checks of earlier findings into `recheck` events, so a fixed finding's thread closes when Codex says it is resolved. `recheck` is Codex-only.
+
+### Changed
+
+- The adversary's verdict on a Claude finding is now `adversary_verdict` (it was `gemini_verdict`) in every file the skill writes. Old run files and report files with `gemini_verdict` still load.
 
 ### Fixed
 

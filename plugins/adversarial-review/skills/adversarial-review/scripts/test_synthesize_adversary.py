@@ -128,13 +128,61 @@ class SynthesizeAdversaryTests(unittest.TestCase):
 
     def test_unknown_adversary_is_a_usage_error(self):
         run = Run(self)
-        res, _ = run.synth("--adversary", "claude-only", "--gemini-findings", run.adv,
+        # "claude-only" used to be the bogus value here; it is now a real choice
+        # (Task 8: the degraded no-adversary path), so this uses an adversary
+        # that is genuinely not on the list.
+        res, _ = run.synth("--adversary", "openai", "--gemini-findings", run.adv,
                            "--gemini-verdicts", run.adv_verdicts)
         self.assertEqual(res.returncode, 2)
         # argparse's own choices-rejection is what actually fires here; without
         # this the guard could vanish and the test would stay green for the
         # wrong reason (ruling F8).
         self.assertIn("invalid choice", res.stderr)
+
+    def test_claude_only_labels_the_report_with_no_adversary(self):
+        """Task 8: the degraded no-adversary path. --adversary-findings and
+        --adversary-verdicts are empty (no second model ran), so every Claude
+        finding stays unconfirmed, and report.json's summary.adversary is
+        "claude-only" -- what pr-audit.py record --adversary claude-only expects
+        (its mismatch guard compares the two)."""
+        run = Run(self)
+        empty_findings = run.put("empty-findings.json", {"findings": []})
+        empty_verdicts = run.put("empty-verdicts.json", {"verdicts": []})
+        res, report = run.synth("--adversary", "claude-only",
+                                "--adversary-findings", empty_findings,
+                                "--adversary-verdicts", empty_verdicts,
+                                "--claude-verdicts", empty_verdicts)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(report["summary"]["adversary"], "claude-only")
+        f = by_id(report["findings"])
+        self.assertEqual(f["C-001"]["status"], "unconfirmed")
+        self.assertEqual(f["C-002"]["status"], "unconfirmed")
+        self.assertIsNone(f["C-001"]["adversary_verdict"])
+        md = (run.dir / "report.md").read_text()
+        self.assertIn("_No findings confirmed by both models._", md)
+        # End to end: pr-audit.py record --adversary claude-only must not trip
+        # its mismatch guard against this report's summary.adversary.
+        rec_res, rec = run.record(run.dir / "report.json", adversary="claude-only")
+        self.assertEqual(rec_res.returncode, 0, rec_res.stderr)
+        ar.validate(rec)
+        self.assertEqual(rec["adversary"], "claude-only")
+
+    def test_claude_only_report_still_trips_the_record_mismatch_guard(self):
+        """Negative control for the test above: a real adversary/summary mismatch
+        must still be refused (exit 2), so the guard added in Task 7 is not
+        silently defeated by the claude-only path."""
+        run = Run(self)
+        empty_findings = run.put("empty-findings-2.json", {"findings": []})
+        empty_verdicts = run.put("empty-verdicts-2.json", {"verdicts": []})
+        res, _ = run.synth("--adversary", "claude-only",
+                           "--adversary-findings", empty_findings,
+                           "--adversary-verdicts", empty_verdicts,
+                           "--claude-verdicts", empty_verdicts)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rec_res, rec = run.record(run.dir / "report.json", adversary="gemini")
+        self.assertEqual(rec_res.returncode, 2)
+        self.assertIsNone(rec)
+        self.assertIn("does not match", rec_res.stderr)
 
     def test_codex_run_becomes_a_valid_round_record(self):
         run = Run(self)

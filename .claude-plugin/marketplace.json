@@ -11,7 +11,7 @@
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
-      "description": "Adversarial PR review \u2014 Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if the Gemini adversary is unavailable.",
+      "description": "Adversarial PR review \u2014 Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if no adversary is available.",
       "version": "0.2.0"
     },
     {

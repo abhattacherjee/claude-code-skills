@@ -53,7 +53,8 @@ Tests:
   - synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)
   - synthesize.py: confirm-rate guard (rubber-stamp / rubber-reject detection)
   - synthesize.py: verdict_reason carries the judge's real reason text
-  - pr-audit.py + audit_record.py: Python unit and CLI tests (gh stub)
+  - Python unit and CLI tests (test_*.py): audit trail (gh stub), Codex detection,
+    adversary choice, codex-review.sh (codex stub), synthesize --adversary, docs
   - sink.sh: PR mode posts the audit trail; any pr-audit failure -> exit 4;
     gh fallback; .gitignore handling; --no-post and local mode
 
@@ -2104,7 +2105,7 @@ assert_contains "C-002 verdict_reason is Gemini's refute reason" \
 # ====================================================================
 # pr-audit.py + audit_record.py — unit and CLI tests
 # ====================================================================
-section "pr-audit.py + audit_record.py — unit and CLI tests"
+section "Python unit and CLI tests (test_*.py)"
 
 run_capture UT_OUT UT_EXIT env PYTHONDONTWRITEBYTECODE=1 \
   python3 -m unittest discover -s "$SCRIPT_DIR" -p 'test_*.py'
