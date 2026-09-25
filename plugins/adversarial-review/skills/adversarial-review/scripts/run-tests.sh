@@ -2117,6 +2117,37 @@ sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --record "$SINK_R
 assert_eq "sink adds the pattern when only a commented copy exists" "yes" \
   "$(grep -qxF '*.adversarial-review.md' "$SINK_REPO/.gitignore" && echo yes || echo no)"
 
+# A .gitignore with no final newline: the pattern must go on its own line.
+printf 'node_modules' >"$SINK_REPO/.gitignore"
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
+assert_eq "sink keeps the last .gitignore line intact when it has no newline" "yes" \
+  "$(grep -qxF 'node_modules' "$SINK_REPO/.gitignore" && echo yes || echo no)"
+assert_eq "sink puts the pattern on its own line after a line with no newline" "yes" \
+  "$(grep -qxF '*.adversarial-review.md' "$SINK_REPO/.gitignore" && echo yes || echo no)"
+
+# A CRLF .gitignore that already has the pattern: nothing is added.
+printf 'node_modules\r\n*.adversarial-review.md\r\n' >"$SINK_REPO/.gitignore"
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
+assert_eq "sink counts a CRLF pattern line as present" "1" \
+  "$(grep -c 'adversarial-review' "$SINK_REPO/.gitignore")"
+if [[ "$S_OUT" == *"Added '*.adversarial-review.md'"* ]]; then
+  fail "sink does not re-add a pattern that is on a CRLF line"
+else
+  pass "sink does not re-add a pattern that is on a CRLF line"
+fi
+
+# A .gitignore that cannot be written: warn and still deliver the report.
+rm -f "$SINK_REPO/.gitignore"
+mkdir "$SINK_REPO/.gitignore"
+rm -f "$SINK_REPO/feature-g.adversarial-review.md"
+sink_run S_OUT S_EXIT '{}' --mode local --branch feature/g
+assert_exit_code "sink with an unwritable .gitignore still exits 0" "0" "$S_EXIT"
+assert_contains "sink warns when it cannot update .gitignore" \
+  "WARNING: could not add '*.adversarial-review.md' to" "$S_OUT"
+assert_eq "sink with an unwritable .gitignore still writes the report" "yes" \
+  "$([[ -f "$SINK_REPO/feature-g.adversarial-review.md" ]] && echo yes || echo no)"
+rmdir "$SINK_REPO/.gitignore"
+
 rm -f "$SINK_REPO/feature-x.adversarial-review.md"
 sink_run S_OUT S_EXIT '{"auth":false}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
 assert_exit_code "sink pr mode with gh logged out exits 4" "4" "$S_EXIT"
@@ -2130,10 +2161,20 @@ assert_exit_code "sink pr mode with a rejected record exits 4" "4" "$S_EXIT"
 assert_contains "sink says the round record was rejected" \
   "the round record was rejected, no audit trail was saved" "$S_OUT"
 
+# A bad gh response is a failed post (exit 1 from pr-audit), not a crash.
 sink_run S_OUT S_EXIT '{"garbage":["reply"]}' --mode pr --pr 7 --branch feature/x \
   --record "$SINK_RECORD"
+assert_exit_code "sink pr mode with a bad gh response exits 4" "4" "$S_EXIT"
+assert_contains "sink says a bad gh response left the trail incomplete" "incomplete" "$S_OUT"
+
+# The fallback file path is a directory, so pr-audit.py crashes (exit 3).
+mkdir -p "$SINK_REPO/feature-crash.adversarial-review.md"
+sink_run S_OUT S_EXIT '{"auth":false}' --mode pr --pr 7 --branch feature/crash \
+  --record "$SINK_RECORD"
 assert_exit_code "sink pr mode with a pr-audit crash exits 4" "4" "$S_EXIT"
-assert_contains "sink says pr-audit crashed" "pr-audit.py crashed, no audit trail was saved" "$S_OUT"
+assert_contains "sink says pr-audit crashed and the trail may be partial" \
+  "pr-audit.py crashed; the audit trail may be partial" "$S_OUT"
+rmdir "$SINK_REPO/feature-crash.adversarial-review.md"
 
 sink_run S_OUT S_EXIT '{}' --mode local --branch feature/z --record "$TMP_DIR/sink-bad-round.json"
 assert_exit_code "sink local mode with a rejected record exits 4" "4" "$S_EXIT"

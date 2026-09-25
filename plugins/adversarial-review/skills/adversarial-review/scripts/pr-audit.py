@@ -16,14 +16,15 @@ one COMMENT review with a summary table; a long table is split over several
 numbered reviews. Earlier threads and summaries are found by a hidden marker,
 so no local state is kept. A rerun updates its own summary in place.
 
-When gh is missing, not logged in, or cannot read the PR, `post` writes the
-same content to the local markdown file instead and exits 1.
+When gh is missing, not logged in, or cannot read the PR, `post` says why,
+writes the same content to the local markdown file instead, and exits 1. A gh
+call that fails, or returns output that cannot be parsed, is a failed post.
 
 Exit codes:
   0  everything was posted (or `local`/`record` succeeded)
   1  the trail is incomplete: some posts failed, or it went to the local file
   2  usage error, invalid record, or invalid report
-  3  unexpected error (one line on stderr, no traceback)
+  3  unexpected error (one line on stderr, no traceback); the trail may be partial
 """
 import argparse
 import json
@@ -65,16 +66,32 @@ def gh(args, payload=None):
     return proc.stdout
 
 
+# What went wrong in a gh call that returned output. A bad response (invalid
+# JSON, or JSON of the wrong shape) counts as a failed post, the same as GhError.
+POST_ERRORS = (GhError, ValueError, KeyError, TypeError)
+
+
 def gh_ready():
-    """True when gh can read the account that will post. `gh api user` tests the
-    token gh will actually use, on every gh version, and is not fooled by a
-    logged-in account on another host."""
+    """Return (ready, reason). ready is True when gh can read the account that will
+    post; reason says why not. `gh api user` tests the token gh will actually use,
+    on every gh version, and is not fooled by a logged-in account on another host."""
     try:
         proc = subprocess.run(["gh", "api", "user", "-q", ".login"], capture_output=True,
                               text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0 and bool(proc.stdout.strip())
+    except FileNotFoundError:
+        return False, "gh is not installed"
+    except subprocess.TimeoutExpired:
+        return False, "gh timed out checking the login"
+    except OSError as exc:
+        return False, f"gh could not run ({exc})"
+    if proc.returncode != 0:
+        err = " ".join(proc.stderr.split()) or f"gh exited {proc.returncode}"
+        if "401" in err or "auth login" in err:
+            return False, f"gh is not logged in ({err})"
+        return False, f"gh could not check the login ({err})"
+    if not proc.stdout.strip():
+        return False, "gh returned no login"
+    return True, ""
 
 
 def load_record(path):
@@ -153,9 +170,10 @@ def cmd_local(args):
 
 def cmd_post(args):
     rec = load_record(args.record)
-    if not gh_ready():
+    ready, reason = gh_ready()
+    if not ready:
         out = args.fallback_out or default_local_out()
-        print(f"pr-audit: gh is missing or not logged in; writing the audit trail to {out} instead.",
+        print(f"pr-audit: {reason}; writing the audit trail to {out} instead.",
               file=sys.stderr)
         write_local(rec, out)
         return 1
@@ -181,6 +199,14 @@ def json_lines(text):
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
+def json_object(text):
+    """Parse gh output that must be one JSON object. Raise ValueError otherwise."""
+    obj = json.loads(text)
+    if not isinstance(obj, dict):
+        raise ValueError(f"expected a JSON object from gh, got {type(obj).__name__}")
+    return obj
+
+
 class GitHub:
     def __init__(self, repo, pr):
         self.repo, self.pr = repo, pr
@@ -204,19 +230,20 @@ class GitHub:
             payload["subject_type"] = "file"
         else:
             payload.update(line=line, side="RIGHT")
-        return json.loads(gh(["api", "-X", "POST", f"{self.base}/comments", "--input", "-"], payload))
+        return json_object(gh(["api", "-X", "POST", f"{self.base}/comments", "--input", "-"],
+                              payload))
 
     def reply(self, comment_id, body):
-        return json.loads(gh(["api", "-X", "POST", f"{self.base}/comments/{comment_id}/replies",
-                              "--input", "-"], {"body": body}))
+        return json_object(gh(["api", "-X", "POST", f"{self.base}/comments/{comment_id}/replies",
+                               "--input", "-"], {"body": body}))
 
     def review(self, sha, body):
-        return json.loads(gh(["api", "-X", "POST", f"{self.base}/reviews", "--input", "-"],
-                             {"commit_id": sha, "body": body, "event": "COMMENT"}))
+        return json_object(gh(["api", "-X", "POST", f"{self.base}/reviews", "--input", "-"],
+                              {"commit_id": sha, "body": body, "event": "COMMENT"}))
 
     def update_review(self, review_id, body):
-        return json.loads(gh(["api", "-X", "PUT", f"{self.base}/reviews/{review_id}",
-                              "--input", "-"], {"body": body}))
+        return json_object(gh(["api", "-X", "PUT", f"{self.base}/reviews/{review_id}",
+                               "--input", "-"], {"body": body}))
 
     def threads(self):
         """Map each thread's first comment id to (thread node id, isResolved)."""
@@ -262,12 +289,23 @@ def open_thread(hub, rec, f, body):
 
 def anchor_note(f, opener):
     """Say when a thread is file-level, so the summary shows the line anchor was lost.
-    Worked out from the opener itself, so a rerun renders the same note."""
-    if opener.get("subject_type") != "file":
+    Worked out from the opener itself, so a rerun renders the same note. When the
+    opener has no subject_type, a missing line means the thread is file-level."""
+    subject = opener.get("subject_type")
+    if subject is None:
+        subject = "line" if opener.get("line") is not None else "file"
+    if subject != "file":
         return None
     if f.get("line") is not None:
         return "inline rejected (422); file-level"
     return "file-level (no line)"
+
+
+def error_text(exc):
+    """GhError already carries gh's message; name the type for a bad response."""
+    if isinstance(exc, GhError):
+        return str(exc)
+    return f"bad response from gh: {type(exc).__name__}: {exc}"
 
 
 def post_round(rec, args):
@@ -278,7 +316,7 @@ def post_round(rec, args):
         me = hub.login()
         existing = hub.comments()
         reviews = hub.reviews()
-    except (GhError, json.JSONDecodeError) as exc:
+    except POST_ERRORS as exc:
         print(f"pr-audit: could not read PR #{args.pr}: {exc}", file=sys.stderr)
         out = args.fallback_out or default_local_out()
         write_local(rec, out)
@@ -313,8 +351,8 @@ def post_round(rec, args):
             try:
                 opener, note = open_thread(hub, rec, f, body)
                 n_posted += opener is not None
-            except GhError as exc:
-                failures.append((fid, "open thread", str(exc)))
+            except POST_ERRORS as exc:
+                failures.append((fid, "open thread", error_text(exc)))
                 note = "posting failed"
         else:
             if is_new:
@@ -334,8 +372,8 @@ def post_round(rec, args):
                 try:
                     hub.reply(opener["id"], body)
                     n_posted += 1
-                except GhError as exc:
-                    failures.append((fid, f"reply {rec['round']}.{idx}", str(exc)))
+                except POST_ERRORS as exc:
+                    failures.append((fid, f"reply {rec['round']}.{idx}", error_text(exc)))
             if ar.should_resolve(f, rec):
                 to_resolve.append((fid, opener))
         rows.append({"id": fid, "severity": f["severity"], "origin": f["origin"],
@@ -348,9 +386,9 @@ def post_round(rec, args):
     if to_resolve:
         try:
             threads = hub.threads()
-        except GhError as exc:
+        except POST_ERRORS as exc:
             for fid, _ in to_resolve:
-                failures.append((fid, "resolve thread", str(exc)))
+                failures.append((fid, "resolve thread", error_text(exc)))
         else:
             for fid, opener in to_resolve:
                 entry = threads.get(opener["id"])
@@ -363,8 +401,8 @@ def post_round(rec, args):
                 try:
                     hub.resolve(thread_id)
                     n_resolved += 1
-                except GhError as exc:
-                    failures.append((fid, "resolve thread", str(exc)))
+                except POST_ERRORS as exc:
+                    failures.append((fid, "resolve thread", error_text(exc)))
 
     details, red = ar.no_thread_details(rec, no_thread)
     redacted += red
@@ -387,8 +425,8 @@ def post_round(rec, args):
             else:
                 hub.update_review(old["id"], body)
                 n_updated += 1
-        except GhError as exc:
-            failures.append(("summary", f"part {i}", str(exc)))
+        except POST_ERRORS as exc:
+            failures.append(("summary", f"part {i}", error_text(exc)))
 
     print(f"pr-audit: PR #{args.pr}: posted {n_posted}, updated {n_updated}, "
           f"skipped {n_skipped} already on the PR, "
@@ -516,11 +554,13 @@ def main(argv=None):
 
 
 def run(argv=None):
-    """main() with a guard: an unexpected error prints one line and exits 3."""
+    """main() with a guard: an unexpected error prints one line and exits 3.
+    Some posts may already be on the PR by then, so the trail may be partial."""
     try:
         return main(argv)
     except Exception as exc:  # noqa: BLE001 - the last line of defence
-        print(f"pr-audit: unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"pr-audit: unexpected error: {type(exc).__name__}: {exc}; "
+              "the audit trail may be partial", file=sys.stderr)
         return 3
 
 

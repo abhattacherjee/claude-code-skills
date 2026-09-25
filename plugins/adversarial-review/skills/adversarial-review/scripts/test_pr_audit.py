@@ -1,4 +1,5 @@
 """CLI tests for pr-audit.py against a stateful `gh` stub."""
+import importlib.util
 import json
 import os
 import shutil
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -145,6 +147,34 @@ class LocalTests(unittest.TestCase):
         self.assertEqual(res.stdout, "")
         self.assertIn("Retry loop never resets the backoff", h.fallback.read_text())
         self.assertEqual([c["argv"] for c in h.calls()], [["api", "user", "-q", ".login"]])
+
+    def test_post_with_empty_login_falls_back_to_local(self):
+        h = Harness(self, login="")
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("gh returned no login", res.stderr)
+        self.assertTrue(h.fallback.exists(), "fallback file was not written")
+        self.assertEqual([c["argv"] for c in h.calls()], [["api", "user", "-q", ".login"]])
+
+    def test_gh_error_text_is_the_reason_given(self):
+        h = Harness(self, user_error="error connecting to api.github.com")
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("error connecting to api.github.com", res.stderr)
+        self.assertNotIn("not logged in", res.stderr)
+        self.assertTrue(h.fallback.exists(), "fallback file was not written")
+
+    def test_missing_gh_is_the_reason_given(self):
+        h = Harness(self)
+        (h.dir / "bin" / "gh").unlink()
+        h.env["PATH"] = str(h.dir / "bin")
+        res = subprocess.run([sys.executable, str(PR_AUDIT), "post", "--pr", "7", "--repo",
+                              "octo/demo", "--record", str(h.write(record([finding()]))),
+                              "--fallback-out", str(h.fallback)],
+                             capture_output=True, text=True, env=h.env, cwd=h.dir)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("gh is not installed", res.stderr)
+        self.assertTrue(h.fallback.exists(), "fallback file was not written")
 
     def test_local_output_is_redacted(self):
         h = Harness(self)
@@ -330,13 +360,65 @@ class PostTests(unittest.TestCase):
         self.assertTrue(h.fallback.exists(), "fallback file was not written")
 
     def test_unexpected_crash_exits_3_without_traceback(self):
-        h = Harness(self, garbage=["reply"])
-        res = h.post(record([finding(events=[ev("verdict", verdict="confirm")])]))
+        # The fallback path is a directory, so writing the local file raises
+        # IsADirectoryError, which nothing inside main() expects.
+        h = Harness(self, auth=False)
+        h.fallback = h.dir / "fallback-dir.md"
+        h.fallback.mkdir()
+        res = h.post(record([finding()]))
         self.assertEqual(res.returncode, 3, res.stderr)
         self.assertNotIn("Traceback", res.stderr)
-        lines = res.stderr.strip().splitlines()
-        self.assertEqual(len(lines), 1, res.stderr)
-        self.assertTrue(lines[0].startswith("pr-audit: unexpected error: JSONDecodeError: "), lines[0])
+        last = res.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("pr-audit: unexpected error: IsADirectoryError: "), last)
+        self.assertIn("audit trail may be partial", last)
+        self.assertNotIn("no audit trail", res.stderr)
+
+    def test_garbage_reply_is_a_failure_not_a_crash(self):
+        h = Harness(self, garbage=["reply"])
+        rec = record([finding(events=[ev("verdict", verdict="confirm")]),
+                      finding("X-002", path="src/b.py")])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertNotIn("unexpected error", res.stderr)
+        self.assertIn("FAILED X-001 reply 1.1", res.stderr)
+        # The loop kept going after the bad reply: X-002 got its thread and the
+        # summary was posted with the failure counted.
+        self.assertEqual(len(h.posted("thread")), 2)
+        self.assertIn("Posting failures: 1", h.state()["reviews"][0]["body"])
+
+    def test_garbage_thread_opener_is_a_failure_not_a_crash(self):
+        h = Harness(self, garbage=["comment"])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertNotIn("unexpected error", res.stderr)
+        self.assertIn("FAILED X-001 open thread", res.stderr)
+        self.assertEqual(len(h.state()["reviews"]), 1)
+
+    def test_wrong_shape_thread_query_is_a_failure_not_a_crash(self):
+        h = Harness(self, garbage=["graphql"])
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertNotIn("unexpected error", res.stderr)
+        self.assertIn("FAILED X-001 resolve thread", res.stderr)
+        self.assertEqual(len(h.state()["reviews"]), 1)
+
+    def test_garbage_summary_response_is_a_failure_not_a_crash(self):
+        h = Harness(self, garbage=["review"])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertNotIn("unexpected error", res.stderr)
+        self.assertIn("FAILED summary part 1", res.stderr)
+
+    def test_failed_summary_update_on_rerun_exits_1(self):
+        h = Harness(self, fail=["comment"])
+        rec = record([finding()])
+        self.assertEqual(h.post(rec).returncode, 1)
+        h.set_state(fail=["review_update"])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("FAILED summary part 1", res.stderr)
+        self.assertIn("updated 0,", res.stdout)
+        self.assertIn("Posting failures: 1", h.state()["reviews"][0]["body"])
 
     def test_open_thread_failure_is_reported(self):
         h = Harness(self, fail=["comment"])
@@ -632,6 +714,78 @@ class GitignoreTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertFalse((plain_dir / ".gitignore").exists())
         self.assertIn("not in a git repo", res.stderr)
+
+    def _repo_with_gitignore(self, content):
+        repo = Path(tempfile.mkdtemp(prefix="pr-audit-gitignore-"))
+        self.addCleanup(shutil.rmtree, repo, True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / ".gitignore").write_bytes(content)
+        return repo
+
+    def test_pattern_goes_on_its_own_line_when_file_lacks_final_newline(self):
+        h = Harness(self)
+        repo = self._repo_with_gitignore(b"node_modules")
+        out = repo / "branch.adversarial-review.md"
+        res = h.run("local", "--record", h.write(record([finding()])), "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual((repo / ".gitignore").read_bytes(),
+                         b"node_modules\n*.adversarial-review.md\n")
+
+    def test_crlf_line_counts_as_present(self):
+        h = Harness(self)
+        repo = self._repo_with_gitignore(b"node_modules\r\n*.adversarial-review.md\r\n")
+        out = repo / "branch.adversarial-review.md"
+        res = h.run("local", "--record", h.write(record([finding()])), "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn("added", res.stdout)
+        self.assertEqual((repo / ".gitignore").read_bytes(),
+                         b"node_modules\r\n*.adversarial-review.md\r\n")
+
+
+def load_pr_audit():
+    spec = importlib.util.spec_from_file_location("pr_audit", PR_AUDIT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class HelperTests(unittest.TestCase):
+    def setUp(self):
+        self.mod = load_pr_audit()
+
+    def test_anchor_note_without_subject_type_uses_the_opener_line(self):
+        note = self.mod.anchor_note
+        self.assertIsNone(note(finding(), {"id": 1, "line": 41}))
+        self.assertEqual(note(finding(), {"id": 1, "line": None}),
+                         "inline rejected (422); file-level")
+        self.assertEqual(note(finding(line=None), {"id": 1}), "file-level (no line)")
+
+    def test_anchor_note_with_subject_type(self):
+        note = self.mod.anchor_note
+        self.assertIsNone(note(finding(), {"subject_type": "line", "line": 41}))
+        self.assertEqual(note(finding(), {"subject_type": "file"}),
+                         "inline rejected (422); file-level")
+
+    def test_default_local_out_when_git_is_missing(self):
+        with mock.patch.object(self.mod.subprocess, "run", side_effect=OSError("no git")):
+            out = self.mod.default_local_out()
+        self.assertEqual(out, str(Path(".") / "unknown-branch.adversarial-review.md"))
+
+    def test_default_local_out_outside_a_repo(self):
+        failed = subprocess.CompletedProcess([], 128, stdout="", stderr="fatal: not a git repository")
+        with mock.patch.object(self.mod.subprocess, "run", return_value=failed):
+            out = self.mod.default_local_out()
+        self.assertEqual(out, str(Path(".") / "unknown-branch.adversarial-review.md"))
+
+    def test_default_local_out_uses_root_and_branch(self):
+        answers = {"--show-toplevel": "/repo", "--abbrev-ref": "feature/x"}
+
+        def fake(argv, **_):
+            key = next(k for k in answers if k in argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=answers[key] + "\n", stderr="")
+        with mock.patch.object(self.mod.subprocess, "run", side_effect=fake):
+            out = self.mod.default_local_out()
+        self.assertEqual(out, str(Path("/repo") / "feature-x.adversarial-review.md"))
 
 
 if __name__ == "__main__":

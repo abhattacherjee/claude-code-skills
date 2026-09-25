@@ -128,18 +128,27 @@ get_repo_root() {
   git rev-parse --show-toplevel 2>/dev/null || echo "."
 }
 
-# Ensure *.adversarial-review.md is in .gitignore at repo root
+# Ensure *.adversarial-review.md is in .gitignore at repo root. A CRLF line
+# ("pattern\r") counts as present. When the file does not end in a newline,
+# one is added first so the pattern does not merge with the last line. A write
+# failure is a warning, not an abort: the report is still delivered.
 ensure_gitignored() {
   local repo_root="$1"
   local gitignore="$repo_root/.gitignore"
   local pattern="*.adversarial-review.md"
 
-  if [[ -f "$gitignore" ]]; then
-    if grep -qxF "$pattern" "$gitignore"; then
-      return 0
-    fi
+  if [[ -f "$gitignore" ]] && grep -qxF -e "$pattern" -e "$pattern"$'\r' "$gitignore"; then
+    return 0
   fi
-  echo "$pattern" >>"$gitignore"
+  local text="$pattern"$'\n'
+  if [[ -f "$gitignore" && -s "$gitignore" && -n "$(tail -c 1 "$gitignore")" ]]; then
+    text=$'\n'"$text"
+  fi
+  # One simple command: bash 3.2 does not report a failed redirect on a { } group.
+  if ! printf '%s' "$text" 2>/dev/null >>"$gitignore"; then
+    echo "WARNING: could not add '$pattern' to $gitignore; add it by hand so the local report is not committed." >&2
+    return 0
+  fi
   echo "Added '$pattern' to $gitignore"
 }
 
@@ -171,7 +180,7 @@ audit_failed() {
   case "$code" in
     1) echo "WARNING: the audit trail$where is incomplete — see the pr-audit lines above." >&2 ;;
     2) echo "WARNING: the round record was rejected, no audit trail was saved." >&2 ;;
-    3) echo "WARNING: pr-audit.py crashed, no audit trail was saved." >&2 ;;
+    3) echo "WARNING: pr-audit.py crashed; the audit trail may be partial — see the pr-audit line above." >&2 ;;
     *) echo "WARNING: pr-audit.py failed (exit $code), the audit trail may be incomplete." >&2 ;;
   esac
   return 4

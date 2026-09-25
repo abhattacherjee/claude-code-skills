@@ -14,6 +14,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 ### Fixed
 
 - **`adversarial-review` PR mode never posted a comment.** `sink.sh` called `pr-review-cli.sh --pr …`, which that CLI rejects, then printed "PR review comments posted" anyway. The old test suite had no PR-mode test; it only ran `sink.sh --help`. It also never ran in CI. It now has PR-mode tests and runs in CI.
+- **`adversarial-review` `pr-audit.py` and `sink.sh` edge cases (#135).** A gh response that could not be parsed crashed `pr-audit.py` and lost the failures it had collected; it is now a failed post (exit 1). The gh readiness check treats an empty login as not ready and prints the real reason. The exit-3 message now says the trail may be partial, not that nothing was saved. `sink.sh` no longer merges the `.gitignore` pattern into a last line with no newline, counts a CRLF line as present, and warns instead of aborting when `.gitignore` cannot be written.
 
 ## [3.18.1] - 2026-09-24
 

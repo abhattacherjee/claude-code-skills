@@ -64,7 +64,8 @@ Exit codes:
   because `gh` is unusable or the PR cannot be read. Note it for the final report and carry on.
   Rerunning the same command later posts only what is missing and updates the summary.
 - 2: the record is invalid. Fix the JSON and rerun.
-- 3: pr-audit.py crashed. Note its one-line error for the final report and carry on.
+- 3: pr-audit.py crashed. Some posts may already be on the PR, so the trail may be partial.
+  Note its one-line error for the final report and carry on.
 
 A posting failure never stops the review.
 

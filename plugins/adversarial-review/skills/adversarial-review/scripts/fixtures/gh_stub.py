@@ -8,8 +8,12 @@ calls pr-audit.py makes.
 
 State keys that change behaviour:
   auth              false makes `gh api user` fail with HTTP 401
-  fail              kinds of call that fail: read, comment, reply, review, resolve, graphql
-  garbage           kinds of call that print invalid JSON: read, reply
+  login             the login `gh api user -q .login` prints; "" prints an empty line
+  user_error        when set, `gh api user` fails with this text on stderr
+  fail              kinds of call that fail: read, comment, reply, review, resolve, graphql,
+                    review_update (only the PUT that rewrites a summary)
+  garbage           kinds of call that print bad output: read, reply, comment, review
+                    (invalid JSON), graphql (JSON of the wrong shape)
   reject_inline     [path, line] pairs rejected with HTTP 422
   reject_file       paths whose file-level comment is rejected with HTTP 422
   thread_missing    comment ids left out of the reviewThreads query
@@ -67,6 +71,9 @@ def graphql(state, args):
         return
     if "graphql" in state["fail"]:
         die("gh: Bad Gateway (HTTP 502)")
+    if "graphql" in state["garbage"]:
+        print(json.dumps({"data": None}))
+        return
     nodes = [
         {"id": f"T_{c['id']}", "isResolved": c["id"] in state["resolved"],
          "comments": {"nodes": [{"databaseId": c["id"]}]}}
@@ -97,6 +104,8 @@ def main(argv):
     args = argv[1:]
     if argv[:2] == ["api", "user"]:
         # pr-audit.py only ever calls this as `api user -q .login`.
+        if state.get("user_error"):
+            die(state["user_error"])
         if not state["auth"]:
             die("gh: Bad credentials (HTTP 401)")
         if "-q" in argv and argv[argv.index("-q") + 1] == ".login":
@@ -130,7 +139,7 @@ def main(argv):
             print(json.dumps(out))
         return
     if kind == "reviews" and method == "PUT":
-        if "review" in state["fail"]:
+        if "review" in state["fail"] or "review_update" in state["fail"]:
             die("gh: Server Error (HTTP 500)")
         for review in state["reviews"]:
             if review["id"] == int(item_id):
@@ -147,7 +156,7 @@ def main(argv):
                                  "commit_id": payload.get("commit_id"), "event": payload.get("event"),
                                  "user": state["login"]})
         save(state)
-        print(json.dumps({"id": state["next_id"]}))
+        print("{not json" if "review" in state["garbage"] else json.dumps({"id": state["next_id"]}))
         return
     if parent:
         if "reply" in state["fail"]:
@@ -177,7 +186,7 @@ def main(argv):
     new["html_url"] = f"https://github.com/{state['repo']}/pull/{pr}#discussion_r{new['id']}"
     state["comments"].append(new)
     save(state)
-    print(json.dumps(new))
+    print("{not json" if not parent and "comment" in state["garbage"] else json.dumps(new))
 
 
 if __name__ == "__main__":
