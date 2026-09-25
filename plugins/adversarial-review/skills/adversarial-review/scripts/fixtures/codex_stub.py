@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Stand-in for the `codex` CLI, used by the codex-review, ensure-codex and
+pick-adversary tests. No network, no model, no real login.
+
+codex-review runs codex with only PATH, HOME and CODEX_HOME in its environment,
+so the stub is driven by files under $HOME (always a temp dir in tests):
+  $HOME/codex-stub.json   what to do (below); a missing file means defaults
+  $HOME/codex-stub.log    one JSON line per call, appended
+
+State keys:
+  version              what `codex --version` prints (default "codex-cli 0.155.1")
+  login                exit code of `codex login status` (default 0); a message goes to stderr
+  login_stdout         text `codex login status` prints on stdout (default: nothing)
+  load_project_config  true: act like a Codex that loads <repo>/.codex/config.toml; a
+                       `model = "..."` line there makes exec fail with "unknown model ..."
+  ignore_doc_override  true: act like a Codex that reads <repo>/AGENTS.md even when
+                       `-c project_doc_max_bytes=0` is passed
+  exec                 list of actions, one per review `codex exec` call; the last repeats:
+                         out          JSON value written to the -o file; a string is written as is
+                         exit         exit code (default 0)
+                         stderr       text printed on stderr
+                         sleep        seconds to sleep before answering
+                         spawn_child  true: start `sleep 60` and write its pid to $HOME/child.pid
+
+<repo> is the -C argument. An isolation canary run is recognised by a
+CANARY-<hex> token in <repo>/AGENTS.md. It never uses the exec list: the stub
+answers with no findings when AGENTS.md is blocked, and with one finding titled
+with the token when it is not.
+
+Each exec log line records argv, the environment's key names, CODEX_HOME, the
+working directory, all of stdin, the --output-schema file's JSON, and whether
+it was a canary run.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+HOME = os.environ.get("HOME", "")
+STATE = os.path.join(HOME, "codex-stub.json")
+LOG = os.path.join(HOME, "codex-stub.log")
+CANARY_RE = re.compile(r"CANARY-[0-9a-f]+")
+MODEL_RE = re.compile(r'^model\s*=\s*"([^"]+)"', re.M)
+
+
+def load():
+    if os.path.exists(STATE):
+        with open(STATE) as fh:
+            return json.load(fh)
+    return {}
+
+
+def save(state):
+    with open(STATE, "w") as fh:
+        json.dump(state, fh)
+
+
+def log(entry):
+    with open(LOG, "a") as fh:
+        fh.write(json.dumps(entry) + "\n")
+
+
+def read(path):
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except (OSError, TypeError):
+        return ""
+
+
+def arg_after(argv, flag):
+    return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+def write_out(argv, body):
+    out = arg_after(argv, "-o")
+    if out:
+        with open(out, "w") as fh:
+            fh.write(body if isinstance(body, str) else json.dumps(body))
+
+
+def run_exec(argv, state):
+    repo = arg_after(argv, "-C") or os.getcwd()
+    canary = CANARY_RE.search(read(os.path.join(repo, "AGENTS.md")))
+    stdin_text = sys.stdin.read()
+    schema_text = read(arg_after(argv, "--output-schema"))
+    log({"argv": argv, "env": sorted(os.environ), "codex_home": os.environ.get("CODEX_HOME"),
+         "cwd": os.getcwd(), "stdin": stdin_text,
+         "schema": json.loads(schema_text) if schema_text else None, "canary": bool(canary)})
+    if state.get("load_project_config"):
+        model = MODEL_RE.search(read(os.path.join(repo, ".codex", "config.toml")))
+        if model:
+            print("error: unknown model " + model.group(1), file=sys.stderr)
+            return 1
+    if canary:
+        blocked = "project_doc_max_bytes=0" in argv and not state.get("ignore_doc_override")
+        findings = [] if blocked else [{
+            "path": "a.py", "line": 2, "severity": "minor", "category": "bug",
+            "title": canary.group(0), "rationale": "followed AGENTS.md"}]
+        write_out(argv, {"findings": findings})
+        return 0
+    actions = state.get("exec") or [{"out": {"findings": []}}]
+    n = state.get("exec_calls", 0)
+    action = actions[min(n, len(actions) - 1)]
+    state["exec_calls"] = n + 1
+    save(state)
+    if action.get("spawn_child"):
+        child = subprocess.Popen(["sleep", "60"], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        with open(os.path.join(HOME, "child.pid"), "w") as fh:
+            fh.write(str(child.pid))
+    if action.get("sleep"):
+        time.sleep(action["sleep"])
+    if action.get("stderr"):
+        print(action["stderr"], file=sys.stderr)
+    if "out" in action:
+        write_out(argv, action["out"])
+    return action.get("exit", 0)
+
+
+def main(argv):
+    state = load()
+    if argv[:1] in (["--version"], ["-V"]):
+        log({"argv": argv})
+        print(state.get("version", "codex-cli 0.155.1"))
+        return 0
+    if argv[:2] == ["login", "status"]:
+        log({"argv": argv})
+        code = state.get("login", 0)
+        if state.get("login_stdout"):
+            print(state["login_stdout"])
+        print("Logged in using ChatGPT" if code == 0 else "Not logged in", file=sys.stderr)
+        return code
+    if argv[:1] == ["exec"]:
+        return run_exec(argv, state)
+    log({"argv": argv})
+    print("codex stub: unsupported call: " + " ".join(argv), file=sys.stderr)
+    return 64
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
