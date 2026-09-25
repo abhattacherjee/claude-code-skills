@@ -481,15 +481,9 @@ def assert_isolated(argv):
         raise Unavailable("refusing to run codex: " + "; ".join(bad))
 
 
-# Vars Codex itself may need -- a Codex-specific API key for a non-ChatGPT login,
-# proxy settings, and a scratch dir -- passed through only when the caller's
-# parent_env has them. OPENAI_API_KEY is deliberately not passed: an unrelated
-# OPENAI_API_KEY set in the user's shell for some other tool makes `codex exec`
-# authenticate with it instead of the login in CODEX_HOME (which is still
-# passed), and the call fails ("Incorrect API key provided") even though `codex
-# login status` exits 0. Codex's own API-key login (`codex login --with-api-key`)
-# lives in CODEX_HOME, so it needs no separate passthrough here.
-PASSTHROUGH_ENV = ("CODEX_API_KEY",
+# Vars Codex itself may need -- an API key for a non-ChatGPT login, proxy settings,
+# and a scratch dir -- passed through only when the caller's parent_env has them.
+PASSTHROUGH_ENV = ("OPENAI_API_KEY", "CODEX_API_KEY",
                    "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
                    "NO_PROXY", "no_proxy", "TMPDIR")
 
