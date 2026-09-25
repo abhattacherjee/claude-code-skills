@@ -2117,6 +2117,12 @@ fi
 assert_eq "sink --no-post writes the local report" "yes" \
   "$([[ -f "$SINK_REPO/feature-x.adversarial-review.md" ]] && echo yes || echo no)"
 
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --no-post \
+  --record "$TMP_DIR/does-not-exist-round.json"
+assert_exit_code "sink --no-post with a missing --record still exits 0" "0" "$S_EXIT"
+assert_contains "sink --no-post with a missing --record notes and continues" \
+  "continuing without it" "$S_OUT"
+
 sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x
 assert_exit_code "sink pr mode without --record is a usage error" "2" "$S_EXIT"
 

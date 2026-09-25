@@ -109,8 +109,13 @@ if [[ "$MODE" == "pr" && "$NO_POST" == "false" && -z "$RECORD" ]]; then
   exit 2
 fi
 if [[ -n "$RECORD" && ! -f "$RECORD" ]]; then
-  echo "Error: record not found: $RECORD" >&2
-  exit 1
+  if [[ "$NO_POST" == "true" ]]; then
+    echo "Note: record not found ($RECORD); continuing without it because --no-post was given."
+    RECORD=""
+  else
+    echo "Error: record not found: $RECORD" >&2
+    exit 1
+  fi
 fi
 
 # ---- helpers ----
@@ -139,11 +144,8 @@ write_local_artifact() {
   local repo_root="$1"
   local branch="$2"
   local report_md="$3"
-
-  # Sanitize branch name for filename (replace / with -)
-  local safe_branch
-  safe_branch="${branch//\//-}"
-  local out_file="$repo_root/${safe_branch}.adversarial-review.md"
+  local out_file
+  out_file="$(local_out_file "$branch")"
 
   ensure_gitignored "$repo_root"
   cp "$report_md" "$out_file"
@@ -192,10 +194,10 @@ deliver_pr() {
   case "$code" in
     0) return 0 ;;
     1)
-      echo "WARNING: the audit trail for PR #$PR_NUMBER is incomplete — some comments failed to post (listed above)." >&2
+      echo "WARNING: the audit trail for PR #$PR_NUMBER is incomplete — see the pr-audit lines above." >&2
       return 4 ;;
     *)
-      echo "Error: pr-audit.py could not run (exit $code)." >&2
+      echo "Error: pr-audit.py failed (exit $code)." >&2
       return 1 ;;
   esac
 }
