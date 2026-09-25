@@ -189,6 +189,7 @@ class OutputTests(unittest.TestCase):
         h = Harness(self)
         res = h.run("--mode", "find")
         self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(h.result()["adversary"], "codex")
         [f] = h.result()["findings"]
         self.assertEqual((f["id"], f["origin"], f["path"], f["line"]), ("X-001", "codex", "src/a.py", 2))
         self.assertIsNone(f["adversary_verdict"])
@@ -218,7 +219,7 @@ class OutputTests(unittest.TestCase):
         findings = h.write("claude.json", {"findings": [{"id": "C-001", "title": "t", "rationale": "r"}]})
         res = h.run("--mode", "judge", "--findings", findings)
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(h.result(), {"verdicts": [
+        self.assertEqual(h.result(), {"adversary": "codex", "verdicts": [
             {"id": "C-001", "adversary_verdict": "confirm", "reason": "line 2", "confidence": 0.9}]})
         self.assertIn("<findings-", h.exec_calls()[0]["stdin"])
 
@@ -229,6 +230,7 @@ class OutputTests(unittest.TestCase):
             {"id": "X-001", "title": "t", "rationale": "r", "kill_reason": "handled"}]})
         res = h.run("--mode", "counter", "--findings", findings)
         self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(h.result()["adversary"], "codex")
         self.assertEqual(h.result()["counters"][0]["position"], "defend")
         self.assertIn("handled", h.exec_calls()[0]["stdin"])
 
@@ -243,6 +245,7 @@ class OutputTests(unittest.TestCase):
         res = h.run("--mode", "find", "--prior", prior, "--id-start", "2")
         self.assertEqual(res.returncode, 0, res.stderr)
         out = h.result()
+        self.assertEqual(out["adversary"], "codex")
         self.assertEqual(out["findings"][0]["id"], "X-002")
         self.assertEqual(out["rechecks"], [{"id": "X-001", "result": "resolved", "reason": "cap is there"}])
         call = h.exec_calls()[0]
@@ -345,7 +348,7 @@ class FixRoundOneTests(unittest.TestCase):
         for mode, key in (("judge", "verdicts"), ("counter", "counters")):
             res = h.run("--mode", mode, "--findings", empty)
             self.assertEqual(res.returncode, 0, res.stderr)
-            self.assertEqual(h.result(), {key: []})
+            self.assertEqual(h.result(), {"adversary": "codex", key: []})
         self.assertEqual([c for c in h.calls() if c["argv"][:1] == ["exec"]], [])
 
     def test_the_canary_git_repo_ignores_the_users_git_config_and_templates(self):

@@ -34,8 +34,16 @@ class RecheckTests(unittest.TestCase):
         rec = json.loads(self.out.read_text()) if res.returncode == 0 else None
         return res, rec
 
+    def raw_recheck(self, path_or_dict, rnd=5, prior=None):
+        """Like recheck(), but skips writing through self.h.write when a raw path is
+        already on disk (for a non-JSON or missing --rechecks file)."""
+        path = self.h.write(path_or_dict, "recheck.json") if isinstance(path_or_dict, dict) \
+            else path_or_dict
+        return self.h.run("recheck", "--prior", prior or self.prior, "--rechecks", path,
+                          "--round", rnd, "--head-sha", SHA3, "--out", self.out)
+
     def test_rechecks_become_adversary_events_on_the_earlier_findings(self):
-        res, rec = self.recheck({"findings": [], "rechecks": [
+        res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
             {"id": "X-003", "result": "resolved", "reason": "cap is there"}]})
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual((rec["phase"], rec["round"], rec["run_id"]), ("phase2-recheck", 5, "ar-test-1"))
@@ -47,7 +55,7 @@ class RecheckTests(unittest.TestCase):
         self.assertIn("no re-check for X-004", res.stderr)
 
     def test_unknown_repeated_and_unhashable_ids_are_skipped(self):
-        res, rec = self.recheck({"findings": [], "rechecks": [
+        res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
             {"id": "X-003", "result": "partly", "reason": "one path left"},
             {"id": "X-003", "result": "resolved", "reason": "repeat"},
             {"id": "X-404", "result": "resolved", "reason": "made up"},
@@ -57,19 +65,19 @@ class RecheckTests(unittest.TestCase):
         self.assertIn("X-404", res.stderr)
 
     def test_new_findings_are_added_unconfirmed(self):
-        res, rec = self.recheck({"findings": [NEW], "rechecks": []})
+        res, rec = self.recheck({"adversary": "codex", "findings": [NEW], "rechecks": []})
         self.assertEqual(res.returncode, 0, res.stderr)
         [f] = rec["findings"]
         self.assertEqual((f["id"], f["origin"], f["status"], f["events"]), ("X-005", "codex", "unconfirmed", []))
 
     def test_new_finding_reusing_an_earlier_id_exits_2(self):
         clash = dict(NEW, id="X-003")
-        res, _ = self.recheck({"findings": [clash], "rechecks": []})
+        res, _ = self.recheck({"adversary": "codex", "findings": [clash], "rechecks": []})
         self.assertEqual(res.returncode, 2)
         self.assertIn("--id-start", res.stderr)
 
     def test_round_must_come_after_the_prior_round(self):
-        res, _ = self.recheck({"findings": [], "rechecks": []}, rnd=4)
+        res, _ = self.recheck({"adversary": "codex", "findings": [], "rechecks": []}, rnd=4)
         self.assertEqual(res.returncode, 2)
         self.assertIn("must come after", res.stderr)
 
@@ -78,18 +86,11 @@ class RecheckTests(unittest.TestCase):
         self.assertEqual(res.returncode, 2)
         self.assertIn("rechecks", res.stderr)
 
-    def test_claude_only_prior_rechecks_as_claude(self):
-        prior = self.h.write(fix_round("claude-only"), "round-4-claude.json")
-        res, rec = self.recheck({"findings": [], "rechecks": [
-            {"id": "X-003", "result": "resolved", "reason": "ok"}]}, prior=prior)
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(rec["findings"][0]["events"][0]["by"], "claude")
-
     def test_resolved_recheck_closes_only_that_thread_on_the_pr(self):
         self.assertEqual(self.h.post(fix_round(), "round-4.json").returncode, 0)
         self.assertEqual(self.h.resolves(), [])
         replies_before = len(self.h.posted("reply"))
-        res, rec = self.recheck({"findings": [], "rechecks": [
+        res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
             {"id": "X-003", "result": "resolved", "reason": "cap is there"},
             {"id": "X-004", "result": "partly", "reason": "one path left"}]})
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -97,6 +98,83 @@ class RecheckTests(unittest.TestCase):
         self.assertEqual(post.returncode, 0, post.stderr)
         self.assertEqual(len(self.h.resolves()), 1)
         self.assertEqual(len(self.h.posted("reply")), replies_before + 2)
+
+    # --- fix round 1: recheck rounds are Codex-only, and the rechecks file must
+    # name the same adversary as the prior it re-checks (review Important 1) ---
+
+    def test_gemini_prior_is_rejected(self):
+        # The rechecks file's own "adversary" matches the prior's, so only the
+        # Codex-only guard (not the provenance guard) can reject this.
+        prior = self.h.write(fix_round("gemini"), "round-4-gemini.json")
+        res, _ = self.recheck({"adversary": "gemini", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]}, prior=prior)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("Codex-only", res.stderr)
+        self.assertIn("gemini", res.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_claude_only_prior_is_rejected(self):
+        # Same as above: the rechecks file's "adversary" matches the prior's
+        # "claude-only", so only the Codex-only guard can reject this.
+        prior = self.h.write(fix_round("claude-only"), "round-4-claude.json")
+        res, _ = self.recheck({"adversary": "claude-only", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "ok"}]}, prior=prior)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("Codex-only", res.stderr)
+        self.assertIn("claude-only", res.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_reviewers_hand_written_probe_on_a_gemini_prior_is_rejected(self):
+        # The exact probe from the review: a hand-written {"rechecks": [...]} file
+        # with no provenance, run against a gemini prior, must not be trusted as a
+        # Codex re-check and must not close any thread Gemini never agreed to close.
+        prior = self.h.write(fix_round("gemini"), "round-4-gemini-probe.json")
+        path = self.h.write({"rechecks": [{"id": "X-003", "result": "resolved"}]}, "probe.json")
+        res = self.h.run("recheck", "--prior", prior, "--rechecks", path,
+                         "--round", "5", "--head-sha", SHA3, "--out", self.out)
+        self.assertEqual(res.returncode, 2)
+        self.assertFalse(self.out.exists())
+
+    def test_rechecks_file_adversary_mismatch_is_rejected(self):
+        res, _ = self.recheck({"adversary": "gemini", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]})
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("does not match", res.stderr)
+        self.assertIn("codex", res.stderr)
+        self.assertIn("gemini", res.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_rechecks_file_missing_adversary_is_rejected(self):
+        res, _ = self.recheck({"findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]})
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("does not match", res.stderr)
+        self.assertFalse(self.out.exists())
+
+    # --- Minor 4: an unreadable/non-JSON --rechecks file, and an invalid re-check
+    # `result` value, both exit 2 ---
+
+    def test_non_json_rechecks_file_exits_2(self):
+        path = self.h.dir / "bad.json"
+        path.write_text("not json")
+        res = self.raw_recheck(path)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("cannot read", res.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_unreadable_rechecks_file_exits_2(self):
+        path = self.h.dir / "does-not-exist.json"
+        res = self.raw_recheck(path)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("cannot read", res.stderr)
+        self.assertFalse(self.out.exists())
+
+    def test_invalid_recheck_result_exits_2(self):
+        res, _ = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "kinda", "reason": "eh"}]})
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("does not make a valid record", res.stderr)
+        self.assertFalse(self.out.exists())
 
 
 if __name__ == "__main__":

@@ -659,6 +659,7 @@ class RecordTests(unittest.TestCase):
                     "--skill", "adversarial-review", "--phase", "review", "--round", "1",
                     "--adversary", "gemini", "--head-sha", SHA1, "--out", out)
         self.assertEqual(res.returncode, 2)
+        self.assertIn("does not match", res.stderr)
         self.assertIn("codex", res.stderr)
         self.assertIn("gemini", res.stderr)
         self.assertFalse(out.exists())

@@ -20,6 +20,7 @@ def raw_finding(**over):
 class ValidateFindTests(unittest.TestCase):
     def test_numbers_findings_from_id_start_and_marks_origin(self):
         out = cr.validate_find({"findings": [raw_finding(), raw_finding(title="Second")]}, id_start=7)
+        self.assertEqual(out["adversary"], "codex")
         self.assertEqual([f["id"] for f in out["findings"]], ["X-007", "X-008"])
         f = out["findings"][0]
         self.assertEqual(f["origin"], "codex")
@@ -86,7 +87,7 @@ class ValidateJudgeTests(unittest.TestCase):
     def test_maps_verdict_to_the_shared_verdict_key(self):
         out = cr.validate_judge({"verdicts": [
             {"id": "C-001", "verdict": "confirm", "reason": "line 41", "confidence": 0.8}]}, {"C-001"})
-        self.assertEqual(out, {"verdicts": [
+        self.assertEqual(out, {"adversary": "codex", "verdicts": [
             {"id": "C-001", "adversary_verdict": "confirm", "reason": "line 41", "confidence": 0.8}]})
 
     def test_drops_unknown_repeated_unhashable_and_invalid(self):
@@ -127,6 +128,7 @@ class ValidateCounterTests(unittest.TestCase):
             {"id": "X-003", "position": "shrug", "reason": "bad"},
             {"id": "X-404", "position": "defend", "reason": "unknown"}]}
         out = cr.validate_counter(raw, {"X-001", "X-002", "X-003"})
+        self.assertEqual(out["adversary"], "codex")
         self.assertEqual(out["counters"], [
             {"id": "X-001", "position": "defend", "reason": "line 9 still loops"},
             {"id": "X-002", "position": "concede", "reason": "Claude is right"}])

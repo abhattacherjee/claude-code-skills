@@ -541,6 +541,10 @@ RECHECK_KEEP = ("id", "origin", "path", "line", "severity", "category", "title",
 
 def cmd_recheck(args):
     prior = load_record(args.prior)
+    if prior["adversary"] != "codex":
+        print(f"pr-audit: recheck rounds are Codex-only; {args.prior}'s adversary is "
+              f"{prior['adversary']!r}", file=sys.stderr)
+        return 2
     try:
         with open(args.rechecks, encoding="utf-8") as fh:
             out = json.load(fh)
@@ -550,6 +554,10 @@ def cmd_recheck(args):
     if not isinstance(out, dict) or not isinstance(out.get("rechecks"), list):
         print(f"pr-audit: {args.rechecks} has no rechecks list; "
               "run codex-review.sh --mode find with --prior", file=sys.stderr)
+        return 2
+    if out.get("adversary") != prior["adversary"]:
+        print(f"pr-audit: {args.rechecks}'s adversary {out.get('adversary')!r} does not match "
+              f"{args.prior}'s adversary {prior['adversary']!r}", file=sys.stderr)
         return 2
     if args.round <= prior["round"]:
         print(f"pr-audit: --round {args.round} must come after the prior round {prior['round']}",

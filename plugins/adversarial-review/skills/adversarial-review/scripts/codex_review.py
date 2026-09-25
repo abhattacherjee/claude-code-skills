@@ -136,7 +136,7 @@ def validate_find(raw, id_start=1, prior_ids=None):
             "claude_verdict": None, "adversary_verdict": None, "status": None,
             "killed_by": None, "kill_reason": None,
         })
-    result = {"findings": findings}
+    result = {"adversary": "codex", "findings": findings}
     if prior_ids is not None:
         items = raw.get("rechecks")
         if not isinstance(items, list):
@@ -165,7 +165,7 @@ def validate_judge(raw, known_ids):
         verdicts.append({"id": rid, "adversary_verdict": item["verdict"],
                          "reason": clean_text(item.get("reason"), MAX_TEXT),
                          "confidence": _confidence(item.get("confidence"))})
-    return {"verdicts": verdicts}
+    return {"adversary": "codex", "verdicts": verdicts}
 
 
 def validate_counter(raw, known_ids):
@@ -179,7 +179,7 @@ def validate_counter(raw, known_ids):
         seen.add(rid)
         counters.append({"id": rid, "position": item["position"],
                          "reason": clean_text(item.get("reason"), MAX_TEXT)})
-    return {"counters": counters}
+    return {"adversary": "codex", "counters": counters}
 
 
 def _obj(props):
@@ -891,7 +891,8 @@ def review(args):
     if args.mode in ("judge", "counter") and not findings:
         print("codex-review: %s has no findings with ids; nothing for Codex to %s"
               % (args.findings, args.mode), file=sys.stderr)
-        return {"verdicts": []} if args.mode == "judge" else {"counters": []}
+        return {"adversary": "codex", "verdicts": []} if args.mode == "judge" \
+            else {"adversary": "codex", "counters": []}
     env = _codex_env()
     codex = _ready_codex(env)
     version = ensure_isolation(codex, env, args.timeout)
