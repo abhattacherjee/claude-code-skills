@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.4.0] - 2026-09-24
+
+### Added
+
+- Every round of both phases is saved on the PR through adversarial-review's `pr-audit.py`: findings as threads, and verdicts, counters, fixes and re-checks as replies, with one summary review per round. `--no-post` keeps it local. See `references/audit-trail.md`.
+
+### Fixed
+
+- Phase 2 R1 told you to call `gemini` directly because `gemini-review.sh` supposedly had no `--mode find`. It does; R1 now uses it.
+
 ## [1.3.1] - 2026-09-24
 
 ### Added

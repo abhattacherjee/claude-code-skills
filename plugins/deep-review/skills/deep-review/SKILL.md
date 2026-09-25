@@ -2,7 +2,7 @@
 name: deep-review
 description: "Use when the user wants a thorough, high-assurance review of code changes — phrases like \"review this until it's clean\", \"converge to zero issues\", \"adversarial review\", \"have Gemini and Claude review\", \"deep review this PR\", or \"make this change ironclad\". Runs TWO phases on a PR or working-tree diff: (1) iterative multi-reviewer review that loops fix->re-review until a round finds zero actionable issues, then (2) a multi-round Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Repeatable across any project/PR. Use when: (1) the user wants a thorough, high-assurance review that converges to zero actionable issues, (2) the user asks for an adversarial or Gemini-and-Claude cross-examination review of a code diff, (3) deep-reviewing a PR or working-tree diff before merge, (4) the user wants to make a change ironclad."
 metadata:
-  version: 1.3.1
+  version: 1.4.0
 ---
 
 # Deep Review
@@ -39,6 +39,7 @@ Not for: a quick one-shot look (use `/pr-review-toolkit:review-pr` alone) or a t
 /deep-review --phase1-only   # iterative review only (skip adversarial)
 /deep-review --phase2-only   # adversarial only (skip iterative)
 /deep-review --max-rounds N  # cap Phase-1 rounds (default 4)
+/deep-review --no-post       # keep the audit trail local; post nothing to the PR
 ```
 
 ## Prerequisites & composition
@@ -81,6 +82,9 @@ silently skip a phase.
    (`ls .github/workflows`, check the job's `runs-on`). If none does, label it **UNCOVERED**, not
    deferred. Recommend a concrete cross-platform check when feasible (`gtar`, `gawk`, or a
    Linux container), and never treat the local suite as covering the unavailable environment.
+6. **Start the audit trail.** Set up `RUN_ID`, `RUN_DIR`, `AUDIT` and the round counter as in
+   `./references/audit-trail.md`. Every round below ends by writing and posting one record, so the
+   PR shows each iteration: findings as threads, verdicts, counters, fixes and re-checks as replies.
 
 ---
 
@@ -115,6 +119,8 @@ dimension** AND the previous round's fixes introduced nothing new.
 5. **Converge or iterate.** If all dimensions report CONVERGED -> Phase 1 done. Else apply the new
    fixes and run another round. Respect `--max-rounds` (default 4); if not converged at the cap,
    surface the remaining items to the user rather than looping forever.
+6. **Record the round** per `./references/audit-trail.md` (phase `phase1`): this round's findings
+   with their `resolution` events, and `recheck` events for last round's fixes.
 
 ### Phase 1 convergence is real only when
 
@@ -155,15 +161,13 @@ headless calls need an API key.
 In one message, launch (none seeing the others):
 - Claude bug-hunter (opus) — bugs/security/perf/correctness, grounded in source.
 - Claude convention-reviewer (sonnet) — convention/maintainability/doc-drift.
-- Gemini finder — run a direct `gemini -m gemini-2.5-pro -p "<brief + diff>"` call (build a
-  prompt file combining the review brief and the diff; parse the JSON findings array from stdout).
-  NOTE: the adversarial-review plugin's `scripts/gemini-review.sh` is R2-**judge-only** (`--diff <file> --findings <r1.json>
-  [--model <m>] [--out <r2.json>]`) — it has NO discovery/`--mode find` mode, so do NOT use it for
-  R1.
+- Gemini finder — `gemini-review.sh --diff <DIFF> --mode find --out <gemini-r1.json>` (the
+  adversarial-review plugin's script). It emits `{"findings":[...]}` with `origin="gemini"`.
+  Exit 3 means the adversary is unavailable: follow Step 2.0's degraded path.
 
 Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`;
 Gemini -> `G-001..`. Emit an R1 digest (counts by severity/category). An empty findings array is a
-respectable, valid answer.
+respectable, valid answer. Record the round (phase `phase2-r1`).
 
 ### Step 2.2 — R2: symmetric cross-examination
 
@@ -174,10 +178,11 @@ In one message:
   - **Reliability note:** the wrapper fails open to nothing if Gemini's JSON lacks `verdicts`
     (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key` -> empty result). Fall back to a
     direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
-    verdict:confirm|refute, reason}>"` call (same approach R1 uses) and parse it yourself; treat
-    the direct call as primary, the wrapper as convenience.
+    verdict:confirm|refute, reason}>"` call (build a prompt file with the brief and each finding)
+    and parse it yourself; treat the direct call as primary, the wrapper as convenience.
 
-Emit an R2 digest (confirmed/refuted/unjudged each direction).
+Emit an R2 digest (confirmed/refuted/unjudged each direction). Record the round (phase
+`phase2-r2`): each judged finding with its `verdict` event and updated `status`.
 
 ### Step 2.3 — R3: counter-round (the "let the primary counter" round)
 
@@ -191,6 +196,8 @@ This is what makes it >=3 rounds and forces genuine convergence rather than a st
 - A judgment-call disagreement (e.g. keep-vs-delete dead code) can be legitimately *defended* by
   either side on its real merits — if it stays split after evidence, escalate it to the user as an
   explicit decision rather than forcing a verdict.
+
+Record the round (phase `phase2-r3`): `counter` then `verdict` events for each contested finding.
 
 ### Step 2.4 — Converge (survivor rule)
 
@@ -216,7 +223,8 @@ Then finalize:
   a test suite to a runtime location; regenerate a generated doc/architecture page). A repo's own
   CLAUDE.md often mandates this in the same change-set.
 - Commit Phase 2 with a message naming the survivors and noting what the adversarial pass
-  dismissed (and why). Push; if the repo polls CI after push, check it.
+  dismissed (and why). Push; if the repo polls CI after push, check it. Then record the round
+  (phase `phase2-fix`): a `resolution` event with the pushed commit's `sha` for each survivor.
 
 ---
 
@@ -230,6 +238,8 @@ Summarize for the user:
 - Portability concerns that were not executable locally: for each, either the exact CI/toolchain
   coverage it was deferred to, or an explicit **UNCOVERED** marker when no CI job covers that
   environment — plus any concrete command recommended for pre-CI reproduction.
+- Audit trail: the PR link (or local file), rounds posted, and any posting failures with the
+  command to rerun them; the run directory path holding every `round-<k>.json`.
 
 ## Red Flags — do not
 
