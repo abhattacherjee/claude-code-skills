@@ -482,7 +482,10 @@ def cmd_record(args):
     for f in report.get("findings", []):
         origin = f.get("origin")
         if origin == "claude":
-            judge, verdict = args.adversary, f.get("adversary_verdict", f.get("gemini_verdict"))
+            judge = args.adversary
+            verdict = f.get("adversary_verdict")
+            if verdict is None:
+                verdict = f.get("gemini_verdict")
         else:
             judge, verdict = "claude", f.get("claude_verdict")
         events = []

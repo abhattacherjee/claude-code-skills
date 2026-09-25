@@ -19,10 +19,10 @@ Convergence rule (mechanical):
 
   Claude finding (origin=claude):
     adversary_verdict=confirm   -> status=survivor
-    adversary_verdict=refute    -> status=rejected, killed_by=gemini
+    adversary_verdict=refute    -> status=rejected, killed_by=<adversary> (gemini by default)
     missing/none             -> status=unconfirmed
 
-  Gemini finding (origin=gemini):
+  Adversary finding (origin=<adversary>, gemini by default):
     claude_verdict=confirm   -> status=survivor
     claude_verdict=refute    -> status=rejected, killed_by=claude
     missing/none             -> status=unconfirmed
@@ -87,7 +87,7 @@ def compute_confirm_rate(verdict_map: dict, verdict_field: str) -> dict:
     }
 
 
-def count_unjudged(findings: list[dict], verdict_map: dict) -> int:
+def count_unjudged(findings, verdict_map):
     """Findings with an id but no entry at all in the judge's verdict map -- what a
     partial judge run (missing or unknown ids silently dropped, not defaulted)
     never answered. Distinct from "unrecognized" (an entry exists, its verdict
@@ -105,10 +105,10 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Convergence rule (mechanical):
   Claude finding: adversary_verdict=confirm -> survivor
-                  adversary_verdict=refute  -> rejected (killed_by=gemini)
+                  adversary_verdict=refute  -> rejected (killed_by=<adversary>, gemini by default)
                   missing/none           -> unconfirmed
 
-  Gemini finding: claude_verdict=confirm -> survivor
+  Adversary finding (gemini by default): claude_verdict=confirm -> survivor
                   claude_verdict=refute  -> rejected (killed_by=claude)
                   missing/none           -> unconfirmed
 
@@ -130,7 +130,7 @@ Exit codes:
                         help="the adversary model: sets killed_by, the default origin of its "
                              "findings, and the report labels (default: gemini)")
     parser.add_argument("--claude-verdicts", required=True, metavar="FILE",
-                        help="Claude judging Gemini: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
+                        help="Claude judging the adversary: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
     parser.add_argument("--md", metavar="FILE",
                         help="Write human-readable markdown report to this file")
     parser.add_argument("--json", metavar="FILE", dest="json_out",

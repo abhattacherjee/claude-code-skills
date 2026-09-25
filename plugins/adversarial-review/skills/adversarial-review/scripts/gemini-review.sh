@@ -449,7 +449,9 @@ assert isinstance(data['verdicts'], list), 'verdicts must be a list'
 data['verdicts'] = [v for v in data['verdicts'] if isinstance(v.get('id'), str) and v['id']]
 for v in data['verdicts']:
     if 'gemini_verdict' in v:
-        v.setdefault('adversary_verdict', v.pop('gemini_verdict'))
+        old = v.pop('gemini_verdict')
+        if v.get('adversary_verdict') is None:
+            v['adversary_verdict'] = old
 with open('$EXTRACTED_JSON_FILE', 'w') as fh:
     json.dump(data, fh)
 " 2>"$VALIDATE_ERR_FILE"; then
@@ -468,7 +470,9 @@ assert isinstance(data['findings'], list), 'findings must be a list'
 data['findings'] = [f for f in data['findings'] if isinstance(f.get('id'), str) and f['id']]
 for f in data['findings']:
     if 'gemini_verdict' in f:
-        f.setdefault('adversary_verdict', f.pop('gemini_verdict'))
+        old = f.pop('gemini_verdict')
+        if f.get('adversary_verdict') is None:
+            f['adversary_verdict'] = old
 with open('$EXTRACTED_JSON_FILE', 'w') as fh:
     json.dump(data, fh)
 " 2>"$VALIDATE_ERR_FILE"; then

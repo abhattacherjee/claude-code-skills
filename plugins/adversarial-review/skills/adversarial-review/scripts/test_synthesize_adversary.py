@@ -201,8 +201,17 @@ class UnjudgedTests(unittest.TestCase):
              "--md", str(md), "--json", str(out)],
             capture_output=True, text=True, timeout=60, env=env)
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("codex_on_claude: confirmed=1 refuted=1", res.stdout)
-        self.assertIn("unjudged=1", res.stdout)
+        lines = {line.split(":", 1)[0]: line for line in res.stdout.splitlines()}
+        # Exact per-direction lines: a substring match on "unjudged=1" would also
+        # match "unjudged=10" and would not tell the two directions apart.
+        self.assertEqual(
+            lines["codex_on_claude"],
+            "codex_on_claude: confirmed=1 refuted=1 judged=2 confirm_rate=0.500 "
+            "low_signal=false unrecognized=0 unjudged=1")
+        self.assertEqual(
+            lines["claude_on_codex"],
+            "claude_on_codex: confirmed=0 refuted=0 judged=0 confirm_rate=0.000 "
+            "low_signal=false unrecognized=0 unjudged=1")
 
         report = json.loads(out.read_text())
         f = by_id(report["findings"])
@@ -253,6 +262,103 @@ class LegacyKeyTests(unittest.TestCase):
         [v] = json.loads(res.stdout)["verdicts"]
         self.assertEqual(v["adversary_verdict"], "confirm")
         self.assertNotIn(OLD, v)
+
+    def test_gemini_review_renames_the_old_key_in_find_mode(self):
+        """The find-mode rename loop (gemini-review.sh, mirrors the judge-mode one)
+        had no test of its own before this fix round."""
+        run = Run(self)
+        bindir = run.dir / "bin"
+        bindir.mkdir()
+        stub = bindir / "gemini"
+        canned = run.dir / "canned-find.json"
+        canned.write_text(json.dumps({"findings": [
+            {"id": "G-001", "path": "src/a.py", "line": 1, "severity": "minor", "category": "bug",
+             "title": "t", "rationale": "r", "origin": "gemini", "claude_verdict": None,
+             OLD: "confirm", "status": None, "killed_by": None, "kill_reason": None}]}))
+        stub.write_text('#!/usr/bin/env bash\ncat "$CANNED_GEMINI_FILE"\n')
+        stub.chmod(0o755)
+        env = run.env(PATH=str(bindir) + os.pathsep + os.environ["PATH"],
+                      CANNED_GEMINI_FILE=str(canned))
+        res = subprocess.run(["bash", str(GEMINI_REVIEW), "--diff", str(run.claude),
+                              "--mode", "find"], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        [f] = json.loads(res.stdout)["findings"]
+        self.assertEqual(f["adversary_verdict"], "confirm")
+        self.assertNotIn(OLD, f)
+
+
+class LegacyKeyPrecedenceTests(unittest.TestCase):
+    """Controller ruling (fix round 1, minor 1): all three legacy readers must
+    agree when a record carries both keys -- use adversary_verdict when present
+    and non-null, else fall back to gemini_verdict. Each reader is tested with
+    the same four cases: {both keys (new wins), new explicitly null + old set
+    (fall back), only old, only new}."""
+
+    def test_synthesize_upgrade_verdict_key_precedence(self):
+        import synthesize as sx
+        items = [
+            {"id": "C-001", "adversary_verdict": "confirm", "gemini_verdict": "refute"},
+            {"id": "C-002", "adversary_verdict": None, "gemini_verdict": "refute"},
+            {"id": "C-003", "gemini_verdict": "refute"},
+            {"id": "C-004", "adversary_verdict": "confirm"},
+        ]
+        sx.upgrade_verdict_key(items)
+        by = {i["id"]: i for i in items}
+        self.assertEqual(by["C-001"]["adversary_verdict"], "confirm")
+        self.assertEqual(by["C-002"]["adversary_verdict"], "refute")
+        self.assertEqual(by["C-003"]["adversary_verdict"], "refute")
+        self.assertEqual(by["C-004"]["adversary_verdict"], "confirm")
+        for item in items:
+            self.assertNotIn("gemini_verdict", item)
+
+    def test_pr_audit_record_precedence(self):
+        run = Run(self)
+        base_kwargs = dict(status="rejected", killed_by="codex", kill_reason="handled at line 9")
+        report = run.put("precedence-report.json", {"findings": [
+            dict(claude_finding("C-001", "t1"), adversary_verdict="confirm",
+                 gemini_verdict="refute", **base_kwargs),
+            dict(claude_finding("C-002", "t2"), adversary_verdict=None,
+                 gemini_verdict="refute", **base_kwargs),
+            # C-003: only the old key -- no adversary_verdict key at all.
+            dict(claude_finding("C-003", "t3", OLD), gemini_verdict="refute", **base_kwargs),
+            dict(claude_finding("C-004", "t4"), adversary_verdict="confirm", **base_kwargs),
+        ]})
+        res, rec = run.record(report, adversary="codex")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        by = {f["id"]: f for f in rec["findings"]}
+        self.assertEqual(by["C-001"]["events"][0]["verdict"], "confirm")
+        self.assertEqual(by["C-002"]["events"][0]["verdict"], "refute")
+        self.assertEqual(by["C-003"]["events"][0]["verdict"], "refute")
+        self.assertEqual(by["C-004"]["events"][0]["verdict"], "confirm")
+
+    def test_gemini_review_judge_mode_precedence(self):
+        run = Run(self)
+        bindir = run.dir / "bin"
+        bindir.mkdir()
+        stub = bindir / "gemini"
+        canned = run.dir / "canned-judge.json"
+        canned.write_text(json.dumps({"verdicts": [
+            {"id": "C-001", "adversary_verdict": "confirm", "gemini_verdict": "refute",
+             "reason": "r", "confidence": 0.9},
+            {"id": "C-002", "adversary_verdict": None, "gemini_verdict": "refute",
+             "reason": "r", "confidence": 0.9},
+            {"id": "C-003", "gemini_verdict": "refute", "reason": "r", "confidence": 0.9},
+            {"id": "C-004", "adversary_verdict": "confirm", "reason": "r", "confidence": 0.9}]}))
+        stub.write_text('#!/usr/bin/env bash\ncat "$CANNED_GEMINI_FILE"\n')
+        stub.chmod(0o755)
+        env = run.env(PATH=str(bindir) + os.pathsep + os.environ["PATH"],
+                      CANNED_GEMINI_FILE=str(canned))
+        res = subprocess.run(["bash", str(GEMINI_REVIEW), "--diff", str(run.claude), "--findings",
+                              str(run.claude), "--mode", "judge"], capture_output=True, text=True,
+                             env=env, timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        by = {v["id"]: v for v in json.loads(res.stdout)["verdicts"]}
+        self.assertEqual(by["C-001"]["adversary_verdict"], "confirm")
+        self.assertEqual(by["C-002"]["adversary_verdict"], "refute")
+        self.assertEqual(by["C-003"]["adversary_verdict"], "refute")
+        self.assertEqual(by["C-004"]["adversary_verdict"], "confirm")
+        for v in by.values():
+            self.assertNotIn("gemini_verdict", v)
 
 
 if __name__ == "__main__":
