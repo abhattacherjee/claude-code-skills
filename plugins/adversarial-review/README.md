@@ -35,7 +35,7 @@ detect-mode → R1 parallel independent discovery → R2 parallel symmetric cros
 
 ### Modes
 
-- **PR mode** (auto-detected when a PR exists for the current branch): reviews `gh pr diff`, posts survivor findings as PR review comments via `pr-review-loop`'s `pr-review-cli.sh`.
+- **PR mode** (auto-detected when a PR exists for the current branch): reviews `gh pr diff`, then saves the exchange on the PR: one thread per finding, the opposing model's verdict as a reply, refuted threads resolved, and one summary review. `--no-post` skips posting.
 - **Local mode** (no PR found): reviews `git diff <base>...HEAD` against the working tree, prints a terminal report, and writes a gitignored `<branch>.adversarial-review.md` file.
 
 ### Degradation
@@ -119,7 +119,7 @@ rm -rf /tmp/ccs
 
 ## See Also
 
-- `pr-review-loop` plugin — Workflow B for posting and resolving PR comments from the adversarial review's survivor output
+- `scripts/pr-audit.py` — the PR audit trail; also used by the `deep-review` plugin for every round
 - `adversarial-bug-hunter` agent (`~/.claude/agents/adversarial-bug-hunter.md`) — R1 bug-hunt sub-agent
 - `adversarial-convention-reviewer` agent (`~/.claude/agents/adversarial-convention-reviewer.md`) — R1 convention sub-agent
 - `adversarial-cross-examiner` agent (`~/.claude/agents/adversarial-cross-examiner.md`) — R2 cross-examiner sub-agent

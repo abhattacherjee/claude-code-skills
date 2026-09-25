@@ -2,6 +2,17 @@
 
 All notable changes to this skill will be documented in this file.
 
+## [0.2.0] - 2026-09-24
+
+### Added
+
+- PR mode saves the whole exchange on the PR: one inline thread per finding (refuted ones too), the opposing model's verdict as a reply, refuted threads resolved at once, and one summary review. Secrets in model output are redacted before posting, and bodies are capped below GitHub's size limit.
+- `scripts/pr-audit.py` with `post`, `local` and `record` modes, and `--no-post` on the skill and `sink.sh`.
+
+### Fixed
+
+- PR mode never posted anything. `sink.sh` called `pr-review-cli.sh --pr …`, which that CLI rejects as an unknown subcommand, then printed "PR review comments posted" anyway. `sink.sh` now exits 4 when any audit comment fails.
+
 ## [0.1.0] - 2026-06-02
 
 ### Added
