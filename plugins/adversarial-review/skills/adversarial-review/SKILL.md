@@ -272,7 +272,7 @@ $SCRIPTS/pr-audit.py record \
   --out "$RUN_DIR/round-1.json"
 ```
 
-Exit 2 means `report.json` could not be read or did not make a valid record. Tell the user and run Step 5 with `--no-post`.
+Exit 2 means `report.json` could not be read or did not make a valid record. Tell the user and run Step 5 with `--no-post` and without `--record`.
 
 ### Step 5 — Sink
 
@@ -288,6 +288,8 @@ $SCRIPTS/sink.sh \
 ```
 
 Pass `--no-post` when the user asked for it. Relay `sink.sh`'s `pr-audit:` line to the user.
+
+Model text is posted as written under your GitHub account, so @mentions and #refs in it will notify people and link issues.
 
 - Exit 0: delivered. In pr mode, each finding now has a thread on the PR, the opposing model's verdict is a reply, refuted findings' threads are resolved, and one summary review (split into numbered parts if very long) lists them all.
 - Exit 4: the report was delivered but some audit comments failed. The failed ids are on stderr. Tell the user; rerunning Step 5 with the same record posts only what is missing.

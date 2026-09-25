@@ -45,7 +45,7 @@ PREV_HEAD=null # previous round's head SHA, JSON null for the first round
 3. Post it:
 
 ```bash
-if [[ "$NO_POST" == "true" ]]; then :;
+if [[ "$NO_POST" == "true" ]]; then python3 "$AUDIT" local --record "$RUN_DIR/round-$K.json" --out "<branch with / as ->.adversarial-review.md";
 elif [[ -n "$PR" ]]; then python3 "$AUDIT" post --pr "$PR" --record "$RUN_DIR/round-$K.json";
 else python3 "$AUDIT" local --record "$RUN_DIR/round-$K.json" --out "<branch with / as ->.adversarial-review.md"; fi
 ```
@@ -63,14 +63,21 @@ fix the JSON and rerun. A posting failure never stops the review.
 
 | Round | Findings to include | Events |
 |---|---|---|
-| Phase 1, each round | every actionable finding raised this round, ids `R-001…` continuing across rounds; plus earlier findings being re-checked; the record's adversary is `claude-only` | `resolution` for each fix or pushback (`fixed` has no `sha` until the Phase 1 commit); `recheck` by the re-reviewer for findings fixed last round |
+| Phase 1, each round | every actionable finding raised this round, ids `R-001…` continuing across rounds; plus earlier findings being re-checked; the record's adversary value is explained below | `resolution` for each fix or pushback (`fixed` has no `sha` until the Phase 1 commit); `recheck` by the re-reviewer for findings fixed last round |
 | Phase 2 R1 | all Claude (`C-`) and adversary (`G-`/`X-`) findings, `status: unconfirmed` | none |
-| Phase 2 R2 | every judged finding, with its updated `status` | `verdict` by the judging model |
-| Phase 2 R3 | findings whose refutation was contested | `counter` by the finding's origin, then `verdict` for the concede-or-defend answer |
+| Phase 2 R2 | every judged finding, `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
+| Phase 2 R3 | findings whose refutation was contested, plus every other R2-refuted finding getting its final status (`rejected` or `survivor`) written | `counter` by the finding's origin, then `verdict` for the concede-or-defend answer |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
 
-A refuted finding's thread is resolved at once. A fixed one stays open until the LATEST `recheck`
-event on it says `resolved` and was made by the record's `adversary`. Phase 1 records therefore use
-`"adversary": "claude-only"`, so the Claude re-reviewer's re-check can resolve a Phase 1 thread.
-Phase 2 records use the Phase 2 adversary (`gemini`, or `codex` later), so only that model's
-re-check resolves a Phase 2 thread.
+A refuted finding's thread is resolved at once — which is why a finding refuted in R2 keeps
+`status: unconfirmed` in the phase2-r2 record even though its `verdict` refute event is recorded
+there: writing `rejected` (and resolving the thread) before the R3 counter round has run would let a
+contested refutation flip the finding back to `survivor` after its thread was already closed. A
+fixed finding's thread stays open until the LATEST `recheck` event on it says `resolved` and was
+made by the record's `adversary`. Phase 1 records therefore use `"adversary": "claude-only"`, so the
+Claude re-reviewer's re-check can resolve a Phase 1 thread. Phase 2 records use the Phase 2 adversary
+(`gemini`, or `codex` later), so only that model's re-check resolves a Phase 2 thread.
+
+Phase 2 has no adversary re-check round yet, so fixed Phase 2 threads stay open until the re-review
+rounds that #135 part 2 adds. On repos that require conversation resolution before merge, resolve
+those threads by hand after checking the fix.
