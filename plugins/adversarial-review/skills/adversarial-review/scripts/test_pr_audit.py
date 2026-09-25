@@ -650,6 +650,30 @@ class RecordTests(unittest.TestCase):
         self.assertNotIn("Traceback", res.stderr)
         self.assertFalse(out.exists())
 
+    def test_record_rejects_adversary_mismatch(self):
+        h = Harness(self)
+        report = dict(REPORT, summary={"adversary": "codex"})
+        report_path = h.write(json.dumps(report), "mismatch-report.json")
+        out = h.dir / "mismatch-round.json"
+        res = h.run("record", "--report-json", report_path, "--run-id", "ar-mismatch-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "gemini", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("codex", res.stderr)
+        self.assertIn("gemini", res.stderr)
+        self.assertFalse(out.exists())
+
+    def test_record_accepts_matching_adversary_summary(self):
+        h = Harness(self)
+        report = dict(REPORT, summary={"adversary": "gemini"})
+        report_path = h.write(json.dumps(report), "match-report.json")
+        out = h.dir / "match-round.json"
+        res = h.run("record", "--report-json", report_path, "--run-id", "ar-match-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "gemini", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(out.exists())
+
     def test_record_output_posts_cleanly(self):
         # C-001 opens an inline thread. C-002 has a path but no line, so it opens a
         # file-level thread. G-001 has no path, so it appears in the summary only.

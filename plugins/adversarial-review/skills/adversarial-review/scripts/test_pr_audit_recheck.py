@@ -1,0 +1,103 @@
+"""Tests for `pr-audit.py recheck`: the adversary's re-checks become recheck events."""
+import json
+import sys
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from test_pr_audit import SHA2, SHA3, Harness, ev, finding, record  # noqa: E402
+
+
+def fix_round(adversary="codex"):
+    return record([finding("X-003", events=[ev("resolution", resolution="fixed", sha=SHA2,
+                                                 text="added a cap")]),
+                   finding("X-004", events=[ev("resolution", resolution="fixed", sha=SHA2,
+                                                 text="guarded")])],
+                  rnd=4, head=SHA2, phase="phase2-fix", adversary=adversary)
+
+
+NEW = {"id": "X-005", "origin": "codex", "path": "src/b.py", "line": 7, "severity": "minor",
+       "category": "perf", "title": "Scan twice", "rationale": "Loop in a loop."}
+
+
+class RecheckTests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness(self)
+        self.prior = self.h.write(fix_round(), "round-4.json")
+        self.out = self.h.dir / "round-5.json"
+
+    def recheck(self, data, rnd=5, prior=None):
+        path = self.h.write(data, "recheck.json")
+        res = self.h.run("recheck", "--prior", prior or self.prior, "--rechecks", path,
+                         "--round", rnd, "--head-sha", SHA3, "--out", self.out)
+        rec = json.loads(self.out.read_text()) if res.returncode == 0 else None
+        return res, rec
+
+    def test_rechecks_become_adversary_events_on_the_earlier_findings(self):
+        res, rec = self.recheck({"findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual((rec["phase"], rec["round"], rec["run_id"]), ("phase2-recheck", 5, "ar-test-1"))
+        self.assertEqual((rec["prev_head_sha"], rec["head_sha"], rec["adversary"]), (SHA2, SHA3, "codex"))
+        [f] = rec["findings"]
+        self.assertEqual((f["id"], f["title"], f["status"]), ("X-003", "Retry loop never resets the backoff", "survivor"))
+        self.assertEqual(f["events"], [{"by": "codex", "kind": "recheck", "result": "resolved",
+                                        "text": "cap is there"}])
+        self.assertIn("no re-check for X-004", res.stderr)
+
+    def test_unknown_repeated_and_unhashable_ids_are_skipped(self):
+        res, rec = self.recheck({"findings": [], "rechecks": [
+            {"id": "X-003", "result": "partly", "reason": "one path left"},
+            {"id": "X-003", "result": "resolved", "reason": "repeat"},
+            {"id": "X-404", "result": "resolved", "reason": "made up"},
+            {"id": ["X-004"], "result": "resolved", "reason": "unhashable"}]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual([(f["id"], f["events"][0]["result"]) for f in rec["findings"]], [("X-003", "partly")])
+        self.assertIn("X-404", res.stderr)
+
+    def test_new_findings_are_added_unconfirmed(self):
+        res, rec = self.recheck({"findings": [NEW], "rechecks": []})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        [f] = rec["findings"]
+        self.assertEqual((f["id"], f["origin"], f["status"], f["events"]), ("X-005", "codex", "unconfirmed", []))
+
+    def test_new_finding_reusing_an_earlier_id_exits_2(self):
+        clash = dict(NEW, id="X-003")
+        res, _ = self.recheck({"findings": [clash], "rechecks": []})
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("--id-start", res.stderr)
+
+    def test_round_must_come_after_the_prior_round(self):
+        res, _ = self.recheck({"findings": [], "rechecks": []}, rnd=4)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("must come after", res.stderr)
+
+    def test_missing_rechecks_list_exits_2(self):
+        res, _ = self.recheck({"findings": []})
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("rechecks", res.stderr)
+
+    def test_claude_only_prior_rechecks_as_claude(self):
+        prior = self.h.write(fix_round("claude-only"), "round-4-claude.json")
+        res, rec = self.recheck({"findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "ok"}]}, prior=prior)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(rec["findings"][0]["events"][0]["by"], "claude")
+
+    def test_resolved_recheck_closes_only_that_thread_on_the_pr(self):
+        self.assertEqual(self.h.post(fix_round(), "round-4.json").returncode, 0)
+        self.assertEqual(self.h.resolves(), [])
+        replies_before = len(self.h.posted("reply"))
+        res, rec = self.recheck({"findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"},
+            {"id": "X-004", "result": "partly", "reason": "one path left"}]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        post = self.h.post(rec, "round-5.json")
+        self.assertEqual(post.returncode, 0, post.stderr)
+        self.assertEqual(len(self.h.resolves()), 1)
+        self.assertEqual(len(self.h.posted("reply")), replies_before + 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
