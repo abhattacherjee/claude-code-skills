@@ -104,9 +104,10 @@ dimension** AND the previous round's fixes introduced nothing new.
    the intent context, and an instruction to **return findings grouped CRITICAL / IMPORTANT /
    SUGGESTION with file:line + concrete fix**, and to **say so plainly if clean — do not invent
    issues to seem thorough.** Also tell each reviewer: run long harnesses (mutation runs, fuzzers,
-   full suites) in the foreground, with the Bash timeout near its maximum. If a run will take more
-   than about 20 minutes, split it into chunks and send partial results after each chunk. Never go
-   idle "waiting for your background run": an idle teammate is not woken when its own job ends.
+   full suites) in the foreground, keeping each Bash call under the 10-minute cap — chain calls, or
+   split the harness into chunks, rather than backgrounding it — and send partial results to the
+   orchestrator at least every ~20 minutes of a long run. Never go idle "waiting for your
+   background run": an idle teammate is not woken when its own job ends.
 2. **Aggregate.** Deduplicate convergent findings (multiple reviewers flagging the same thing ->
    higher confidence). Note which are factual vs judgment calls. When a reviewer or implementer
    says it is waiting on a background job, check its output or process within about 10 minutes
@@ -115,7 +116,11 @@ dimension** AND the previous round's fixes introduced nothing new.
 3. **Fix** all Critical/Important via a single **implementer sub-agent** given the exact,
    numbered fix spec (read-then-edit in its own context; this also sidesteps any parent-side
    router restrictions on Read/Edit). Address cheap Suggestions too when they reduce future review
-   noise. The implementer must **verify empirically** — run the tests, and for any new guard/check,
+   noise. Tell the implementer the same never-idle rule as the reviewers: run long harnesses
+   (tests, mutation runs) in the foreground, keeping each Bash call under the 10-minute cap (chain
+   calls, or split into chunks, rather than backgrounding it), and send partial results at least
+   every ~20 minutes of a long run; never go idle waiting on its own background run. The
+   implementer must **verify empirically** — run the tests, and for any new guard/check,
    **prove it fails-first** (a planted-regression that would pass even when the code is broken is a
    silent defect; see Red Flags). Do not commit per-round by default — checkpoint at phase end to
    avoid preflight churn. Before advancing to the re-review, verify the implementer's claims against ground truth in *your own* context per `./references/delegated-verification.md` — a sub-agent can report "done" without writing, or "committed" with only a subset of files. A failed verification is a failure, not a silent retry.
@@ -123,10 +128,10 @@ dimension** AND the previous round's fixes introduced nothing new.
    preserves their codebase context) with TWO asks: (a) verify each prior finding is *actually*
    resolved against the new diff — not assumed; (b) check whether the fixes **introduced** any new
    bug, inconsistency, or regression. Repeat the same rule as the initial dispatch: long harnesses
-   run in the foreground with the Bash timeout near its maximum, chunk anything over ~20 minutes
-   and send partial results after each chunk, and never go idle waiting on their own background
-   run. A reviewer replies either with new CRITICAL/IMPORTANT items or "CONVERGED — no actionable
-   issues."
+   run in the foreground, keeping each Bash call under the 10-minute cap (chain calls, or split
+   into chunks, rather than backgrounding it), and send partial results at least every ~20 minutes
+   of a long run, and never go idle waiting on their own background run. A reviewer replies either
+   with new CRITICAL/IMPORTANT items or "CONVERGED — no actionable issues."
 5. **Converge or iterate.** If all dimensions report CONVERGED -> Phase 1 done. Else apply the new
    fixes and run another round. Respect `--max-rounds` (default 4); if not converged at the cap,
    surface the remaining items to the user rather than looping forever.
@@ -199,9 +204,10 @@ In one message, launch (none seeing the others):
   picked automatically and `GEMINI_AUTHED=yes`, switch to Gemini for the whole phase and rerun this
   step; otherwise follow Step 2.0's Claude-only path.
 
-Tell both Claude agents the same rule as Phase 1's dispatch: run long harnesses in the foreground
-with the Bash timeout near its maximum, split anything over ~20 minutes into chunks and send
-partial results after each chunk, and never go idle waiting on their own background run.
+Tell both Claude agents the same rule as Phase 1's dispatch: run long harnesses in the foreground,
+keeping each Bash call under the 10-minute cap (chain calls, or split into chunks, rather than
+backgrounding it), and send partial results at least every ~20 minutes of a long run.
+Never go idle waiting on their own background run.
 
 Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`.
 Emit an R1 digest (counts by severity/category). An empty findings array is a respectable, valid
@@ -215,9 +221,10 @@ if it is idle — never report "waiting on R1" to the user without having looked
 In one message:
 - Claude cross-examiner (opus) judges every adversary finding -> `confirm|refute` with reason,
   grounded in the **current** source (findings can be stale if Phase 1 already fixed them). Give
-  it the same rule as Step 2.1: run long harnesses in the foreground with the Bash timeout near
-  its maximum, chunk anything over ~20 minutes with partial results after each chunk, and never go
-  idle waiting on its own background run.
+  it the same rule as Step 2.1: run long harnesses in the foreground, keeping each Bash call under
+  the 10-minute cap (chain calls, or split into chunks, rather than backgrounding it), and send
+  partial results at least every ~20 minutes of a long run, and never go idle waiting on its own
+  background run.
 - The adversary judges every Claude finding:
   `$ADV_REVIEW --diff <DIFF> --findings <claude-r1.json> --mode judge --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"`.
   Both scripts write the verdict under the key `adversary_verdict`, whichever model gave it.
@@ -281,7 +288,11 @@ rule; otherwise apply it by hand and print `survivors / unconfirmed / rejected` 
 
 ### Step 2.5 — Fix survivors + finalize
 
-Fix all survivors via an implementer sub-agent (same verify-empirically discipline as Phase 1).
+Fix all survivors via an implementer sub-agent (same verify-empirically discipline as Phase 1),
+including the same never-idle rule: run long harnesses in the foreground, keeping each Bash call
+under the 10-minute cap (chain calls, or split into chunks, rather than backgrounding it), and
+send partial results at least every ~20 minutes of a long run; never go idle waiting on its own
+background run.
 Before finalizing, verify the implementer's fixes against ground truth in *your own* context per `./references/delegated-verification.md` — never trust the sub-agent's narration that the survivors were fixed.
 Then finalize:
 - Re-run the full test/build suite; confirm green.

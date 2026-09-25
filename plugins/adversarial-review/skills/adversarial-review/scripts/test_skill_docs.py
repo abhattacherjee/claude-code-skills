@@ -155,7 +155,7 @@ class AdversarialReviewDocTests(unittest.TestCase):
         # report once it finishes" goes idle -- it is not woken when its own job
         # ends. R1's Claude finders must carry the never-idle rule.
         step2 = norm(section(self.text, "### Step 2 — R1", "### Step 3 — R2"))
-        self.assertIn("Bash timeout near its maximum", step2)
+        self.assertIn("10-minute cap", step2)
         self.assertIn("20 minutes", step2)
         self.assertIn("Never go idle", step2)
 
@@ -169,7 +169,7 @@ class AdversarialReviewDocTests(unittest.TestCase):
 
     def test_step_3_r2_dispatch_never_idle_on_its_own_background_run(self):
         step3 = norm(section(self.text, "### Step 3 — R2", "### Step 4 — Converge"))
-        self.assertIn("Bash timeout near its maximum", step3)
+        self.assertIn("10-minute cap", step3)
         self.assertIn("never go idle", step3.lower())
 
     def test_step_3_orchestrator_checks_before_reporting_waiting(self):
@@ -231,21 +231,21 @@ class AgentNeverIdleOnOwnBackgroundRunTests(unittest.TestCase):
     def test_bug_hunter_never_idle_on_its_own_background_run(self):
         text = (AGENTS_DIR / "adversarial-bug-hunter.md").read_text(encoding="utf-8")
         rules = text.split("## Rules", 1)[1]
-        self.assertIn("Bash timeout near its maximum", rules)
+        self.assertIn("10-minute cap", rules)
         self.assertIn("20 minutes", rules)
         self.assertIn("Never go idle", rules)
 
     def test_convention_reviewer_never_idle_on_its_own_background_run(self):
         text = (AGENTS_DIR / "adversarial-convention-reviewer.md").read_text(encoding="utf-8")
         rules = text.split("## Rules", 1)[1]
-        self.assertIn("Bash timeout near its maximum", rules)
+        self.assertIn("10-minute cap", rules)
         self.assertIn("20 minutes", rules)
         self.assertIn("Never go idle", rules)
 
     def test_cross_examiner_never_idle_on_its_own_background_run(self):
         text = (AGENTS_DIR / "adversarial-cross-examiner.md").read_text(encoding="utf-8")
         rules = text.split("## Rules", 1)[1]
-        self.assertIn("Bash timeout near its maximum", rules)
+        self.assertIn("10-minute cap", rules)
         self.assertIn("20 minutes", rules)
         self.assertIn("Never go idle", rules)
 
@@ -343,7 +343,7 @@ class DeepReviewDocTests(unittest.TestCase):
         # idle waiting on their own background job.
         each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
         step1 = norm(section(each_round, "1. **Dispatch", "2. **Aggregate"))
-        self.assertIn("Bash timeout near its maximum", step1)
+        self.assertIn("10-minute cap", step1)
         self.assertIn("20 minutes", step1)
         self.assertIn("Never go idle", step1)
 
@@ -354,6 +354,16 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("10 minutes", step2)
         self.assertIn('Never report "waiting on X"', step2)
 
+    def test_phase1_step3_fix_implementer_never_idle_on_its_own_background_run(self):
+        # #137 follow-up: item 2 (Aggregate) tells the orchestrator to watch a
+        # background job, but item 3 (Fix) never told the implementer itself the
+        # never-idle rule. It must carry the same rule as the reviewers.
+        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
+        step3 = norm(section(each_round, "3. **Fix", "4. **Re-review"))
+        self.assertIn("10-minute cap", step3)
+        self.assertIn("20 minutes", step3)
+        self.assertIn("never go idle", step3.lower())
+
     def test_phase1_step4_rereview_never_idle_on_its_own_background_run(self):
         each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
         step4 = section(each_round, "4. **Re-review", "5. **Converge")
@@ -362,17 +372,25 @@ class DeepReviewDocTests(unittest.TestCase):
 
     def test_step_2_1_r1_briefs_never_idle_and_orchestrator_checks(self):
         step21 = section(self.read("SKILL.md"), "### Step 2.1", "### Step 2.2")
-        self.assertIn("Bash timeout near its maximum", step21)
+        self.assertIn("10-minute cap", step21)
         self.assertIn("never go idle", step21.lower())
         self.assertIn("ps -axo pid,etime,command", step21)
         self.assertIn("10 minutes", step21)
 
     def test_step_2_2_r2_briefs_never_idle_and_orchestrator_checks(self):
         step22 = norm(section(self.read("SKILL.md"), "### Step 2.2", "### Step 2.3"))
-        self.assertIn("Bash timeout near its maximum", step22)
+        self.assertIn("10-minute cap", step22)
         self.assertIn("never go idle", step22.lower())
         self.assertIn("ps -axo pid,etime,command", step22)
         self.assertIn("10 minutes", step22)
+
+    def test_step_2_5_implementer_never_idle_on_its_own_background_run(self):
+        # #137 follow-up: Step 2.5's implementer dispatch (Phase 2's fix step) must
+        # carry the same never-idle rule as Phase 1's Fix step and the R1/R2 briefs.
+        step25 = norm(section(self.read("SKILL.md"), "### Step 2.5", "### Step 2.6"))
+        self.assertIn("10-minute cap", step25)
+        self.assertIn("20 minutes", step25)
+        self.assertIn("never go idle", step25.lower())
 
     def test_red_flags_names_idle_reviewer_wait(self):
         red_flags = section(self.read("SKILL.md"), "## Red Flags", "## Integration")
