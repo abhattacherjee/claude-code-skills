@@ -100,6 +100,11 @@ class Harness:
     def state(self):
         return json.loads(self.state_path.read_text())
 
+    def set_state(self, **over):
+        state = self.state()
+        state.update(over)
+        self.state_path.write_text(json.dumps(state))
+
 
 class InputTests(unittest.TestCase):
     def test_malformed_record_exits_2_and_makes_no_calls(self):
@@ -135,10 +140,31 @@ class LocalTests(unittest.TestCase):
     def test_post_without_auth_falls_back_to_local(self):
         h = Harness(self, auth=False)
         res = h.post(record([finding()]))
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("not logged in", res.stdout)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("not logged in", res.stderr)
+        self.assertEqual(res.stdout, "")
         self.assertIn("Retry loop never resets the backoff", h.fallback.read_text())
-        self.assertEqual([c["argv"][:2] for c in h.calls()], [["auth", "status"]])
+        self.assertEqual([c["argv"] for c in h.calls()], [["api", "user", "-q", ".login"]])
+
+    def test_local_output_is_redacted(self):
+        h = Harness(self)
+        out = h.dir / "branch.adversarial-review.md"
+        rec = record([finding(rationale=f"leaked {FAKE_GH}",
+                              events=[ev("verdict", verdict="confirm", text=f"saw {FAKE_GH}")])])
+        res = h.run("local", "--record", h.write(rec), "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        text = out.read_text()
+        self.assertNotIn(FAKE_GH, text)
+        self.assertIn("[REDACTED:github-token]", text)
+
+    def test_fallback_output_is_redacted(self):
+        h = Harness(self, auth=False)
+        rec = record([finding(rationale=f"leaked {FAKE_GH}")])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        text = h.fallback.read_text()
+        self.assertNotIn(FAKE_GH, text)
+        self.assertIn("[REDACTED:github-token]", text)
 
 
 class PostTests(unittest.TestCase):
@@ -208,6 +234,15 @@ class PostTests(unittest.TestCase):
         self.assertEqual([c["path"] for c in comments], ["src/a.py"])
         summary = h.posted("review")[0]["input"]["body"]
         self.assertIn("| X-002 | important | codex | confirmed | no thread: GitHub rejected", summary)
+        self.assertIn("[thread](https://github.com/octo/demo/pull/7#discussion_r1001) "
+                      "(inline rejected (422); file-level) |", summary)
+
+    def test_path_without_line_is_noted_as_file_level(self):
+        h = Harness(self)
+        res = h.post(record([finding(line=None)]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        summary = h.posted("review")[0]["input"]["body"]
+        self.assertIn("(file-level (no line)) |", summary)
 
     def test_rerun_posts_nothing(self):
         h = Harness(self)
@@ -220,6 +255,8 @@ class PostTests(unittest.TestCase):
         self.assertEqual([c for c in new if "-X" in c["argv"]], [])
         self.assertIn("posted 0,", res.stdout)
         self.assertIn("skipped 3 already on the PR", res.stdout)
+        self.assertIn("resolved 0,", res.stdout)
+        self.assertIn("updated 0,", res.stdout)
 
     def test_partial_rerun_posts_only_missing(self):
         h = Harness(self, fail=["reply"])
@@ -282,7 +319,81 @@ class PostTests(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertTrue(h.fallback.exists(), "fallback file was not written")
         self.assertIn("Retry loop never resets the backoff", h.fallback.read_text())
-        self.assertIn(f"wrote the audit trail to {h.fallback}", res.stdout)
+        self.assertIn(f"wrote the audit trail to {h.fallback}", res.stderr)
+
+    def test_garbage_json_on_read_falls_back(self):
+        h = Harness(self, garbage=["read"])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("could not read PR #7", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertTrue(h.fallback.exists(), "fallback file was not written")
+
+    def test_unexpected_crash_exits_3_without_traceback(self):
+        h = Harness(self, garbage=["reply"])
+        res = h.post(record([finding(events=[ev("verdict", verdict="confirm")])]))
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        lines = res.stderr.strip().splitlines()
+        self.assertEqual(len(lines), 1, res.stderr)
+        self.assertTrue(lines[0].startswith("pr-audit: unexpected error: JSONDecodeError: "), lines[0])
+
+    def test_open_thread_failure_is_reported(self):
+        h = Harness(self, fail=["comment"])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("FAILED X-001 open thread", res.stderr)
+        summary = h.posted("review")[0]["input"]["body"]
+        self.assertIn("| X-001 | important | codex | confirmed | no thread: posting failed |", summary)
+
+    def test_resolve_failure_is_reported(self):
+        h = Harness(self, fail=["resolve"])
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("FAILED X-001 resolve thread", res.stderr)
+        self.assertEqual(h.state()["resolved"], [])
+
+    def test_thread_missing_from_graphql_is_reported(self):
+        h = Harness(self, thread_missing=[1001])
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("FAILED X-001 resolve thread: thread not found", res.stderr)
+
+    def test_thread_query_failure_is_reported(self):
+        h = Harness(self, fail=["graphql"])
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("FAILED X-001 resolve thread", res.stderr)
+        self.assertEqual(h.resolves(), [])
+
+    def test_threads_are_read_across_pages(self):
+        h = Harness(self, thread_page_size=2)
+        rec = record([finding(f"X-00{i}", status="rejected", events=[ev("verdict", verdict="refute")])
+                      for i in range(1, 6)])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("resolved 5,", res.stdout)
+        queries = [c for c in h.calls() if c["argv"][:2] == ["api", "graphql"]
+                   and not any("resolveReviewThread" in a for a in c["argv"])]
+        self.assertEqual(len(queries), 3)
+
+    def test_rerun_updates_a_stale_summary_in_place(self):
+        h = Harness(self, fail=["comment"])
+        rec = record([finding()])
+        first = h.post(rec)
+        self.assertEqual(first.returncode, 1, first.stderr)
+        self.assertIn("Posting failures: 1", h.state()["reviews"][0]["body"])
+        h.set_state(fail=[])
+        second = h.post(rec)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("updated 1,", second.stdout)
+        reviews = h.state()["reviews"]
+        self.assertEqual(len(reviews), 1)
+        self.assertIn("Posting failures: 0", reviews[0]["body"])
+        self.assertIn("| X-001 | important | codex | confirmed | [thread](", reviews[0]["body"])
+        puts = [c for c in h.calls() if "PUT" in c["argv"]]
+        self.assertEqual(len(puts), 1)
+        self.assertIn(f"repos/octo/demo/pulls/7/reviews/{reviews[0]['id']}", puts[0]["argv"])
 
     def test_every_refuted_thread_is_resolved(self):
         h = Harness(self)
@@ -399,6 +510,52 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(by_id["C-003"]["severity"], "important")
         self.assertEqual(by_id["C-003"]["rationale"], "(severity was 'weird') r3")
 
+    def run_record(self, h, report, adversary="gemini"):
+        report_path = h.write(json.dumps(report), "extra-report.json")
+        out = h.dir / "extra-round.json"
+        res = h.run("record", "--report-json", report_path, "--run-id", "ar-x-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", adversary, "--head-sha", SHA1, "--out", out)
+        return res, out
+
+    def test_record_rejects_non_canonical_id(self):
+        h = Harness(self)
+        res, out = self.run_record(h, {"findings": [
+            {"id": "BH-1", "origin": "claude", "path": "a.py", "line": 1, "severity": "minor",
+             "category": "bug", "title": "t", "rationale": "r", "status": "survivor"}]})
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("BH-1", res.stderr)
+        self.assertFalse(out.exists())
+
+    def test_record_normalizes_verdicts(self):
+        h = Harness(self)
+        base = {"origin": "claude", "path": "a.py", "line": 1, "severity": "minor",
+                "category": "bug", "title": "t", "rationale": "r", "status": "survivor",
+                "verdict_reason": "why"}
+        res, out = self.run_record(h, {"findings": [
+            dict(base, id="C-001", gemini_verdict="Confirmed"),
+            dict(base, id="C-002", gemini_verdict="REFUTED", status="rejected"),
+            dict(base, id="C-003", gemini_verdict="maybe"),
+        ]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        by_id = {f["id"]: f for f in json.loads(out.read_text())["findings"]}
+        self.assertEqual(by_id["C-001"]["events"][0]["verdict"], "confirm")
+        self.assertEqual(by_id["C-002"]["events"][0]["verdict"], "refute")
+        self.assertEqual(by_id["C-003"]["events"], [])
+        self.assertEqual(by_id["C-003"]["rationale"], "(verdict 'maybe' was not recognised) r")
+        self.assertIn("C-003", res.stderr)
+        self.assertIn("'maybe'", res.stderr)
+
+    def test_record_notes_a_dropped_line(self):
+        h = Harness(self)
+        res, out = self.run_record(h, {"findings": [
+            {"id": "C-001", "origin": "claude", "path": "a.py", "line": "L12", "severity": "minor",
+             "category": "bug", "title": "t", "rationale": "r", "status": "survivor"}]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        f = json.loads(out.read_text())["findings"][0]
+        self.assertIsNone(f["line"])
+        self.assertEqual(f["rationale"], "(line 'L12' was not a line number) r")
+
     def test_record_rejects_non_object_report(self):
         h = Harness(self)
         report_path = h.write(json.dumps([{"id": "C-001"}]), "list-report.json")
@@ -453,6 +610,19 @@ class GitignoreTests(unittest.TestCase):
         gitignore = (repo / ".gitignore").read_text()
         self.assertEqual(gitignore.count("*.adversarial-review.md"), 1)
 
+    def test_unreadable_gitignore_is_reported_not_fatal(self):
+        h = Harness(self)
+        repo = Path(tempfile.mkdtemp(prefix="pr-audit-gitignore-"))
+        self.addCleanup(shutil.rmtree, repo, True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / ".gitignore").mkdir()
+        out = repo / "branch.adversarial-review.md"
+        res = h.run("local", "--record", h.write(record([finding()])), "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertIn("could not update", res.stderr)
+        self.assertTrue(out.exists())
+
     def test_no_gitignore_write_outside_a_git_repo(self):
         h = Harness(self)
         plain_dir = Path(tempfile.mkdtemp(prefix="pr-audit-no-git-"))
@@ -461,6 +631,7 @@ class GitignoreTests(unittest.TestCase):
         res = h.run("local", "--record", h.write(record([finding()])), "--out", out)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertFalse((plain_dir / ".gitignore").exists())
+        self.assertIn("not in a git repo", res.stderr)
 
 
 if __name__ == "__main__":

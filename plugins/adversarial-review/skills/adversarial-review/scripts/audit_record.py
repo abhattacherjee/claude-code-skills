@@ -8,6 +8,8 @@ import re
 from collections import Counter
 
 SCHEMA = "audit-round/v1"
+# GitHub rejects comment and review bodies over 65536 characters. 60000 leaves
+# headroom for the marker and for any encoding growth on GitHub's side.
 MAX_BODY = 60000
 SKILLS = {"adversarial-review", "deep-review"}
 ADVERSARIES = {"codex", "gemini", "claude-only"}
@@ -95,7 +97,7 @@ def validate(rec):
             continue
         fid = str(f.get("id", ""))
         if not FINDING_ID_RE.match(fid):
-            problems.append(f"{where}.id must look like X-001")
+            problems.append(f"{where}.id {fid!r} must look like X-001")
         elif fid in seen:
             problems.append(f"{where}.id {fid} is duplicated")
         seen.add(fid)
@@ -218,7 +220,9 @@ def event_content(rec, ev):
 
 
 def should_resolve(f, rec):
-    """Refuted findings close at once. Others close only on the adversary's latest re-check."""
+    """Refuted findings close at once. Any other finding closes only when the latest
+    re-check in this record says "resolved" and comes from the adversary. With a
+    claude-only adversary, a re-check from any model counts."""
     if f["status"] == "rejected":
         return True
     for e in reversed(f["events"]):
@@ -263,7 +267,10 @@ def summary_bodies(rec, rows, redacted, failures, details="", limit=MAX_BODY):
     for r in rows:
         note = r['note'] or 'unknown'
         note, _ = redact(note)
-        link = f"[thread]({r['thread']})" if r["thread"] else f"no thread: {_cell(note)}"
+        if r["thread"]:
+            link = f"[thread]({r['thread']})" + (f" ({_cell(note)})" if r["note"] else "")
+        else:
+            link = f"no thread: {_cell(note)}"
         lines.append(f"| {_cell(r['id'])} | {_cell(r['severity'])} | {_cell(r['origin'])} | "
                      f"{_cell(r['outcome'])} | {link} |")
     footer = f"Redacted: {redacted} · Posting failures: {failures}"

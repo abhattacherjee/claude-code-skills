@@ -8,12 +8,22 @@ Usage:
                      --round K --adversary ADV --head-sha SHA [--prev-head-sha SHA]
                      --out ROUND.json
 
-Each finding gets one inline thread; each later event is a reply in it; each
-round gets one COMMENT review with a summary table. Earlier threads are found by
-a hidden marker, so no local state is kept. Without gh (or when logged out),
-post writes the same content to the local markdown file instead.
+Each finding with a path gets one thread. It is inline when GitHub accepts the
+line, file-level when GitHub rejects the line (HTTP 422) or there is no line,
+and none when GitHub rejects both. Findings with no thread appear only in the
+summary. Each later event is a reply in the finding's thread. Each round gets
+one COMMENT review with a summary table; a long table is split over several
+numbered reviews. Earlier threads and summaries are found by a hidden marker,
+so no local state is kept. A rerun updates its own summary in place.
 
-Exit codes: 0 ok, 1 one or more posts failed, 2 usage error or invalid record.
+When gh is missing, not logged in, or cannot read the PR, `post` writes the
+same content to the local markdown file instead and exits 1.
+
+Exit codes:
+  0  everything was posted (or `local`/`record` succeeded)
+  1  the trail is incomplete: some posts failed, or it went to the local file
+  2  usage error, invalid record, or invalid report
+  3  unexpected error (one line on stderr, no traceback)
 """
 import argparse
 import json
@@ -35,7 +45,12 @@ class GhError(RuntimeError):
 
 
 def gh(args, payload=None):
-    """Run gh and return stdout. Raise GhError with .status=422 on validation failures."""
+    """Run gh and return its stdout.
+
+    Raise GhError on any failure: gh missing, a timeout, or a non-zero exit.
+    GhError.status is 422 only when gh's stderr contains "(HTTP 422)"; it is
+    None for every other failure.
+    """
     try:
         proc = subprocess.run(
             ["gh", *args], input=None if payload is None else json.dumps(payload),
@@ -51,11 +66,15 @@ def gh(args, payload=None):
 
 
 def gh_ready():
+    """True when gh can read the account that will post. `gh api user` tests the
+    token gh will actually use, on every gh version, and is not fooled by a
+    logged-in account on another host."""
     try:
-        return subprocess.run(["gh", "auth", "status"], capture_output=True,
-                              timeout=30).returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        proc = subprocess.run(["gh", "api", "user", "-q", ".login"], capture_output=True,
+                              text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
         return False
+    return proc.returncode == 0 and bool(proc.stdout.strip())
 
 
 def load_record(path):
@@ -79,23 +98,28 @@ def ensure_gitignored(out):
     without going through sink.sh's own gitignore step, so this covers that path."""
     if not str(out).endswith(LOCAL_SUFFIX):
         return
+    folder = Path(out).resolve().parent
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(Path(out).resolve().parent), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+        proc = subprocess.run(["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"pr-audit: could not run git ({exc}); not updating .gitignore", file=sys.stderr)
         return
     if proc.returncode != 0:
+        print(f"pr-audit: {folder} is not in a git repo; not updating .gitignore", file=sys.stderr)
         return
-    root = Path(proc.stdout.strip())
-    gitignore = root / ".gitignore"
-    existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
-    if GITIGNORE_PATTERN in existing.splitlines():
+    gitignore = Path(proc.stdout.strip()) / ".gitignore"
+    try:
+        existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+        if GITIGNORE_PATTERN in existing.splitlines():
+            return
+        with open(gitignore, "a", encoding="utf-8") as fh:
+            if existing and not existing.endswith("\n"):
+                fh.write("\n")
+            fh.write(GITIGNORE_PATTERN + "\n")
+    except OSError as exc:
+        print(f"pr-audit: could not update {gitignore}: {exc}", file=sys.stderr)
         return
-    with open(gitignore, "a", encoding="utf-8") as fh:
-        if existing and not existing.endswith("\n"):
-            fh.write("\n")
-        fh.write(GITIGNORE_PATTERN + "\n")
     print(f"pr-audit: added '{GITIGNORE_PATTERN}' to {gitignore}")
 
 
@@ -109,7 +133,11 @@ def write_local(rec, out):
 
 def default_local_out():
     def git(*args):
-        return subprocess.run(["git", *args], capture_output=True, text=True).stdout.strip()
+        try:
+            return subprocess.run(["git", *args], capture_output=True, text=True,
+                                  timeout=10).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
     root = git("rev-parse", "--show-toplevel") or "."
     branch = (git("rev-parse", "--abbrev-ref", "HEAD") or "unknown-branch").replace("/", "-")
     return str(Path(root) / f"{branch}{LOCAL_SUFFIX}")
@@ -127,9 +155,10 @@ def cmd_post(args):
     rec = load_record(args.record)
     if not gh_ready():
         out = args.fallback_out or default_local_out()
-        print(f"pr-audit: gh is missing or not logged in; writing the audit trail to {out} instead.")
+        print(f"pr-audit: gh is missing or not logged in; writing the audit trail to {out} instead.",
+              file=sys.stderr)
         write_local(rec, out)
-        return 0
+        return 1
     return post_round(rec, args)
 
 
@@ -162,7 +191,8 @@ class GitHub:
 
     def comments(self):
         return json_lines(gh(["api", "--paginate", f"{self.base}/comments?per_page=100",
-                              "--jq", ".[] | {id, body, html_url, user: .user.login}"]))
+                              "--jq", ".[] | {id, body, html_url, subject_type, line, "
+                                      "user: .user.login}"]))
 
     def reviews(self):
         return json_lines(gh(["api", "--paginate", f"{self.base}/reviews?per_page=100",
@@ -183,6 +213,10 @@ class GitHub:
     def review(self, sha, body):
         return json.loads(gh(["api", "-X", "POST", f"{self.base}/reviews", "--input", "-"],
                              {"commit_id": sha, "body": body, "event": "COMMENT"}))
+
+    def update_review(self, review_id, body):
+        return json.loads(gh(["api", "-X", "PUT", f"{self.base}/reviews/{review_id}",
+                              "--input", "-"], {"body": body}))
 
     def threads(self):
         """Map each thread's first comment id to (thread node id, isResolved)."""
@@ -218,11 +252,22 @@ def open_thread(hub, rec, f, body):
             if exc.status != 422:
                 raise
     try:
-        return hub.new_thread(rec["head_sha"], path, None, body), None
+        opener = hub.new_thread(rec["head_sha"], path, None, body)
     except GhError as exc:
         if exc.status != 422:
             raise
         return None, "GitHub rejected the inline and file comment (422)"
+    return opener, anchor_note(f, opener)
+
+
+def anchor_note(f, opener):
+    """Say when a thread is file-level, so the summary shows the line anchor was lost.
+    Worked out from the opener itself, so a rerun renders the same note."""
+    if opener.get("subject_type") != "file":
+        return None
+    if f.get("line") is not None:
+        return "inline rejected (422); file-level"
+    return "file-level (no line)"
 
 
 def post_round(rec, args):
@@ -233,11 +278,11 @@ def post_round(rec, args):
         me = hub.login()
         existing = hub.comments()
         reviews = hub.reviews()
-    except GhError as exc:
+    except (GhError, json.JSONDecodeError) as exc:
         print(f"pr-audit: could not read PR #{args.pr}: {exc}", file=sys.stderr)
         out = args.fallback_out or default_local_out()
         write_local(rec, out)
-        print(f"pr-audit: wrote the audit trail to {out} instead.")
+        print(f"pr-audit: wrote the audit trail to {out} instead.", file=sys.stderr)
         return 1
 
     posted_markers, openers = set(), {}
@@ -250,13 +295,17 @@ def post_round(rec, args):
             if m["run"] == rec["run_id"] and m["index"] == 0:
                 openers.setdefault(m["finding"], c)
 
-    n_posted = n_skipped = n_resolved = 0
+    n_posted = n_skipped = n_resolved = n_updated = 0
     failures, rows, no_thread, to_resolve = [], [], [], []
     redacted = Counter()
     for f in rec["findings"]:
         fid = f["id"]
         opener = openers.get(fid)
-        is_new, note = opener is None, None
+        note = None
+        # "new" means the thread was opened in this round, so a rerun of the same
+        # round renders the same summary and does not rewrite it.
+        is_new = opener is None or (
+            ar.parse_marker(ar.trailing_line(opener["body"]))["round"] == rec["round"])
         if opener is None:
             mark = ar.marker(rec["run_id"], fid, rec["round"], 0)
             body, red = ar.finalize(ar.opener_content(rec, f), mark)
@@ -267,8 +316,10 @@ def post_round(rec, args):
             except GhError as exc:
                 failures.append((fid, "open thread", str(exc)))
                 note = "posting failed"
-        elif ar.parse_marker(ar.trailing_line(opener["body"]))["round"] == rec["round"]:
-            n_skipped += 1
+        else:
+            if is_new:
+                n_skipped += 1
+            note = anchor_note(f, opener)
 
         if opener is None:
             no_thread.append(f)
@@ -318,18 +369,29 @@ def post_round(rec, args):
     details, red = ar.no_thread_details(rec, no_thread)
     redacted += red
     total_redacted = sum(redacted.values())
-    own_summary_lines = {ar.trailing_line(r.get("body")) for r in reviews if r.get("user") == me}
+    # Our own earlier summary parts, by marker. A rerun rewrites a part in place
+    # when its body changed (for example, a failure count that is now 0). If the
+    # rerun needs fewer parts, the extra old parts are left as they are.
+    own_summaries = {}
+    for r in reviews:
+        if r.get("user") == me:
+            own_summaries.setdefault(ar.trailing_line(r.get("body")), r)
     for i, body in enumerate(ar.summary_bodies(rec, rows, total_redacted, len(failures), details), 1):
-        if ar.summary_marker(rec["run_id"], rec["round"], i) in own_summary_lines:
-            n_skipped += 1
-            continue
+        old = own_summaries.get(ar.summary_marker(rec["run_id"], rec["round"], i))
         try:
-            hub.review(rec["head_sha"], body)
-            n_posted += 1
+            if old is None:
+                hub.review(rec["head_sha"], body)
+                n_posted += 1
+            elif (old.get("body") or "").strip() == body.strip():
+                n_skipped += 1
+            else:
+                hub.update_review(old["id"], body)
+                n_updated += 1
         except GhError as exc:
             failures.append(("summary", f"part {i}", str(exc)))
 
-    print(f"pr-audit: PR #{args.pr}: posted {n_posted}, skipped {n_skipped} already on the PR, "
+    print(f"pr-audit: PR #{args.pr}: posted {n_posted}, updated {n_updated}, "
+          f"skipped {n_skipped} already on the PR, "
           f"resolved {n_resolved}, failed {len(failures)}, redacted {total_redacted}")
     for fid, what, err in failures:
         print(f"pr-audit: FAILED {fid} {what}: {err}", file=sys.stderr)
@@ -364,6 +426,10 @@ def normalize_severity(raw, rationale):
     return "important", f"(severity was '{raw}') " + rationale
 
 
+VERDICT_ALIASES = {"confirm": "confirm", "confirmed": "confirm",
+                   "refute": "refute", "refuted": "refute"}
+
+
 def cmd_record(args):
     try:
         with open(args.report_json, encoding="utf-8") as fh:
@@ -382,13 +448,23 @@ def cmd_record(args):
         else:
             judge, verdict = "claude", f.get("claude_verdict")
         events = []
-        if args.adversary != "claude-only" and verdict in ("confirm", "refute"):
-            events.append({"by": judge, "kind": "verdict", "verdict": verdict,
-                           "text": f.get("verdict_reason") or f.get("kill_reason") or ""})
-        severity, rationale = normalize_severity(f.get("severity"), f.get("rationale") or "")
+        rationale = f.get("rationale") or ""
+        if args.adversary != "claude-only" and verdict not in (None, ""):
+            norm = VERDICT_ALIASES.get(str(verdict).strip().lower())
+            if norm:
+                events.append({"by": judge, "kind": "verdict", "verdict": norm,
+                               "text": f.get("verdict_reason") or f.get("kill_reason") or ""})
+            else:
+                print(f"pr-audit: warning: {f.get('id')}: verdict '{verdict}' was not recognised; "
+                      "no verdict event written", file=sys.stderr)
+                rationale = f"(verdict '{verdict}' was not recognised) " + rationale
+        line = _as_line(f.get("line"))
+        if line is None and f.get("line") not in (None, ""):
+            rationale = f"(line '{f.get('line')}' was not a line number) " + rationale
+        severity, rationale = normalize_severity(f.get("severity"), rationale)
         findings.append({
             "id": f.get("id"), "origin": origin, "path": f.get("path") or None,
-            "line": _as_line(f.get("line")), "severity": severity,
+            "line": line, "severity": severity,
             "category": f.get("category") or "other", "title": f.get("title") or "(no title)",
             "rationale": rationale, "status": f.get("status"), "events": events,
         })
@@ -439,5 +515,14 @@ def main(argv=None):
     return cmd_local(args)
 
 
+def run(argv=None):
+    """main() with a guard: an unexpected error prints one line and exits 3."""
+    try:
+        return main(argv)
+    except Exception as exc:  # noqa: BLE001 - the last line of defence
+        print(f"pr-audit: unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

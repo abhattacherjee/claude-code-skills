@@ -59,8 +59,14 @@ class ValidateTests(unittest.TestCase):
 
     def test_event_kinds_are_checked(self):
         f = finding(events=[{"by": "claude", "kind": "shrug", "text": ""}])
-        with self.assertRaises(ar.RecordError):
+        with self.assertRaises(ar.RecordError) as cm:
             ar.validate(record(findings=[f]))
+        self.assertIn("findings[0].events[0].kind", str(cm.exception))
+
+    def test_bad_finding_id_is_named_in_the_error(self):
+        with self.assertRaises(ar.RecordError) as cm:
+            ar.validate(record(findings=[finding(fid="BH-1")]))
+        self.assertIn("'BH-1'", str(cm.exception))
 
     def test_fixed_without_sha_is_allowed_but_bad_sha_is_not(self):
         ok = finding(events=[{"by": "claude", "kind": "resolution", "resolution": "fixed", "text": "done"}])
@@ -219,6 +225,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("| X-002 | minor | codex | refuted | no thread: no path |", b)
         self.assertIn("Redacted: 1 · Posting failures: 0", b)
         self.assertTrue(b.endswith(ar.summary_marker("ar-test-1", 1, 1)))
+
+    def test_summary_shows_the_note_next_to_a_thread_link(self):
+        rows = [{"id": "X-001", "severity": "minor", "origin": "codex", "outcome": "confirmed",
+                 "new": True, "thread": "https://t/1", "note": "inline rejected (422); file-level"}]
+        b = ar.summary_bodies(record(), rows, 0, 0)[0]
+        self.assertIn("| [thread](https://t/1) (inline rejected (422); file-level) |", b)
 
     def test_summary_splits_and_numbers_parts(self):
         rows = [{"id": f"X-{i:03d}", "severity": "minor", "origin": "codex", "outcome": "confirmed",
