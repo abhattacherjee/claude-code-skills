@@ -164,6 +164,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Enforce the scripts' Python 3.9 floor (see run-tests.sh, standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
       # Unconditional, like the two harness jobs above. Before #135 this suite
       # ran only by hand, which is how sink.sh's PR mode stayed broken.
       - name: Run adversarial-review test suite
