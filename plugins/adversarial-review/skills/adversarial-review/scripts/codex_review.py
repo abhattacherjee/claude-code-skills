@@ -55,9 +55,15 @@ CATEGORIES = ("bug", "security", "perf", "convention", "maintainability")
 RECHECK_RESULTS = ("resolved", "partly", "missed")
 VERDICTS = ("confirm", "refute")
 POSITIONS = ("concede", "defend")
-# codex_hooks is a legacy feature name in the 0.155.1 binary; Task 10 checks it.
+# Names as `codex features list` reports them on codex-cli 0.155.1. codex_hooks
+# does not exist in that binary; the current name for the same feature is
+# `hooks` (stable, enabled by default). skill_search, skill_mcp_dependency_install,
+# browser_use, browser_use_external and computer_use are also enabled by default
+# and unneeded by a read-only reviewer, so they are disabled too.
 DISABLED_FEATURES = ("apps", "plugins", "remote_plugin", "memories", "multi_agent",
-                     "image_generation", "view_image", "codex_hooks")
+                     "image_generation", "view_image", "hooks", "skill_search",
+                     "skill_mcp_dependency_install", "browser_use",
+                     "browser_use_external", "computer_use")
 
 
 class BadOutput(ValueError):

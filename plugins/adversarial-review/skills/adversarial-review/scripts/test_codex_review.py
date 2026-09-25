@@ -197,6 +197,19 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(cr._has_run(argv, ("-c", "project_doc_max_bytes=0")))
         self.assertTrue(cr._has_run(argv, ("-c", "project_doc_fallback_filenames=[]")))
 
+    def test_disables_hooks_and_the_extra_read_only_reviewer_features_by_current_name(self):
+        # codex-cli 0.155.1 `codex features list`: codex_hooks does not exist; the
+        # current name is `hooks` (stable, enabled). skill_search,
+        # skill_mcp_dependency_install, browser_use, browser_use_external and
+        # computer_use are also enabled by default and unneeded by a read-only
+        # reviewer, so they must be disabled too.
+        argv = self.argv()
+        disabled = [argv[i + 1] for i, a in enumerate(argv) if a == "--disable"]
+        for feature in ("hooks", "skill_search", "skill_mcp_dependency_install",
+                        "browser_use", "browser_use_external", "computer_use"):
+            self.assertIn(feature, disabled, feature)
+        self.assertNotIn("codex_hooks", disabled)
+
     def test_built_argv_passes_the_isolation_guard(self):
         for model in (None, "gpt-x"):
             cr.assert_isolated(self.argv(model=model))

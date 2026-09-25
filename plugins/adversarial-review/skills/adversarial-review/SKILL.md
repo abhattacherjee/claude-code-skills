@@ -20,7 +20,7 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 `codex-review.sh` never runs `codex` with your normal setup. Each call is one `codex exec` with:
 
 - an environment holding only `PATH`, `HOME` and your own `CODEX_HOME` (as set, else Codex's default `~/.codex`), so your login works and nothing else from your shell leaks in;
-- `--ephemeral --ignore-user-config --ignore-rules`, so your `config.toml` and rules are not loaded, and `--disable` for `apps`, `plugins`, `remote_plugin`, `memories`, `multi_agent`, `image_generation`, `view_image` and `codex_hooks`. Turning off `apps` removes the ChatGPT connector tools (Gmail send, GitHub merge and others) that run outside the sandbox;
+- `--ephemeral --ignore-user-config --ignore-rules`, so your `config.toml` and rules are not loaded, and `--disable` for `apps`, `plugins`, `remote_plugin`, `memories`, `multi_agent`, `image_generation`, `view_image`, `hooks`, `skill_search`, `skill_mcp_dependency_install`, `browser_use`, `browser_use_external` and `computer_use`. Turning off `apps` removes the ChatGPT connector tools (Gmail send, GitHub merge and others) that run outside the sandbox. The `hooks` feature is disabled, so your own Codex hooks do not run during a review;
 - `-c project_doc_max_bytes=0` and `-c project_doc_fallback_filenames=[]`, so the reviewed repo's `AGENTS.md` cannot instruct Codex. A repo's `.codex/config.toml` applies only to trusted repos, and trust lives in the `config.toml` that is ignored;
 - `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout (default 900 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group.
 
