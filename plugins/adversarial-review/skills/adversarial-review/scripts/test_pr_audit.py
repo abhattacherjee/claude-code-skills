@@ -525,15 +525,15 @@ class ForgeryTests(unittest.TestCase):
 REPORT = {"summary": {}, "findings": [
     {"id": "C-001", "origin": "claude", "path": "src/a.py", "line": 41, "severity": "important",
      "category": "bug", "title": "Off by one", "rationale": "Loop skips the last item.",
-     "status": "survivor", "gemini_verdict": "confirm", "claude_verdict": None,
+     "status": "survivor", "adversary_verdict": "confirm", "claude_verdict": None,
      "verdict_reason": "Reproduced with a 3-item list.", "kill_reason": None},
     {"id": "G-001", "origin": "gemini", "path": "", "line": "12", "severity": "minor",
      "category": "convention", "title": "Name", "rationale": None, "status": "rejected",
-     "gemini_verdict": None, "claude_verdict": "refute", "verdict_reason": None,
+     "adversary_verdict": None, "claude_verdict": "refute", "verdict_reason": None,
      "kill_reason": "The name matches the module convention."},
     {"id": "C-002", "origin": "claude", "path": "src/c.py", "line": None, "severity": "minor",
      "category": None, "title": "Unjudged", "rationale": "x", "status": "unconfirmed",
-     "gemini_verdict": None, "claude_verdict": None},
+     "adversary_verdict": None, "claude_verdict": None},
 ]}
 
 
@@ -615,9 +615,9 @@ class RecordTests(unittest.TestCase):
                 "category": "bug", "title": "t", "rationale": "r", "status": "survivor",
                 "verdict_reason": "why"}
         res, out = self.run_record(h, {"findings": [
-            dict(base, id="C-001", gemini_verdict="Confirmed"),
-            dict(base, id="C-002", gemini_verdict="REFUTED", status="rejected"),
-            dict(base, id="C-003", gemini_verdict="maybe"),
+            dict(base, id="C-001", adversary_verdict="Confirmed"),
+            dict(base, id="C-002", adversary_verdict="REFUTED", status="rejected"),
+            dict(base, id="C-003", adversary_verdict="maybe"),
         ]})
         self.assertEqual(res.returncode, 0, res.stderr)
         by_id = {f["id"]: f for f in json.loads(out.read_text())["findings"]}

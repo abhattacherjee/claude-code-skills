@@ -182,11 +182,11 @@ UNCONFIRMED="$(echo "$SYNTH_OUT" | grep -oE 'unconfirmed=[0-9]+' | cut -d= -f2)"
 REJECTED="$(echo "$SYNTH_OUT" | grep -oE 'rejected=[0-9]+' | cut -d= -f2)"
 
 # Expected classification (fixtures):
-# C-001: gemini_verdict=confirm  -> SURVIVOR
-# C-002: gemini_verdict=refute   -> REJECTED (killed_by=gemini)
-# C-003: gemini_verdict=confirm  -> SURVIVOR
-# C-004: not in gemini verdicts  -> UNCONFIRMED (gemini_verdict=null)
-# C-005: not in gemini verdicts  -> UNCONFIRMED (gemini_verdict=null)
+# C-001: adversary_verdict=confirm  -> SURVIVOR
+# C-002: adversary_verdict=refute   -> REJECTED (killed_by=gemini)
+# C-003: adversary_verdict=confirm  -> SURVIVOR
+# C-004: not in gemini verdicts  -> UNCONFIRMED (adversary_verdict=null)
+# C-005: not in gemini verdicts  -> UNCONFIRMED (adversary_verdict=null)
 # G-001: claude_verdict=confirm  -> SURVIVOR
 # G-002: claude_verdict=refute   -> REJECTED (killed_by=claude)
 # Survivors: 3, Rejected: 2, Unconfirmed: 2
@@ -488,7 +488,7 @@ fi
 # Test 5: find mode — a findings-keyed JSON should extract in find mode
 FIND_FIXTURE="$TMP_DIR/find_fixture.json"
 cat >"$FIND_FIXTURE" <<'JSON'
-{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}
+{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}
 JSON
 
 FIND_EXTRACT_OUT=""
@@ -506,7 +506,7 @@ fi
 LEADING_OBJ_FIXTURE="$TMP_DIR/leading_obj_fixture.txt"
 cat >"$LEADING_OBJ_FIXTURE" <<'TEXT'
 {"status":"ok"}
-{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"test","confidence":0.9}]}
+{"verdicts":[{"id":"C-001","adversary_verdict":"confirm","reason":"test","confidence":0.9}]}
 TEXT
 
 LEADING_OBJ_OUT=""
@@ -566,7 +566,7 @@ assert_contains "auth-error -> ADVERSARY_UNAVAILABLE" "ADVERSARY_UNAVAILABLE" "$
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
 # Stub gemini that outputs valid judge-mode JSON (verdicts only, no new_findings)
-printf '{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"test","confidence":0.9}]}\n'
+printf '{"verdicts":[{"id":"C-001","adversary_verdict":"confirm","reason":"test","confidence":0.9}]}\n'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
@@ -593,7 +593,7 @@ assert_eq "judge mode output has verdicts and no new_findings key" "ok" "$JUDGE_
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
 # Stub gemini that outputs valid find-mode JSON (findings)
-printf '{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}\n'
+printf '{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}\n'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
@@ -620,7 +620,7 @@ cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 # Stub gemini that wraps judge JSON in prose
 echo "Here is my analysis:"
 echo ""
-printf '{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"found it","confidence":0.8}]}\n'
+printf '{"verdicts":[{"id":"C-001","adversary_verdict":"confirm","reason":"found it","confidence":0.8}]}\n'
 echo ""
 echo "That completes my review."
 STUB
@@ -649,7 +649,7 @@ cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 # Stub gemini v0.44.x: prose lines printed before outer envelope JSON
 echo "Ripgrep is not available. Falling back to GrepTool."
 echo "Skill conflict detected: stub-skill loaded twice."
-echo '{"session_id":"test-session","response":"{\"verdicts\":[{\"id\":\"C-001\",\"gemini_verdict\":\"confirm\",\"reason\":\"confirmed by gemini\",\"confidence\":0.9}]}","stats":{"tokens":42}}'
+echo '{"session_id":"test-session","response":"{\"verdicts\":[{\"id\":\"C-001\",\"adversary_verdict\":\"confirm\",\"reason\":\"confirmed by gemini\",\"confidence\":0.9}]}","stats":{"tokens":42}}'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
@@ -1994,14 +1994,14 @@ assert_contains  "confirm-rate boundary T9: judged=4 -> low_signal=false (proves
 CR_D_CLAUDE_FINDINGS="$TMP_DIR/cr_d_claude_findings.json"
 cat >"$CR_D_CLAUDE_FINDINGS" <<'JSON'
 [
-  {"id":"C-D1","path":"src/a.py","line":1,"severity":"minor","category":"bug","title":"F1","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D2","path":"src/a.py","line":2,"severity":"minor","category":"bug","title":"F2","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D3","path":"src/a.py","line":3,"severity":"minor","category":"bug","title":"F3","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D4","path":"src/a.py","line":4,"severity":"minor","category":"bug","title":"F4","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D5","path":"src/a.py","line":5,"severity":"minor","category":"bug","title":"F5","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D6","path":"src/a.py","line":6,"severity":"minor","category":"bug","title":"F6","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D7","path":"src/a.py","line":7,"severity":"minor","category":"bug","title":"F7","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D8","path":"src/a.py","line":8,"severity":"minor","category":"bug","title":"F8","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}
+  {"id":"C-D1","path":"src/a.py","line":1,"severity":"minor","category":"bug","title":"F1","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D2","path":"src/a.py","line":2,"severity":"minor","category":"bug","title":"F2","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D3","path":"src/a.py","line":3,"severity":"minor","category":"bug","title":"F3","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D4","path":"src/a.py","line":4,"severity":"minor","category":"bug","title":"F4","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D5","path":"src/a.py","line":5,"severity":"minor","category":"bug","title":"F5","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D6","path":"src/a.py","line":6,"severity":"minor","category":"bug","title":"F6","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D7","path":"src/a.py","line":7,"severity":"minor","category":"bug","title":"F7","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D8","path":"src/a.py","line":8,"severity":"minor","category":"bug","title":"F8","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null}
 ]
 JSON
 
@@ -2009,14 +2009,14 @@ CR_D_VERDICTS="$TMP_DIR/cr_d_verdicts.json"
 cat >"$CR_D_VERDICTS" <<'JSON'
 {
   "verdicts": [
-    {"id":"C-D1","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D2","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D3","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D4","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D5","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D6","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9},
-    {"id":"C-D7","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9},
-    {"id":"C-D8","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9}
+    {"id":"C-D1","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D2","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D3","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D4","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D5","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D6","adversary_verdict":"reject","reason":"typo verdict","confidence":0.9},
+    {"id":"C-D7","adversary_verdict":"reject","reason":"typo verdict","confidence":0.9},
+    {"id":"C-D8","adversary_verdict":"reject","reason":"typo verdict","confidence":0.9}
   ]
 }
 JSON
