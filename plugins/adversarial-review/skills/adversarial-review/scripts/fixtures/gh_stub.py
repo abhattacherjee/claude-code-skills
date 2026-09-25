@@ -76,16 +76,11 @@ def main(argv):
         die(f"gh stub: unsupported command {argv}")
     args = argv[1:]
     if argv[:2] == ["api", "user"]:
-        if "-q" in argv:
-            # Handle jq filter
-            q_idx = argv.index("-q") + 1
-            if q_idx < len(argv) and argv[q_idx] == ".login":
-                print(state["login"])
-            else:
-                print(json.dumps({"login": state["login"]}))
-        else:
-            print(json.dumps({"login": state["login"]}))
-        return
+        # pr-audit.py only ever calls this as `api user -q .login`.
+        if "-q" in argv and argv[argv.index("-q") + 1] == ".login":
+            print(state["login"])
+            return
+        die(f"gh stub: unsupported invocation {argv}")
     if args[0] == "graphql":
         graphql(state, args[1:])
         return

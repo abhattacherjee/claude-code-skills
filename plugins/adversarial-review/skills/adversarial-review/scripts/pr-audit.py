@@ -69,10 +69,41 @@ def load_record(path):
     return rec
 
 
+GITIGNORE_PATTERN = "*.adversarial-review.md"
+
+
+def ensure_gitignored(out):
+    """When out is a *.adversarial-review.md file inside a git repo, make sure the
+    pattern is in that repo's root .gitignore. No-op outside a git repo, or when
+    out doesn't end with the local-fallback suffix. deep-review writes local files
+    without going through sink.sh's own gitignore step, so this covers that path."""
+    if not str(out).endswith(LOCAL_SUFFIX):
+        return
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(Path(out).resolve().parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if proc.returncode != 0:
+        return
+    root = Path(proc.stdout.strip())
+    gitignore = root / ".gitignore"
+    existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    if GITIGNORE_PATTERN in existing.splitlines():
+        return
+    with open(gitignore, "a", encoding="utf-8") as fh:
+        if existing and not existing.endswith("\n"):
+            fh.write("\n")
+        fh.write(GITIGNORE_PATTERN + "\n")
+    print(f"pr-audit: added '{GITIGNORE_PATTERN}' to {gitignore}")
+
+
 def write_local(rec, out):
     text, counts = ar.markdown(rec)
     with open(out, "a", encoding="utf-8") as fh:
         fh.write("\n" + text + "\n")
+    ensure_gitignored(out)
     return counts
 
 
@@ -204,6 +235,9 @@ def post_round(rec, args):
         reviews = hub.reviews()
     except GhError as exc:
         print(f"pr-audit: could not read PR #{args.pr}: {exc}", file=sys.stderr)
+        out = args.fallback_out or default_local_out()
+        write_local(rec, out)
+        print(f"pr-audit: wrote the audit trail to {out} instead.")
         return 1
 
     posted_markers, openers = set(), {}
@@ -217,9 +251,8 @@ def post_round(rec, args):
                 openers.setdefault(m["finding"], c)
 
     n_posted = n_skipped = n_resolved = 0
-    failures, rows, no_thread = [], [], []
+    failures, rows, no_thread, to_resolve = [], [], [], []
     redacted = Counter()
-    threads = None
     for f in rec["findings"]:
         fid = f["id"]
         opener = openers.get(fid)
@@ -234,7 +267,7 @@ def post_round(rec, args):
             except GhError as exc:
                 failures.append((fid, "open thread", str(exc)))
                 note = "posting failed"
-        elif ar.parse_marker(opener["body"])["round"] == rec["round"]:
+        elif ar.parse_marker(ar.trailing_line(opener["body"]))["round"] == rec["round"]:
             n_skipped += 1
 
         if opener is None:
@@ -253,18 +286,34 @@ def post_round(rec, args):
                 except GhError as exc:
                     failures.append((fid, f"reply {rec['round']}.{idx}", str(exc)))
             if ar.should_resolve(f, rec):
-                try:
-                    if threads is None:
-                        threads = hub.threads()
-                    thread_id, done = threads.get(opener["id"], (None, True))
-                    if thread_id and not done:
-                        hub.resolve(thread_id)
-                        n_resolved += 1
-                except GhError as exc:
-                    failures.append((fid, "resolve thread", str(exc)))
+                to_resolve.append((fid, opener))
         rows.append({"id": fid, "severity": f["severity"], "origin": f["origin"],
                      "outcome": ar.outcome(f), "new": is_new,
                      "thread": opener.get("html_url") if opener else None, "note": note})
+
+    # Resolve in a second pass, after every thread this round has been opened (and
+    # every reply posted), so a thread opened later in this same loop is not missed
+    # by a threads() snapshot taken before it existed.
+    if to_resolve:
+        try:
+            threads = hub.threads()
+        except GhError as exc:
+            for fid, _ in to_resolve:
+                failures.append((fid, "resolve thread", str(exc)))
+        else:
+            for fid, opener in to_resolve:
+                entry = threads.get(opener["id"])
+                if entry is None:
+                    failures.append((fid, "resolve thread", "thread not found"))
+                    continue
+                thread_id, done = entry
+                if done:
+                    continue
+                try:
+                    hub.resolve(thread_id)
+                    n_resolved += 1
+                except GhError as exc:
+                    failures.append((fid, "resolve thread", str(exc)))
 
     details, red = ar.no_thread_details(rec, no_thread)
     redacted += red
@@ -295,12 +344,35 @@ def _as_line(value):
     return None
 
 
+SEVERITY_ALIASES = {
+    "critical": "critical", "important": "important", "minor": "minor",
+    "high": "important", "low": "minor", "medium": "important",
+}
+
+
+def normalize_severity(raw, rationale):
+    """Map a report's free-form severity to one of audit_record's SEVERITIES.
+
+    Known aliases (case-insensitive) map silently. Anything else falls back to
+    "important" and the raw value is noted in the rationale, so the record still
+    validates instead of failing the whole round over one finding's severity spelling.
+    """
+    low = str(raw).strip().lower() if raw is not None else ""
+    norm = SEVERITY_ALIASES.get(low)
+    if norm is not None:
+        return norm, rationale
+    return "important", f"(severity was '{raw}') " + rationale
+
+
 def cmd_record(args):
     try:
         with open(args.report_json, encoding="utf-8") as fh:
             report = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"pr-audit: cannot read {args.report_json}: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(report, dict):
+        print(f"pr-audit: {args.report_json} is not a JSON object", file=sys.stderr)
         return 2
     findings = []
     for f in report.get("findings", []):
@@ -313,11 +385,12 @@ def cmd_record(args):
         if args.adversary != "claude-only" and verdict in ("confirm", "refute"):
             events.append({"by": judge, "kind": "verdict", "verdict": verdict,
                            "text": f.get("verdict_reason") or f.get("kill_reason") or ""})
+        severity, rationale = normalize_severity(f.get("severity"), f.get("rationale") or "")
         findings.append({
             "id": f.get("id"), "origin": origin, "path": f.get("path") or None,
-            "line": _as_line(f.get("line")), "severity": f.get("severity"),
+            "line": _as_line(f.get("line")), "severity": severity,
             "category": f.get("category") or "other", "title": f.get("title") or "(no title)",
-            "rationale": f.get("rationale") or "", "status": f.get("status"), "events": events,
+            "rationale": rationale, "status": f.get("status"), "events": events,
         })
     rec = {"schema": ar.SCHEMA, "run_id": args.run_id, "skill": args.skill, "phase": args.phase,
            "round": args.round, "adversary": args.adversary, "head_sha": args.head_sha,

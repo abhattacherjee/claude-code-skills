@@ -248,6 +248,18 @@ class RenderTests(unittest.TestCase):
             self.assertNotIn(FAKE_GH, b)
             self.assertLessEqual(len(b), limit)
 
+    def test_no_room_for_details_leaves_a_note_instead_of_silent_drop(self):
+        rows = [{"id": "X-001", "severity": "minor", "origin": "codex", "outcome": "confirmed",
+                 "new": True, "thread": "https://t/1", "note": None}]
+        details = "x" * 5000
+        bodies = ar.summary_bodies(record(), rows, 0, 0, details=details, limit=450)
+        b = bodies[-1]
+        self.assertLessEqual(len(b), 450)
+        self.assertIn(
+            "Details for findings with no thread were too long to include; they are in the run dir.",
+            b)
+        self.assertNotIn("x" * 50, b)
+
     def test_no_thread_details_and_markdown(self):
         f = finding(path=None, events=[ev("verdict", verdict="confirm")])
         details, _ = ar.no_thread_details(record(findings=[f]), [f])

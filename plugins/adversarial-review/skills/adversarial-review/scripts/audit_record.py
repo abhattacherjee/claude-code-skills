@@ -248,6 +248,9 @@ def _cell(text):
     return str(text).replace("|", "\\|").replace("\n", " ")
 
 
+NO_ROOM_NOTE = "Details for findings with no thread were too long to include; they are in the run dir."
+
+
 def summary_bodies(rec, rows, redacted, failures, details="", limit=MAX_BODY):
     prev_txt = _prev_suffix(rec)
     title = f"**{rec['skill']} · {rec['phase']} · Round {rec['round']}"
@@ -284,6 +287,8 @@ def summary_bodies(rec, rows, redacted, failures, details="", limit=MAX_BODY):
             room = limit - len(body) - len(mark) - 4
             if room > 200:
                 body += "\n\n" + truncate(details, room)
+            elif room > len(NO_ROOM_NOTE) + 4:
+                body += "\n\n" + NO_ROOM_NOTE
         body, _ = redact(body)
         bodies.append(body + "\n" + mark)
     return bodies

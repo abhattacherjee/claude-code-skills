@@ -276,6 +276,28 @@ class PostTests(unittest.TestCase):
         self.assertIn("could not read PR #7", res.stderr)
         self.assertNotIn("Traceback", res.stderr)
 
+    def test_unreadable_pr_writes_fallback(self):
+        h = Harness(self, fail=["read"])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1)
+        self.assertTrue(h.fallback.exists(), "fallback file was not written")
+        self.assertIn("Retry loop never resets the backoff", h.fallback.read_text())
+        self.assertIn(f"wrote the audit trail to {h.fallback}", res.stdout)
+
+    def test_every_refuted_thread_is_resolved(self):
+        h = Harness(self)
+        rec = record([
+            finding("X-001", status="rejected", events=[ev("verdict", verdict="refute")]),
+            finding("X-002", status="rejected", events=[ev("verdict", verdict="refute")]),
+            finding("X-003", status="rejected", events=[ev("verdict", verdict="refute")]),
+        ])
+        res = h.post(rec)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.resolves()), 3)
+        opener_ids = [c["id"] for c in h.state()["comments"] if c["in_reply_to_id"] is None]
+        self.assertEqual(sorted(h.state()["resolved"]), sorted(opener_ids))
+        self.assertIn("resolved 3,", res.stdout)
+
 
 class ForgeryTests(unittest.TestCase):
     def test_forged_opener_from_other_user_is_ignored(self):
@@ -353,6 +375,42 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertTrue(all(f["events"] == [] for f in json.loads(out.read_text())["findings"]))
 
+    def test_record_normalizes_severity(self):
+        h = Harness(self)
+        report = {"findings": [
+            {"id": "C-001", "origin": "claude", "path": "a.py", "line": 1, "severity": "Critical",
+             "category": "bug", "title": "t1", "rationale": "r1", "status": "survivor"},
+            {"id": "C-002", "origin": "claude", "path": "a.py", "line": 2, "severity": "High",
+             "category": "bug", "title": "t2", "rationale": "r2", "status": "survivor"},
+            {"id": "C-003", "origin": "claude", "path": "a.py", "line": 3, "severity": "weird",
+             "category": "bug", "title": "t3", "rationale": "r3", "status": "survivor"},
+        ]}
+        report_path = h.write(json.dumps(report), "sev-report.json")
+        out = h.dir / "sev-round.json"
+        res = h.run("record", "--report-json", report_path, "--run-id", "ar-sev-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "claude-only", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        by_id = {f["id"]: f for f in json.loads(out.read_text())["findings"]}
+        self.assertEqual(by_id["C-001"]["severity"], "critical")
+        self.assertEqual(by_id["C-001"]["rationale"], "r1")
+        self.assertEqual(by_id["C-002"]["severity"], "important")
+        self.assertEqual(by_id["C-002"]["rationale"], "r2")
+        self.assertEqual(by_id["C-003"]["severity"], "important")
+        self.assertEqual(by_id["C-003"]["rationale"], "(severity was 'weird') r3")
+
+    def test_record_rejects_non_object_report(self):
+        h = Harness(self)
+        report_path = h.write(json.dumps([{"id": "C-001"}]), "list-report.json")
+        out = h.dir / "bad-round.json"
+        res = h.run("record", "--report-json", report_path, "--run-id", "ar-bad-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "claude-only", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("is not a JSON object", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertFalse(out.exists())
+
     def test_record_output_posts_cleanly(self):
         # C-001 opens an inline thread. C-002 has a path but no line, so it opens a
         # file-level thread. G-001 has no path, so it appears in the summary only.
@@ -362,6 +420,47 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(len(h.posted("thread")), 2)
         self.assertEqual(len(h.posted("review")), 1)
+
+
+class GitignoreTests(unittest.TestCase):
+    """write_local (used by `local` and the post-fallback path) must gitignore its
+    own output in whatever git repo it lands in. Uses a throwaway `git init` repo,
+    never this repo's own .gitignore."""
+
+    def test_local_write_adds_gitignore_pattern_in_its_own_repo(self):
+        h = Harness(self)
+        repo = Path(tempfile.mkdtemp(prefix="pr-audit-gitignore-"))
+        self.addCleanup(shutil.rmtree, repo, True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        out = repo / "branch.adversarial-review.md"
+        res = h.run("local", "--record", h.write(record([finding()])), "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        gitignore = repo / ".gitignore"
+        self.assertTrue(gitignore.exists())
+        self.assertIn("*.adversarial-review.md", gitignore.read_text())
+        self.assertIn("added '*.adversarial-review.md'", res.stdout)
+
+    def test_second_write_does_not_duplicate_the_pattern(self):
+        h = Harness(self)
+        repo = Path(tempfile.mkdtemp(prefix="pr-audit-gitignore-"))
+        self.addCleanup(shutil.rmtree, repo, True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        out = repo / "branch.adversarial-review.md"
+        h.run("local", "--record", h.write(record([finding()]), "r1.json"), "--out", out)
+        res2 = h.run("local", "--record", h.write(record([finding()]), "r2.json"), "--out", out)
+        self.assertEqual(res2.returncode, 0, res2.stderr)
+        self.assertNotIn("added '*.adversarial-review.md'", res2.stdout)
+        gitignore = (repo / ".gitignore").read_text()
+        self.assertEqual(gitignore.count("*.adversarial-review.md"), 1)
+
+    def test_no_gitignore_write_outside_a_git_repo(self):
+        h = Harness(self)
+        plain_dir = Path(tempfile.mkdtemp(prefix="pr-audit-no-git-"))
+        self.addCleanup(shutil.rmtree, plain_dir, True)
+        out = plain_dir / "branch.adversarial-review.md"
+        res = h.run("local", "--record", h.write(record([finding()])), "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertFalse((plain_dir / ".gitignore").exists())
 
 
 if __name__ == "__main__":
