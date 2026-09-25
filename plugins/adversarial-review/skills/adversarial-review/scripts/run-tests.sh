@@ -39,6 +39,7 @@ Tests:
   - ensure-gemini.sh: GEMINI_INSTALLED=yes + GEMINI_AUTHED=yes with stub + API key
   - ensure-gemini.sh: OAuth-only creds (no API key) -> GEMINI_AUTHED=no (regression)
   - ensure-gemini.sh: ~/.gemini/.env with GEMINI_API_KEY -> GEMINI_AUTHED=yes
+  - ensure-gemini.sh: value with an embedded single quote round-trips through eval
   - synthesize.py: slug-keyed claude verdict still rejects (G-### recovery)
   - synthesize.py: reason-location recovery for unmatched verdict id
   - synthesize.py: truly-unmatched verdict id warns on stderr
@@ -52,7 +53,8 @@ Tests:
   - synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)
   - synthesize.py: confirm-rate guard (rubber-stamp / rubber-reject detection)
   - synthesize.py: verdict_reason carries the judge's real reason text
-  - pr-audit.py + audit_record.py: Python unit and CLI tests (gh stub)
+  - Python unit and CLI tests (test_*.py): audit trail (gh stub), Codex detection,
+    adversary choice, codex-review.sh (codex stub), synthesize --adversary, docs
   - sink.sh: PR mode posts the audit trail; any pr-audit failure -> exit 4;
     gh fallback; .gitignore handling; --no-post and local mode
 
@@ -181,11 +183,11 @@ UNCONFIRMED="$(echo "$SYNTH_OUT" | grep -oE 'unconfirmed=[0-9]+' | cut -d= -f2)"
 REJECTED="$(echo "$SYNTH_OUT" | grep -oE 'rejected=[0-9]+' | cut -d= -f2)"
 
 # Expected classification (fixtures):
-# C-001: gemini_verdict=confirm  -> SURVIVOR
-# C-002: gemini_verdict=refute   -> REJECTED (killed_by=gemini)
-# C-003: gemini_verdict=confirm  -> SURVIVOR
-# C-004: not in gemini verdicts  -> UNCONFIRMED (gemini_verdict=null)
-# C-005: not in gemini verdicts  -> UNCONFIRMED (gemini_verdict=null)
+# C-001: adversary_verdict=confirm  -> SURVIVOR
+# C-002: adversary_verdict=refute   -> REJECTED (killed_by=gemini)
+# C-003: adversary_verdict=confirm  -> SURVIVOR
+# C-004: not in gemini verdicts  -> UNCONFIRMED (adversary_verdict=null)
+# C-005: not in gemini verdicts  -> UNCONFIRMED (adversary_verdict=null)
 # G-001: claude_verdict=confirm  -> SURVIVOR
 # G-002: claude_verdict=refute   -> REJECTED (killed_by=claude)
 # Survivors: 3, Rejected: 2, Unconfirmed: 2
@@ -487,7 +489,7 @@ fi
 # Test 5: find mode — a findings-keyed JSON should extract in find mode
 FIND_FIXTURE="$TMP_DIR/find_fixture.json"
 cat >"$FIND_FIXTURE" <<'JSON'
-{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}
+{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}
 JSON
 
 FIND_EXTRACT_OUT=""
@@ -505,7 +507,7 @@ fi
 LEADING_OBJ_FIXTURE="$TMP_DIR/leading_obj_fixture.txt"
 cat >"$LEADING_OBJ_FIXTURE" <<'TEXT'
 {"status":"ok"}
-{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"test","confidence":0.9}]}
+{"verdicts":[{"id":"C-001","adversary_verdict":"confirm","reason":"test","confidence":0.9}]}
 TEXT
 
 LEADING_OBJ_OUT=""
@@ -565,7 +567,7 @@ assert_contains "auth-error -> ADVERSARY_UNAVAILABLE" "ADVERSARY_UNAVAILABLE" "$
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
 # Stub gemini that outputs valid judge-mode JSON (verdicts only, no new_findings)
-printf '{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"test","confidence":0.9}]}\n'
+printf '{"verdicts":[{"id":"C-001","adversary_verdict":"confirm","reason":"test","confidence":0.9}]}\n'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
@@ -592,7 +594,7 @@ assert_eq "judge mode output has verdicts and no new_findings key" "ok" "$JUDGE_
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash
 # Stub gemini that outputs valid find-mode JSON (findings)
-printf '{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}\n'
+printf '{"findings":[{"id":"G-001","path":"src/auth.py","line":42,"severity":"critical","category":"security","title":"Hardcoded secret","rationale":"Secret key in source","origin":"gemini","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null}]}\n'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
@@ -619,7 +621,7 @@ cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 # Stub gemini that wraps judge JSON in prose
 echo "Here is my analysis:"
 echo ""
-printf '{"verdicts":[{"id":"C-001","gemini_verdict":"confirm","reason":"found it","confidence":0.8}]}\n'
+printf '{"verdicts":[{"id":"C-001","adversary_verdict":"confirm","reason":"found it","confidence":0.8}]}\n'
 echo ""
 echo "That completes my review."
 STUB
@@ -648,7 +650,7 @@ cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 # Stub gemini v0.44.x: prose lines printed before outer envelope JSON
 echo "Ripgrep is not available. Falling back to GrepTool."
 echo "Skill conflict detected: stub-skill loaded twice."
-echo '{"session_id":"test-session","response":"{\"verdicts\":[{\"id\":\"C-001\",\"gemini_verdict\":\"confirm\",\"reason\":\"confirmed by gemini\",\"confidence\":0.9}]}","stats":{"tokens":42}}'
+echo '{"session_id":"test-session","response":"{\"verdicts\":[{\"id\":\"C-001\",\"adversary_verdict\":\"confirm\",\"reason\":\"confirmed by gemini\",\"confidence\":0.9}]}","stats":{"tokens":42}}'
 STUB
 chmod +x "$STUB_BIN_DIR/gemini"
 
@@ -1016,6 +1018,42 @@ HELP_ENSURE_EXIT=0
 run_capture HELP_ENSURE_OUT HELP_ENSURE_EXIT bash "$ENSURE_GEMINI" --help
 assert_exit_code "ensure-gemini: --help exits 0" "0" "$HELP_ENSURE_EXIT"
 assert_contains  "ensure-gemini: --help shows usage" "Usage:" "$HELP_ENSURE_OUT"
+
+# ---- Test G: a value with an embedded single quote survives an `eval` round-trip ----
+# `GEMINI_VERSION` is set verbatim from `gemini --version` output when that
+# output has no x.y.z token (see ensure-gemini.sh), so a stub whose --version
+# string contains a single quote drives a real embedded-quote value through
+# emit() without touching the script's static hint text.
+QUOTE_STUB_DIR="$TMP_DIR/quote-stub"
+mkdir -p "$QUOTE_STUB_DIR"
+cat >"$QUOTE_STUB_DIR/gemini" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) echo "gemini cli's dev build" ;;
+  *)         echo "stub gemini" ;;
+esac
+exit 0
+STUB
+chmod +x "$QUOTE_STUB_DIR/gemini"
+
+QUOTE_OUT=""
+QUOTE_EXIT=0
+run_capture QUOTE_OUT QUOTE_EXIT \
+  env PATH="$QUOTE_STUB_DIR:$PATH" \
+      GEMINI_API_KEY="test-key-abc123" \
+      GOOGLE_API_KEY="" \
+  bash "$ENSURE_GEMINI" --check
+
+assert_exit_code "ensure-gemini: embedded-quote version -> exit 0" "0" "$QUOTE_EXIT"
+
+QUOTE_EVAL_OUT=""
+QUOTE_EVAL_EXIT=0
+run_capture QUOTE_EVAL_OUT QUOTE_EVAL_EXIT \
+  bash -c 'eval "$1"; printf "%s" "$GEMINI_VERSION"' _ "$QUOTE_OUT"
+
+assert_exit_code "ensure-gemini: embedded-quote output evals without error" "0" "$QUOTE_EVAL_EXIT"
+assert_eq "ensure-gemini: embedded-quote version round-trips exactly through eval" \
+  "gemini cli's dev build" "$QUOTE_EVAL_OUT"
 
 # ====================================================================
 # SECTION 11: synthesize.py — slug/location fallback matching (bug #30 regression)
@@ -1957,14 +1995,14 @@ assert_contains  "confirm-rate boundary T9: judged=4 -> low_signal=false (proves
 CR_D_CLAUDE_FINDINGS="$TMP_DIR/cr_d_claude_findings.json"
 cat >"$CR_D_CLAUDE_FINDINGS" <<'JSON'
 [
-  {"id":"C-D1","path":"src/a.py","line":1,"severity":"minor","category":"bug","title":"F1","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D2","path":"src/a.py","line":2,"severity":"minor","category":"bug","title":"F2","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D3","path":"src/a.py","line":3,"severity":"minor","category":"bug","title":"F3","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D4","path":"src/a.py","line":4,"severity":"minor","category":"bug","title":"F4","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D5","path":"src/a.py","line":5,"severity":"minor","category":"bug","title":"F5","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D6","path":"src/a.py","line":6,"severity":"minor","category":"bug","title":"F6","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D7","path":"src/a.py","line":7,"severity":"minor","category":"bug","title":"F7","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
-  {"id":"C-D8","path":"src/a.py","line":8,"severity":"minor","category":"bug","title":"F8","rationale":"R","origin":"claude","claude_verdict":null,"gemini_verdict":null,"status":null,"killed_by":null,"kill_reason":null}
+  {"id":"C-D1","path":"src/a.py","line":1,"severity":"minor","category":"bug","title":"F1","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D2","path":"src/a.py","line":2,"severity":"minor","category":"bug","title":"F2","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D3","path":"src/a.py","line":3,"severity":"minor","category":"bug","title":"F3","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D4","path":"src/a.py","line":4,"severity":"minor","category":"bug","title":"F4","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D5","path":"src/a.py","line":5,"severity":"minor","category":"bug","title":"F5","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D6","path":"src/a.py","line":6,"severity":"minor","category":"bug","title":"F6","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D7","path":"src/a.py","line":7,"severity":"minor","category":"bug","title":"F7","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null},
+  {"id":"C-D8","path":"src/a.py","line":8,"severity":"minor","category":"bug","title":"F8","rationale":"R","origin":"claude","claude_verdict":null,"adversary_verdict":null,"status":null,"killed_by":null,"kill_reason":null}
 ]
 JSON
 
@@ -1972,14 +2010,14 @@ CR_D_VERDICTS="$TMP_DIR/cr_d_verdicts.json"
 cat >"$CR_D_VERDICTS" <<'JSON'
 {
   "verdicts": [
-    {"id":"C-D1","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D2","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D3","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D4","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D5","gemini_verdict":"confirm","reason":"ok","confidence":0.9},
-    {"id":"C-D6","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9},
-    {"id":"C-D7","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9},
-    {"id":"C-D8","gemini_verdict":"reject","reason":"typo verdict","confidence":0.9}
+    {"id":"C-D1","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D2","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D3","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D4","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D5","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-D6","adversary_verdict":"reject","reason":"typo verdict","confidence":0.9},
+    {"id":"C-D7","adversary_verdict":"reject","reason":"typo verdict","confidence":0.9},
+    {"id":"C-D8","adversary_verdict":"reject","reason":"typo verdict","confidence":0.9}
   ]
 }
 JSON
@@ -2067,7 +2105,7 @@ assert_contains "C-002 verdict_reason is Gemini's refute reason" \
 # ====================================================================
 # pr-audit.py + audit_record.py — unit and CLI tests
 # ====================================================================
-section "pr-audit.py + audit_record.py — unit and CLI tests"
+section "Python unit and CLI tests (test_*.py)"
 
 run_capture UT_OUT UT_EXIT env PYTHONDONTWRITEBYTECODE=1 \
   python3 -m unittest discover -s "$SCRIPT_DIR" -p 'test_*.py'

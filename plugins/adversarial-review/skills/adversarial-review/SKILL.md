@@ -1,21 +1,38 @@
 ---
 name: adversarial-review
-description: "Runs a Claude↔Gemini adversarial code review on a PR diff or working-tree diff, surfacing only findings both models independently confirm (high-precision, both-confirm rule). Use when: (1) reviewing a PR or working-tree diff with adversarial rigor and you want fewer false positives, (2) you want only findings two independent AI models agree on rather than a single-model opinion, (3) replacing a lost external PR reviewer (e.g. Copilot) with a second independent model cross-examining Claude's analysis, (4) running a high-precision pre-merge review before shipping to production. Supports automatic PR mode (posts review comments) and local mode (terminal report + gitignored markdown file). Degrades loudly to Claude-only review when Gemini is unavailable."
+description: "Runs an adversarial code review of a PR diff or working-tree diff between Claude and an opposing model (Codex when installed and logged in, else Gemini), surfacing only findings both models independently confirm (high-precision, both-confirm rule). Use when: (1) reviewing a PR or working-tree diff with adversarial rigor and you want fewer false positives, (2) you want only findings two independent AI models agree on rather than a single-model opinion, (3) replacing a lost external PR reviewer (e.g. Copilot) with a second independent model cross-examining Claude's analysis, (4) running a high-precision pre-merge review before shipping to production. Supports automatic PR mode (saves the exchange as PR threads) and local mode (terminal report + gitignored markdown file). Degrades loudly to Claude-only review when no adversary is available."
 metadata:
   version: 0.2.0
 ---
 
 # Adversarial Review
 
-Runs a symmetric 2-round Claude↔Gemini cross-examination on a diff. Both models discover findings independently in R1, then each cross-examines the other's findings in R2. Only findings **the opposing model confirms** reach the final report. Single-model findings are retained as `UNCONFIRMED`, never silently dropped.
+Runs a symmetric 2-round cross-examination on a diff between Claude and an opposing model, the adversary: Codex, else Gemini. Both sides discover findings independently in R1, then each cross-examines the other's findings in R2. Only findings **the opposing model confirms** reach the final report. Single-model findings are retained as `UNCONFIRMED`, never silently dropped.
 
 ## Prerequisites
 
-Gemini setup is **guided automatically** via Step 0 below. When the skill runs, `ensure-gemini.sh` detects whether Gemini is installed and has a **headless-capable credential**, then the orchestrator prompts the user to install or authenticate with their consent before proceeding. No manual pre-flight needed; the skill degrades to Claude-only mode only if the user declines or setup fails.
+Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged in (`codex login status` exits 0), else **Gemini** when it has a headless credential, else **Claude-only** with a loud banner. `--adversary codex|gemini` forces one. A forced adversary that is not usable stops the run instead of falling back.
 
-**Important — interactive Google login is NOT sufficient.** The skill's headless calls (`gemini -p ... -o json -m <model>`) require a `GEMINI_API_KEY` (or Vertex AI credentials). `ensure-gemini.sh` correctly reports `GEMINI_AUTHED=no` when only OAuth credentials are present.
+**Gemini: interactive Google login is NOT sufficient.** The skill's headless calls (`gemini -p ... -o json -m <model>`) need a `GEMINI_API_KEY` (or Vertex AI credentials). `ensure-gemini.sh` reports `GEMINI_AUTHED=no` when only OAuth credentials are present. Recommended: add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`, which the gemini CLI loads in every shell, sub-agents included.
 
-**Recommended credential location:** add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`. The gemini CLI auto-loads this file for all invocations including non-login shells and sub-agent contexts — no shell profile changes needed.
+### Codex sandbox
+
+`codex-review.sh` never runs `codex` with your normal setup. Each call is one `codex exec` with:
+
+- an environment holding `PATH`, `HOME` and your own `CODEX_HOME` (as set, else Codex's default `~/.codex`), plus each of these that your shell sets to a non-empty value: `OPENAI_API_KEY` and `CODEX_API_KEY` (an API-key login), `HTTP_PROXY`, `http_proxy`, `HTTPS_PROXY`, `https_proxy`, `NO_PROXY` and `no_proxy` (proxy settings), and `TMPDIR` (a scratch dir). Nothing else from your shell reaches Codex. The two API keys do reach it when set, so unset them for the review if you log in with ChatGPT and do not want them passed;
+- `--ephemeral --ignore-user-config --ignore-rules`, so your `config.toml` and rules are not loaded, and `--disable` for `apps`, `plugins`, `remote_plugin`, `memories`, `multi_agent`, `image_generation`, `view_image`, `hooks`, `skill_search`, `skill_mcp_dependency_install`, `browser_use`, `browser_use_external` and `computer_use`. Turning off `apps` removes the ChatGPT connector tools (Gmail send, GitHub merge and others) that run outside the sandbox. The `hooks` feature is disabled, so your own Codex hooks do not run during a review;
+- `-c project_doc_max_bytes=0` and `-c project_doc_fallback_filenames=[]`, so the reviewed repo's `AGENTS.md` cannot instruct Codex; `-c skills.include_instructions=false`, so its `.agents/skills` cannot either — that setting defaults to true, so a repo's own skill instructions would otherwise land in the prompt. A repo's `.codex/config.toml` applies only to trusted repos, and trust lives in the `config.toml` that is ignored;
+- `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout per Codex call (default 540 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group. A SIGTERM or SIGINT sent to `codex-review.sh` kills that group too, removes its temp dirs, and exits 128+N.
+
+One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. That can pass the Bash tool's 600 s cap, so run `$ADV_REVIEW` with the Bash tool's `run_in_background`.
+
+Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `codex-review.sh --self-test` reruns the canary on demand.
+
+Live testing on codex-cli 0.155.1 proved two of the four canary surfaces leak without their override — each caught by a positive control that failed before the fix existed: `AGENTS.md` (fixed by `project_doc_max_bytes=0` / `project_doc_fallback_filenames=[]`) and `.agents/skills` (fixed by `skills.include_instructions=false`). The other two are not exercised the same way by that version: it does not read `.mcp.json` at all, and it loads a repo's `.codex/config.toml` only for a trusted repo — trust lives in the user's own `config.toml`, which `--ignore-user-config` already drops. Both stay canaried anyway, as cheap guards against a future Codex version that changes either.
+
+A pass is stamped in `$XDG_CACHE_HOME/adversarial-review/codex-isolation-<version>-<key>.ok` (falling back to `~/.cache/adversarial-review/` when `XDG_CACHE_HOME` is unset), one file per Codex version. The key is a short hash of: the Codex version, the isolation recipe (the required argv flags, the disabled features, the four canary surfaces above, and a `CANARY_SCHEMA` constant bumped whenever the canary itself changes), the resolved Codex binary's realpath and sha256, and `CODEX_HOME` (empty when unset). Any change to any of these — a Codex upgrade, an edited recipe, a different binary, a different `CODEX_HOME` — makes the old stamp not match, so the canary reruns. A missing, unreadable or corrupt stamp counts the same as no stamp. For an npm install, the sha256 covers only the resolved JS entry script `codex` points at, not every file `npm install` laid down — a same-version package swap that replaces other files keeps the stamp valid. The stamp hashes the file `command -v codex` resolves to (its realpath): if that is a wrapper script, a same-version binary swap behind the wrapper keeps the stamp valid too.
+
+What you accept by using it: the read-only sandbox still lets Codex read any file your user can read, not only the repo. Review needs Codex's shell tool to read the repo, so this stays. Codex cannot run tests that write temp files, so a Codex claim that tests pass covers pure tests only. Codex output is untrusted: it is checked against a schema, capped (50 findings, 4000 characters per text), and redacted before anything reaches the PR.
 
 ## Quick Start
 
@@ -31,6 +48,9 @@ Gemini setup is **guided automatically** via Step 0 below. When the skill runs, 
 
 # Review without posting anything to the PR (report + local file only)
 /adversarial-review --no-post
+
+# Force the adversary (a forced adversary that is not usable stops the run)
+/adversarial-review --adversary codex
 ```
 
 ---
@@ -44,31 +64,31 @@ detect-mode.sh
      └── MODE=local → diff from working tree vs base
 
 R1 (parallel, blind — neither side sees the other):
-  Claude: bug-hunter (opus) + convention-reviewer (sonnet) → r1-claude.json [C-001, C-002, ...]
-  Gemini: gemini-review.sh --mode find                     → r1-gemini.json [G-001, G-002, ...]
+  Claude:    bug-hunter (opus) + convention-reviewer (sonnet) → r1-claude.json [C-001, ...]
+  Adversary: $ADV_REVIEW --mode find                          → r1-<adversary>.json [X-001 Codex | G-001 Gemini]
      │
      │  emit R1 DIGEST
      │
 R2 (parallel, symmetric cross-examination):
-  Claude: adversarial-cross-examiner (opus)  reads r1-gemini.json → r2-claude-verdicts.json
-  Gemini: gemini-review.sh --mode judge      reads r1-claude.json  → r2-gemini-verdicts.json
+  Claude:    adversarial-cross-examiner (opus) reads r1-<adversary>.json → r2-claude-verdicts.json
+  Adversary: $ADV_REVIEW --mode judge           reads r1-claude.json      → r2-<adversary>-verdicts.json
      │
      │  emit R2 DIGEST
      │
-CONVERGE: synthesize.py (4 files) → report.md + report.json
+CONVERGE: synthesize.py --adversary <adversary> (4 files) → report.md + report.json
 
-sink.sh → PR comments (MODE=pr) | terminal + .md (MODE=local)
+sink.sh → PR audit trail (MODE=pr) | terminal + .md (MODE=local)
 ```
 
 ## Sub-Agent Registry
 
 | Agent | Model | Round | Purpose | Scheduling |
 |---|---|---|---|---|
-| `adversarial-bug-hunter` | opus | R1 | Find bugs, security, perf, correctness in actual source | Parallel with convention-reviewer and Gemini find |
-| `adversarial-convention-reviewer` | sonnet | R1 | Find convention, CLAUDE.md, maintainability issues | Parallel with bug-hunter and Gemini find |
-| `adversarial-cross-examiner` | opus | R2 | Judges Gemini's R1 findings against actual source; returns confirm/refute verdicts | Parallel with Gemini judge |
+| `adversarial-bug-hunter` | opus | R1 | Find bugs, security, perf, correctness in actual source | Parallel with convention-reviewer and the adversary's find |
+| `adversarial-convention-reviewer` | sonnet | R1 | Find convention, CLAUDE.md, maintainability issues | Parallel with bug-hunter and the adversary's find |
+| `adversarial-cross-examiner` | opus | R2 | Judges the adversary's R1 findings against actual source; returns confirm/refute verdicts | Parallel with the adversary's judge |
 
-Gemini (R1 find + R2 judge) runs via `scripts/gemini-review.sh`, not a Claude sub-agent.
+The adversary (R1 find + R2 judge) runs via `scripts/codex-review.sh` or `scripts/gemini-review.sh`, not a Claude sub-agent.
 
 ---
 
@@ -83,39 +103,31 @@ RUN_DIR=$(mktemp -d)
 # All round files: $RUN_DIR/r1-claude.json, $RUN_DIR/r1-gemini.json, etc.
 ```
 
-### Step 0 — Ensure the adversary (Gemini) is available
+### Step 0 — Pick the adversary
+
+The adversary is the opposing model: Codex first, then Gemini, then Claude-only.
 
 ```bash
 SCRIPTS="$(dirname "$0")/scripts"
-eval "$($SCRIPTS/ensure-gemini.sh --check)"
-# Exports: GEMINI_INSTALLED  GEMINI_VERSION  GEMINI_AUTHED
-#          INSTALL_HINT       AUTH_HINT
+unset ADVERSARY
+PICK="$($SCRIPTS/pick-adversary.sh ${ADVERSARY_FLAG:+--adversary "$ADVERSARY_FLAG"})"
+PICK_RC=$?
+eval "$PICK"
+# Exports: ADVERSARY (codex | gemini | claude-only)  ADVERSARY_REASON
+#          CODEX_INSTALLED  CODEX_VERSION  CODEX_AUTHED  CODEX_INSTALL_HINT  CODEX_AUTH_HINT
+#          GEMINI_INSTALLED GEMINI_VERSION GEMINI_AUTHED INSTALL_HINT        AUTH_HINT
 ```
 
-Parse the `KEY=VALUE` output and follow this decision tree:
+`eval "$(cmd)"` alone returns eval's own status, not the command's — so the exit code must be captured from `$PICK` before `eval` runs, or the "Exit 3" branch below can never be seen and `$ADVERSARY` stays unset. `ADVERSARY_FLAG` holds the value of `--adversary codex|gemini` when the user passed it. Tell the user `ADVERSARY_REASON` in one line.
 
-**Case A — `GEMINI_INSTALLED=no`:**
-Tell the user Gemini CLI is not installed and show the `INSTALL_HINT`. ASK whether to install it. If the user consents, run:
-```bash
-npm install -g @google/gemini-cli
-```
-After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. If the user declines, or if install fails, set `ADVERSARY="claude-only"`, proceed in **degraded Claude-only mode** (print the loud banner from the Degradation Behavior section), and continue directly to the detect-mode step.
+- **`ADVERSARY=codex`:** set `ADV_REVIEW="$SCRIPTS/codex-review.sh"`. No questions.
+- **`ADVERSARY=gemini`:** set `ADV_REVIEW="$SCRIPTS/gemini-review.sh"`. No questions.
+- **`ADVERSARY=claude-only`:** no adversary is usable. Show the Codex hint (`CODEX_INSTALL_HINT` or `CODEX_AUTH_HINT`) and the Gemini hint (`INSTALL_HINT` or `AUTH_HINT`), and ASK the user to choose: set up Codex, set up Gemini, or go on Claude-only. After any setup, run `pick-adversary.sh` again. If they decline, go on in **degraded Claude-only mode** and print the banner from Degradation Behavior.
+- **`PICK_RC` is 3:** the user forced an adversary that is not usable. Show the `ADVERSARY_UNAVAILABLE` line from stderr and stop. Do not fall back; the user asked for that model.
 
-**Case B — installed but `GEMINI_AUTHED=no`:**
-Tell the user Gemini is installed but lacks a headless-capable credential, and show the `AUTH_HINT`. **Emphasise that interactive Google login is NOT sufficient** — the skill's headless calls require an API key. ASK the user to:
-- (Recommended) Add `GEMINI_API_KEY=<key>` to `~/.gemini/.env` — auto-loaded for all shells including sub-agents; get a key at [Google AI Studio](https://aistudio.google.com/apikey), OR
-- `export GEMINI_API_KEY=<key>` in the current shell session, OR
-- Configure Vertex AI: `export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=<project>`.
+**Setting up Codex:** with the user's consent, install it with `CODEX_INSTALL_HINT`. The user then runs `codex login` themselves.
 
-**Do NOT suggest** `gemini` interactive login — it produces OAuth credentials insufficient for headless `-p`/`-o json` calls.
-
-Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, set `ADVERSARY="claude-only"` and proceed in **degraded Claude-only mode**.
-
-**Case C — `GEMINI_AUTHED=unknown`:**
-No user interaction needed. Proceed normally: set `ADVERSARY="gemini"`. Rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails, which falls back per Degradation Behavior (setting `ADVERSARY="claude-only"`).
-
-**Case D — `GEMINI_INSTALLED=yes` and `GEMINI_AUTHED=yes`:**
-Adversary confirmed available. Set `ADVERSARY="gemini"`. Continue to Step 1 with no user interaction.
+**Setting up Gemini:** with the user's consent, install it with `npm install -g @google/gemini-cli`. Headless calls need an API key: add `GEMINI_API_KEY=<key>` to `~/.gemini/.env` (recommended; get a key at [Google AI Studio](https://aistudio.google.com/apikey)), or `export GEMINI_API_KEY=<key>`, or set `GOOGLE_GENAI_USE_VERTEXAI=true` and `GOOGLE_CLOUD_PROJECT=<project>`. **Do NOT suggest** `gemini` interactive login — it produces OAuth credentials insufficient for headless `-p`/`-o json` calls.
 
 ### Step 1 — Detect Mode
 
@@ -129,7 +141,7 @@ Parse the `KEY=VALUE` output. If exit code is 2 and `--force` was not passed, ha
 
 ### Step 2 — R1: Parallel Independent Discovery
 
-Launch all three discovery tasks **in a single message** (parallel dispatch). Neither Claude agent nor Gemini sees the other's output at this stage.
+Launch all three discovery tasks **in a single message** (parallel dispatch). Neither Claude agent nor the adversary sees the other's output at this stage.
 
 **(a) Claude finders — two agents in parallel:**
 
@@ -138,22 +150,26 @@ Each receives: absolute path to `DIFF_FILE`, absolute path to `FILES_FILE`, and 
 - **Bug-hunter** returns `{"findings":[...]}` with `origin="claude"`. Assign sequential ids `BH-001`, `BH-002`, ...
 - **Convention-reviewer** returns `{"findings":[...]}` with `origin="claude"`. Assign sequential ids `CR-001`, `CR-002`, ...
 
-Merge both arrays. Renumber with unified prefix: `C-001`, `C-002`, ... Set `claude_verdict=null`, `gemini_verdict=null`, `status="unconfirmed"` on every entry. Write to `$RUN_DIR/r1-claude.json`.
+Merge both arrays. Renumber with unified prefix: `C-001`, `C-002`, ... Set `claude_verdict=null`, `adversary_verdict=null`, `status="unconfirmed"` on every entry. Write to `$RUN_DIR/r1-claude.json`.
 
-**(b) Gemini finder — run in parallel with Claude agents:**
+**(b) Adversary finder — run in parallel with Claude agents:**
 
 ```bash
-$SCRIPTS/gemini-review.sh \
+$ADV_REVIEW \
   --diff "$DIFF_FILE" \
   --mode find \
-  --out "$RUN_DIR/r1-gemini.json"
+  --out "$RUN_DIR/r1-$ADVERSARY.json"
 ```
 
-**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): print the degradation banner (see Degradation Behavior), emit the Claude findings as the report (all `status=unconfirmed`), and exit 0.
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
 
-Script emits `{"findings":[...]}` with `origin="gemini"`. Renumber ids: `G-001`, `G-002`, ... Write to `$RUN_DIR/r1-gemini.json`.
+- `ADVERSARY_FLAG` is set (the user forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as `PICK_RC` 3 in Step 0. Never fall back to another model or to Claude-only.
+- Codex was picked automatically and `GEMINI_AUTHED=yes`: switch to Gemini for the whole run (`ADVERSARY=gemini`, `ADV_REVIEW="$SCRIPTS/gemini-review.sh"`), tell the user, and rerun this step once.
+- Otherwise: go to the R1 path in Degradation Behavior.
 
-**r1-claude.json and r1-gemini.json format:**
+Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemini findings arrive with `origin="gemini"`; renumber them `G-001`, `G-002`, ... The file is `$RUN_DIR/r1-$ADVERSARY.json`.
+
+**r1-claude.json and r1-<adversary>.json format:**
 
 ```json
 {
@@ -168,7 +184,7 @@ Script emits `{"findings":[...]}` with `origin="gemini"`. Renumber ids: `G-001`,
       "rationale": "Why this is a problem, grounded in source",
       "origin": "claude",
       "claude_verdict": null,
-      "gemini_verdict": null,
+      "adversary_verdict": null,
       "status": "unconfirmed",
       "killed_by": null,
       "kill_reason": null
@@ -183,7 +199,7 @@ Script emits `{"findings":[...]}` with `origin="gemini"`. Renumber ids: `G-001`,
 === R1 Discovery Digest ===
 Claude findings: <N> total  (critical=X important=Y minor=Z)
   bug=A  security=B  perf=C  convention=D  maintainability=E
-Gemini findings: <M> total  (critical=X important=Y minor=Z)
+Adversary (<adversary>) findings: <M> total  (critical=X important=Y minor=Z)
   (categories if available)
 ```
 
@@ -191,51 +207,58 @@ Gemini findings: <M> total  (critical=X important=Y minor=Z)
 
 Launch both cross-examination tasks **in a single message** (parallel dispatch).
 
-**(a) Claude cross-examines Gemini's findings:**
+**(a) Claude cross-examines the adversary's findings:**
 
 Launch the `adversarial-cross-examiner` agent (opus). Provide:
-- Absolute path to `$RUN_DIR/r1-gemini.json` (Gemini's findings)
+- Absolute path to `$RUN_DIR/r1-$ADVERSARY.json` (the adversary's findings)
 - Absolute path to `DIFF_FILE`
 - Repo read access
 
-Agent returns `{"verdicts":[{"id":"G-NNN","claude_verdict":"confirm|refute","reason":"..."}]}`. Write to `$RUN_DIR/r2-claude-verdicts.json`.
+Agent returns `{"verdicts":[{"id":"X-NNN or G-NNN","claude_verdict":"confirm|refute","reason":"..."}]}`. Write to `$RUN_DIR/r2-claude-verdicts.json`.
 
-**(b) Gemini cross-examines Claude's findings:**
+**(b) The adversary cross-examines Claude's findings:**
 
 ```bash
-$SCRIPTS/gemini-review.sh \
+$ADV_REVIEW \
   --diff "$DIFF_FILE" \
   --findings "$RUN_DIR/r1-claude.json" \
   --mode judge \
-  --out "$RUN_DIR/r2-gemini-verdicts.json"
+  --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"
 ```
 
-**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): print the degradation banner, emit Claude findings as unconfirmed report, exit 0.
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
 
-Script emits `{"verdicts":[{"id":"C-NNN","gemini_verdict":"confirm|refute","reason":"...","confidence":...}]}`. Written to `$RUN_DIR/r2-gemini-verdicts.json`.
+- `ADVERSARY_FLAG` is set: show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3. Never fall back to Claude-only.
+- Otherwise: go to the R2 path in Degradation Behavior. It keeps the adversary's R1 findings. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
+
+Both scripts emit `{"verdicts":[{"id":"C-NNN","adversary_verdict":"confirm|refute","reason":"...","confidence":...}]}`. The key is `adversary_verdict` for both models; it was `gemini_verdict` before #135, and old run files still load.
 
 **Emit R2 DIGEST** (print to conversation after both sides complete):
 
 ```
 === R2 Cross-Examination Digest ===
-Gemini's verdict on Claude's findings (<N> total):
-  confirmed=A  refuted=B  judged=J  confirm_rate=R.RRR  low_signal=true|false  unrecognized=U
+<Adversary>'s verdict on Claude's findings (<N> total):
+  confirmed=A  refuted=B  judged=J  confirm_rate=R.RRR  low_signal=true|false  unrecognized=U  unjudged=N
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
   [⚠ UNRECOGNIZED — U verdict(s) had an unrecognized value; judge output may be malformed]
-Claude's verdict on Gemini's findings (<M> total):
-  confirmed=D  refuted=E  judged=K  confirm_rate=S.RRR  low_signal=true|false  unrecognized=V
+  [⚠ UNJUDGED — N finding(s) got no verdict; the judge skipped them, so they stay unconfirmed]
+Claude's verdict on <Adversary>'s findings (<M> total):
+  confirmed=D  refuted=E  judged=K  confirm_rate=S.RRR  low_signal=true|false  unrecognized=V  unjudged=P
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
   [⚠ UNRECOGNIZED — V verdict(s) had an unrecognized value; judge output may be malformed]
+  [⚠ UNJUDGED — P finding(s) got no verdict; the judge skipped them, so they stay unconfirmed]
 ```
 
-The per-direction fields `confirmed`, `refuted`, `judged`, `confirm_rate`, `low_signal`, and `unrecognized` come verbatim from `synthesize.py` stdout. The orchestrator may derive `unjudged = <total findings> − judged` if it wants to display that count.
+The per-direction fields `confirmed`, `refuted`, `judged`, `confirm_rate`, `low_signal`, `unrecognized` and `unjudged` come verbatim from `synthesize.py` stdout. The direction lines are named `<adversary>_on_claude:` and `claude_on_<adversary>:` (for example `codex_on_claude:`), and each ends in `unjudged=<n>`.
 
-The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.950 or <= 0.050 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`. The `UNRECOGNIZED` banner is printed only when `unrecognized > 0`.
+`unjudged` counts findings that got no verdict entry at all. A judge that answers only some ids still exits 0, so this count is the only sign that work is missing. Always take it from `synthesize.py`; never work it out from the total and `judged`, because `judged` also counts entries with an unrecognized value.
+
+The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.950 or <= 0.050 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`. The `UNRECOGNIZED` banner is printed only when `unrecognized > 0`. The `UNJUDGED` banner is printed only when `unjudged > 0`.
 
 **Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge with maximum skepticism and re-synthesize:
 
-- Gemini rubber-stamping Claude's findings: `$SCRIPTS/gemini-review.sh --diff "$DIFF_FILE" --findings "$RUN_DIR/r1-claude.json" --mode judge --strict --out "$RUN_DIR/r2-gemini-verdicts.json"` (the `--strict` flag forces the hardened judge prompt on the first call, requiring Gemini to quote the exact offending diff line verbatim for every confirm)
-- Claude rubber-stamping Gemini's findings: re-spawn the `adversarial-cross-examiner` agent with an explicit instruction for a maximum-skepticism re-judge — refute unless the evidence is unambiguous and cite the proving line
+- The adversary rubber-stamping Claude's findings: `$ADV_REVIEW --diff "$DIFF_FILE" --findings "$RUN_DIR/r1-claude.json" --mode judge --strict --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"` (`--strict`, judge mode only, adds the hardened judge prompt: confirm only when the finding's defect is visible in the diff or source, quoting the offending line verbatim in the reason; otherwise refute)
+- Claude rubber-stamping the adversary's findings: re-spawn the `adversarial-cross-examiner` agent with an explicit instruction for a maximum-skepticism re-judge — refute unless the evidence is unambiguous and cite the proving line
 
 Re-run `synthesize.py` after the escalation pass and relay the updated digest. The `low_signal` flag is informational only — it does not change survivor classification; surviving findings are still those confirmed by the opposing model (see Survivor Rule).
 
@@ -243,15 +266,18 @@ Re-run `synthesize.py` after the escalation pass and relay the updated digest. T
 
 ```bash
 $SCRIPTS/synthesize.py \
+  --adversary "$ADVERSARY" \
   --claude-findings "$RUN_DIR/r1-claude.json" \
-  --gemini-findings "$RUN_DIR/r1-gemini.json" \
-  --gemini-verdicts "$RUN_DIR/r2-gemini-verdicts.json" \
+  --adversary-findings "$RUN_DIR/r1-$ADVERSARY.json" \
+  --adversary-verdicts "$RUN_DIR/r2-$ADVERSARY-verdicts.json" \
   --claude-verdicts "$RUN_DIR/r2-claude-verdicts.json" \
   --md "$RUN_DIR/report.md" \
   --json "$RUN_DIR/report.json"
 ```
 
-Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, and `unrecognized=`. Read and relay these counts and any `low_signal=true` flags and any `unrecognized > 0` count to the user.
+Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, `unrecognized=` and `unjudged=`. Read and relay these counts to the user, plus any `low_signal=true` flag, any `unrecognized > 0` count, and any `unjudged > 0` count with its `UNJUDGED` banner.
+
+When `ADVERSARY="claude-only"` (the user chose Claude-only in Step 0, or Degradation Behavior's R1 path fired), there is no second model to feed Step 4 real findings from. Run the same command with `--adversary claude-only`, and write `{"findings":[]}` once to `$RUN_DIR/r1-empty.json` for `--adversary-findings`, and `{"verdicts":[]}` once to `$RUN_DIR/r2-empty.json` for both `--adversary-verdicts` and `--claude-verdicts` (R2 never ran). Every Claude finding comes out `status=unconfirmed`; nothing is silently dropped, and `report.json`'s `summary.adversary` is `"claude-only"` — matching what Step 4b passes to `pr-audit.py record --adversary "$ADVERSARY"`, so its adversary/summary mismatch guard does not fire.
 
 ### Step 4b — Write the round record
 
@@ -264,7 +290,7 @@ if [[ "$MODE" == "pr" ]]; then
 else
   HEAD_SHA="$(git rev-parse HEAD)"
 fi
-# ADVERSARY was set in Step 0 ("gemini"), or to "claude-only" on any degraded-mode fallback.
+# ADVERSARY was set in Step 0 ("codex" or "gemini"), or to "claude-only" on the R1 degraded path.
 $SCRIPTS/pr-audit.py record \
   --report-json "$RUN_DIR/report.json" \
   --run-id "$RUN_ID" --skill adversarial-review --phase review --round 1 \
@@ -272,7 +298,7 @@ $SCRIPTS/pr-audit.py record \
   --out "$RUN_DIR/round-1.json"
 ```
 
-Exit 2 means `report.json` could not be read or did not make a valid record. Tell the user and run Step 5 with `--no-post` and without `--record`.
+Exit 2 means `report.json` could not be read, did not make a valid record, or `--out` could not be written. Tell the user and run Step 5 with `--no-post` and without `--record`.
 
 ### Step 5 — Sink
 
@@ -305,8 +331,8 @@ A finding reaches the **Survivors** section only when the **opposing model** con
 
 | Finding origin | Survives when |
 |---|---|
-| Claude finding (C-NNN in r1-claude.json) | Gemini verdict = `confirm` in r2-gemini-verdicts.json |
-| Gemini finding (G-NNN in r1-gemini.json) | Claude verdict = `confirm` in r2-claude-verdicts.json |
+| Claude finding (C-NNN in r1-claude.json) | The adversary's verdict = `confirm` in r2-<adversary>-verdicts.json |
+| Adversary finding (X-NNN Codex or G-NNN Gemini, in r1-<adversary>.json) | Claude verdict = `confirm` in r2-claude-verdicts.json |
 
 - **Survivors** — confirmed by the opposing model; both models agree
 - **Unconfirmed** — not judged by the opponent, or opponent abstained
@@ -316,22 +342,46 @@ Nothing is ever silently discarded.
 
 ## Degradation Behavior
 
-If `gemini-review.sh` exits with code 3 (unauthenticated, network error, unparseable JSON after one retry) at **either** the R1 find step or the R2 judge step, the skill degrades loudly to Claude-only mode:
+If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not installed, not logged in, no credential, a network error, a timeout, a tripped isolation canary, or no valid JSON after one retry) at **either** the R1 find step or the R2 judge step:
+
+- **`ADVERSARY_FLAG` is set** (the user passed `--adversary`): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, as in Step 0. Never fall back to Claude-only or to the other model: the user asked for that model. No report is written.
+- **Auto mode, at R1** (after the one Codex-to-Gemini switch allowed in Step 2): degrade to Claude-only, below.
+- **Auto mode, at R2**: degrade, but keep what R1 and Claude's R2 already produced, below.
+
+In auto mode, print this banner:
 
 ```
 ╔══════════════════════════════════════════════════════════╗
 ║  ADVERSARY UNAVAILABLE — single-model review only        ║
-║  Gemini did not respond. Showing Claude R1 findings.     ║
-║  Re-run after: add GEMINI_API_KEY=<key> to              ║
-║  ~/.gemini/.env  (interactive login is NOT enough)       ║
+║  The adversary (Codex or Gemini) did not respond.        ║
+║  Showing Claude R1 findings.                              ║
+║  Re-run after: codex login, or add GEMINI_API_KEY=<key>  ║
+║  to ~/.gemini/.env (interactive login is NOT enough)      ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 
-Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without Gemini. The skill exits 0 (not an error). Set `ADVERSARY="claude-only"` whenever this degraded path is taken.
+**At R1:** set `ADVERSARY="claude-only"`, then continue straight to Step 4 (there is nothing for R2 to cross-examine). Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without an adversary. See Step 4 for the empty-file `--adversary claude-only` call that keeps `report.json` and every downstream record labeled consistently.
+
+**At R2:** the adversary's R1 findings and Claude's verdicts on them already exist, so do not drop them. Keep `ADVERSARY` as it is, tell the user the adversary's R2 judge failed, write `{"verdicts":[]}` to `$RUN_DIR/r2-empty.json`, and run Step 4 with it in place of the adversary's verdicts:
+
+```bash
+$SCRIPTS/synthesize.py \
+  --adversary "$ADVERSARY" \
+  --claude-findings "$RUN_DIR/r1-claude.json" \
+  --adversary-findings "$RUN_DIR/r1-$ADVERSARY.json" \
+  --adversary-verdicts "$RUN_DIR/r2-empty.json" \
+  --claude-verdicts "$RUN_DIR/r2-claude-verdicts.json" \
+  --md "$RUN_DIR/report.md" \
+  --json "$RUN_DIR/report.json"
+```
+
+Every Claude finding comes out `status=unconfirmed`, and the `<adversary>_on_claude` line shows them all as `unjudged`. The adversary's R1 findings keep Claude's verdicts: survivor when Claude confirmed, rejected when it refuted, unconfirmed when it gave none.
+
+In auto mode the skill exits 0 (not an error).
 
 ## Same-Diff Invariant
 
-Both Claude agents (R1) and Gemini (R1 find + R2 judge) receive the **byte-identical** `DIFF_FILE` path produced by `detect-mode.sh`. The orchestrator must not re-generate or alter the diff between steps.
+Both Claude agents (R1) and the adversary (R1 find + R2 judge) receive the **byte-identical** `DIFF_FILE` path produced by `detect-mode.sh`. The orchestrator must not re-generate or alter the diff between steps.
 
 ## Output Locations
 
@@ -343,8 +393,11 @@ Both Claude agents (R1) and Gemini (R1 find + R2 judge) receive the **byte-ident
 ## See Also
 
 - `scripts/ensure-gemini.sh` — Step 0 detection: emits Gemini install/auth status + hints; never installs or calls the network
+- `scripts/ensure-codex.sh` — Step 0 detection for Codex: installed, version, and logged in (from the exit code of `codex login status`)
+- `scripts/pick-adversary.sh` — Step 0: picks Codex, then Gemini, then Claude-only; `--adversary` forces one, with no fallback
+- `scripts/codex-review.sh` — Codex's R1 find and R2 judge, plus `counter` and `find --prior` re-checks for deep-review, through a locked-down `codex exec` (see Codex sandbox); `--self-test` reruns the isolation canary
 - `scripts/detect-mode.sh` — diff extraction and mode detection
 - `scripts/gemini-review.sh` — R1 find + R2 judge Gemini calls
 - `scripts/synthesize.py` — survivor rule application (4-file symmetric input)
 - `scripts/sink.sh` — output routing: terminal + local file, and the PR audit trail via `pr-audit.py`
-- `scripts/pr-audit.py` — posts a round record to the PR (`post`), writes it locally (`local`), or builds it from `report.json` (`record`)
+- `scripts/pr-audit.py` — posts a round record to the PR (`post`), writes it locally (`local`), builds it from `report.json` (`record`), or builds a re-check round from Codex's re-checks (`recheck`)

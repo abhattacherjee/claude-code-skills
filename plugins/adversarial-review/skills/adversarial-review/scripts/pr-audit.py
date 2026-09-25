@@ -7,6 +7,8 @@ Usage:
   pr-audit.py record --report-json REPORT.json --run-id ID --skill SKILL --phase PHASE
                      --round K --adversary ADV --head-sha SHA [--prev-head-sha SHA]
                      --out ROUND.json
+  pr-audit.py recheck --prior ROUND.json --rechecks CODEX_OUT.json --round K
+                      --head-sha SHA [--phase PHASE] --out ROUND.json
 
 Each finding with a path gets one thread. It is inline when GitHub accepts the
 line, file-level when GitHub rejects the line (HTTP 422) or there is no line,
@@ -16,6 +18,17 @@ one COMMENT review with a summary table; a long table is split over several
 numbered reviews. Earlier threads and summaries are found by a hidden marker,
 so no local state is kept. A rerun updates its own summary in place.
 
+`recheck` builds the record for an adversary re-check round: each earlier
+finding the adversary re-checked gets one recheck event by the adversary, and
+its new findings are added unconfirmed. An earlier finding the adversary did
+not re-check is carried over unchanged with no events (its thread stays open),
+and stderr reports `unchecked=<N> (<ids>)`; the exit is still 0, since the
+record is valid, so the caller must read that count. A "resolved" re-check by the adversary
+closes the thread when the record is posted. `recheck` is Codex-only: only
+`codex-review.sh --mode find --prior` re-checks earlier findings against
+current source, so a prior round whose adversary is not `codex` (Gemini or
+Claude-only) is refused (exit 2).
+
 When gh is missing, not logged in, or cannot read the PR, `post` says why,
 writes the same content to the local markdown file instead, and exits 1. A gh
 call that fails, or returns output that cannot be parsed, is a failed post.
@@ -23,7 +36,8 @@ call that fails, or returns output that cannot be parsed, is a failed post.
 Exit codes:
   0  everything was posted (or `local`/`record` succeeded)
   1  the trail is incomplete: some posts failed, or it went to the local file
-  2  usage error, invalid record, or invalid report
+  2  usage error, invalid record, or invalid report, or `record`/`recheck` could
+     not write --out
   3  unexpected error (one line on stderr, no traceback); the trail may be partial
 """
 import argparse
@@ -146,6 +160,18 @@ def write_local(rec, out):
         fh.write("\n" + text + "\n")
     ensure_gitignored(out)
     return counts
+
+
+def write_record(rec, out):
+    """Write a built record to --out. On failure say why and return False; the
+    caller exits 2, since no usable record was made."""
+    try:
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, indent=2)
+    except OSError as exc:
+        print(f"pr-audit: cannot write --out {out}: {exc}", file=sys.stderr)
+        return False
+    return True
 
 
 def default_local_out():
@@ -478,11 +504,20 @@ def cmd_record(args):
     if not isinstance(report, dict):
         print(f"pr-audit: {args.report_json} is not a JSON object", file=sys.stderr)
         return 2
+    summary = report.get("summary")
+    report_adversary = summary.get("adversary") if isinstance(summary, dict) else None
+    if report_adversary is not None and report_adversary != args.adversary:
+        print(f"pr-audit: --adversary {args.adversary!r} does not match "
+              f"{args.report_json}'s summary.adversary {report_adversary!r}", file=sys.stderr)
+        return 2
     findings = []
     for f in report.get("findings", []):
         origin = f.get("origin")
         if origin == "claude":
-            judge, verdict = args.adversary, f.get("gemini_verdict")
+            judge = args.adversary
+            verdict = f.get("adversary_verdict")
+            if verdict is None:
+                verdict = f.get("gemini_verdict")
         else:
             judge, verdict = "claude", f.get("claude_verdict")
         events = []
@@ -514,9 +549,89 @@ def cmd_record(args):
     except ar.RecordError as exc:
         print(f"pr-audit: report does not make a valid record: {exc}", file=sys.stderr)
         return 2
-    with open(args.out, "w", encoding="utf-8") as fh:
-        json.dump(rec, fh, indent=2)
+    if not write_record(rec, args.out):
+        return 2
     print(f"pr-audit: wrote {args.out} ({len(findings)} findings)")
+    return 0
+
+
+RECHECK_KEEP = ("id", "origin", "path", "line", "severity", "category", "title", "rationale", "status")
+
+
+def cmd_recheck(args):
+    prior = load_record(args.prior)
+    if prior["adversary"] != "codex":
+        print(f"pr-audit: recheck rounds are Codex-only; {args.prior}'s adversary is "
+              f"{prior['adversary']!r}", file=sys.stderr)
+        return 2
+    try:
+        with open(args.rechecks, encoding="utf-8") as fh:
+            out = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"pr-audit: cannot read {args.rechecks}: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(out, dict) or not isinstance(out.get("rechecks"), list):
+        print(f"pr-audit: {args.rechecks} has no rechecks list; "
+              "run codex-review.sh --mode find with --prior", file=sys.stderr)
+        return 2
+    if out.get("adversary") != prior["adversary"]:
+        print(f"pr-audit: {args.rechecks}'s adversary {out.get('adversary')!r} does not match "
+              f"{args.prior}'s adversary {prior['adversary']!r}", file=sys.stderr)
+        return 2
+    if args.round <= prior["round"]:
+        print(f"pr-audit: --round {args.round} must come after the prior round {prior['round']}",
+              file=sys.stderr)
+        return 2
+    by = prior["adversary"]
+    earlier = {f["id"]: f for f in prior["findings"]}
+    events = {}
+    for item in out["rechecks"]:
+        rid = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(rid, str) or rid not in earlier or rid in events:
+            print(f"pr-audit: warning: skipped a re-check for unknown or repeated id {rid!r}",
+                  file=sys.stderr)
+            continue
+        events[rid] = [{"by": by, "kind": "recheck", "result": item.get("result"),
+                        "text": item.get("reason") or ""}]
+    # Every earlier finding stays in the record, in its earlier order. One the
+    # adversary did not re-check is carried over unchanged with no events, so its
+    # thread stays open and Step 2.6 still sees it as not resolved.
+    findings, unchecked = [], []
+    for fid, old in earlier.items():
+        f = {k: old.get(k) for k in RECHECK_KEEP}
+        f["events"] = events.get(fid, [])
+        if fid not in events:
+            unchecked.append(fid)
+            print(f"pr-audit: warning: no re-check for {fid}; carried over with no events, "
+                  "so its thread stays open", file=sys.stderr)
+        findings.append(f)
+    print(f"pr-audit: unchecked={len(unchecked)}" + (f" ({', '.join(unchecked)})" if unchecked else ""),
+          file=sys.stderr)
+    for nf in out.get("findings") or []:
+        if not isinstance(nf, dict):
+            continue
+        if isinstance(nf.get("id"), str) and nf["id"] in earlier:
+            print(f"pr-audit: new finding id {nf.get('id')} is already used in {args.prior}; "
+                  "rerun codex-review.sh with a higher --id-start", file=sys.stderr)
+            return 2
+        findings.append({
+            "id": nf.get("id"), "origin": nf.get("origin") or by, "path": nf.get("path") or None,
+            "line": _as_line(nf.get("line")), "severity": nf.get("severity"),
+            "category": nf.get("category") or "other", "title": nf.get("title") or "(no title)",
+            "rationale": nf.get("rationale") or "", "status": "unconfirmed", "events": [],
+        })
+    rec = {"schema": ar.SCHEMA, "run_id": prior["run_id"], "skill": prior["skill"],
+           "phase": args.phase, "round": args.round, "adversary": prior["adversary"],
+           "head_sha": args.head_sha, "prev_head_sha": prior["head_sha"], "findings": findings}
+    try:
+        ar.validate(rec)
+    except ar.RecordError as exc:
+        print(f"pr-audit: the re-check does not make a valid record: {exc}", file=sys.stderr)
+        return 2
+    if not write_record(rec, args.out):
+        return 2
+    print(f"pr-audit: wrote {args.out} ({len(events)} re-checked, {len(unchecked)} unchecked, "
+          f"{len(findings) - len(earlier)} new)")
     return 0
 
 
@@ -541,6 +656,13 @@ def build_parser():
     local = sub.add_parser("local")
     local.add_argument("--record", required=True)
     local.add_argument("--out", required=True)
+    rc = sub.add_parser("recheck")
+    rc.add_argument("--prior", required=True)
+    rc.add_argument("--rechecks", required=True)
+    rc.add_argument("--round", type=int, required=True)
+    rc.add_argument("--head-sha", required=True)
+    rc.add_argument("--phase", default="phase2-recheck")
+    rc.add_argument("--out", required=True)
     return p
 
 
@@ -550,6 +672,8 @@ def main(argv=None):
         return cmd_record(args)
     if args.cmd == "post":
         return cmd_post(args)
+    if args.cmd == "recheck":
+        return cmd_recheck(args)
     return cmd_local(args)
 
 

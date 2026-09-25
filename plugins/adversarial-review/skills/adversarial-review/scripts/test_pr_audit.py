@@ -525,15 +525,15 @@ class ForgeryTests(unittest.TestCase):
 REPORT = {"summary": {}, "findings": [
     {"id": "C-001", "origin": "claude", "path": "src/a.py", "line": 41, "severity": "important",
      "category": "bug", "title": "Off by one", "rationale": "Loop skips the last item.",
-     "status": "survivor", "gemini_verdict": "confirm", "claude_verdict": None,
+     "status": "survivor", "adversary_verdict": "confirm", "claude_verdict": None,
      "verdict_reason": "Reproduced with a 3-item list.", "kill_reason": None},
     {"id": "G-001", "origin": "gemini", "path": "", "line": "12", "severity": "minor",
      "category": "convention", "title": "Name", "rationale": None, "status": "rejected",
-     "gemini_verdict": None, "claude_verdict": "refute", "verdict_reason": None,
+     "adversary_verdict": None, "claude_verdict": "refute", "verdict_reason": None,
      "kill_reason": "The name matches the module convention."},
     {"id": "C-002", "origin": "claude", "path": "src/c.py", "line": None, "severity": "minor",
      "category": None, "title": "Unjudged", "rationale": "x", "status": "unconfirmed",
-     "gemini_verdict": None, "claude_verdict": None},
+     "adversary_verdict": None, "claude_verdict": None},
 ]}
 
 
@@ -615,9 +615,9 @@ class RecordTests(unittest.TestCase):
                 "category": "bug", "title": "t", "rationale": "r", "status": "survivor",
                 "verdict_reason": "why"}
         res, out = self.run_record(h, {"findings": [
-            dict(base, id="C-001", gemini_verdict="Confirmed"),
-            dict(base, id="C-002", gemini_verdict="REFUTED", status="rejected"),
-            dict(base, id="C-003", gemini_verdict="maybe"),
+            dict(base, id="C-001", adversary_verdict="Confirmed"),
+            dict(base, id="C-002", adversary_verdict="REFUTED", status="rejected"),
+            dict(base, id="C-003", adversary_verdict="maybe"),
         ]})
         self.assertEqual(res.returncode, 0, res.stderr)
         by_id = {f["id"]: f for f in json.loads(out.read_text())["findings"]}
@@ -648,6 +648,43 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(res.returncode, 2)
         self.assertIn("is not a JSON object", res.stderr)
         self.assertNotIn("Traceback", res.stderr)
+        self.assertFalse(out.exists())
+
+    def test_record_rejects_adversary_mismatch(self):
+        h = Harness(self)
+        report = dict(REPORT, summary={"adversary": "codex"})
+        report_path = h.write(json.dumps(report), "mismatch-report.json")
+        out = h.dir / "mismatch-round.json"
+        res = h.run("record", "--report-json", report_path, "--run-id", "ar-mismatch-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "gemini", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("does not match", res.stderr)
+        self.assertIn("codex", res.stderr)
+        self.assertIn("gemini", res.stderr)
+        self.assertFalse(out.exists())
+
+    def test_record_accepts_matching_adversary_summary(self):
+        h = Harness(self)
+        report = dict(REPORT, summary={"adversary": "gemini"})
+        report_path = h.write(json.dumps(report), "match-report.json")
+        out = h.dir / "match-round.json"
+        res = h.run("record", "--report-json", report_path, "--run-id", "ar-match-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "gemini", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(out.exists())
+
+    def test_record_with_an_unwritable_out_path_exits_2_with_a_message(self):
+        h = Harness(self)
+        report = h.write(json.dumps(REPORT), "report.json")
+        out = h.dir / "missing-dir" / "round-1.json"
+        res = h.run("record", "--report-json", report, "--run-id", "ar-20260924-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "gemini", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("cannot write --out", res.stderr)
+        self.assertNotIn("unexpected error", res.stderr)
         self.assertFalse(out.exists())
 
     def test_record_output_posts_cleanly(self):

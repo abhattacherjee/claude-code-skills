@@ -6,10 +6,17 @@
 
 - Every round of both phases is saved on the PR through adversarial-review's `pr-audit.py`: findings as threads, and verdicts, counters, fixes and re-checks as replies, with one summary review per round. `--no-post` keeps it local. See `references/audit-trail.md`.
 - You write one round record (`audit-round/v1` JSON) per round, and `references/audit-trail.md` says what each `pr-audit.py` exit code means: 0 posted, 1 trail incomplete (carry on and rerun later), 2 invalid record (fix and rerun), 3 crashed (the trail may be partial).
+- Phase 2 picks its adversary with adversarial-review's `pick-adversary.sh`: Codex when it is installed and logged in, then Gemini, then Claude-only. `--adversary codex|gemini` forces one and stops if it is not usable.
+- With Codex, every Codex call goes through `codex-review.sh` (find, judge and counter), never `codex` directly, so the reviewed repo's `AGENTS.md` and project config cannot steer it.
+- Step 2.6: Codex re-checks each fix in the fix range, and `pr-audit.py recheck` records the answers as `recheck` events, so a fixed Phase 2 thread closes when Codex says it is resolved. A finding Codex did not re-check (`unchecked=<N>` from `recheck`) counts as not resolved: the loop re-checks it again within the cap of 3, and surfaces it to you at the cap.
+- The adversary's verdict key is `adversary_verdict` (it was `gemini_verdict`); old run files still load.
 
 ### Fixed
 
 - Phase 2 R1 told you to call `gemini` directly because `gemini-review.sh` supposedly had no `--mode find`. It does; R1 now uses it.
+- Step 2.2: when the Codex judge exits 3, write `{"verdicts":[]}` to its verdicts file, so `synthesize.py` does not exit 1 on a missing file. Those Claude findings stay unconfirmed.
+- Step 2.6: exit 1 from `codex-review.sh` (for example a missing `--prior` file) stops the re-check loop, leaves the remaining threads open, and goes in the round summary, the same as exit 3.
+- Steps 2.1 and 2.2: a forced adversary (`ADVERSARY_FLAG` / `--adversary codex|gemini`) that exits 3 now shows `ADVERSARY_UNAVAILABLE` and stops the run, the same as `PICK_RC` 3 in Step 2.0, instead of always taking the auto-mode fallback. Auto mode keeps its documented fallback.
 
 ## [1.3.1] - 2026-09-24
 

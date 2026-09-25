@@ -1,10 +1,10 @@
 # adversarial-review
 
-Adversarial PR review — Claude and Gemini discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm
+Adversarial PR review — Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm
 
 ## What It Does
 
-Runs a symmetric two-model adversarial review of a diff. Both Claude and Gemini independently discover findings in R1 (neither sees the other's output). In R2, each model cross-examines the other's findings against actual source code. Only findings confirmed by the opposing model survive to the report. Single-model findings land in an UNCONFIRMED bucket; rejected findings are retained with the refuting model and its reason.
+Runs a symmetric two-model adversarial review of a diff. Claude and an opposing model (Codex when it is installed and logged in, else Gemini) independently discover findings in R1 (neither sees the other's output). In R2, each model cross-examines the other's findings against actual source code. Only findings confirmed by the opposing model survive to the report. Single-model findings land in an UNCONFIRMED bucket; rejected findings are retained with the refuting model and its reason.
 
 **Use when:**
 - you want a high-precision code review before merging a PR, not maximal coverage,
@@ -22,13 +22,13 @@ detect-mode → R1 parallel independent discovery → R2 parallel symmetric cros
 
 ### Symmetric 2-Round Pipeline
 
-1. **R1 — Independent discovery (parallel, blind):** Two Claude sub-agents (bug-hunter on Opus, convention-reviewer on Sonnet) review the diff grounded in actual source files — their findings become `r1-claude.json`. Simultaneously, `gemini-review.sh --mode find` runs Gemini's independent pass — findings become `r1-gemini.json`. Neither side sees the other's output.
-2. **R2 — Symmetric cross-examination (parallel):** The `adversarial-cross-examiner` (Opus) reads Gemini's R1 findings against actual source and returns confirm/refute verdicts (`r2-claude-verdicts.json`). Simultaneously, `gemini-review.sh --mode judge` cross-examines Claude's R1 findings and returns verdicts (`r2-gemini-verdicts.json`).
+1. **R1 — Independent discovery (parallel, blind):** Two Claude sub-agents (bug-hunter on Opus, convention-reviewer on Sonnet) review the diff grounded in actual source files — their findings become `r1-claude.json`. Simultaneously, the adversary's script (`codex-review.sh` or `gemini-review.sh`) runs its independent pass — findings become `r1-codex.json` or `r1-gemini.json`. Neither side sees the other's output.
+2. **R2 — Symmetric cross-examination (parallel):** The `adversarial-cross-examiner` (Opus) reads the adversary's R1 findings against actual source and returns confirm/refute verdicts (`r2-claude-verdicts.json`). Simultaneously, the adversary cross-examines Claude's R1 findings and returns verdicts (`r2-<adversary>-verdicts.json`).
 
 ### Survivor Rule
 
-- A Claude finding (C-NNN) survives **if and only if Gemini confirmed it** in R2.
-- A Gemini finding (G-NNN) survives **if and only if Claude confirmed it** in R2.
+- A Claude finding (C-NNN) survives **if and only if the adversary confirmed it** in R2.
+- An adversary finding (X-NNN Codex, G-NNN Gemini) survives **if and only if Claude confirmed it** in R2.
 - All other findings → `UNCONFIRMED (single-model)` bucket, surfaced below survivors and never silently dropped.
 - Rejected findings are retained with which model refuted them and why.
 - Convergence is purely mechanical — `synthesize.py` applies the rule with no further adjudication.
@@ -40,9 +40,11 @@ detect-mode → R1 parallel independent discovery → R2 parallel symmetric cros
 
 ### Degradation
 
-If Gemini is unauthenticated, errors, or returns unparseable JSON after one retry, the skill falls back to a **Claude-only review** and prints a loud `ADVERSARY UNAVAILABLE — single-model review only` banner. The second opinion is never silently skipped.
+If the adversary is not logged in, errors, times out, or returns unparseable JSON after one retry, the skill falls back to a **Claude-only review** and prints a loud `ADVERSARY UNAVAILABLE — single-model review only` banner. The second opinion is never silently skipped.
 
 ## Prerequisites
+
+The skill picks **Codex** first when `codex login status` says you are logged in (run `codex login` once), then Gemini, then Claude-only. `--adversary codex|gemini` forces one. Codex runs in a locked-down `codex exec`; see the skill's "Codex sandbox" section for what that does and does not stop. The Gemini notes below apply when Gemini is the adversary:
 
 The skill now **auto-detects and guides Gemini setup** at the start of every run via `ensure-gemini.sh` + Step 0:
 
@@ -59,17 +61,20 @@ No manual pre-flight is required. The `gemini` binary version 0.38.2+ supports `
 
 ### Skills
 
-- `adversarial-review` — Adversarial PR review via symmetric Claude↔Gemini independent discovery and cross-examination. Surfaces only findings both models confirm. Auto-detects PR vs local mode.
+- `adversarial-review` — Adversarial PR review via symmetric independent discovery and cross-examination between Claude and an opposing model (Codex, else Gemini). Surfaces only findings both models confirm. Auto-detects PR vs local mode.
 
 ### Agents
 
 - `adversarial-bug-hunter` (Opus) — R1 bug-hunt pass over the diff, grounded in actual source files. NOT user-invocable — spawned by the adversarial-review skill.
 - `adversarial-convention-reviewer` (Sonnet) — R1 convention and CLAUDE.md compliance scan over the diff. NOT user-invocable — spawned by the adversarial-review skill.
-- `adversarial-cross-examiner` (Opus) — R2 symmetric cross-examiner: reads Gemini's R1 findings against actual source files and returns confirm/refute verdicts. NOT user-invocable — spawned by the adversarial-review skill.
+- `adversarial-cross-examiner` (Opus) — R2 symmetric cross-examiner: reads the adversary's (Codex or Gemini) R1 findings against actual source files and returns confirm/refute verdicts. NOT user-invocable — spawned by the adversarial-review skill.
 
 ### Scripts
 
 - `ensure-gemini.sh` — Step 0 detection: emits `KEY=VALUE` status lines (installed, version, authed, install hint, auth hint); never installs or calls the network; used by the orchestrator to guide setup before the pipeline runs.
+- `ensure-codex.sh` — Codex install and login detection (`codex login status` exit code); never installs anything.
+- `pick-adversary.sh` — picks Codex, then Gemini, then Claude-only; `--adversary` forces one.
+- `codex-review.sh` — Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`.
 - `detect-mode.sh` — resolves PR vs local mode and emits the shared diff artifact both models consume.
 - `gemini-review.sh` — `--mode find`: Gemini's independent R1 discovery pass; `--mode judge`: Gemini's R2 cross-examination of Claude's findings; extracts JSON from the CLI envelope; retries once on parse failure.
 - `synthesize.py` — applies the survivor rule to the 4 symmetric inputs (claude-findings, gemini-findings, gemini-verdicts, claude-verdicts), classifying findings into SURVIVORS / UNCONFIRMED / REJECTED.
