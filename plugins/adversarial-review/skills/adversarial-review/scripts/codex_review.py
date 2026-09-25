@@ -9,14 +9,16 @@ Called through codex-review.sh (--help works on both). Modes:
 
 Codex runs with only PATH, HOME, the user's own CODEX_HOME and a short
 pass-through list (API key, proxy, TMPDIR) in its environment; with user config,
-rules, the reviewed repo's AGENTS.md, apps, plugins, hooks and memories off; in a
-read-only sandbox; and with the diff on a stdin pipe that is closed after
-writing. Every argv passes an isolation guard, and each Codex version must pass
-an isolation canary (AGENTS.md, .codex/config.toml, .agents/skills, .mcp.json)
-before its first review. A pass is stamped in
+rules, the reviewed repo's AGENTS.md and .agents/skills, apps, plugins, hooks and
+memories off; in a read-only sandbox; and with the diff on a stdin pipe that is
+closed after writing. Every argv passes an isolation guard, and each Codex
+version must pass an isolation canary (AGENTS.md, .codex/config.toml,
+.agents/skills, .mcp.json) before its first review. A pass is stamped in
 $XDG_CACHE_HOME/adversarial-review/codex-isolation-<version>-<key>.ok, keyed on the
 Codex version, a hash of the isolation recipe, the resolved binary's path and
-sha256, and CODEX_HOME; a change to any of them reruns the canary.
+sha256, and CODEX_HOME; a change to any of them reruns the canary. The stamp
+hashes the file `command -v codex` resolves to (its realpath), so if that is a
+wrapper script, a same-version binary swap behind the wrapper keeps the stamp.
 Its output is untrusted: it is checked against the schema, capped, and redacted.
 
 Exit codes:
@@ -307,8 +309,14 @@ def build_stdin(diff_text, mode, findings=None, prior=None, *, nonce):
 
 
 # Config overrides that stop the reviewed repo's AGENTS.md (and its fallback
-# names) from reaching Codex. Key names checked in the codex 0.155.1 binary.
-ISOLATION_OVERRIDES = ("project_doc_max_bytes=0", "project_doc_fallback_filenames=[]")
+# names) and its .agents/skills from reaching Codex. Key names checked in the
+# codex 0.155.1 binary. Live testing on 0.155.1 proved both leaks with a
+# positive control: without project_doc_max_bytes=0 /
+# project_doc_fallback_filenames=[], the isolation canary's AGENTS.md reached
+# Codex; without skills.include_instructions=false (which defaults to true),
+# its .agents/skills reached Codex too.
+ISOLATION_OVERRIDES = ("project_doc_max_bytes=0", "project_doc_fallback_filenames=[]",
+                       "skills.include_instructions=false")
 
 
 def build_argv(codex, repo, schema_path, out_path, prompt, model=None):
@@ -558,6 +566,15 @@ def codex_version(codex, env=None):
 # Bump when the canary itself changes (its repo, its checks, its answer rules), so
 # every stamp made by an older canary stops counting.
 CANARY_SCHEMA = 2
+# All four surfaces are canaried, but only two are proven live leaks on
+# codex-cli 0.155.1, each by a positive control that failed before its override
+# existed: AGENTS.md (fixed by project_doc_max_bytes=0 /
+# project_doc_fallback_filenames=[]) and .agents/skills (fixed by
+# skills.include_instructions=false). The other two are not exercised the same
+# way by 0.155.1: it does not read .mcp.json at all, and it loads a repo's
+# .codex/config.toml only for a trusted repo -- trust lives in the user's own
+# config.toml, which --ignore-user-config drops. Both stay canaried anyway, as
+# cheap guards against a future Codex version that changes either.
 CANARY_SURFACES = ("AGENTS.md", ".codex/config.toml", ".agents/skills", ".mcp.json")
 
 

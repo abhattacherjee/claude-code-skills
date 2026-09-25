@@ -197,6 +197,17 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(cr._has_run(argv, ("-c", "project_doc_max_bytes=0")))
         self.assertTrue(cr._has_run(argv, ("-c", "project_doc_fallback_filenames=[]")))
 
+    def test_argv_blocks_the_reviewed_repos_skills(self):
+        # Live testing on codex-cli 0.155.1 proved the isolation canary's
+        # .agents/skills surface reaches Codex without this override.
+        argv = self.argv()
+        self.assertTrue(cr._has_run(argv, ("-c", "skills.include_instructions=false")))
+
+    def test_guard_refuses_argv_missing_the_skills_override(self):
+        with self.assertRaises(cr.Unavailable) as ctx:
+            cr.assert_isolated(without(self.argv(), ("-c", "skills.include_instructions=false")))
+        self.assertIn("skills.include_instructions=false", str(ctx.exception))
+
     def test_disables_hooks_and_the_extra_read_only_reviewer_features_by_current_name(self):
         # codex-cli 0.155.1 `codex features list`: codex_hooks does not exist; the
         # current name is `hooks` (stable, enabled). skill_search,
