@@ -314,6 +314,63 @@ class ArgvAllowListTests(unittest.TestCase):
         with self.assertRaises(cr.Unavailable):
             cr.assert_isolated(argv)
 
+    def test_guard_refuses_a_flag_shaped_prompt_slot(self):
+        # The exact re-review probe: drop the real prompt and leave a flag last.
+        argv = self.argv()[:-1] + ["--dangerously-bypass-approvals-and-sandbox"]
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
+
+    def test_guard_accepts_a_bare_dash_prompt_slot(self):
+        argv = self.argv()[:-1] + ["-"]
+        cr.assert_isolated(argv)
+
+    def test_guard_refuses_a_flag_shaped_value(self):
+        argv = self.argv()
+        argv = argv[:-1] + ["-m", "--dangerously-bypass-approvals-and-sandbox"] + [argv[-1]]
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
+
+    def test_guard_does_not_credit_a_required_flag_hiding_in_a_value_slot(self):
+        # Drop the real --ignore-rules, then try to satisfy the old (raw-scan)
+        # presence check by putting its exact text in a value slot instead.
+        argv = without(self.argv(), ("--ignore-rules",))
+        argv = argv[:-1] + ["-m", "--ignore-rules"] + [argv[-1]]
+        with self.assertRaises(cr.Unavailable) as ctx:
+            cr.assert_isolated(argv)
+        self.assertIn("--ignore-rules", str(ctx.exception))
+
+    def test_guard_refuses_a_duplicate_value_flag(self):
+        for flag, value in (("-C", "/other"), ("-o", "/other.json"),
+                            ("--output-schema", "/other.json")):
+            argv = self.argv()
+            argv = argv[:-1] + [flag, value] + [argv[-1]]
+            with self.assertRaises(cr.Unavailable, msg=flag):
+                cr.assert_isolated(argv)
+
+    def test_guard_refuses_a_duplicate_dash_m(self):
+        argv = self.argv(model="gpt-x")
+        argv = argv[:-1] + ["-m", "other-model"] + [argv[-1]]
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
+
+    def test_guard_refuses_an_exact_duplicate_dash_s(self):
+        argv = self.argv()
+        argv = argv[:-1] + ["-s", "read-only"] + [argv[-1]]
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
+
+    def test_guard_refuses_disable_with_an_unknown_feature(self):
+        argv = self.argv()
+        argv = argv[:-1] + ["--disable", "not_a_real_feature"] + [argv[-1]]
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
+
+    def test_guard_refuses_a_value_flag_with_nothing_after_it(self):
+        argv = self.argv()
+        argv = argv[:-1] + ["-m"] + [argv[-1]]
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
+
 
 FAKE_OPENAI_KEY = "sk-" + "proj-" + "fake1234567890abcdef1234567890"
 FAKE_CODEX_KEY = "cdx-" + "fake1234567890abcdef1234567890"

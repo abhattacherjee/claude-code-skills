@@ -330,66 +330,98 @@ def _has_run(argv, run):
     return any(tuple(argv[i:i + n]) == run for i in range(len(argv) - n + 1))
 
 
-def _allow_list_violations(argv):
-    """Every unexpected token in argv[1:-1] (the binary at argv[0] and the trailing
-    prompt at argv[-1] are not scanned): an unknown flag, a -c value off the closed
-    list, a value flag with nothing after it, or a second -s or a second isolation
-    -c key. Returns a list of human-readable descriptions, empty when argv is clean."""
+def _flag_occurrences(argv):
+    """Parse argv[1:-1] (the binary at argv[0] and the trailing prompt at argv[-1]
+    are handled by the caller, not here) into the flags it actually carries, and a
+    list of human-readable violations for anything unexpected: an unknown flag, a
+    -c/--disable value off its closed list, a value flag with nothing after it or a
+    flag-shaped value, or a second -s, isolation -c key, or value flag.
+
+    Returns (occurrences, violations). occurrences holds a tuple for every token
+    recognized at a real flag position -- never a value -- shaped exactly like the
+    entries in REQUIRED_ARGS (e.g. ("-s", "read-only")). A required flag's name
+    sitting in a value slot (say, as the argument to -m) never lands here, so it is
+    never mistaken for that flag's presence."""
     body = argv[1:-1]
     if not body or body[0] != "exec":
-        return ["argv[1] is not 'exec'"]
-    bad = []
+        return [], ["argv[1] is not 'exec'"]
+    occurrences = []
+    violations = []
     seen_s = False
     seen_c_keys = set()
+    seen_value_flags = set()
     i = 1
     while i < len(body):
         tok = body[i]
         nxt = body[i + 1] if i + 1 < len(body) else None
         if tok in _BARE_FLAGS:
+            occurrences.append((tok,))
             i += 1
         elif tok == "--disable":
             if nxt not in DISABLED_FEATURES:
-                bad.append("--disable %r" % (nxt,))
+                violations.append("--disable %r" % (nxt,))
+            else:
+                occurrences.append((tok, nxt))
             i += 2
         elif tok == "-c":
             if nxt not in _ALLOWED_C_VALUES:
-                bad.append("-c %r" % (nxt,))
+                violations.append("-c %r" % (nxt,))
             else:
                 key = nxt.split("=", 1)[0]
                 if key in _ISOLATION_C_KEYS:
                     if key in seen_c_keys:
-                        bad.append("duplicate -c %s" % key)
+                        violations.append("duplicate -c %s" % key)
                     seen_c_keys.add(key)
+                occurrences.append((tok, nxt))
             i += 2
         elif tok == "-s":
             if nxt != "read-only":
-                bad.append("-s %r" % (nxt,))
-            elif seen_s:
-                bad.append("duplicate -s")
-            seen_s = True
+                violations.append("-s %r" % (nxt,))
+            else:
+                if seen_s:
+                    violations.append("duplicate -s")
+                seen_s = True
+                occurrences.append((tok, nxt))
             i += 2
         elif tok in _VALUE_FLAGS:
             if nxt is None:
-                bad.append("%s <missing value>" % tok)
+                violations.append("%s <missing value>" % tok)
+            elif nxt.startswith("-"):
+                violations.append("%s %r" % (tok, nxt))
+            else:
+                if tok in seen_value_flags:
+                    violations.append("duplicate %s" % tok)
+                seen_value_flags.add(tok)
             i += 2
         else:
-            bad.append(tok)
+            violations.append(tok)
             i += 1
-    return bad
+    return occurrences, violations
 
 
 def assert_isolated(argv):
-    """Refuse to start Codex unless every isolation flag and override is in argv,
-    AND nothing else is there to cancel or redirect one: an allow-list, not just a
-    presence check. Called right before every codex exec, so a change that drops an
-    isolation arg, or adds a contradicting one, fails closed. The prompt (the last
-    item) never counts."""
-    missing = [" ".join(run) for run in REQUIRED_ARGS if not _has_run(argv[:-1], run)]
+    """Refuse to start Codex unless every isolation flag and override is present as
+    an actual flag -- never merely as some other flag's value -- the trailing prompt
+    slot does not itself look like a flag, and nothing else in argv could cancel or
+    redirect an isolation setting. Called right before every codex exec, so a change
+    that drops an isolation arg, hides one in a value slot, or adds a contradicting
+    one, fails closed.
+
+    The prompt (argv[-1]) is never scanned as a flag position, but it may not start
+    with '-' either, unless it is exactly '-' (the stdin marker): a flag-shaped
+    final token would otherwise let clap parse it as an option instead of a prompt."""
+    bad = []
+    if argv:
+        last = argv[-1]
+        if last != "-" and isinstance(last, str) and last.startswith("-"):
+            bad.append("the prompt slot looks like a flag: %r" % (last,))
+    occurrences, violations = _flag_occurrences(argv)
+    bad += violations
+    missing = [" ".join(run) for run in REQUIRED_ARGS if run not in occurrences]
     if missing:
-        raise Unavailable("refusing to run codex without: " + ", ".join(missing))
-    bad = _allow_list_violations(argv)
+        bad.append("missing: " + ", ".join(missing))
     if bad:
-        raise Unavailable("refusing to run codex with unexpected argv: " + ", ".join(bad))
+        raise Unavailable("refusing to run codex: " + "; ".join(bad))
 
 
 # Vars Codex itself may need -- an API key for a non-ChatGPT login, proxy settings,
