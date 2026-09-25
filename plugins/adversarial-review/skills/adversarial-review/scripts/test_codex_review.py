@@ -457,7 +457,7 @@ FAKE_OPENAI_KEY = "sk-" + "proj-" + "fake1234567890abcdef1234567890"
 FAKE_CODEX_KEY = "cdx-" + "fake1234567890abcdef1234567890"
 
 PASSTHROUGH_CASES = (
-    ("OPENAI_API_KEY", FAKE_OPENAI_KEY), ("CODEX_API_KEY", FAKE_CODEX_KEY),
+    ("CODEX_API_KEY", FAKE_CODEX_KEY),
     ("HTTP_PROXY", "http://proxy:8080"), ("http_proxy", "http://proxy:8080"),
     ("HTTPS_PROXY", "http://proxy:8443"), ("https_proxy", "http://proxy:8443"),
     ("NO_PROXY", "localhost"), ("no_proxy", "localhost"),
@@ -485,6 +485,16 @@ class EnvPassthroughTests(unittest.TestCase):
 
     def test_build_env_reads_nothing_when_parent_env_is_not_given(self):
         self.assertEqual(cr.build_env("/bin", "/h"), {"PATH": "/bin", "HOME": "/h"})
+
+    def test_openai_api_key_never_crosses_even_when_the_parent_env_has_one(self):
+        # #135 live defect: an OPENAI_API_KEY set in the user's shell for an
+        # unrelated tool makes `codex exec` authenticate with it instead of the
+        # user's own CODEX_HOME login, and fails ("Incorrect API key provided")
+        # even though `codex login status` exits 0. OPENAI_API_KEY must never
+        # cross, no matter what the parent env holds.
+        env = cr.build_env("/bin", "/h", parent_env={"OPENAI_API_KEY": FAKE_OPENAI_KEY})
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertNotIn("OPENAI_API_KEY", cr.PASSTHROUGH_ENV)
 
 
 if __name__ == "__main__":

@@ -621,11 +621,22 @@ class LockdownTests(unittest.TestCase):
 
     def test_codex_gets_only_path_home_codex_home_and_the_passthrough_list(self):
         h = Harness(self)
-        h.env["OPENAI_API_KEY"] = "sk-" + "stub"
+        h.env["CODEX_API_KEY"] = "cdx-" + "stub"
         self.assertEqual(h.run("--mode", "find").returncode, 0)
         call = h.exec_calls()[0]
-        self.assertEqual(env_keys(call), ["CODEX_HOME", "HOME", "OPENAI_API_KEY", "PATH", "TMPDIR"])
+        self.assertEqual(env_keys(call), ["CODEX_API_KEY", "CODEX_HOME", "HOME", "PATH", "TMPDIR"])
         self.assertEqual(call["codex_home"], str(h.codex_home))
+
+    def test_an_unrelated_openai_api_key_never_reaches_codex(self):
+        # #135 live defect: OPENAI_API_KEY set for an unrelated tool made `codex
+        # exec` authenticate with it instead of the ChatGPT login in CODEX_HOME,
+        # and it failed ("Incorrect API key provided") even though `codex login
+        # status` exited 0. It must never cross into the exec call's env.
+        h = Harness(self)
+        h.env["OPENAI_API_KEY"] = "sk-" + "stub-unrelated"
+        self.assertEqual(h.run("--mode", "find").returncode, 0)
+        call = h.exec_calls()[0]
+        self.assertNotIn("OPENAI_API_KEY", env_keys(call))
 
     def test_the_users_codex_home_is_used_as_is_and_left_untouched(self):
         h = Harness(self)
