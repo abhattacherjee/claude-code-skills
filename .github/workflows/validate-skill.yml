@@ -158,3 +158,13 @@ jobs:
       # .gitignore, which no skill/plugin filter covers either.
       - name: Run sync-hygiene regression harness
         run: ./scripts/test-sync-hygiene.sh
+
+  adversarial-review-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the two harness jobs above. Before #135 this suite
+      # ran only by hand, which is how sink.sh's PR mode stayed broken.
+      - name: Run adversarial-review test suite
+        run: bash plugins/adversarial-review/skills/adversarial-review/scripts/run-tests.sh
