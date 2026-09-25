@@ -99,7 +99,7 @@ Tell the user Gemini CLI is not installed and show the `INSTALL_HINT`. ASK wheth
 ```bash
 npm install -g @google/gemini-cli
 ```
-After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. If the user declines, or if install fails, proceed in **degraded Claude-only mode** (print the loud banner from the Degradation Behavior section) and continue directly to the detect-mode step.
+After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. If the user declines, or if install fails, set `ADVERSARY="claude-only"`, proceed in **degraded Claude-only mode** (print the loud banner from the Degradation Behavior section), and continue directly to the detect-mode step.
 
 **Case B — installed but `GEMINI_AUTHED=no`:**
 Tell the user Gemini is installed but lacks a headless-capable credential, and show the `AUTH_HINT`. **Emphasise that interactive Google login is NOT sufficient** — the skill's headless calls require an API key. ASK the user to:
@@ -109,13 +109,13 @@ Tell the user Gemini is installed but lacks a headless-capable credential, and s
 
 **Do NOT suggest** `gemini` interactive login — it produces OAuth credentials insufficient for headless `-p`/`-o json` calls.
 
-Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, proceed in **degraded Claude-only mode**.
+Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, set `ADVERSARY="claude-only"` and proceed in **degraded Claude-only mode**.
 
 **Case C — `GEMINI_AUTHED=unknown`:**
 No user interaction needed. Proceed normally; rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails.
 
 **Case D — `GEMINI_INSTALLED=yes` and `GEMINI_AUTHED=yes`:**
-Adversary confirmed available. Continue to Step 1 with no user interaction.
+Adversary confirmed available. Set `ADVERSARY="gemini"`. Continue to Step 1 with no user interaction.
 
 ### Step 1 — Detect Mode
 
@@ -264,7 +264,7 @@ if [[ "$MODE" == "pr" ]]; then
 else
   HEAD_SHA="$(git rev-parse HEAD)"
 fi
-# ADVERSARY is "gemini", or "claude-only" when Step 0 fell back to degraded mode.
+# ADVERSARY was set in Step 0 ("gemini"), or to "claude-only" on any degraded-mode fallback.
 $SCRIPTS/pr-audit.py record \
   --report-json "$RUN_DIR/report.json" \
   --run-id "$RUN_ID" --skill adversarial-review --phase review --round 1 \
@@ -272,7 +272,7 @@ $SCRIPTS/pr-audit.py record \
   --out "$RUN_DIR/round-1.json"
 ```
 
-Exit 2 means `report.json` did not make a valid record. Tell the user and run Step 5 with `--no-post`.
+Exit 2 means `report.json` could not be read or did not make a valid record. Tell the user and run Step 5 with `--no-post`.
 
 ### Step 5 — Sink
 
@@ -289,7 +289,7 @@ $SCRIPTS/sink.sh \
 
 Pass `--no-post` when the user asked for it. Relay `sink.sh`'s `pr-audit:` line to the user.
 
-- Exit 0: delivered. In pr mode, each finding now has a thread on the PR, the opposing model's verdict is a reply, refuted findings' threads are resolved, and one summary review lists them all.
+- Exit 0: delivered. In pr mode, each finding now has a thread on the PR, the opposing model's verdict is a reply, refuted findings' threads are resolved, and one summary review (split into numbered parts if very long) lists them all.
 - Exit 4: the report was delivered but some audit comments failed. The failed ids are on stderr. Tell the user; rerunning Step 5 with the same record posts only what is missing.
 - Exit 1 or 2: delivery failed. Show the error.
 
@@ -325,7 +325,7 @@ If `gemini-review.sh` exits with code 3 (unauthenticated, network error, unparse
 ╚══════════════════════════════════════════════════════════╝
 ```
 
-Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without Gemini. The skill exits 0 (not an error).
+Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without Gemini. The skill exits 0 (not an error). Set `ADVERSARY="claude-only"` whenever this degraded path is taken.
 
 ## Same-Diff Invariant
 
