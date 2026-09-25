@@ -20,12 +20,17 @@ State keys:
                        becomes a finding title
   load_repo_mcp        true: act like a Codex that starts the servers in <repo>/.mcp.json;
                        each server's command runs (with its args) before exec answers
+  canary_answer        how a canary run answers when nothing leaked: "findings" (default,
+                       an empty findings list), "none" (exit 0, write no -o file), or
+                       "stdout_token" (print the AGENTS.md token on stdout only, and
+                       write an empty findings list)
   exec                 list of actions, one per review `codex exec` call; the last repeats:
                          out          JSON value written to the -o file; a string is written as is
                          exit         exit code (default 0)
                          stderr       text printed on stderr
                          sleep        seconds to sleep before answering
                          spawn_child  true: start `sleep 60` and write its pid to $HOME/child.pid
+                         delete       a path to delete before answering
 
 <repo> is the -C argument. An isolation canary run is recognised by a
 CANARY-<hex> token in <repo>/AGENTS.md. It never uses the exec list: the stub
@@ -35,7 +40,8 @@ with the token when it is not.
 A `login status` log line records argv and the environment's key names.
 Each exec log line records argv, the environment's key names, CODEX_HOME, the
 working directory, all of stdin, the --output-schema file's JSON, and whether
-it was a canary run.
+it was a canary run. A canary line also records the entries of <repo>/.git/hooks
+(git_hooks) and the text of <repo>/.git/HEAD (git_head).
 """
 import json
 import os
@@ -115,9 +121,14 @@ def run_exec(argv, state):
     canary = CANARY_RE.search(read(os.path.join(repo, "AGENTS.md")))
     stdin_text = sys.stdin.read()
     schema_text = read(arg_after(argv, "--output-schema"))
-    log({"argv": argv, "env": sorted(os.environ), "codex_home": os.environ.get("CODEX_HOME"),
-         "cwd": os.getcwd(), "stdin": stdin_text,
-         "schema": json.loads(schema_text) if schema_text else None, "canary": bool(canary)})
+    entry = {"argv": argv, "env": sorted(os.environ), "codex_home": os.environ.get("CODEX_HOME"),
+             "cwd": os.getcwd(), "stdin": stdin_text,
+             "schema": json.loads(schema_text) if schema_text else None, "canary": bool(canary)}
+    if canary:
+        hooks = os.path.join(repo, ".git", "hooks")
+        entry["git_hooks"] = sorted(os.listdir(hooks)) if os.path.isdir(hooks) else []
+        entry["git_head"] = read(os.path.join(repo, ".git", "HEAD"))
+    log(entry)
     if state.get("load_project_config"):
         model = MODEL_RE.search(read(os.path.join(repo, ".codex", "config.toml")))
         if model:
@@ -133,6 +144,12 @@ def run_exec(argv, state):
                 "title": skill, "rationale": "followed .agents/skills"}]})
             return 0
         blocked = "project_doc_max_bytes=0" in argv and not state.get("ignore_doc_override")
+        if blocked and state.get("canary_answer") == "none":
+            return 0
+        if blocked and state.get("canary_answer") == "stdout_token":
+            print(canary.group(0))
+            write_out(argv, {"findings": []})
+            return 0
         findings = [] if blocked else [{
             "path": "a.py", "line": 2, "severity": "minor", "category": "bug",
             "title": canary.group(0), "rationale": "followed AGENTS.md"}]
@@ -143,6 +160,8 @@ def run_exec(argv, state):
     action = actions[min(n, len(actions) - 1)]
     state["exec_calls"] = n + 1
     save(state)
+    if action.get("delete") and os.path.exists(action["delete"]):
+        os.remove(action["delete"])
     if action.get("spawn_child"):
         child = subprocess.Popen(["sleep", "60"], stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)

@@ -57,10 +57,10 @@ class Harness:
         self.codex_home = self.dir / "codex-home"   # no credentials; the stub needs none
         self.codex_home.mkdir()
         self.cache = self.dir / "cache"
-        self.stamp = self.cache / "adversarial-review" / "codex-isolation-0.155.1.ok"
+        fields = cr.stamp_fields(str(self.bin / "codex"), "0.155.1", str(self.codex_home))
+        self.stamp = Path(cr.stamp_path(fields, str(self.cache)))
         if stamp:
-            self.stamp.parent.mkdir(parents=True)
-            self.stamp.write_text("passed\n")
+            cr.write_stamp(str(self.stamp), fields)
         self.repo = self.dir / "repo"
         self.repo.mkdir()
         self.diff = self.dir / "change.diff"
@@ -99,6 +99,23 @@ class Harness:
 
     def canary_calls(self):
         return [c for c in self.calls() if c["argv"][:1] == ["exec"] and c["canary"]]
+
+    def gate(self, codex=None, codex_home="default", force=False):
+        """Run ensure_isolation in-process against the stub; return how many canary
+        runs it made."""
+        codex = str(codex or self.bin / "codex")
+        home = str(self.codex_home) if codex_home == "default" else codex_home
+        env = cr.build_env(self.env["PATH"], str(self.home), home)
+        before = len(self.canary_calls())
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache)}):
+            cr.ensure_isolation(codex, env, 30, force=force)
+        return len(self.canary_calls()) - before
+
+    def set_state(self, **changes):
+        path = self.home / "codex-stub.json"
+        state = json.loads(path.read_text())
+        state.update(changes)
+        path.write_text(json.dumps(state))
 
     def result(self):
         return json.loads(self.out.read_text())
@@ -261,6 +278,181 @@ class OutputTests(unittest.TestCase):
         h = Harness(self)
         h.diff.unlink()
         self.assertEqual(h.run("--mode", "find").returncode, 1)
+
+
+class FixRoundOneTests(unittest.TestCase):
+    def test_grandchildren_are_killed_after_a_normal_exit(self):
+        h = Harness(self, exec_actions=[{"spawn_child": True, "out": ONE_FINDING}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        pid = int((h.home / "child.pid").read_text())
+        self.assertTrue(wait_dead(pid), "the stub's child outlived a normal exit")
+
+    def test_a_timed_out_run_is_reaped_even_when_an_escaped_child_holds_stderr(self):
+        d = Path(tempfile.mkdtemp(prefix="codex-cli-test-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        script, pidfile = d / "escape.py", d / "escaped.pid"
+        script.write_text(
+            "import subprocess, sys, time\n"
+            "p = subprocess.Popen(['sleep', '30'], start_new_session=True)\n"
+            "open(sys.argv[1], 'w').write(str(p.pid))\n"
+            "time.sleep(30)\n")
+
+        def kill_escaped():
+            try:
+                os.kill(int(pidfile.read_text()), 9)
+            except (OSError, ValueError):
+                pass
+        self.addCleanup(kill_escaped)
+        made = []
+        real = subprocess.Popen
+
+        class Recording(real):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                made.append(self)
+
+        with mock.patch.object(cr.subprocess, "Popen", Recording), \
+                mock.patch.object(cr, "POST_KILL_WAIT", 1):
+            with self.assertRaises(cr.Unavailable):
+                cr.run_codex([sys.executable, str(script), str(pidfile)], None, b"", 2)
+        [proc] = made
+        self.assertIsNotNone(proc.returncode, "the killed codex process was never reaped")
+        self.assertTrue(proc.stderr.closed)
+
+    def test_a_stamp_removed_during_the_review_discards_the_result(self):
+        h = Harness(self)
+        h.set_state(exec=[{"delete": str(h.stamp), "out": ONE_FINDING}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("stamp", res.stderr)
+        self.assertFalse(h.out.exists())
+
+    def test_an_unwritable_out_file_exits_1_with_the_result_on_stdout(self):
+        h = Harness(self)
+        bad = h.dir / "missing-dir" / "out.json"
+        res = subprocess.run(["bash", str(WRAPPER), "--diff", str(h.diff), "--repo", str(h.repo),
+                              "--out", str(bad), "--mode", "find"], capture_output=True, text=True,
+                             env=h.env, timeout=90, stdin=subprocess.DEVNULL)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("cannot write --out", res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertEqual(json.loads(res.stdout)["findings"][0]["id"], "X-001")
+
+    def test_judge_and_counter_with_no_usable_findings_skip_codex(self):
+        h = Harness(self)
+        empty = h.write("empty.json", {"findings": [{"id": 7}, {"title": "no id"}]})
+        for mode, key in (("judge", "verdicts"), ("counter", "counters")):
+            res = h.run("--mode", mode, "--findings", empty)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(h.result(), {key: []})
+        self.assertEqual([c for c in h.calls() if c["argv"][:1] == ["exec"]], [])
+
+    def test_the_canary_git_repo_ignores_the_users_git_config_and_templates(self):
+        h = Harness(self, stamp=False)
+        template = h.dir / "git-template"
+        (template / "hooks").mkdir(parents=True)
+        (template / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n")
+        (h.home / ".gitconfig").write_text(
+            "[init]\n\tdefaultBranch = leaked-branch\n\ttemplateDir = %s\n" % template)
+        self.assertEqual(h.self_test().returncode, 0)
+        [call] = h.canary_calls()
+        self.assertEqual(call["git_hooks"], [])
+        self.assertNotIn("leaked-branch", call["git_head"])
+
+
+class CanaryAnswerTests(unittest.TestCase):
+    def test_a_canary_with_no_answer_is_not_stamped(self):
+        h = Harness(self, stamp=False, canary_answer="none")
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("no valid answer", res.stderr)
+        self.assertFalse(h.stamp.exists())
+        self.assertEqual(h.exec_calls(), [])
+
+    def test_a_canary_token_on_stdout_only_is_a_leak(self):
+        h = Harness(self, stamp=False, canary_answer="stdout_token")
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("isolation canary leaked", res.stderr)
+        self.assertIn("AGENTS.md", res.stderr)
+        self.assertFalse(h.stamp.exists())
+
+
+class StampKeyTests(unittest.TestCase):
+    def test_a_matching_stamp_skips_the_canary(self):
+        h = Harness(self)
+        self.assertEqual(h.gate(), 0)
+
+    def test_a_changed_isolation_recipe_reruns_the_canary(self):
+        h = Harness(self)
+        with mock.patch.object(cr, "CANARY_SCHEMA", cr.CANARY_SCHEMA + 1):
+            self.assertEqual(h.gate(), 1)
+            self.assertEqual(h.gate(), 0)
+        self.assertEqual(h.gate(), 0)   # the original recipe's stamp still stands
+
+    def test_the_recipe_hash_covers_each_component(self):
+        base = cr.recipe_hash()
+        changes = {
+            "CANARY_SCHEMA": cr.CANARY_SCHEMA + 1,
+            "CANARY_SURFACES": cr.CANARY_SURFACES + ("extra",),
+            "DISABLED_FEATURES": cr.DISABLED_FEATURES + ("extra",),
+            "PASSTHROUGH_ENV": cr.PASSTHROUGH_ENV + ("EXTRA",),
+            "REQUIRED_ARGS": cr.REQUIRED_ARGS + (("--extra",),),
+            "ISOLATION_OVERRIDES": cr.ISOLATION_OVERRIDES + ("extra=1",),
+        }
+        # Pin the argv template so each named entry has to carry its own change.
+        fixed = cr.build_argv("<codex>", "<repo>", "<schema>", "<out>", "<prompt>")
+        with mock.patch.object(cr, "build_argv", lambda *a, **k: list(fixed)):
+            pinned = cr.recipe_hash()
+            self.assertEqual(pinned, base)
+            for name, value in changes.items():
+                with mock.patch.object(cr, name, value):
+                    self.assertNotEqual(cr.recipe_hash(), pinned, name)
+        with mock.patch.object(cr, "build_argv", lambda *a, **k: fixed + ["--extra"]):
+            self.assertNotEqual(cr.recipe_hash(), base, "argv_template")
+        self.assertEqual(cr.recipe_hash(), base)
+
+    def test_changed_binary_bytes_rerun_the_canary(self):
+        h = Harness(self)
+        with open(str(h.bin / "codex"), "a") as fh:
+            fh.write("# changed\n")
+        self.assertEqual(h.gate(), 1)
+
+    def test_a_different_binary_path_reruns_the_canary(self):
+        h = Harness(self)
+        other = h.dir / "bin2"
+        other.mkdir()
+        shutil.copy2(str(h.bin / "codex"), str(other / "codex"))
+        self.assertEqual(h.gate(codex=other / "codex"), 1)
+
+    def test_a_different_codex_home_reruns_the_canary(self):
+        h = Harness(self)
+        self.assertEqual(h.gate(codex_home=str(h.dir)), 1)
+
+    def test_a_new_codex_version_reruns_the_canary(self):
+        h = Harness(self)
+        h.set_state(version="codex-cli 0.156.0")
+        self.assertEqual(h.gate(), 1)
+
+    def test_a_corrupt_or_mismatched_stamp_reruns_the_canary(self):
+        h = Harness(self)
+        h.stamp.write_text("passed\n")
+        self.assertEqual(h.gate(), 1)
+        data = json.loads(h.stamp.read_text())
+        data["codex_sha256"] = "0" * 64
+        h.stamp.write_text(json.dumps(data))
+        self.assertEqual(h.gate(), 1)
+
+    def test_a_failed_stamp_write_leaves_the_old_stamp_whole(self):
+        h = Harness(self)
+        before = h.stamp.read_text()
+        fields = json.loads(before)
+        with mock.patch.object(cr.json, "dump", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                cr.write_stamp(str(h.stamp), fields)
+        self.assertEqual(h.stamp.read_text(), before)
+        self.assertEqual(sorted(p.name for p in h.stamp.parent.iterdir()), [h.stamp.name])
 
 
 class LoadFindingsTests(unittest.TestCase):

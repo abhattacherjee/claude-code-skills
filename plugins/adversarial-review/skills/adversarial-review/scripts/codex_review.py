@@ -13,19 +13,24 @@ rules, the reviewed repo's AGENTS.md, apps, plugins, hooks and memories off; in 
 read-only sandbox; and with the diff on a stdin pipe that is closed after
 writing. Every argv passes an isolation guard, and each Codex version must pass
 an isolation canary (AGENTS.md, .codex/config.toml, .agents/skills, .mcp.json)
-before its first review; the stamp lives in
-$XDG_CACHE_HOME/adversarial-review/codex-isolation-<version>.ok.
+before its first review. A pass is stamped in
+$XDG_CACHE_HOME/adversarial-review/codex-isolation-<version>-<key>.ok, keyed on the
+Codex version, a hash of the isolation recipe, the resolved binary's path and
+sha256, and CODEX_HOME; a change to any of them reruns the canary.
 Its output is untrusted: it is checked against the schema, capped, and redacted.
 
 Exit codes:
   0  success
-  1  error (an input file is missing or unreadable)
+  1  error (an input file is missing or unreadable, or the --out file cannot be
+     written; the result then goes to stdout)
   2  usage error
   3  adversary unavailable (codex missing or logged out, a non-zero exit,
      a timeout, no valid output after one retry, a missing isolation flag,
      or a leaked isolation canary)
 """
 import argparse
+import glob
+import hashlib
 import json
 import os
 import re
@@ -467,27 +472,55 @@ def login_status(codex, env=None):
     return proc.returncode == 0, proc.returncode
 
 
+POST_KILL_WAIT = 10
+
+
+def _kill_group(pgid):
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _reap(proc):
+    """Collect a killed process. If a child that left the group still holds a pipe,
+    close our ends and wait for the process itself, each wait bounded."""
+    try:
+        proc.communicate(timeout=POST_KILL_WAIT)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    for pipe in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if pipe:
+                pipe.close()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=POST_KILL_WAIT)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def run_codex(argv, env, stdin_data, timeout):
     """Run codex in its own process group, write stdin_data to a pipe and close it.
-    On timeout, kill the whole group; macOS has no `timeout` binary."""
+    Return (exit code, stdout, stderr). On timeout, kill the whole group (macOS has
+    no `timeout` binary). After a normal exit, kill the group too, so no child
+    codex started is left running. A child that calls setsid() leaves the group
+    and escapes both kills; nothing here can reach it."""
     try:
-        proc = subprocess.Popen(argv, env=env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        proc = subprocess.Popen(argv, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, start_new_session=True)
     except OSError as exc:
         raise Unavailable("could not run codex: %s" % exc)
     try:
-        _, err = proc.communicate(input=stdin_data, timeout=timeout)
+        out, err = proc.communicate(input=stdin_data, timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            proc.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
+        _kill_group(proc.pid)
+        _reap(proc)
         raise Unavailable("codex timed out after %ss; killed its process group" % timeout)
-    return proc.returncode, err.decode("utf-8", "replace")
+    _kill_group(proc.pid)
+    return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
 def _run_isolated(codex, repo, schema_path, out_path, prompt, stdin_data, env, timeout, model=None):
@@ -516,9 +549,108 @@ def codex_version(codex, env=None):
     return match.group(0)
 
 
-def stamp_path(version):
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    return os.path.join(base, "adversarial-review", "codex-isolation-%s.ok" % version)
+# Bump when the canary itself changes (its repo, its checks, its answer rules), so
+# every stamp made by an older canary stops counting.
+CANARY_SCHEMA = 2
+CANARY_SURFACES = ("AGENTS.md", ".codex/config.toml", ".agents/skills", ".mcp.json")
+
+
+def isolation_recipe():
+    """Everything that decides how isolated a codex call is. Its hash is part of
+    the stamp key, so a change here reruns the canary."""
+    return {"canary_schema": CANARY_SCHEMA, "canary_surfaces": list(CANARY_SURFACES),
+            "required_args": [list(run) for run in REQUIRED_ARGS],
+            "disabled_features": list(DISABLED_FEATURES),
+            "isolation_overrides": list(ISOLATION_OVERRIDES),
+            "passthrough_env": list(PASSTHROUGH_ENV),
+            "argv_template": build_argv("<codex>", "<repo>", "<schema>", "<out>", "<prompt>")}
+
+
+def _sha256_json(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def recipe_hash():
+    return _sha256_json(isolation_recipe())
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 16), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def stamp_fields(codex, version, codex_home):
+    """What a stamp vouches for: this Codex version, this isolation recipe, this
+    exact binary (resolved path and bytes) and this CODEX_HOME ("" when unset)."""
+    real = os.path.realpath(codex)
+    try:
+        digest = _sha256_file(real)
+    except OSError as exc:
+        raise Unavailable("could not read the codex binary %s: %s" % (real, exc))
+    return {"version": version, "recipe_sha256": recipe_hash(), "codex_path": real,
+            "codex_sha256": digest, "codex_home": codex_home or ""}
+
+
+def _stamp_dir(cache_base=None):
+    base = (cache_base or os.environ.get("XDG_CACHE_HOME")
+            or os.path.join(os.path.expanduser("~"), ".cache"))
+    return os.path.join(base, "adversarial-review")
+
+
+def stamp_path(fields, cache_base=None):
+    key = _sha256_json(fields)[:16]
+    return os.path.join(_stamp_dir(cache_base),
+                        "codex-isolation-%s-%s.ok" % (fields["version"], key))
+
+
+def stamp_valid(path, fields):
+    """True only when the stamp exists and records exactly these fields. A missing,
+    unreadable, corrupt or mismatched stamp counts as no stamp."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh) == fields
+    except (OSError, ValueError):
+        return False
+
+
+def write_stamp(path, fields):
+    """Write the stamp atomically: a temp file in the same dir, then os.replace."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".codex-isolation-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(fields, fh, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def remove_stamps(version, cache_base=None):
+    """Delete every stamp for this Codex version, whatever its key (and the old
+    unkeyed name)."""
+    directory = _stamp_dir(cache_base)
+    paths = glob.glob(os.path.join(directory, "codex-isolation-%s-*.ok" % version))
+    paths.append(os.path.join(directory, "codex-isolation-%s.ok" % version))
+    for path in paths:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def current_stamp(codex, env, version):
+    """(path, fields) of the stamp that would vouch for this call."""
+    fields = stamp_fields(codex, version, (env or {}).get("CODEX_HOME"))
+    return stamp_path(fields), fields
 
 
 CANARY_DIFF = ("diff --git a/a.py b/a.py\n--- /dev/null\n+++ b/a.py\n@@ -0,0 +1,2 @@\n"
@@ -547,8 +679,12 @@ def run_canary(codex, env, timeout):
     try:
         repo = os.path.join(root, "repo")
         os.mkdir(repo)
+        # Keep the user's git config (init.templateDir hooks, defaultBranch, ...) out.
+        git_env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
+                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
         try:
-            subprocess.run(["git", "init", "-q", repo], check=True, capture_output=True, timeout=30)
+            subprocess.run(["git", "init", "-q", "--template=", repo], env=git_env, check=True,
+                           capture_output=True, timeout=30)
         except (OSError, subprocess.SubprocessError) as exc:
             raise Unavailable("could not create the canary repo: %s" % exc)
         _write(os.path.join(repo, "AGENTS.md"),
@@ -569,25 +705,33 @@ def run_canary(codex, env, timeout):
         with open(schema_path, "w", encoding="utf-8") as fh:
             json.dump(schema_for("find"), fh)
         nonce = new_nonce()
-        rc, err = _run_isolated(codex, repo, schema_path, out_path,
-                                build_prompt("find", nonce=nonce),
-                                build_stdin(CANARY_DIFF, "find", nonce=nonce).encode("utf-8"),
-                                env, timeout)
+        rc, out, err = _run_isolated(codex, repo, schema_path, out_path,
+                                     build_prompt("find", nonce=nonce),
+                                     build_stdin(CANARY_DIFF, "find", nonce=nonce).encode("utf-8"),
+                                     env, timeout)
         answer = ""
         if os.path.exists(out_path):
             with open(out_path, encoding="utf-8", errors="replace") as fh:
                 answer = fh.read()
-        if token in answer or token in err:
+        seen = (answer, out, err)
+        if any(token in text for text in seen):
             return False, "the test repo's AGENTS.md reached Codex"
-        if model in err or model in answer:
+        if any(model in text for text in seen):
             return False, "the test repo's .codex/config.toml reached Codex"
-        if skill_token in answer or skill_token in err:
+        if any(skill_token in text for text in seen):
             return False, "the test repo's .agents/skills reached Codex"
         if os.path.exists(marker):
             return False, "the test repo's .mcp.json reached Codex"
         if rc != 0:
             raise Unavailable("the isolation self-test could not run: codex exec exited %d: %s"
                               % (rc, _tail(err)))
+        # A pass needs proof that Codex answered: an exit 0 with no or a malformed
+        # answer says nothing about whether the canaries were read.
+        try:
+            validate_find(json.loads(answer))
+        except ValueError as exc:
+            raise Unavailable("the isolation self-test got no valid answer from Codex (%s); "
+                              "not stamping" % exc)
         return True, ""
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -598,18 +742,15 @@ def ensure_isolation(codex, env, timeout, force=False):
     run on a new version (or --self-test) runs the canary; a leak deletes any old
     stamp and raises. Returns the version."""
     version = codex_version(codex, env)
-    stamp = stamp_path(version)
-    if os.path.exists(stamp) and not force:
+    stamp, fields = current_stamp(codex, env, version)
+    if not force and stamp_valid(stamp, fields):
         return version
     ok, why = run_canary(codex, env, timeout)
     if not ok:
-        if os.path.exists(stamp):
-            os.remove(stamp)
+        remove_stamps(version)
         raise Unavailable("isolation canary leaked on Codex %s: %s; codex-review.sh refuses to run"
                           % (version, why))
-    os.makedirs(os.path.dirname(stamp), exist_ok=True)
-    with open(stamp, "w", encoding="utf-8") as fh:
-        fh.write("passed\n")
+    write_stamp(stamp, fields)
     return version
 
 
@@ -725,6 +866,16 @@ def self_test(args):
     return ensure_isolation(codex, env, args.timeout, force=True)
 
 
+def _require_stamp(codex, env, version):
+    """After a review, the stamp it started under must still stand. A concurrent
+    --self-test that found a leak deletes it; the result is then not trusted."""
+    stamp, fields = current_stamp(codex, env, version)
+    if not stamp_valid(stamp, fields):
+        raise Unavailable("the isolation stamp for Codex %s was removed or changed during the "
+                          "review (a concurrent --self-test may have found a leak); result discarded"
+                          % version)
+
+
 def review(args):
     if not os.path.isfile(args.diff):
         raise InputError("diff file not found: %s" % args.diff)
@@ -732,9 +883,13 @@ def review(args):
         diff_text = fh.read()
     findings = load_findings(args.findings) if args.findings else None
     prior = load_findings(args.prior) if args.prior else None
+    if args.mode in ("judge", "counter") and not findings:
+        print("codex-review: %s has no findings with ids; nothing for Codex to %s"
+              % (args.findings, args.mode), file=sys.stderr)
+        return {"verdicts": []} if args.mode == "judge" else {"counters": []}
     env = _codex_env()
     codex = _ready_codex(env)
-    ensure_isolation(codex, env, args.timeout)
+    version = ensure_isolation(codex, env, args.timeout)
     repo = args.repo or repo_root()
     work = tempfile.mkdtemp(prefix="codex-adv-run-")
     try:
@@ -750,18 +905,21 @@ def review(args):
             prompt = build_prompt(args.mode, strict, prior is not None, nonce=nonce)
             stdin_data = build_stdin(diff_text, args.mode, findings, prior,
                                      nonce=nonce).encode("utf-8")
-            rc, err = _run_isolated(codex, repo, schema_path, out_path, prompt, stdin_data, env,
-                                    args.timeout, args.model)
+            rc, _, err = _run_isolated(codex, repo, schema_path, out_path, prompt, stdin_data,
+                                       env, args.timeout, args.model)
             if rc != 0:
                 raise Unavailable("codex exec exited %d: %s" % (rc, _tail(err)))
             try:
-                return validate_output(args.mode, read_output(out_path), findings or [], prior,
-                                       args.id_start)
+                result = validate_output(args.mode, read_output(out_path), findings or [], prior,
+                                         args.id_start)
             except BadOutput as exc:
                 last = str(exc)
                 if attempt == 0:
                     print("Warning: Codex output was not valid (%s); retrying with a stricter prompt"
                           % last, file=sys.stderr)
+                continue
+            _require_stamp(codex, env, version)
+            return result
         raise Unavailable("no valid output from Codex after one retry: %s" % last)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -782,8 +940,14 @@ def main(argv=None):
         return EXIT_ERROR
     text = json.dumps(result, indent=2)
     if args.out:
-        with open(args.out, "w", encoding="utf-8") as fh:
-            fh.write(text + "\n")
+        try:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(text + "\n")
+        except OSError as exc:
+            print("codex-review: cannot write --out %s: %s; the result follows on stdout"
+                  % (args.out, exc), file=sys.stderr)
+            print(text)
+            return EXIT_ERROR
     else:
         print(text)
     return EXIT_OK
