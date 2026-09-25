@@ -8,7 +8,7 @@
 - You write one round record (`audit-round/v1` JSON) per round, and `references/audit-trail.md` says what each `pr-audit.py` exit code means: 0 posted, 1 trail incomplete (carry on and rerun later), 2 invalid record (fix and rerun), 3 crashed (the trail may be partial).
 - Phase 2 picks its adversary with adversarial-review's `pick-adversary.sh`: Codex when it is installed and logged in, then Gemini, then Claude-only. `--adversary codex|gemini` forces one and stops if it is not usable.
 - With Codex, every Codex call goes through `codex-review.sh` (find, judge and counter), never `codex` directly, so the reviewed repo's `AGENTS.md` and project config cannot steer it.
-- Step 2.6: Codex re-checks each fix in the fix range, and `pr-audit.py recheck` records the answers as `recheck` events, so a fixed Phase 2 thread closes when Codex says it is resolved.
+- Step 2.6: Codex re-checks each fix in the fix range, and `pr-audit.py recheck` records the answers as `recheck` events, so a fixed Phase 2 thread closes when Codex says it is resolved. A finding Codex did not re-check (`unchecked=<N>` from `recheck`) counts as not resolved: the loop re-checks it again within the cap of 3, and surfaces it to you at the cap.
 - The adversary's verdict key is `adversary_verdict` (it was `gemini_verdict`); old run files still load.
 
 ### Fixed

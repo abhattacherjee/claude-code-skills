@@ -20,7 +20,10 @@ so no local state is kept. A rerun updates its own summary in place.
 
 `recheck` builds the record for an adversary re-check round: each earlier
 finding the adversary re-checked gets one recheck event by the adversary, and
-its new findings are added unconfirmed. A "resolved" re-check by the adversary
+its new findings are added unconfirmed. An earlier finding the adversary did
+not re-check is carried over unchanged with no events (its thread stays open),
+and stderr reports `unchecked=<N> (<ids>)`; the exit is still 0, since the
+record is valid, so the caller must read that count. A "resolved" re-check by the adversary
 closes the thread when the record is posted. `recheck` is Codex-only: only
 `codex-review.sh --mode find --prior` re-checks earlier findings against
 current source, so a prior round whose adversary is not `codex` (Gemini or
@@ -581,21 +584,29 @@ def cmd_recheck(args):
         return 2
     by = prior["adversary"]
     earlier = {f["id"]: f for f in prior["findings"]}
-    findings, seen = [], set()
+    events = {}
     for item in out["rechecks"]:
         rid = item.get("id") if isinstance(item, dict) else None
-        if not isinstance(rid, str) or rid not in earlier or rid in seen:
+        if not isinstance(rid, str) or rid not in earlier or rid in events:
             print(f"pr-audit: warning: skipped a re-check for unknown or repeated id {rid!r}",
                   file=sys.stderr)
             continue
-        seen.add(rid)
-        f = {k: earlier[rid].get(k) for k in RECHECK_KEEP}
-        f["events"] = [{"by": by, "kind": "recheck", "result": item.get("result"),
+        events[rid] = [{"by": by, "kind": "recheck", "result": item.get("result"),
                         "text": item.get("reason") or ""}]
+    # Every earlier finding stays in the record, in its earlier order. One the
+    # adversary did not re-check is carried over unchanged with no events, so its
+    # thread stays open and Step 2.6 still sees it as not resolved.
+    findings, unchecked = [], []
+    for fid, old in earlier.items():
+        f = {k: old.get(k) for k in RECHECK_KEEP}
+        f["events"] = events.get(fid, [])
+        if fid not in events:
+            unchecked.append(fid)
+            print(f"pr-audit: warning: no re-check for {fid}; carried over with no events, "
+                  "so its thread stays open", file=sys.stderr)
         findings.append(f)
-    for fid in earlier:
-        if fid not in seen:
-            print(f"pr-audit: warning: no re-check for {fid}; its thread stays open", file=sys.stderr)
+    print(f"pr-audit: unchecked={len(unchecked)}" + (f" ({', '.join(unchecked)})" if unchecked else ""),
+          file=sys.stderr)
     for nf in out.get("findings") or []:
         if not isinstance(nf, dict):
             continue
@@ -619,7 +630,8 @@ def cmd_recheck(args):
         return 2
     if not write_record(rec, args.out):
         return 2
-    print(f"pr-audit: wrote {args.out} ({len(seen)} re-checked, {len(findings) - len(seen)} new)")
+    print(f"pr-audit: wrote {args.out} ({len(events)} re-checked, {len(unchecked)} unchecked, "
+          f"{len(findings) - len(earlier)} new)")
     return 0
 
 

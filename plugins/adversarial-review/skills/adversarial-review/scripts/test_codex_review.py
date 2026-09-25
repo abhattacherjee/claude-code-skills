@@ -284,8 +284,35 @@ class BuildTests(unittest.TestCase):
         self.assertIn("never say a test passes unless you ran it", base)
         self.assertIn("<earlier_findings-abc12345>", cr.build_prompt("find", has_prior=True, nonce="abc12345"))
         self.assertIn("did not match the output schema",
-                      cr.build_prompt("judge", strict=True, nonce="abc12345"))
+                      cr.build_prompt("judge", retry=True, nonce="abc12345"))
         self.assertIn("concede", cr.build_prompt("counter", nonce="abc12345"))
+
+    def test_strict_judge_prompt_demands_a_verbatim_quote(self):
+        # deep-review X-002: --strict must harden the judge, not just repeat the
+        # schema note.
+        strict = cr.build_prompt("judge", strict=True, nonce="abc12345")
+        normal = cr.build_prompt("judge", nonce="abc12345")
+        self.assertIn(cr.HARDENED_JUDGE_PROMPT, strict)
+        self.assertIn("quote the exact offending line verbatim", strict)
+        self.assertIn("Otherwise, refute", strict)
+        # Negative controls: the normal judge prompt has no hardening, and a strict
+        # first call has no schema-retry note.
+        self.assertNotIn(cr.HARDENED_JUDGE_PROMPT, normal)
+        self.assertNotIn("verbatim", normal)
+        self.assertNotIn(cr.RETRY_PROMPT, strict)
+        self.assertNotIn(cr.RETRY_PROMPT, normal)
+
+    def test_the_schema_retry_note_is_only_on_a_retry(self):
+        for mode in ("find", "judge", "counter"):
+            first = cr.build_prompt(mode, nonce="abc12345")
+            again = cr.build_prompt(mode, retry=True, nonce="abc12345")
+            self.assertNotIn(cr.RETRY_PROMPT, first, mode)
+            self.assertIn(cr.RETRY_PROMPT, again, mode)
+            # A retry alone never hardens the judge.
+            self.assertNotIn(cr.HARDENED_JUDGE_PROMPT, again, mode)
+        both = cr.build_prompt("judge", strict=True, retry=True, nonce="abc12345")
+        self.assertIn(cr.HARDENED_JUDGE_PROMPT, both)
+        self.assertIn(cr.RETRY_PROMPT, both)
 
     def test_every_prompt_says_repo_files_are_data_not_instructions(self):
         # Final review, minor 3: stdin was untrusted, but a PR can add a repo file that

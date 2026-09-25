@@ -1,10 +1,14 @@
 """Doc-contract tests: the skill steps run scripts that exist, and wire in the adversary."""
 import os
 import re
+import sys
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import codex_review as cr  # noqa: E402
+
 SKILL = HERE.parent / "SKILL.md"
 PLUGIN_README = HERE.parent.parent.parent / "README.md"
 SCRIPT_REF = re.compile(r"\$SCRIPTS/([A-Za-z0-9_.-]+)")
@@ -61,6 +65,31 @@ class AdversarialReviewDocTests(unittest.TestCase):
         name all four, not just the first two."""
         for surface in ("AGENTS.md", ".codex/config.toml", ".agents/skills", ".mcp.json"):
             self.assertIn(surface, self.text)
+
+    def test_every_passthrough_env_var_is_documented(self):
+        # deep-review X-003: the docs said Codex gets only PATH, HOME and CODEX_HOME,
+        # but build_env also passes the PASSTHROUGH_ENV list. Derive it from the code.
+        sandbox = section(self.text, "### Codex sandbox", "One `codex-review.sh` call")
+        self.assertTrue(cr.PASSTHROUGH_ENV)
+        for name in ("PATH", "HOME", "CODEX_HOME") + tuple(cr.PASSTHROUGH_ENV):
+            self.assertIn("`%s`" % name, sandbox, name)
+        self.assertNotIn("holding only `PATH`, `HOME` and your own `CODEX_HOME`", self.text)
+
+    def test_changelogs_list_the_passthrough_env_vars(self):
+        paths = [HERE.parent / "CHANGELOG.md", HERE.parent.parent.parent / "CHANGELOG.md"]
+        root = HERE.parents[4] / "CHANGELOG.md"
+        if (HERE.parents[4] / "deep-review").is_dir() and root.is_file():
+            paths.append(root)  # the monorepo checkout only
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("only `PATH`, `HOME` and", text, str(path))
+            for name in cr.PASSTHROUGH_ENV:
+                self.assertIn("`%s`" % name, text, (str(path), name))
+
+    def test_strict_is_documented_as_the_hardened_judge(self):
+        # deep-review X-002: --strict must be described as what it does.
+        self.assertIn("verbatim", section(self.text, "**Low-signal escalation:**", "- Claude rubber-stamping"))
+        self.assertNotIn("one strict retry", self.text)
 
     def test_the_stamp_key_is_documented(self):
         self.assertIn("codex-isolation-<version>-<key>.ok", self.text)
@@ -200,6 +229,21 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("Exit 2", step26)
         self.assertIn("leave the remaining threads open", step26)
 
+    def test_step_2_6_does_not_converge_with_unchecked_findings(self):
+        # deep-review X-001: pr-audit.py recheck carries a prior finding Codex did not
+        # re-check over with no events and prints unchecked=<N>. Step 2.6 must treat
+        # those as not resolved: keep looping (within the cap), and surface them at
+        # the cap.
+        step26 = section(self.read("SKILL.md"), "### Step 2.6", "\n---\n")
+        self.assertIn("unchecked=", step26)
+        self.assertIn("not resolved", step26)
+        self.assertIn("unchecked=0", step26)
+        stop = section(step26, "Stop when", "\n\n")
+        self.assertIn("unchecked=0", stop)
+        self.assertIn("unchecked", section(stop, "reaches 3", "\n\n"))
+        audit = self.read("references/audit-trail.md")
+        self.assertIn("unchecked=", audit)
+        self.assertIn("carried over", audit)
 
     def test_step_2_2_writes_empty_verdicts_when_the_codex_judge_fails(self):
         # Final review, minor 1: synthesize.py exits 1 on a missing verdicts file.
@@ -231,6 +275,7 @@ class DeepReviewDocTests(unittest.TestCase):
             self.assertIn("ADVERSARY_UNAVAILABLE", part, start)
             self.assertIn("stop the run with exit 3", part, start)
             self.assertIn("never fall back", part.lower(), start)
+
 
 if __name__ == "__main__":
     unittest.main()

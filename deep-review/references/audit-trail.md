@@ -78,7 +78,7 @@ A posting failure never stops the review.
 | Phase 2 R2 | every judged finding; confirmed findings get `status: survivor`, refuted ones keep `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
 | Phase 2 R3 | every R2-refuted finding | For contested findings, record `counter` then `verdict`: `survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted finding gets `rejected`. |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
-| Phase 2 re-check (Codex only) | the findings from the last `phase2-fix` record that Codex re-checked, plus Codex's new findings | Built by `pr-audit.py recheck`, never by hand: one `recheck` event by `codex` on each re-checked finding; new findings get `status: unconfirmed` and no events |
+| Phase 2 re-check (Codex only) | every finding from the last `phase2-fix` record, plus Codex's new findings | Built by `pr-audit.py recheck`, never by hand: one `recheck` event by `codex` on each re-checked finding; a finding Codex did not re-check is carried over unchanged with no events (its thread stays open); new findings get `status: unconfirmed` and no events |
 
 A `rejected` finding's thread is resolved at once. So a finding refuted in R2 keeps
 `status: unconfirmed` in the phase2-r2 record, even though its refute `verdict` is recorded there.
@@ -101,7 +101,9 @@ python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_D
 
 `--prior` is the last `phase2-fix` record. `--rechecks` is the output of `codex-review.sh --mode
 find --prior`. The record takes `run_id`, `skill` and `adversary` from the prior record, and its
-`prev_head_sha` is the prior head. Exit 2 means the inputs do not make a valid record, or
+`prev_head_sha` is the prior head. An earlier finding Codex did not re-check is carried over
+unchanged with no events, and stderr reports `unchecked=<N> (<ids>)`. The exit is still 0, so read
+that line: Step 2.6 counts those findings as not resolved. Exit 2 means the inputs do not make a valid record, or
 `--out` could not be written; a new finding that reuses an earlier id is one cause (rerun
 `codex-review.sh` with a higher `--id-start`). Once `recheck` writes `$RUN_DIR/round-$K.json` (exit 0), you post it exactly as in
 "After each round" step 3 above, so a posting failure there (or a `pr-audit.py` crash) follows the

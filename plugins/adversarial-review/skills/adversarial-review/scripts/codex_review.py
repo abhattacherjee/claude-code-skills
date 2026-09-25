@@ -295,15 +295,24 @@ MODE_PROMPTS = {
         "is in kill_reason or verdict_reason. For each id, concede if Claude is right, or "
         "defend with direct evidence from the source."),
 }
-STRICT_PROMPT = ("Your previous answer did not match the output schema. Answer again with "
-                 "only JSON that matches it, and nothing else.")
+# --strict (judge mode only): the hardened judge, for when the judge looks like it
+# is rubber-stamping.
+HARDENED_JUDGE_PROMPT = (
+    "Be maximally skeptical. Answer confirm only when the finding's defect is visible in "
+    "the diff or the current source, and quote the exact offending line verbatim in the "
+    "reason. Otherwise, refute.")
+# Added only on the one retry after an answer failed the output schema.
+RETRY_PROMPT = ("Your previous answer did not match the output schema. Answer again with "
+                "only JSON that matches it, and nothing else.")
 
 
-def build_prompt(mode, strict=False, has_prior=False, *, nonce):
+def build_prompt(mode, strict=False, has_prior=False, *, nonce, retry=False):
     key = "recheck" if (mode == "find" and has_prior) else mode
     parts = [BASE_PROMPT, MODE_PROMPTS[key].format(**_tags(nonce))]
-    if strict:
-        parts.append(STRICT_PROMPT)
+    if strict and mode == "judge":
+        parts.append(HARDENED_JUDGE_PROMPT)
+    if retry:
+        parts.append(RETRY_PROMPT)
     return "\n\n".join(parts)
 
 
@@ -846,6 +855,17 @@ def validate_output(mode, raw, findings, prior, id_start):
     return validate_find(raw, id_start, prior_ids)
 
 
+def report_unchecked(result, prior):
+    """Name on stderr each --prior finding Codex gave no valid re-check for, as
+    `unchecked=<N> (<ids>)`. pr-audit.py recheck carries those over with no events,
+    so they stay open; this line lets the caller see the gap before that step."""
+    done = {r["id"] for r in result.get("rechecks") or []}
+    missing = [f["id"] for f in prior if f["id"] not in done]
+    print("codex-review: unchecked=%d%s" % (len(missing), " (%s)" % ", ".join(missing) if missing else ""),
+          file=sys.stderr)
+    return missing
+
+
 def repo_root():
     try:
         proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
@@ -879,7 +899,9 @@ def parse_args(argv=None):
                    help="seconds before a run is killed (default: CODEX_REVIEW_TIMEOUT or %d)"
                         % DEFAULT_TIMEOUT)
     p.add_argument("--model", default=None, help="Codex model (default: CODEX_MODEL, else Codex's own)")
-    p.add_argument("--strict", action="store_true", help="use the strict prompt on the first call")
+    p.add_argument("--strict", action="store_true",
+                   help="judge only: use the hardened judge prompt (confirm only with the "
+                        "offending line quoted verbatim)")
     p.add_argument("--self-test", action="store_true",
                    help="run the isolation canary now; exit 0 and stamp this Codex version if it "
                         "passes, exit 3 and delete the stamp if it leaks")
@@ -890,6 +912,8 @@ def parse_args(argv=None):
         p.error("--findings is required for --mode judge and --mode counter")
     if args.prior and args.mode != "find":
         p.error("--prior works only with --mode find")
+    if args.strict and args.mode != "judge":
+        p.error("--strict works only with --mode judge")
     if args.id_start < 1:
         p.error("--id-start must be 1 or more")
     if args.timeout is None:
@@ -957,12 +981,13 @@ def review(args):
         with open(schema_path, "w", encoding="utf-8") as fh:
             json.dump(schema_for(args.mode, prior is not None), fh)
         last = ""
-        for attempt, strict in enumerate((args.strict, True)):
+        for attempt in (0, 1):
             out_path = os.path.join(work, "answer.json")
             if os.path.exists(out_path):
                 os.remove(out_path)
             nonce = new_nonce()
-            prompt = build_prompt(args.mode, strict, prior is not None, nonce=nonce)
+            prompt = build_prompt(args.mode, args.strict, prior is not None, nonce=nonce,
+                                  retry=attempt == 1)
             stdin_data = build_stdin(diff_text, args.mode, findings, prior,
                                      nonce=nonce).encode("utf-8")
             rc, _, err = _run_isolated(codex, repo, schema_path, out_path, prompt, stdin_data,
@@ -975,10 +1000,12 @@ def review(args):
             except BadOutput as exc:
                 last = str(exc)
                 if attempt == 0:
-                    print("Warning: Codex output was not valid (%s); retrying with a stricter prompt"
+                    print("Warning: Codex output was not valid (%s); retrying once with a schema reminder"
                           % last, file=sys.stderr)
                 continue
             _require_stamp(codex, env, version)
+            if prior is not None:
+                report_unchecked(result, prior)
             return result
         raise Unavailable("no valid output from Codex after one retry: %s" % last)
     finally:

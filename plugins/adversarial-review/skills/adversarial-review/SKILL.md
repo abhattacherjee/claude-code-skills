@@ -19,12 +19,12 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 
 `codex-review.sh` never runs `codex` with your normal setup. Each call is one `codex exec` with:
 
-- an environment holding only `PATH`, `HOME` and your own `CODEX_HOME` (as set, else Codex's default `~/.codex`), so your login works and nothing else from your shell leaks in;
+- an environment holding `PATH`, `HOME` and your own `CODEX_HOME` (as set, else Codex's default `~/.codex`), plus each of these that your shell sets to a non-empty value: `OPENAI_API_KEY` and `CODEX_API_KEY` (an API-key login), `HTTP_PROXY`, `http_proxy`, `HTTPS_PROXY`, `https_proxy`, `NO_PROXY` and `no_proxy` (proxy settings), and `TMPDIR` (a scratch dir). Nothing else from your shell reaches Codex. The two API keys do reach it when set, so unset them for the review if you log in with ChatGPT and do not want them passed;
 - `--ephemeral --ignore-user-config --ignore-rules`, so your `config.toml` and rules are not loaded, and `--disable` for `apps`, `plugins`, `remote_plugin`, `memories`, `multi_agent`, `image_generation`, `view_image`, `hooks`, `skill_search`, `skill_mcp_dependency_install`, `browser_use`, `browser_use_external` and `computer_use`. Turning off `apps` removes the ChatGPT connector tools (Gmail send, GitHub merge and others) that run outside the sandbox. The `hooks` feature is disabled, so your own Codex hooks do not run during a review;
 - `-c project_doc_max_bytes=0` and `-c project_doc_fallback_filenames=[]`, so the reviewed repo's `AGENTS.md` cannot instruct Codex; `-c skills.include_instructions=false`, so its `.agents/skills` cannot either — that setting defaults to true, so a repo's own skill instructions would otherwise land in the prompt. A repo's `.codex/config.toml` applies only to trusted repos, and trust lives in the `config.toml` that is ignored;
 - `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout per Codex call (default 540 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group. A SIGTERM or SIGINT sent to `codex-review.sh` kills that group too, removes its temp dirs, and exits 128+N.
 
-One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one strict retry. That can pass the Bash tool's 600 s cap, so run `$ADV_REVIEW` with the Bash tool's `run_in_background`.
+One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. That can pass the Bash tool's 600 s cap, so run `$ADV_REVIEW` with the Bash tool's `run_in_background`.
 
 Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `codex-review.sh --self-test` reruns the canary on demand.
 
@@ -257,7 +257,7 @@ The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_s
 
 **Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge with maximum skepticism and re-synthesize:
 
-- The adversary rubber-stamping Claude's findings: `$ADV_REVIEW --diff "$DIFF_FILE" --findings "$RUN_DIR/r1-claude.json" --mode judge --strict --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"` (`--strict` forces the hardened judge prompt on the first call)
+- The adversary rubber-stamping Claude's findings: `$ADV_REVIEW --diff "$DIFF_FILE" --findings "$RUN_DIR/r1-claude.json" --mode judge --strict --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"` (`--strict`, judge mode only, adds the hardened judge prompt: confirm only when the finding's defect is visible in the diff or source, quoting the offending line verbatim in the reason; otherwise refute)
 - Claude rubber-stamping the adversary's findings: re-spawn the `adversarial-cross-examiner` agent with an explicit instruction for a maximum-skepticism re-judge — refute unless the evidence is unambiguous and cite the proving line
 
 Re-run `synthesize.py` after the escalation pass and relay the updated digest. The `low_signal` flag is informational only — it does not change survivor classification; surviving findings are still those confirmed by the opposing model (see Survivor Rule).

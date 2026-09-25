@@ -48,7 +48,7 @@ class RecheckTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual((rec["phase"], rec["round"], rec["run_id"]), ("phase2-recheck", 5, "ar-test-1"))
         self.assertEqual((rec["prev_head_sha"], rec["head_sha"], rec["adversary"]), (SHA2, SHA3, "codex"))
-        [f] = rec["findings"]
+        f = rec["findings"][0]
         self.assertEqual((f["id"], f["title"], f["status"]), ("X-003", "Retry loop never resets the backoff", "survivor"))
         self.assertEqual(f["events"], [{"by": "codex", "kind": "recheck", "result": "resolved",
                                         "text": "cap is there"}])
@@ -61,14 +61,17 @@ class RecheckTests(unittest.TestCase):
             {"id": "X-404", "result": "resolved", "reason": "made up"},
             {"id": ["X-004"], "result": "resolved", "reason": "unhashable"}]})
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual([(f["id"], f["events"][0]["result"]) for f in rec["findings"]], [("X-003", "partly")])
+        self.assertEqual([(f["id"], [e["result"] for e in f["events"]]) for f in rec["findings"]],
+                         [("X-003", ["partly"]), ("X-004", [])])
         self.assertIn("X-404", res.stderr)
+        self.assertIn("unchecked=1", res.stderr)
 
     def test_new_findings_are_added_unconfirmed(self):
         res, rec = self.recheck({"adversary": "codex", "findings": [NEW], "rechecks": []})
         self.assertEqual(res.returncode, 0, res.stderr)
-        [f] = rec["findings"]
+        f = rec["findings"][-1]
         self.assertEqual((f["id"], f["origin"], f["status"], f["events"]), ("X-005", "codex", "unconfirmed", []))
+        self.assertEqual([g["id"] for g in rec["findings"]], ["X-003", "X-004", "X-005"])
 
     def test_new_finding_reusing_an_earlier_id_exits_2(self):
         clash = dict(NEW, id="X-003")
@@ -176,7 +179,6 @@ class RecheckTests(unittest.TestCase):
         self.assertIn("does not make a valid record", res.stderr)
         self.assertFalse(self.out.exists())
 
-
     def test_an_unwritable_out_path_exits_2_with_a_message(self):
         # Final review, minor 5: open(--out) was unguarded, so a bad path crashed
         # into run()'s catch-all (exit 3) instead of saying what went wrong.
@@ -188,6 +190,57 @@ class RecheckTests(unittest.TestCase):
         self.assertIn("missing-dir", res.stderr)
         self.assertNotIn("unexpected error", res.stderr)
         self.assertFalse(self.out.exists())
+
+    # --- deep-review X-001: a prior finding Codex did not re-check must stay in the
+    # record (so Step 2.6 cannot converge without it) and be counted as unchecked ---
+
+    def test_an_omitted_prior_finding_is_carried_over_with_no_events(self):
+        prior = json.loads(Path(self.prior).read_text())
+        res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual([f["id"] for f in rec["findings"]], ["X-003", "X-004"])
+        carried = rec["findings"][1]
+        expected = dict(prior["findings"][1], events=[])
+        self.assertEqual(carried, expected)
+        self.assertIn("unchecked=1", res.stderr)
+        self.assertIn("X-004", res.stderr.split("unchecked=1", 1)[1].splitlines()[0])
+        self.assertIn("1 unchecked", res.stdout)
+
+    def test_every_omitted_prior_finding_is_counted(self):
+        res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": []})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual([(f["id"], f["events"]) for f in rec["findings"]],
+                         [("X-003", []), ("X-004", [])])
+        line = [ln for ln in res.stderr.splitlines() if "unchecked=" in ln]
+        self.assertEqual(len(line), 1, res.stderr)
+        self.assertIn("unchecked=2", line[0])
+        self.assertIn("X-003", line[0])
+        self.assertIn("X-004", line[0])
+
+    def test_a_full_recheck_reports_unchecked_0_and_carries_nothing(self):
+        # Negative control: when Codex re-checks every prior finding, nothing is
+        # carried over and the count is 0.
+        res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"},
+            {"id": "X-004", "result": "missed", "reason": "no guard"}]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(all(f["events"] for f in rec["findings"]))
+        self.assertIn("unchecked=0", res.stderr)
+        self.assertNotIn("unchecked=1", res.stderr)
+        self.assertIn("0 unchecked", res.stdout)
+
+    def test_a_carried_over_finding_keeps_its_thread_open_on_the_pr(self):
+        self.assertEqual(self.h.post(fix_round(), "round-4.json").returncode, 0)
+        replies_before = len(self.h.posted("reply"))
+        res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        post = self.h.post(rec, "round-5.json")
+        self.assertEqual(post.returncode, 0, post.stderr)
+        self.assertEqual(len(self.h.resolves()), 1)  # X-003 only
+        self.assertEqual(len(self.h.posted("reply")), replies_before + 1)  # no reply on X-004
+
 
 if __name__ == "__main__":
     unittest.main()

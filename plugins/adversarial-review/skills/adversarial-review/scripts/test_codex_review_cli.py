@@ -214,6 +214,37 @@ class OutputTests(unittest.TestCase):
         self.assertNotIn("did not match the output schema", calls[0]["argv"][-1])
         self.assertIn("did not match the output schema", calls[1]["argv"][-1])
 
+    def test_judge_strict_hardens_the_first_call_without_a_schema_note(self):
+        # deep-review X-002
+        verdicts = {"verdicts": [{"id": "C-001", "verdict": "refute", "reason": "no", "confidence": 0.5}]}
+        h = Harness(self, exec_actions=[{"out": verdicts}])
+        findings = h.write("claude.json", {"findings": [{"id": "C-001", "title": "t", "rationale": "r"}]})
+        res = h.run("--mode", "judge", "--findings", findings, "--strict")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        [call] = h.exec_calls()
+        self.assertIn(cr.HARDENED_JUDGE_PROMPT, call["argv"][-1])
+        self.assertNotIn(cr.RETRY_PROMPT, call["argv"][-1])
+
+    def test_judge_retry_without_strict_adds_only_the_schema_note(self):
+        # Negative control for the above: a plain judge is not hardened, even on retry.
+        verdicts = {"verdicts": [{"id": "C-001", "verdict": "refute", "reason": "no", "confidence": 0.5}]}
+        h = Harness(self, exec_actions=[{"out": "not json"}, {"out": verdicts}])
+        findings = h.write("claude.json", {"findings": [{"id": "C-001", "title": "t", "rationale": "r"}]})
+        res = h.run("--mode", "judge", "--findings", findings)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        first, second = h.exec_calls()
+        for call in (first, second):
+            self.assertNotIn(cr.HARDENED_JUDGE_PROMPT, call["argv"][-1])
+        self.assertNotIn(cr.RETRY_PROMPT, first["argv"][-1])
+        self.assertIn(cr.RETRY_PROMPT, second["argv"][-1])
+
+    def test_strict_outside_judge_mode_is_a_usage_error(self):
+        h = Harness(self)
+        res = h.run("--mode", "find", "--strict")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("--strict", res.stderr)
+        self.assertEqual(h.exec_calls(), [])
+
     def test_invalid_then_valid_succeeds(self):
         h = Harness(self, exec_actions=[{"out": {"wrong": []}}, {"out": ONE_FINDING}])
         res = h.run("--mode", "find")
@@ -260,6 +291,35 @@ class OutputTests(unittest.TestCase):
         self.assertIn("rechecks", call["schema"]["properties"])
         self.assertIn("<earlier_findings-", call["stdin"])
         self.assertIn("added a cap", call["stdin"])
+
+    def test_find_with_prior_reports_prior_ids_codex_did_not_recheck(self):
+        # deep-review X-001: a prior id with no re-check must be named on stderr.
+        prior_findings = {"findings": [{"id": "X-001", "title": "a", "rationale": "r"},
+                                       {"id": "X-002", "title": "b", "rationale": "r"}]}
+        h = Harness(self, exec_actions=[{"out": {"findings": [], "rechecks": [
+            {"id": "X-001", "result": "resolved", "reason": "fixed"}]}}])
+        res = h.run("--mode", "find", "--prior", h.write("round-3.json", prior_findings),
+                    "--id-start", "3")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        [line] = [ln for ln in res.stderr.splitlines() if "unchecked=" in ln]
+        self.assertIn("unchecked=1", line)
+        self.assertIn("X-002", line)
+        self.assertNotIn("X-001", line)
+        # Negative control: a full re-check reports unchecked=0.
+        h2 = Harness(self, exec_actions=[{"out": {"findings": [], "rechecks": [
+            {"id": "X-001", "result": "resolved", "reason": "fixed"},
+            {"id": "X-002", "result": "partly", "reason": "half"}]}}])
+        res2 = h2.run("--mode", "find", "--prior", h2.write("round-3.json", prior_findings),
+                      "--id-start", "3")
+        self.assertEqual(res2.returncode, 0, res2.stderr)
+        self.assertIn("unchecked=0", res2.stderr)
+        self.assertNotIn("unchecked=1", res2.stderr)
+
+    def test_find_without_prior_reports_no_unchecked_count(self):
+        h = Harness(self)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn("unchecked=", res.stderr)
 
     def test_prompt_and_stdin_share_one_fresh_nonce_per_call(self):
         h = Harness(self, exec_actions=[{"out": "not json"}, {"out": ONE_FINDING}])

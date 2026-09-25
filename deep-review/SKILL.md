@@ -306,16 +306,22 @@ RECHECK_ROUND=0             # re-check rounds run so far, capped at 3 (see step 
    - **Exit 2** means the re-check inputs don't make a valid record (see
      ./references/audit-trail.md for the causes). Stop, report the exact stderr message to the
      user, and leave the remaining threads open — do not retry with guessed flags.
-4. `partly` or `missed`: set `REVIEWED_SHA="$FIX_SHA"`, then fix again (Step 2.5) — this keeps the
+4. Read the `pr-audit: unchecked=<N> (<ids>)` line that `recheck` prints on stderr. Each id in it
+   is a finding Codex gave no re-check for. `recheck` carries it into the record unchanged with no
+   events, so its thread stays open. Count every unchecked finding as not resolved.
+   `partly` or `missed`: set `REVIEWED_SHA="$FIX_SHA"`, then fix again (Step 2.5) — this keeps the
    next fix range to only what changed since *this* re-check, not every earlier fix stacked
    together. Step 2.5 writes a new `phase2-fix` record; set `FIX_K` to its round and `FIX_SHA` to
    its `head_sha`, then repeat from 1. New findings in the re-check record: judge them with the
    cross-examiner (Step 2.2), fix the survivors (Step 2.5) the same way, and repeat from 1.
+   Unchecked findings with nothing else to fix: do not fix again; repeat from 1 with the same
+   `FIX_K`, `FIX_SHA` and `REVIEWED_SHA`, so Codex re-checks the same fix range.
    `RECHECK_ROUND=$((RECHECK_ROUND+1))` each time through — once per full loop back to step 1
-   (whether that loop was triggered by `partly`/`missed` or by new findings), right before checking
-   the cap below. Stop when a re-check round has every finding `resolved` and no new survivors, or
-   once `RECHECK_ROUND` reaches 3 — a fixed cap on re-check rounds, separate from Phase 1's
-   `--max-rounds`; surface whatever is left to the user.
+   (whether that loop was triggered by `partly`/`missed`, by unchecked findings or by new
+   findings), right before checking the cap below. Stop when a re-check round has every finding
+   `resolved`, `unchecked=0` and no new survivors, or once `RECHECK_ROUND` reaches 3 — a fixed cap
+   on re-check rounds, separate from Phase 1's `--max-rounds`; surface whatever is left to the
+   user, and name each finding still unchecked as one Codex never re-checked.
 
 With Gemini or Claude-only there is no re-check round, and fixed Phase 2 threads stay open for a
 person to resolve.
