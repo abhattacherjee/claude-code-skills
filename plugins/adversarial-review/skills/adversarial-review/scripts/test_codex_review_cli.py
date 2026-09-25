@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,13 @@ def wait_dead(pid, seconds=5.0):
             return True
         time.sleep(0.1)
     return False
+
+
+def kill_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 class Harness:
@@ -394,6 +402,59 @@ class CanaryAnswerTests(unittest.TestCase):
         self.assertIn("isolation canary leaked", res.stderr)
         self.assertIn("AGENTS.md", res.stderr)
         self.assertFalse(h.stamp.exists())
+
+
+    def test_a_canary_that_exits_non_zero_with_a_valid_answer_is_not_stamped(self):
+        # Final review, minor 6: the answer alone is valid, so only the exit-code
+        # check stops this canary from being stamped.
+        h = Harness(self, stamp=False, canary_exit=1)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("the isolation self-test could not run: codex exec exited 1", res.stderr)
+        self.assertEqual(len(h.canary_calls()), 1)
+        self.assertFalse(h.stamp.exists())
+        self.assertEqual(h.exec_calls(), [])
+
+
+class SignalTests(unittest.TestCase):
+    """Final review, minor 2: Codex runs in its own session, so a TERM or INT sent to
+    the wrapper alone never reaches it. The wrapper must kill Codex's whole process
+    group and remove its temp dir before it exits."""
+
+    def interrupt(self, sig, stamp=True):
+        h = Harness(self, stamp=stamp,
+                    exec_actions=[{"sleep": 30, "spawn_child": True, "out": ONE_FINDING}])
+        proc = subprocess.Popen(h.argv("--mode", "find", "--timeout", "60"), env=h.env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        pid_file = h.home / "child.pid"
+        end = time.time() + 30
+        while not pid_file.exists() and time.time() < end:
+            time.sleep(0.1)
+        self.assertTrue(pid_file.exists(), "the stub never started")
+        time.sleep(0.3)
+        self.assertEqual(len(h.leftovers()), 1, "the run's temp dir should exist mid-run")
+        child = int(pid_file.read_text())
+        self.addCleanup(kill_quietly, child)   # a failing run must not leave it behind
+        proc.send_signal(sig)
+        _, err = proc.communicate(timeout=30)
+        return h, proc.returncode, err, child
+
+    def check(self, sig):
+        h, rc, err, child = self.interrupt(sig)
+        self.assertEqual(rc, 128 + sig, err)
+        self.assertIn("interrupted", err)
+        self.assertNotIn("Traceback", err)
+        self.assertTrue(wait_dead(child), "Codex's process group survived the signal")
+        self.assertEqual(h.leftovers(), [])
+        self.assertFalse(h.out.exists())
+
+    def test_term_kills_the_codex_group_and_removes_the_temp_dir(self):
+        self.check(signal.SIGTERM)
+
+    def test_int_kills_the_codex_group_and_removes_the_temp_dir(self):
+        self.check(signal.SIGINT)
 
 
 class StampKeyTests(unittest.TestCase):

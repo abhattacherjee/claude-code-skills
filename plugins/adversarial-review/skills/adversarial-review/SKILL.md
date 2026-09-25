@@ -22,7 +22,9 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 - an environment holding only `PATH`, `HOME` and your own `CODEX_HOME` (as set, else Codex's default `~/.codex`), so your login works and nothing else from your shell leaks in;
 - `--ephemeral --ignore-user-config --ignore-rules`, so your `config.toml` and rules are not loaded, and `--disable` for `apps`, `plugins`, `remote_plugin`, `memories`, `multi_agent`, `image_generation`, `view_image`, `hooks`, `skill_search`, `skill_mcp_dependency_install`, `browser_use`, `browser_use_external` and `computer_use`. Turning off `apps` removes the ChatGPT connector tools (Gmail send, GitHub merge and others) that run outside the sandbox. The `hooks` feature is disabled, so your own Codex hooks do not run during a review;
 - `-c project_doc_max_bytes=0` and `-c project_doc_fallback_filenames=[]`, so the reviewed repo's `AGENTS.md` cannot instruct Codex; `-c skills.include_instructions=false`, so its `.agents/skills` cannot either — that setting defaults to true, so a repo's own skill instructions would otherwise land in the prompt. A repo's `.codex/config.toml` applies only to trusted repos, and trust lives in the `config.toml` that is ignored;
-- `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout (default 900 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group.
+- `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout per Codex call (default 540 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group. A SIGTERM or SIGINT sent to `codex-review.sh` kills that group too, removes its temp dirs, and exits 128+N.
+
+One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one strict retry. That can pass the Bash tool's 600 s cap, so run `$ADV_REVIEW` with the Bash tool's `run_in_background`.
 
 Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `codex-review.sh --self-test` reruns the canary on demand.
 
@@ -159,7 +161,11 @@ $ADV_REVIEW \
   --out "$RUN_DIR/r1-$ADVERSARY.json"
 ```
 
-**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): when Codex was picked automatically (no `--adversary`) and `GEMINI_AUTHED=yes`, switch to Gemini for the whole run (`ADVERSARY=gemini`, `ADV_REVIEW="$SCRIPTS/gemini-review.sh"`), tell the user, and rerun this step once. Otherwise go to the degraded no-adversary path in Degradation Behavior.
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
+
+- `ADVERSARY_FLAG` is set (the user forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as `PICK_RC` 3 in Step 0. Never fall back to another model or to Claude-only.
+- Codex was picked automatically and `GEMINI_AUTHED=yes`: switch to Gemini for the whole run (`ADVERSARY=gemini`, `ADV_REVIEW="$SCRIPTS/gemini-review.sh"`), tell the user, and rerun this step once.
+- Otherwise: go to the R1 path in Degradation Behavior.
 
 Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemini findings arrive with `origin="gemini"`; renumber them `G-001`, `G-002`, ... The file is `$RUN_DIR/r1-$ADVERSARY.json`.
 
@@ -220,7 +226,10 @@ $ADV_REVIEW \
   --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"
 ```
 
-**If exit code is 3** (`ADVERSARY_UNAVAILABLE`): go to the degraded no-adversary path in Degradation Behavior. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
+
+- `ADVERSARY_FLAG` is set: show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3. Never fall back to Claude-only.
+- Otherwise: go to the R2 path in Degradation Behavior. It keeps the adversary's R1 findings. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
 
 Both scripts emit `{"verdicts":[{"id":"C-NNN","adversary_verdict":"confirm|refute","reason":"...","confidence":...}]}`. The key is `adversary_verdict` for both models; it was `gemini_verdict` before #135, and old run files still load.
 
@@ -229,18 +238,22 @@ Both scripts emit `{"verdicts":[{"id":"C-NNN","adversary_verdict":"confirm|refut
 ```
 === R2 Cross-Examination Digest ===
 <Adversary>'s verdict on Claude's findings (<N> total):
-  confirmed=A  refuted=B  judged=J  confirm_rate=R.RRR  low_signal=true|false  unrecognized=U
+  confirmed=A  refuted=B  judged=J  confirm_rate=R.RRR  low_signal=true|false  unrecognized=U  unjudged=N
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
   [⚠ UNRECOGNIZED — U verdict(s) had an unrecognized value; judge output may be malformed]
+  [⚠ UNJUDGED — N finding(s) got no verdict; the judge skipped them, so they stay unconfirmed]
 Claude's verdict on <Adversary>'s findings (<M> total):
-  confirmed=D  refuted=E  judged=K  confirm_rate=S.RRR  low_signal=true|false  unrecognized=V
+  confirmed=D  refuted=E  judged=K  confirm_rate=S.RRR  low_signal=true|false  unrecognized=V  unjudged=P
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
   [⚠ UNRECOGNIZED — V verdict(s) had an unrecognized value; judge output may be malformed]
+  [⚠ UNJUDGED — P finding(s) got no verdict; the judge skipped them, so they stay unconfirmed]
 ```
 
-The per-direction fields `confirmed`, `refuted`, `judged`, `confirm_rate`, `low_signal`, and `unrecognized` come verbatim from `synthesize.py` stdout. The orchestrator may derive `unjudged = <total findings> − judged` if it wants to display that count. The direction lines are named `<adversary>_on_claude:` and `claude_on_<adversary>:` (for example `codex_on_claude:`).
+The per-direction fields `confirmed`, `refuted`, `judged`, `confirm_rate`, `low_signal`, `unrecognized` and `unjudged` come verbatim from `synthesize.py` stdout. The direction lines are named `<adversary>_on_claude:` and `claude_on_<adversary>:` (for example `codex_on_claude:`), and each ends in `unjudged=<n>`.
 
-The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.950 or <= 0.050 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`. The `UNRECOGNIZED` banner is printed only when `unrecognized > 0`.
+`unjudged` counts findings that got no verdict entry at all. A judge that answers only some ids still exits 0, so this count is the only sign that work is missing. Always take it from `synthesize.py`; never work it out from the total and `judged`, because `judged` also counts entries with an unrecognized value.
+
+The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.950 or <= 0.050 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`. The `UNRECOGNIZED` banner is printed only when `unrecognized > 0`. The `UNJUDGED` banner is printed only when `unjudged > 0`.
 
 **Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge with maximum skepticism and re-synthesize:
 
@@ -262,9 +275,9 @@ $SCRIPTS/synthesize.py \
   --json "$RUN_DIR/report.json"
 ```
 
-Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, and `unrecognized=`. Read and relay these counts and any `low_signal=true` flags and any `unrecognized > 0` count to the user.
+Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, `unrecognized=` and `unjudged=`. Read and relay these counts to the user, plus any `low_signal=true` flag, any `unrecognized > 0` count, and any `unjudged > 0` count with its `UNJUDGED` banner.
 
-When `ADVERSARY="claude-only"` (Degradation Behavior fired), there is no second model to feed Step 4 real findings from. Run the same command with `--adversary claude-only`, and write `{"findings":[]}` once to `$RUN_DIR/r1-empty.json` for `--adversary-findings`, and `{"verdicts":[]}` once to `$RUN_DIR/r2-empty.json` for both `--adversary-verdicts` and `--claude-verdicts` (R2 never ran). Every Claude finding comes out `status=unconfirmed`; nothing is silently dropped, and `report.json`'s `summary.adversary` is `"claude-only"` — matching what Step 4b passes to `pr-audit.py record --adversary "$ADVERSARY"`, so its adversary/summary mismatch guard does not fire.
+When `ADVERSARY="claude-only"` (the user chose Claude-only in Step 0, or Degradation Behavior's R1 path fired), there is no second model to feed Step 4 real findings from. Run the same command with `--adversary claude-only`, and write `{"findings":[]}` once to `$RUN_DIR/r1-empty.json` for `--adversary-findings`, and `{"verdicts":[]}` once to `$RUN_DIR/r2-empty.json` for both `--adversary-verdicts` and `--claude-verdicts` (R2 never ran). Every Claude finding comes out `status=unconfirmed`; nothing is silently dropped, and `report.json`'s `summary.adversary` is `"claude-only"` — matching what Step 4b passes to `pr-audit.py record --adversary "$ADVERSARY"`, so its adversary/summary mismatch guard does not fire.
 
 ### Step 4b — Write the round record
 
@@ -277,7 +290,7 @@ if [[ "$MODE" == "pr" ]]; then
 else
   HEAD_SHA="$(git rev-parse HEAD)"
 fi
-# ADVERSARY was set in Step 0 ("codex" or "gemini"), or to "claude-only" on any degraded-mode fallback.
+# ADVERSARY was set in Step 0 ("codex" or "gemini"), or to "claude-only" on the R1 degraded path.
 $SCRIPTS/pr-audit.py record \
   --report-json "$RUN_DIR/report.json" \
   --run-id "$RUN_ID" --skill adversarial-review --phase review --round 1 \
@@ -285,7 +298,7 @@ $SCRIPTS/pr-audit.py record \
   --out "$RUN_DIR/round-1.json"
 ```
 
-Exit 2 means `report.json` could not be read or did not make a valid record. Tell the user and run Step 5 with `--no-post` and without `--record`.
+Exit 2 means `report.json` could not be read, did not make a valid record, or `--out` could not be written. Tell the user and run Step 5 with `--no-post` and without `--record`.
 
 ### Step 5 — Sink
 
@@ -329,7 +342,13 @@ Nothing is ever silently discarded.
 
 ## Degradation Behavior
 
-If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not installed, not logged in, no credential, a network error, a timeout, or no valid JSON after one retry) at **either** the R1 find step or the R2 judge step, the skill degrades loudly to Claude-only mode, after the one Codex-to-Gemini switch allowed in Step 2:
+If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not installed, not logged in, no credential, a network error, a timeout, a tripped isolation canary, or no valid JSON after one retry) at **either** the R1 find step or the R2 judge step:
+
+- **`ADVERSARY_FLAG` is set** (the user passed `--adversary`): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, as in Step 0. Never fall back to Claude-only or to the other model: the user asked for that model. No report is written.
+- **Auto mode, at R1** (after the one Codex-to-Gemini switch allowed in Step 2): degrade to Claude-only, below.
+- **Auto mode, at R2**: degrade, but keep what R1 and Claude's R2 already produced, below.
+
+In auto mode, print this banner:
 
 ```
 ╔══════════════════════════════════════════════════════════╗
@@ -341,7 +360,24 @@ If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not
 ╚══════════════════════════════════════════════════════════╝
 ```
 
-Set `ADVERSARY="claude-only"`, then continue straight to Step 4 (there is nothing for R2 to cross-examine if it has not already run). Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without an adversary. The skill exits 0 (not an error). See Step 4 for the empty-file `--adversary claude-only` call that keeps `report.json` and every downstream record labeled consistently.
+**At R1:** set `ADVERSARY="claude-only"`, then continue straight to Step 4 (there is nothing for R2 to cross-examine). Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without an adversary. See Step 4 for the empty-file `--adversary claude-only` call that keeps `report.json` and every downstream record labeled consistently.
+
+**At R2:** the adversary's R1 findings and Claude's verdicts on them already exist, so do not drop them. Keep `ADVERSARY` as it is, tell the user the adversary's R2 judge failed, write `{"verdicts":[]}` to `$RUN_DIR/r2-empty.json`, and run Step 4 with it in place of the adversary's verdicts:
+
+```bash
+$SCRIPTS/synthesize.py \
+  --adversary "$ADVERSARY" \
+  --claude-findings "$RUN_DIR/r1-claude.json" \
+  --adversary-findings "$RUN_DIR/r1-$ADVERSARY.json" \
+  --adversary-verdicts "$RUN_DIR/r2-empty.json" \
+  --claude-verdicts "$RUN_DIR/r2-claude-verdicts.json" \
+  --md "$RUN_DIR/report.md" \
+  --json "$RUN_DIR/report.json"
+```
+
+Every Claude finding comes out `status=unconfirmed`, and the `<adversary>_on_claude` line shows them all as `unjudged`. The adversary's R1 findings keep Claude's verdicts: survivor when Claude confirmed, rejected when it refuted, unconfirmed when it gave none.
+
+In auto mode the skill exits 0 (not an error).
 
 ## Same-Diff Invariant
 

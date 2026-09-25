@@ -205,5 +205,56 @@ class PickAdversaryTests(unittest.TestCase):
         self.assertNotIn("ADVERSARY", parse_lines(res2.stdout))
 
 
+    # Deferred T5 from the final review: the Gemini side of the detection-failure
+    # gate. The stand-in prints a fully usable status, so only the exit-code check
+    # (not the parse check) can reject the non-zero case.
+    USABLE_GEMINI = ("#!/usr/bin/env bash\n"
+                     "echo \"GEMINI_INSTALLED='yes'\"\n"
+                     "echo \"GEMINI_VERSION='0.40.0'\"\n"
+                     "echo \"GEMINI_AUTHED='yes'\"\n"
+                     "echo \"INSTALL_HINT='x'\"\n"
+                     "echo \"AUTH_HINT='x'\"\n")
+
+    def gemini_side(self, gemini_script):
+        """Codex is installed but logged out, so auto mode would pick Gemini if
+        its detection were trusted."""
+        env = StubEnv(self, login=1)
+        pick = stage(self, gemini_script=gemini_script)
+        auto = subprocess.run(["/bin/bash", str(pick)], capture_output=True, text=True,
+                              env=env.env, timeout=60)
+        forced = subprocess.run(["/bin/bash", str(pick), "--adversary", "gemini"],
+                                capture_output=True, text=True, env=env.env, timeout=60)
+        return auto, forced
+
+    def test_usable_gemini_stand_in_is_picked_when_it_exits_0(self):
+        # Positive control: the same stand-in with exit 0 is trusted.
+        auto, forced = self.gemini_side(self.USABLE_GEMINI + "exit 0\n")
+        self.assertEqual(auto.returncode, 0, auto.stderr)
+        self.assertEqual(parse_lines(auto.stdout)["ADVERSARY"], "gemini")
+        self.assertEqual(forced.returncode, 0, forced.stderr)
+
+    def test_ensure_gemini_exit_nonzero_is_treated_as_unavailable(self):
+        auto, forced = self.gemini_side(self.USABLE_GEMINI + "exit 2\n")
+        self.assertEqual(auto.returncode, 0, auto.stderr)
+        out = parse_lines(auto.stdout)
+        self.assertEqual(out["ADVERSARY"], "claude-only")
+        self.assertIn("Gemini detection failed", out["ADVERSARY_REASON"])
+        self.assertEqual(out["GEMINI_INSTALLED"], "no")
+        self.assertIn("ensure-gemini.sh", auto.stderr)
+        self.assertEqual(forced.returncode, 3)
+        self.assertIn("ADVERSARY_UNAVAILABLE", forced.stderr)
+        self.assertIn("Gemini detection failed", forced.stderr)
+        self.assertNotIn("ADVERSARY", parse_lines(forced.stdout))
+
+    def test_ensure_gemini_unparseable_output_is_treated_as_unavailable(self):
+        auto, forced = self.gemini_side('#!/usr/bin/env bash\necho "this is not KEY=VALUE output"\n')
+        self.assertEqual(auto.returncode, 0, auto.stderr)
+        out = parse_lines(auto.stdout)
+        self.assertEqual(out["ADVERSARY"], "claude-only")
+        self.assertIn("Gemini detection failed", out["ADVERSARY_REASON"])
+        self.assertEqual(forced.returncode, 3)
+        self.assertIn("Gemini detection failed", forced.stderr)
+        self.assertNotIn("ADVERSARY", parse_lines(forced.stdout))
+
 if __name__ == "__main__":
     unittest.main()

@@ -70,6 +70,48 @@ class AdversarialReviewDocTests(unittest.TestCase):
         step4 = section(self.text, "### Step 4 —", "### Step 4b")
         self.assertIn("claude-only", step4)
 
+    def test_r2_digest_relays_unjudged(self):
+        # Final review, Important 1: a partial judge exits 0, and synthesize's
+        # per-direction unjudged= count is the only sign. The digest and the relay
+        # list must carry it, and the wrong "total - judged" formula must be gone.
+        step3 = section(self.text, "### Step 3", "### Step 4 —")
+        digest = section(step3, "=== R2 Cross-Examination Digest ===", "```")
+        self.assertEqual(digest.count("unjudged="), 2)
+        self.assertEqual(digest.count("⚠ UNJUDGED"), 2)
+        self.assertIn("unjudged > 0", step3)
+        self.assertNotIn("− judged", self.text)
+        self.assertNotIn("may derive", self.text)
+        step4 = section(self.text, "### Step 4 —", "### Step 4b")
+        self.assertIn("`unjudged=`", step4)
+        self.assertIn("unjudged > 0", step4)
+
+    def test_a_forced_adversary_never_falls_back_at_run_time(self):
+        # Final review, Important 2: with --adversary set, an exit 3 at R1 or R2
+        # stops the run, the same as PICK_RC=3 at Step 0.
+        for start, end in (("### Step 2", "### Step 3"), ("### Step 3", "### Step 4 —"),
+                           ("## Degradation Behavior", "## Same-Diff Invariant")):
+            part = section(self.text, start, end)
+            self.assertIn("ADVERSARY_FLAG", part, start)
+            self.assertIn("ADVERSARY_UNAVAILABLE", part, start)
+            self.assertIn("stop the run with exit 3", part, start)
+            self.assertIn("never fall back", part.lower(), start)
+
+    def test_r2_failure_keeps_the_adversarys_r1_findings(self):
+        # Final review, minor 4: an R2 judge failure must not drop the adversary's
+        # R1 findings or Claude's verdicts on them.
+        degraded = section(self.text, "## Degradation Behavior", "## Same-Diff Invariant")
+        self.assertIn('--adversary-findings "$RUN_DIR/r1-$ADVERSARY.json"', degraded)
+        self.assertIn('--claude-verdicts "$RUN_DIR/r2-claude-verdicts.json"', degraded)
+        self.assertIn('--adversary-verdicts "$RUN_DIR/r2-empty.json"', degraded)
+
+    def test_codex_timeout_fits_the_bash_tool(self):
+        # Final review, minor 2: the default is below the Bash tool's 600 s cap, and
+        # the docs say how to run a call that may make up to three Codex runs.
+        self.assertIn("default 540 s", self.text)
+        self.assertNotIn("900 s", self.text)
+        self.assertIn("run_in_background", self.text)
+        self.assertIn("SIGTERM", self.text)
+
 
 class PluginReadmeDocTests(unittest.TestCase):
     """Fix round 1: plugins/adversarial-review/README.md's `## Contents` bullets
@@ -158,6 +200,22 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("Exit 2", step26)
         self.assertIn("leave the remaining threads open", step26)
 
+
+    def test_step_2_2_writes_empty_verdicts_when_the_codex_judge_fails(self):
+        # Final review, minor 1: synthesize.py exits 1 on a missing verdicts file.
+        step22 = section(self.read("SKILL.md"), "### Step 2.2", "### Step 2.3")
+        self.assertIn('{"verdicts":[]}', step22)
+        self.assertIn("r2-$ADVERSARY-verdicts.json", step22)
+
+    def test_step_2_6_handles_codex_review_exit_1(self):
+        # Final review, minor 7: exit 1 (for example a missing --prior file) stops
+        # the loop the same way exit 3 does.
+        step26 = section(self.read("SKILL.md"), "### Step 2.6", "\n---\n")
+        self.assertIn("**Exit 1**", step26)
+        exit1 = section(step26, "**Exit 1**", "\n3. ")
+        self.assertIn("Stop the re-check loop", exit1)
+        self.assertIn("leave the remaining threads open", exit1)
+        self.assertIn("round summary", exit1)
 
 if __name__ == "__main__":
     unittest.main()

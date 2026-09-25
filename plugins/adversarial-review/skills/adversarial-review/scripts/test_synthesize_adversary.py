@@ -409,5 +409,63 @@ class LegacyKeyPrecedenceTests(unittest.TestCase):
             self.assertNotIn("gemini_verdict", v)
 
 
+    def test_gemini_review_find_mode_precedence(self):
+        """Deferred T6 from the final review: find mode must use the same rule as
+        judge mode -- a non-null adversary_verdict wins, else gemini_verdict."""
+        run = Run(self)
+        bindir = run.dir / "bin"
+        bindir.mkdir()
+        stub = bindir / "gemini"
+        canned = run.dir / "canned-find-both.json"
+
+        def g(fid, **keys):
+            f = {"id": fid, "path": "src/a.py", "line": 1, "severity": "minor",
+                 "category": "bug", "title": "t", "rationale": "r", "origin": "gemini",
+                 "claude_verdict": None, "status": None, "killed_by": None, "kill_reason": None}
+            f.update(keys)
+            return f
+        canned.write_text(json.dumps({"findings": [
+            g("G-001", adversary_verdict="confirm", gemini_verdict="refute"),
+            g("G-002", adversary_verdict=None, gemini_verdict="refute"),
+            g("G-003", gemini_verdict="refute"),
+            g("G-004", adversary_verdict="confirm")]}))
+        stub.write_text('#!/usr/bin/env bash\ncat "$CANNED_GEMINI_FILE"\n')
+        stub.chmod(0o755)
+        env = run.env(PATH=str(bindir) + os.pathsep + os.environ["PATH"],
+                      CANNED_GEMINI_FILE=str(canned))
+        res = subprocess.run(["bash", str(GEMINI_REVIEW), "--diff", str(run.claude),
+                              "--mode", "find"], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        by = {f["id"]: f for f in json.loads(res.stdout)["findings"]}
+        self.assertEqual(by["G-001"]["adversary_verdict"], "confirm")
+        self.assertEqual(by["G-002"]["adversary_verdict"], "refute")
+        self.assertEqual(by["G-003"]["adversary_verdict"], "refute")
+        self.assertEqual(by["G-004"]["adversary_verdict"], "confirm")
+        for f in by.values():
+            self.assertNotIn(OLD, f)
+
+
+class R2FailureTests(unittest.TestCase):
+    """Final review, minor 4: when the adversary's R2 judge fails, SKILL.md now
+    synthesizes with the real R1 files, Claude's R2 verdicts and an empty adversary
+    verdicts file. The adversary's R1 findings must stay in the report, and every
+    Claude finding must come out unconfirmed and counted as unjudged."""
+
+    def test_adversary_r1_findings_survive_an_r2_judge_failure(self):
+        run = Run(self)
+        empty = run.put("r2-empty.json", {"verdicts": []})
+        res, report = run.synth("--adversary", "codex", "--adversary-findings", run.adv,
+                                "--adversary-verdicts", empty)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        f = by_id(report["findings"])
+        self.assertEqual(sorted(f), ["C-001", "C-002", "X-001", "X-002"])
+        self.assertEqual((f["C-001"]["status"], f["C-002"]["status"]),
+                         ("unconfirmed", "unconfirmed"))
+        self.assertEqual((f["X-001"]["status"], f["X-002"]["status"]), ("survivor", "rejected"))
+        self.assertIn("codex_on_claude: confirmed=0 refuted=0 judged=0", res.stdout)
+        self.assertIn("unjudged=2", res.stdout.splitlines()[1])
+        self.assertEqual(report["summary"]["unjudged"]["codex_on_claude"], 2)
+        self.assertEqual(report["summary"]["adversary"], "codex")
+
 if __name__ == "__main__":
     unittest.main()

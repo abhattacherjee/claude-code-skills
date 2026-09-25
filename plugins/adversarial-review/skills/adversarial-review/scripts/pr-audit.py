@@ -33,7 +33,8 @@ call that fails, or returns output that cannot be parsed, is a failed post.
 Exit codes:
   0  everything was posted (or `local`/`record` succeeded)
   1  the trail is incomplete: some posts failed, or it went to the local file
-  2  usage error, invalid record, or invalid report
+  2  usage error, invalid record, or invalid report, or `record`/`recheck` could
+     not write --out
   3  unexpected error (one line on stderr, no traceback); the trail may be partial
 """
 import argparse
@@ -156,6 +157,18 @@ def write_local(rec, out):
         fh.write("\n" + text + "\n")
     ensure_gitignored(out)
     return counts
+
+
+def write_record(rec, out):
+    """Write a built record to --out. On failure say why and return False; the
+    caller exits 2, since no usable record was made."""
+    try:
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, indent=2)
+    except OSError as exc:
+        print(f"pr-audit: cannot write --out {out}: {exc}", file=sys.stderr)
+        return False
+    return True
 
 
 def default_local_out():
@@ -533,8 +546,8 @@ def cmd_record(args):
     except ar.RecordError as exc:
         print(f"pr-audit: report does not make a valid record: {exc}", file=sys.stderr)
         return 2
-    with open(args.out, "w", encoding="utf-8") as fh:
-        json.dump(rec, fh, indent=2)
+    if not write_record(rec, args.out):
+        return 2
     print(f"pr-audit: wrote {args.out} ({len(findings)} findings)")
     return 0
 
@@ -604,8 +617,8 @@ def cmd_recheck(args):
     except ar.RecordError as exc:
         print(f"pr-audit: the re-check does not make a valid record: {exc}", file=sys.stderr)
         return 2
-    with open(args.out, "w", encoding="utf-8") as fh:
-        json.dump(rec, fh, indent=2)
+    if not write_record(rec, args.out):
+        return 2
     print(f"pr-audit: wrote {args.out} ({len(seen)} re-checked, {len(findings) - len(seen)} new)")
     return 0
 

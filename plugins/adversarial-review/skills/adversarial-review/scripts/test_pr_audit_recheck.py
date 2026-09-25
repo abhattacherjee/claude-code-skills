@@ -177,5 +177,17 @@ class RecheckTests(unittest.TestCase):
         self.assertFalse(self.out.exists())
 
 
+    def test_an_unwritable_out_path_exits_2_with_a_message(self):
+        # Final review, minor 5: open(--out) was unguarded, so a bad path crashed
+        # into run()'s catch-all (exit 3) instead of saying what went wrong.
+        self.out = self.h.dir / "missing-dir" / "round-5.json"
+        res, _ = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]})
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("cannot write --out", res.stderr)
+        self.assertIn("missing-dir", res.stderr)
+        self.assertNotIn("unexpected error", res.stderr)
+        self.assertFalse(self.out.exists())
+
 if __name__ == "__main__":
     unittest.main()

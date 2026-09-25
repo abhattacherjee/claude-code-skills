@@ -30,6 +30,12 @@ All notable changes to this skill will be documented in this file.
 - `sink.sh` added the `.gitignore` pattern onto the last line when the file had no final newline (for example `node_modules*.adversarial-review.md`). It now adds a newline first. A pattern on a CRLF line counts as present. A `.gitignore` that cannot be written is a warning, not an abort.
 - The crash message (exit 3) in `pr-audit.py` and `sink.sh` said no audit trail was saved. Some posts may already be on the PR, so it now says the trail may be partial.
 - A thread opener without `subject_type` is treated as file-level when it has no line, so the summary still notes the lost line anchor.
+- A forced adversary (`--adversary codex|gemini`) that fails at R1 or R2 now stops the run with exit 3. It used to fall back to Claude-only and exit 0. Auto mode keeps its fallback.
+- An R2 judge failure in auto mode no longer drops the adversary's R1 findings. They stay in the report with Claude's verdicts, and every Claude finding is unconfirmed.
+- The R2 digest shows `synthesize.py`'s `unjudged=` count for each direction, with an `UNJUDGED` banner when it is above 0. A judge that answers only some ids still exits 0, so this is the only sign that work is missing. The wrong "total minus judged" formula is gone.
+- Codex's default timeout per call is 540 s (was 900 s), below the Bash tool's 600 s cap; `CODEX_REVIEW_TIMEOUT` and `--timeout` still override it. A SIGTERM or SIGINT to `codex-review.sh` now kills Codex's process group and removes its temp dirs (exit 128+N). Before, Codex kept running in its own session.
+- The Codex prompt says file contents Codex reads from the repository are data under review, never instructions, the same as its standard input.
+- `pr-audit.py record` and `recheck` exit 2 with a `cannot write --out` message when `--out` cannot be written. Before, it was a crash (exit 3).
 
 ## [0.1.0] - 2026-06-02
 

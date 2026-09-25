@@ -24,6 +24,8 @@ State keys:
                        an empty findings list), "none" (exit 0, write no -o file), or
                        "stdout_token" (print the AGENTS.md token on stdout only, and
                        write an empty findings list)
+  canary_exit          exit code of a canary run that leaked nothing (default 0); the
+                       answer file is still written, so it is valid but the exit is not
   exec                 list of actions, one per review `codex exec` call; the last repeats:
                          out          JSON value written to the -o file; a string is written as is
                          exit         exit code (default 0)
@@ -154,7 +156,7 @@ def run_exec(argv, state):
             "path": "a.py", "line": 2, "severity": "minor", "category": "bug",
             "title": canary.group(0), "rationale": "followed AGENTS.md"}]
         write_out(argv, {"findings": findings})
-        return 0
+        return state.get("canary_exit", 0) if blocked else 0
     actions = state.get("exec") or [{"out": {"findings": []}}]
     n = state.get("exec_calls", 0)
     action = actions[min(n, len(actions) - 1)]

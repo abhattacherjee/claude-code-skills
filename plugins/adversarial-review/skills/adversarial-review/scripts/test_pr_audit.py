@@ -675,6 +675,18 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertTrue(out.exists())
 
+    def test_record_with_an_unwritable_out_path_exits_2_with_a_message(self):
+        h = Harness(self)
+        report = h.write(json.dumps(REPORT), "report.json")
+        out = h.dir / "missing-dir" / "round-1.json"
+        res = h.run("record", "--report-json", report, "--run-id", "ar-20260924-1",
+                    "--skill", "adversarial-review", "--phase", "review", "--round", "1",
+                    "--adversary", "gemini", "--head-sha", SHA1, "--out", out)
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("cannot write --out", res.stderr)
+        self.assertNotIn("unexpected error", res.stderr)
+        self.assertFalse(out.exists())
+
     def test_record_output_posts_cleanly(self):
         # C-001 opens an inline thread. C-002 has a path but no line, so it opens a
         # file-level thread. G-001 has no path, so it appears in the summary only.
