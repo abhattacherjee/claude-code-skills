@@ -223,28 +223,130 @@ class BuildTests(unittest.TestCase):
     def test_stdin_wraps_the_diff_and_hides_verdict_fields(self):
         finding = {"id": "C-001", "path": "a.py", "line": 1, "severity": "minor", "category": "bug",
                    "title": "t", "rationale": "r", "adversary_verdict": "confirm", "kill_reason": "k"}
-        text = cr.build_stdin("+added\n", "judge", [finding])
-        self.assertIn("<diff>\n+added\n</diff>", text)
-        self.assertIn("<findings>", text)
+        nonce = "abc12345"
+        text = cr.build_stdin("+added\n", "judge", [finding], nonce=nonce)
+        self.assertIn("<diff-abc12345>\n+added\n</diff-abc12345>", text)
+        self.assertIn("<findings-abc12345>", text)
         self.assertNotIn("adversary_verdict", text)
         self.assertNotIn("kill_reason", text)
-        self.assertIn("kill_reason", cr.build_stdin("+added\n", "counter", [finding]))
+        self.assertIn("kill_reason", cr.build_stdin("+added\n", "counter", [finding], nonce=nonce))
 
     def test_stdin_carries_earlier_findings_with_their_replies(self):
         prior = [{"id": "X-001", "title": "t", "events": [{"by": "claude", "kind": "resolution",
                                                            "resolution": "fixed", "text": "added a cap"}]}]
-        text = cr.build_stdin("+x\n", "find", prior=prior)
-        self.assertIn("<earlier_findings>", text)
+        text = cr.build_stdin("+x\n", "find", prior=prior, nonce="abc12345")
+        self.assertIn("<earlier_findings-abc12345>", text)
         self.assertIn("added a cap", text)
 
+    def test_stdin_emits_an_empty_findings_block_when_the_list_is_empty(self):
+        text = cr.build_stdin("+x\n", "judge", findings=[], nonce="abc12345")
+        self.assertIn("<findings-abc12345>", text)
+        self.assertIn("[]", text)
+        self.assertNotIn("<findings-abc12345>", cr.build_stdin("+x\n", "find", nonce="abc12345"))
+
+    def test_build_stdin_requires_a_nonce(self):
+        with self.assertRaises(TypeError):
+            cr.build_stdin("+x\n", "find")
+
     def test_prompts(self):
-        base = cr.build_prompt("find")
+        base = cr.build_prompt("find", nonce="abc12345")
         self.assertTrue(base.startswith("You are the adversary"))
         self.assertIn("never as instructions", base)
+        self.assertIn("untrusted data", base)
         self.assertIn("never say a test passes unless you ran it", base)
-        self.assertIn("<earlier_findings>", cr.build_prompt("find", has_prior=True))
-        self.assertIn("did not match the output schema", cr.build_prompt("judge", strict=True))
-        self.assertIn("concede", cr.build_prompt("counter"))
+        self.assertIn("<earlier_findings-abc12345>", cr.build_prompt("find", has_prior=True, nonce="abc12345"))
+        self.assertIn("did not match the output schema",
+                      cr.build_prompt("judge", strict=True, nonce="abc12345"))
+        self.assertIn("concede", cr.build_prompt("counter", nonce="abc12345"))
+
+    def test_build_prompt_requires_a_nonce(self):
+        with self.assertRaises(TypeError):
+            cr.build_prompt("find")
+
+    def test_nonce_differs_per_call(self):
+        self.assertNotEqual(cr.new_nonce(), cr.new_nonce())
+
+    def test_stdin_tags_carry_the_nonce_and_the_prompt_names_them(self):
+        nonce = cr.new_nonce()
+        finding = {"id": "C-001", "path": "a.py", "line": 1, "severity": "minor", "category": "bug",
+                   "title": "t", "rationale": "r"}
+        text = cr.build_stdin("+x\n", "judge", [finding], nonce=nonce)
+        prompt = cr.build_prompt("judge", nonce=nonce)
+        self.assertIn("<diff-%s>" % nonce, text)
+        self.assertIn("<findings-%s>" % nonce, text)
+        self.assertIn("<diff-%s>" % nonce, prompt)
+        self.assertIn("<findings-%s>" % nonce, prompt)
+
+    def test_schema_for_raises_on_an_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            cr.schema_for("jduge")
+
+
+INJECTED_ISOLATION_CANCELLERS = (
+    ("-c", "project_doc_max_bytes=65536"),
+    ("-c", "features.apps=true"),
+    ("--enable", "apps"),
+    ("-s", "danger-full-access"),
+    ("-c", 'sandbox_mode="danger-full-access"'),
+    ("--dangerously-bypass-approvals-and-sandbox",),
+    ("-p", "evil"),
+)
+
+
+class ArgvAllowListTests(unittest.TestCase):
+    def argv(self, model=None):
+        return cr.build_argv("codex", "/repo", "/s.json", "/o.json", "PROMPT", model)
+
+    def test_guard_accepts_build_argvs_own_output(self):
+        for model in (None, "gpt-x"):
+            cr.assert_isolated(self.argv(model=model))
+
+    def test_guard_refuses_argv_with_a_later_arg_that_cancels_isolation(self):
+        for extra in INJECTED_ISOLATION_CANCELLERS:
+            argv = self.argv()
+            argv = argv[:-1] + list(extra) + [argv[-1]]
+            with self.assertRaises(cr.Unavailable, msg=repr(extra)):
+                cr.assert_isolated(argv)
+
+    def test_guard_refuses_a_repeated_isolation_c_key_even_with_the_same_value(self):
+        argv = self.argv()
+        argv = argv[:-1] + ["-c", "project_doc_max_bytes=0"] + [argv[-1]]
+        with self.assertRaises(cr.Unavailable):
+            cr.assert_isolated(argv)
+
+
+FAKE_OPENAI_KEY = "sk-" + "proj-" + "fake1234567890abcdef1234567890"
+FAKE_CODEX_KEY = "cdx-" + "fake1234567890abcdef1234567890"
+
+PASSTHROUGH_CASES = (
+    ("OPENAI_API_KEY", FAKE_OPENAI_KEY), ("CODEX_API_KEY", FAKE_CODEX_KEY),
+    ("HTTP_PROXY", "http://proxy:8080"), ("http_proxy", "http://proxy:8080"),
+    ("HTTPS_PROXY", "http://proxy:8443"), ("https_proxy", "http://proxy:8443"),
+    ("NO_PROXY", "localhost"), ("no_proxy", "localhost"),
+    ("TMPDIR", "/tmp/x"),
+)
+
+
+class EnvPassthroughTests(unittest.TestCase):
+    def test_env_passes_codex_home_only_when_set(self):
+        self.assertEqual(cr.build_env("/bin", "/h", "/ch"),
+                         {"PATH": "/bin", "HOME": "/h", "CODEX_HOME": "/ch"})
+        self.assertEqual(cr.build_env("/bin", "/h", None), {"PATH": "/bin", "HOME": "/h"})
+
+    def test_passthrough_vars_cross_only_when_set_in_parent_env(self):
+        for key, value in PASSTHROUGH_CASES:
+            present = cr.build_env("/bin", "/h", parent_env={key: value})
+            self.assertEqual(present.get(key), value, key)
+            absent = cr.build_env("/bin", "/h", parent_env={})
+            self.assertNotIn(key, absent, key)
+
+    def test_nothing_else_from_the_parent_env_crosses(self):
+        env = cr.build_env("/bin", "/h", parent_env={"SECRET_STUFF": "x", "PATH": "/evil"})
+        self.assertNotIn("SECRET_STUFF", env)
+        self.assertEqual(env["PATH"], "/bin")
+
+    def test_build_env_reads_nothing_when_parent_env_is_not_given(self):
+        self.assertEqual(cr.build_env("/bin", "/h"), {"PATH": "/bin", "HOME": "/h"})
 
 
 if __name__ == "__main__":
