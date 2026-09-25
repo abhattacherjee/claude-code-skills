@@ -3,7 +3,8 @@
 # on the PR (pr mode) or in the local report file (local mode).
 # Usage: sink.sh --report-md <md> --report-json <json> --mode <pr|local>
 #                [--pr <n>] [--branch <name>] [--record <round.json>] [--no-post] [--help]
-# Exit codes: 0=ok, 1=error, 2=usage, 4=report delivered but audit trail incomplete
+# Exit codes: 0=ok, 1=error, 2=usage, 4=report delivered but the audit trail
+#             is incomplete, went to the local file, or was not saved
 
 set -euo pipefail
 
@@ -37,8 +38,9 @@ Options:
   --help                Show this help and exit
 
 pr mode behavior:
-  Prints the report, then runs pr-audit.py post. If gh is missing or not logged
-  in, pr-audit.py writes the exchange to <branch>.adversarial-review.md instead.
+  Prints the report, then runs pr-audit.py post. If gh is missing, not logged
+  in, or cannot read the PR, pr-audit.py writes the exchange to
+  <branch>.adversarial-review.md instead (exit 4).
 
 local mode behavior:
   Prints the report AND writes <branch>.adversarial-review.md in the repo root,
@@ -49,7 +51,9 @@ Exit codes:
   0  Success
   1  Error
   2  Usage error
-  4  Report delivered, but some audit comments failed to post (listed on stderr)
+  4  Report delivered, but the audit trail is incomplete: some posts failed,
+     it went to the local file, the record was rejected, or pr-audit.py
+     crashed (see the pr-audit lines on stderr)
 EOF
 }
 
@@ -131,7 +135,7 @@ ensure_gitignored() {
   local pattern="*.adversarial-review.md"
 
   if [[ -f "$gitignore" ]]; then
-    if grep -qF "$pattern" "$gitignore"; then
+    if grep -qxF "$pattern" "$gitignore"; then
       return 0
     fi
   fi
@@ -159,9 +163,23 @@ local_out_file() {
   echo "$(get_repo_root)/${branch//\//-}.adversarial-review.md"
 }
 
+# Map a non-zero pr-audit.py exit code to a message. The report is already
+# delivered by then, so every failure here is exit 4.
+audit_failed() {
+  local code="$1" where=""
+  [[ -n "$PR_NUMBER" && "$NO_POST" == "false" ]] && where=" for PR #$PR_NUMBER"
+  case "$code" in
+    1) echo "WARNING: the audit trail$where is incomplete — see the pr-audit lines above." >&2 ;;
+    2) echo "WARNING: the round record was rejected, no audit trail was saved." >&2 ;;
+    3) echo "WARNING: pr-audit.py crashed, no audit trail was saved." >&2 ;;
+    *) echo "WARNING: pr-audit.py failed (exit $code), the audit trail may be incomplete." >&2 ;;
+  esac
+  return 4
+}
+
 # ---- mode: local ----
 deliver_local() {
-  local repo_root output_branch
+  local repo_root output_branch code=0
   repo_root="$(get_repo_root)"
   output_branch="${BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown-branch")}"
 
@@ -172,7 +190,9 @@ deliver_local() {
 
   write_local_artifact "$repo_root" "$output_branch" "$REPORT_MD"
   if [[ -n "$RECORD" ]]; then
-    python3 "$SCRIPT_DIR/pr-audit.py" local --record "$RECORD" --out "$(local_out_file "$output_branch")"
+    python3 "$SCRIPT_DIR/pr-audit.py" local --record "$RECORD" \
+      --out "$(local_out_file "$output_branch")" || code=$?
+    [[ "$code" == "0" ]] || { audit_failed "$code"; return; }
   fi
 }
 
@@ -187,19 +207,12 @@ deliver_pr() {
   cat "$REPORT_MD"
   echo "============================================================"
 
-  # pr-audit.py falls back to this file when gh is unavailable, so keep it ignored.
+  # pr-audit.py falls back to this file when gh is unavailable or the PR cannot
+  # be read, so keep it ignored.
   ensure_gitignored "$repo_root"
   python3 "$SCRIPT_DIR/pr-audit.py" post --pr "$PR_NUMBER" --record "$RECORD" \
     --fallback-out "$(local_out_file "$output_branch")" || code=$?
-  case "$code" in
-    0) return 0 ;;
-    1)
-      echo "WARNING: the audit trail for PR #$PR_NUMBER is incomplete — see the pr-audit lines above." >&2
-      return 4 ;;
-    *)
-      echo "Error: pr-audit.py failed (exit $code)." >&2
-      return 1 ;;
-  esac
+  [[ "$code" == "0" ]] || audit_failed "$code"
 }
 
 # ---- dispatch ----

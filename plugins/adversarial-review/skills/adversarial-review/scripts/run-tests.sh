@@ -50,6 +50,11 @@ Tests:
   - synthesize.py: multi-location reason abstains (no mis-match)
   - synthesize.py: exact-id confirm not clobbered by reason-location refute
   - synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)
+  - synthesize.py: confirm-rate guard (rubber-stamp / rubber-reject detection)
+  - synthesize.py: verdict_reason carries the judge's real reason text
+  - pr-audit.py + audit_record.py: Python unit and CLI tests (gh stub)
+  - sink.sh: PR mode posts the audit trail; any pr-audit failure -> exit 4;
+    gh fallback; .gitignore handling; --no-post and local mode
 
 Exit codes:
   0  All tests pass
@@ -2043,15 +2048,21 @@ run_capture VR_OUT VR_EXIT python3 "$SYNTHESIZE" \
   --md "$TMP_DIR/vr-report.md" \
   --json "$VR_JSON"
 assert_exit_code "synthesize exits 0 for verdict_reason fixture" "0" "$VR_EXIT"
-VR_CHECK="$(python3 - "$VR_JSON" <<'PYEOF'
+VR_CHECK="$(python3 - "$VR_JSON" "$FIXTURES_DIR" <<'PYEOF'
 import json, sys
-fs = json.load(open(sys.argv[1]))["findings"]
-judged = [f for f in fs if (f.get("gemini_verdict") or f.get("claude_verdict"))]
-bad = [f["id"] for f in judged if not isinstance(f.get("verdict_reason"), str)]
-print("ok" if judged and not bad else f"bad {bad} judged={len(judged)}")
+fs = {f["id"]: f for f in json.load(open(sys.argv[1]))["findings"]}
+want = {}
+for name in ("r2_gemini_verdicts.json", "r2_claude_verdicts.json"):
+    for v in json.load(open(f"{sys.argv[2]}/{name}"))["verdicts"]:
+        want[v["id"]] = v["reason"]
+bad = [i for i, reason in want.items() if fs.get(i, {}).get("verdict_reason") != reason]
+print("ok" if want and not bad else f"bad {bad}")
 PYEOF
 )"
-assert_eq "every judged finding carries verdict_reason" "ok" "$VR_CHECK"
+assert_eq "every judged finding carries its judge's reason as verdict_reason" "ok" "$VR_CHECK"
+VR_C002="$(python3 -c 'import json,sys; print({f["id"]: f for f in json.load(open(sys.argv[1]))["findings"]}["C-002"].get("verdict_reason"))' "$VR_JSON")"
+assert_contains "C-002 verdict_reason is Gemini's refute reason" \
+  "intentionally exclusive of the last element" "$VR_C002"
 
 # ====================================================================
 # pr-audit.py + audit_record.py — unit and CLI tests
@@ -2097,6 +2108,39 @@ sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --record "$SINK_R
 assert_exit_code "sink pr mode posts and exits 0" "0" "$S_EXIT"
 assert_contains "sink pr mode prints pr-audit counts" "pr-audit: PR #7: posted 3" "$S_OUT"
 assert_contains "sink pr mode posted a summary review" "/reviews" "$(cat "$SINK_LOG" 2>/dev/null)"
+assert_eq "sink pr mode adds the pattern to the repo .gitignore" "yes" \
+  "$(grep -qxF '*.adversarial-review.md' "$SINK_REPO/.gitignore" 2>/dev/null && echo yes || echo no)"
+
+# A commented-out pattern is not a real ignore rule; sink must still add it.
+printf '# *.adversarial-review.md\n' >"$SINK_REPO/.gitignore"
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
+assert_eq "sink adds the pattern when only a commented copy exists" "yes" \
+  "$(grep -qxF '*.adversarial-review.md' "$SINK_REPO/.gitignore" && echo yes || echo no)"
+
+rm -f "$SINK_REPO/feature-x.adversarial-review.md"
+sink_run S_OUT S_EXIT '{"auth":false}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
+assert_exit_code "sink pr mode with gh logged out exits 4" "4" "$S_EXIT"
+assert_contains "sink logged-out fallback says the trail is incomplete" "incomplete" "$S_OUT"
+assert_eq "sink logged-out fallback writes the local file" "yes" \
+  "$([[ -f "$SINK_REPO/feature-x.adversarial-review.md" ]] && echo yes || echo no)"
+
+printf '{}\n' >"$TMP_DIR/sink-bad-round.json"
+sink_run S_OUT S_EXIT '{}' --mode pr --pr 7 --branch feature/x --record "$TMP_DIR/sink-bad-round.json"
+assert_exit_code "sink pr mode with a rejected record exits 4" "4" "$S_EXIT"
+assert_contains "sink says the round record was rejected" \
+  "the round record was rejected, no audit trail was saved" "$S_OUT"
+
+sink_run S_OUT S_EXIT '{"garbage":["reply"]}' --mode pr --pr 7 --branch feature/x \
+  --record "$SINK_RECORD"
+assert_exit_code "sink pr mode with a pr-audit crash exits 4" "4" "$S_EXIT"
+assert_contains "sink says pr-audit crashed" "pr-audit.py crashed, no audit trail was saved" "$S_OUT"
+
+sink_run S_OUT S_EXIT '{}' --mode local --branch feature/z --record "$TMP_DIR/sink-bad-round.json"
+assert_exit_code "sink local mode with a rejected record exits 4" "4" "$S_EXIT"
+assert_contains "sink local mode says the round record was rejected" \
+  "the round record was rejected" "$S_OUT"
+assert_eq "sink local mode still writes the report before the trail fails" "yes" \
+  "$([[ -f "$SINK_REPO/feature-z.adversarial-review.md" ]] && echo yes || echo no)"
 
 sink_run S_OUT S_EXIT '{"fail":["review"]}' --mode pr --pr 7 --branch feature/x --record "$SINK_RECORD"
 assert_exit_code "sink pr mode with a failed post exits 4" "4" "$S_EXIT"
