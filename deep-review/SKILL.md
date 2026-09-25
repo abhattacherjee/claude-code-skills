@@ -281,16 +281,28 @@ RECHECK_ROUND=0             # re-check rounds run so far, capped at 3 (see step 
    must be above every finding id used anywhere in this run so far — Codex's and Claude's alike —
    so a new finding never reuses a dropped finding's id. Never reuse a `--round` value, here or
    anywhere else in the run; `K` only ever increases.
+   - **Exit 3** here means Codex became unavailable partway through the re-check loop (auth
+     expiry, quota, a tripped isolation canary) — not at Step 2.0, where it was picked.
+     Stop the re-check loop at once: do not retry, and do not fall back to Gemini or Claude-only,
+     because a different model cannot close a Codex thread (only `codex`'s own re-check does, per
+     ./references/audit-trail.md). Leave every remaining re-check thread open, post the round
+     summary you already have noting Codex became unavailable, and surface it to the user — the
+     same outcome as the Gemini/Claude-only path below, reached mid-loop instead of at Step 2.0.
 3. `python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_DIR/recheck-$K.json" --round "$K" --head-sha "$FIX_SHA" --out "$RUN_DIR/round-$K.json"`,
    then post it as in ./references/audit-trail.md. A `resolved` re-check closes its thread.
+   - **Exit 2** means the re-check inputs don't make a valid record (see
+     ./references/audit-trail.md for the causes). Stop, report the exact stderr message to the
+     user, and leave the remaining threads open — do not retry with guessed flags.
 4. `partly` or `missed`: set `REVIEWED_SHA="$FIX_SHA"`, then fix again (Step 2.5) — this keeps the
    next fix range to only what changed since *this* re-check, not every earlier fix stacked
    together. Step 2.5 writes a new `phase2-fix` record; set `FIX_K` to its round and `FIX_SHA` to
    its `head_sha`, then repeat from 1. New findings in the re-check record: judge them with the
    cross-examiner (Step 2.2), fix the survivors (Step 2.5) the same way, and repeat from 1.
-   `RECHECK_ROUND=$((RECHECK_ROUND+1))` each time through. Stop when a re-check round has every
-   finding `resolved` and no new survivors, or once `RECHECK_ROUND` reaches 3 — a fixed cap on
-   re-check rounds, separate from Phase 1's `--max-rounds`; surface whatever is left to the user.
+   `RECHECK_ROUND=$((RECHECK_ROUND+1))` each time through — once per full loop back to step 1
+   (whether that loop was triggered by `partly`/`missed` or by new findings), right before checking
+   the cap below. Stop when a re-check round has every finding `resolved` and no new survivors, or
+   once `RECHECK_ROUND` reaches 3 — a fixed cap on re-check rounds, separate from Phase 1's
+   `--max-rounds`; surface whatever is left to the user.
 
 With Gemini or Claude-only there is no re-check round, and fixed Phase 2 threads stay open for a
 person to resolve.

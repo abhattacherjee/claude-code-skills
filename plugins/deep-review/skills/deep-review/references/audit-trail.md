@@ -103,6 +103,9 @@ python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_D
 find --prior`. The record takes `run_id`, `skill` and `adversary` from the prior record, and its
 `prev_head_sha` is the prior head. Exit 2 means the inputs do not make a valid record; a new
 finding that reuses an earlier id is one cause (rerun `codex-review.sh` with a higher
-`--id-start`). With Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay
+`--id-start`). Once `recheck` writes `$RUN_DIR/round-$K.json` (exit 0), you post it exactly as in
+"After each round" step 3 above, so a posting failure there (or a `pr-audit.py` crash) follows the
+generic Exit codes section above (0/1/3) — `recheck`'s own exit 2 covers only the record-building
+step itself. With Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay
 open. On repos that require conversation resolution before merge, resolve those threads by hand
 after checking the fix.

@@ -146,6 +146,18 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("phase2-recheck", text)
         self.assertNotIn("Phase 2 has no adversary re-check round yet", text)
 
+    def test_step_2_6_handles_codex_becoming_unavailable_mid_recheck(self):
+        # Fix round 1, Important: codex-review.sh (exit 3) and pr-audit.py recheck
+        # (exit 2) can both fail partway through the Step 2.6 loop, after Step 2.0
+        # already picked Codex. Step 2.6 must say what to do -- stop, leave threads
+        # open, no retry, no fallback -- the same way Steps 2.1/2.2 already do for
+        # their own exit-3 cases.
+        step26 = section(self.read("SKILL.md"), "### Step 2.6", "\n---\n")
+        self.assertIn("Exit 3", step26)
+        self.assertIn("Stop the re-check loop", step26)
+        self.assertIn("Exit 2", step26)
+        self.assertIn("leave the remaining threads open", step26)
+
 
 if __name__ == "__main__":
     unittest.main()
