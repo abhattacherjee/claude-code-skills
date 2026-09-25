@@ -183,9 +183,12 @@ In one message, launch (none seeing the others):
 - Claude bug-hunter (opus) — bugs/security/perf/correctness, grounded in source.
 - Claude convention-reviewer (sonnet) — convention/maintainability/doc-drift.
 - Adversary finder — `$ADV_REVIEW --diff <DIFF> --mode find --out "$RUN_DIR/r1-$ADVERSARY.json"`.
-  It emits `{"findings":[...]}` with `origin` set to the adversary. Exit 3 means the adversary is
-  unavailable: if Codex was picked automatically and `GEMINI_AUTHED=yes`, switch to Gemini for the
-  whole phase and rerun this step; otherwise follow Step 2.0's Claude-only path.
+  It emits `{"findings":[...]}` with `origin` set to the adversary. **If exit code is 3**
+  (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user forced this adversary): show
+  the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as `PICK_RC` 3 in Step
+  2.0. Never fall back to another model or to Claude-only. Otherwise (auto mode): if Codex was
+  picked automatically and `GEMINI_AUTHED=yes`, switch to Gemini for the whole phase and rerun this
+  step; otherwise follow Step 2.0's Claude-only path.
 
 Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`.
 Emit an R1 digest (counts by severity/category). An empty findings array is a respectable, valid
@@ -199,6 +202,10 @@ In one message:
 - The adversary judges every Claude finding:
   `$ADV_REVIEW --diff <DIFF> --findings <claude-r1.json> --mode judge --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"`.
   Both scripts write the verdict under the key `adversary_verdict`, whichever model gave it.
+  - **If exit code is 3** (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user
+    forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3.
+    Never fall back to another model or to Claude-only. The rest of this step is the auto-mode
+    path.
   - **Gemini reliability note:** `gemini-review.sh` can come back empty when Gemini's JSON lacks
     `verdicts` (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key`). Only then, fall back
     to a direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,

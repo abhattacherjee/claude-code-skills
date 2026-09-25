@@ -217,5 +217,20 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("leave the remaining threads open", exit1)
         self.assertIn("round summary", exit1)
 
+    def test_step_2_1_and_2_2_stop_on_a_forced_unavailable_adversary(self):
+        # #135 follow-up: adversarial-review's own Step 2/3 already stop the run
+        # on exit 3 when ADVERSARY_FLAG is set (never fall back for a forced
+        # adversary). deep-review's Step 2.1 (R1 finder) and Step 2.2 (R2 judge)
+        # must apply the same rule instead of always taking the auto-mode
+        # fallback path. Auto mode (no ADVERSARY_FLAG) keeps its documented
+        # fallback -- see test_step_2_2_writes_empty_verdicts_when_the_codex_judge_fails.
+        skill = self.read("SKILL.md")
+        for start, end in (("### Step 2.1", "### Step 2.2"), ("### Step 2.2", "### Step 2.3")):
+            part = section(skill, start, end)
+            self.assertIn("ADVERSARY_FLAG", part, start)
+            self.assertIn("ADVERSARY_UNAVAILABLE", part, start)
+            self.assertIn("stop the run with exit 3", part, start)
+            self.assertIn("never fall back", part.lower(), start)
+
 if __name__ == "__main__":
     unittest.main()
