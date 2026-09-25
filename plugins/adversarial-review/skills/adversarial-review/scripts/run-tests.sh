@@ -39,6 +39,7 @@ Tests:
   - ensure-gemini.sh: GEMINI_INSTALLED=yes + GEMINI_AUTHED=yes with stub + API key
   - ensure-gemini.sh: OAuth-only creds (no API key) -> GEMINI_AUTHED=no (regression)
   - ensure-gemini.sh: ~/.gemini/.env with GEMINI_API_KEY -> GEMINI_AUTHED=yes
+  - ensure-gemini.sh: value with an embedded single quote round-trips through eval
   - synthesize.py: slug-keyed claude verdict still rejects (G-### recovery)
   - synthesize.py: reason-location recovery for unmatched verdict id
   - synthesize.py: truly-unmatched verdict id warns on stderr
@@ -1016,6 +1017,42 @@ HELP_ENSURE_EXIT=0
 run_capture HELP_ENSURE_OUT HELP_ENSURE_EXIT bash "$ENSURE_GEMINI" --help
 assert_exit_code "ensure-gemini: --help exits 0" "0" "$HELP_ENSURE_EXIT"
 assert_contains  "ensure-gemini: --help shows usage" "Usage:" "$HELP_ENSURE_OUT"
+
+# ---- Test G: a value with an embedded single quote survives an `eval` round-trip ----
+# `GEMINI_VERSION` is set verbatim from `gemini --version` output when that
+# output has no x.y.z token (see ensure-gemini.sh), so a stub whose --version
+# string contains a single quote drives a real embedded-quote value through
+# emit() without touching the script's static hint text.
+QUOTE_STUB_DIR="$TMP_DIR/quote-stub"
+mkdir -p "$QUOTE_STUB_DIR"
+cat >"$QUOTE_STUB_DIR/gemini" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) echo "gemini cli's dev build" ;;
+  *)         echo "stub gemini" ;;
+esac
+exit 0
+STUB
+chmod +x "$QUOTE_STUB_DIR/gemini"
+
+QUOTE_OUT=""
+QUOTE_EXIT=0
+run_capture QUOTE_OUT QUOTE_EXIT \
+  env PATH="$QUOTE_STUB_DIR:$PATH" \
+      GEMINI_API_KEY="test-key-abc123" \
+      GOOGLE_API_KEY="" \
+  bash "$ENSURE_GEMINI" --check
+
+assert_exit_code "ensure-gemini: embedded-quote version -> exit 0" "0" "$QUOTE_EXIT"
+
+QUOTE_EVAL_OUT=""
+QUOTE_EVAL_EXIT=0
+run_capture QUOTE_EVAL_OUT QUOTE_EVAL_EXIT \
+  bash -c 'eval "$1"; printf "%s" "$GEMINI_VERSION"' _ "$QUOTE_OUT"
+
+assert_exit_code "ensure-gemini: embedded-quote output evals without error" "0" "$QUOTE_EVAL_EXIT"
+assert_eq "ensure-gemini: embedded-quote version round-trips exactly through eval" \
+  "gemini cli's dev build" "$QUOTE_EVAL_OUT"
 
 # ====================================================================
 # SECTION 11: synthesize.py — slug/location fallback matching (bug #30 regression)
