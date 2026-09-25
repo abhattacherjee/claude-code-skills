@@ -750,7 +750,12 @@ def ensure_isolation(codex, env, timeout, force=False):
         remove_stamps(version)
         raise Unavailable("isolation canary leaked on Codex %s: %s; codex-review.sh refuses to run"
                           % (version, why))
-    write_stamp(stamp, fields)
+    try:
+        write_stamp(stamp, fields)
+    except OSError as exc:
+        raise Unavailable("the isolation canary passed on Codex %s, but its stamp could not be "
+                          "written to %s (%s); set XDG_CACHE_HOME to a writable directory"
+                          % (version, stamp, exc))
     return version
 
 

@@ -361,6 +361,20 @@ class FixRoundOneTests(unittest.TestCase):
         self.assertNotIn("leaked-branch", call["git_head"])
 
 
+class StampWriteTests(unittest.TestCase):
+    def test_an_unwritable_cache_dir_is_unavailable_with_its_path(self):
+        h = Harness(self, stamp=False)
+        blocker = h.dir / "cache-is-a-file"
+        blocker.write_text("not a dir\n")
+        h.env["XDG_CACHE_HOME"] = str(blocker)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("ADVERSARY_UNAVAILABLE", res.stderr)
+        self.assertIn(str(blocker), res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertEqual(h.exec_calls(), [])
+
+
 class CanaryAnswerTests(unittest.TestCase):
     def test_a_canary_with_no_answer_is_not_stamped(self):
         h = Harness(self, stamp=False, canary_answer="none")
