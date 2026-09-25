@@ -103,9 +103,15 @@ dimension** AND the previous round's fixes introduced nothing new.
    docs/comments changed. Each reviewer gets: the diff command, the file list, repo read access,
    the intent context, and an instruction to **return findings grouped CRITICAL / IMPORTANT /
    SUGGESTION with file:line + concrete fix**, and to **say so plainly if clean — do not invent
-   issues to seem thorough.**
+   issues to seem thorough.** Also tell each reviewer: run long harnesses (mutation runs, fuzzers,
+   full suites) in the foreground, with the Bash timeout near its maximum. If a run will take more
+   than about 20 minutes, split it into chunks and send partial results after each chunk. Never go
+   idle "waiting for your background run": an idle teammate is not woken when its own job ends.
 2. **Aggregate.** Deduplicate convergent findings (multiple reviewers flagging the same thing ->
-   higher confidence). Note which are factual vs judgment calls.
+   higher confidence). Note which are factual vs judgment calls. When a reviewer or implementer
+   says it is waiting on a background job, check its output or process within about 10 minutes
+   (`ps -axo pid,etime,command | grep <harness>`, or its scratch output), and ping it if it is
+   idle. Never report "waiting on X" to the user without having looked at X.
 3. **Fix** all Critical/Important via a single **implementer sub-agent** given the exact,
    numbered fix spec (read-then-edit in its own context; this also sidesteps any parent-side
    router restrictions on Read/Edit). Address cheap Suggestions too when they reduce future review
@@ -116,8 +122,11 @@ dimension** AND the previous round's fixes introduced nothing new.
 4. **Re-review (next round).** Re-query the same reviewers (continuing them via SendMessage
    preserves their codebase context) with TWO asks: (a) verify each prior finding is *actually*
    resolved against the new diff — not assumed; (b) check whether the fixes **introduced** any new
-   bug, inconsistency, or regression. A reviewer replies either with new CRITICAL/IMPORTANT items
-   or "CONVERGED — no actionable issues."
+   bug, inconsistency, or regression. Repeat the same rule as the initial dispatch: long harnesses
+   run in the foreground with the Bash timeout near its maximum, chunk anything over ~20 minutes
+   and send partial results after each chunk, and never go idle waiting on their own background
+   run. A reviewer replies either with new CRITICAL/IMPORTANT items or "CONVERGED — no actionable
+   issues."
 5. **Converge or iterate.** If all dimensions report CONVERGED -> Phase 1 done. Else apply the new
    fixes and run another round. Respect `--max-rounds` (default 4); if not converged at the cap,
    surface the remaining items to the user rather than looping forever.
@@ -190,15 +199,25 @@ In one message, launch (none seeing the others):
   picked automatically and `GEMINI_AUTHED=yes`, switch to Gemini for the whole phase and rerun this
   step; otherwise follow Step 2.0's Claude-only path.
 
+Tell both Claude agents the same rule as Phase 1's dispatch: run long harnesses in the foreground
+with the Bash timeout near its maximum, split anything over ~20 minutes into chunks and send
+partial results after each chunk, and never go idle waiting on their own background run.
+
 Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`.
 Emit an R1 digest (counts by severity/category). An empty findings array is a respectable, valid
-answer. Record the round (phase `phase2-r1`).
+answer. If a side reports it is waiting on a background job, check its output or process within
+about 10 minutes (`ps -axo pid,etime,command | grep <harness>`, or its scratch output) and ping it
+if it is idle — never report "waiting on R1" to the user without having looked. Record the round
+(phase `phase2-r1`).
 
 ### Step 2.2 — R2: symmetric cross-examination
 
 In one message:
 - Claude cross-examiner (opus) judges every adversary finding -> `confirm|refute` with reason,
-  grounded in the **current** source (findings can be stale if Phase 1 already fixed them).
+  grounded in the **current** source (findings can be stale if Phase 1 already fixed them). Give
+  it the same rule as Step 2.1: run long harnesses in the foreground with the Bash timeout near
+  its maximum, chunk anything over ~20 minutes with partial results after each chunk, and never go
+  idle waiting on its own background run.
 - The adversary judges every Claude finding:
   `$ADV_REVIEW --diff <DIFF> --findings <claude-r1.json> --mode judge --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"`.
   Both scripts write the verdict under the key `adversary_verdict`, whichever model gave it.
@@ -215,7 +234,10 @@ In one message:
     (`synthesize.py` exits 1 on a missing file), and say in the R2 digest that Codex's verdicts
     are missing. Those Claude findings stay unconfirmed.
 
-Emit an R2 digest (confirmed/refuted/unjudged each direction). Record the round (phase
+Emit an R2 digest (confirmed/refuted/unjudged each direction). If a side reports it is waiting on
+a background job, check its output or process within about 10 minutes (`ps -axo pid,etime,command
+| grep <harness>`, or its scratch output) and ping it if it is idle — never report "waiting on R2"
+to the user without having looked. Record the round (phase
 `phase2-r2`): record each judged finding with its `verdict` event; confirmed findings take
 `status: survivor`, refuted ones stay `status: unconfirmed` until the R3 record (see
 ./references/audit-trail.md).
@@ -382,6 +404,7 @@ Summarize for the user:
   matching CI job **(or mark it UNCOVERED when no such job exists)**, and recommend a concrete
   alternate-toolchain check where possible.
 - **Hand a fix to re-review without self-checking it.** A new guard needs its planted-regression in the *same* edit; retiring/disabling/renaming code needs a sweep of *every* descriptor string (manifest, README tagline, comments), not just the banner — don't let the next round be the first to catch your fix's new gap.
+- **Report "waiting on a reviewer" without checking whether it is idle.** An idle teammate is not woken when its own background job ends; check its process or output before telling the user you're waiting on it.
 
 ## Integration
 

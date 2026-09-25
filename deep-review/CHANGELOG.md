@@ -10,6 +10,7 @@
 - With Codex, every Codex call goes through `codex-review.sh` (find, judge and counter), never `codex` directly, so the reviewed repo's `AGENTS.md` and project config cannot steer it.
 - Step 2.6: Codex re-checks each fix in the fix range, and `pr-audit.py recheck` records the answers as `recheck` events, so a fixed Phase 2 thread closes when Codex says it is resolved. A finding Codex did not re-check (`unchecked=<N>` from `recheck`) counts as not resolved: the loop re-checks it again within the cap of 3, and surfaces it to you at the cap.
 - The adversary's verdict key is `adversary_verdict` (it was `gemini_verdict`); old run files still load.
+- Reviewer dispatch, re-review, and the Phase 2 R1/R2 briefs now tell reviewers to run long harnesses (mutation runs, fuzzers, full suites) in the foreground with the Bash timeout near its maximum, chunk anything over ~20 minutes and send partial results after each chunk, and never go idle waiting on their own background run. The orchestrator checks a reviewer's or implementer's background job (`ps -axo pid,etime,command`, or its scratch output) within about 10 minutes before reporting it is waiting on one.
 
 ### Fixed
 
