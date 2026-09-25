@@ -293,6 +293,8 @@ def classify_findings(
         else:
             f["gemini_verdict"] = g_verdict.get("gemini_verdict")
             f["status"] = "unconfirmed"
+        if g_verdict is not None:
+            f["verdict_reason"] = g_verdict.get("reason", "") or ""
 
         classified.append(f)
 
@@ -325,6 +327,8 @@ def classify_findings(
         else:
             f["claude_verdict"] = c_verdict.get("claude_verdict")
             f["status"] = "unconfirmed"
+        if c_verdict is not None:
+            f["verdict_reason"] = c_verdict.get("reason", "") or ""
 
         classified.append(f)
 

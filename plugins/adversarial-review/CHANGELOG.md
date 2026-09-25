@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-09-24
+
+### Added
+
+- PR mode saves the whole exchange on the PR: one inline thread per finding (refuted ones too), the opposing model's verdict as a reply, refuted threads resolved at once, and one summary review. Secrets in model output are redacted before posting, and bodies are capped below GitHub's size limit.
+- `scripts/pr-audit.py` with `post`, `local` and `record` modes, and `--no-post` on the skill and `sink.sh`.
+- `pr-audit.py` exit codes: 0 everything posted, 1 trail incomplete (some posts failed, or it went to the local file), 2 invalid record or report, 3 unexpected crash (the trail may be partial). `sink.sh` maps any non-zero code to 4.
+
+### Fixed
+
+- PR mode never posted anything. `sink.sh` called `pr-review-cli.sh --pr …`, which that CLI rejects as an unknown subcommand, then printed "PR review comments posted" anyway. `sink.sh` now exits 4 when any audit comment fails.
+- A gh response that could not be parsed (bad JSON or the wrong shape) crashed `pr-audit.py` and lost the failures already collected. It is now a failed post: the run carries on, lists it, and exits 1.
+- When `gh` is not usable, `pr-audit.py` now says why: not installed, not logged in, no login returned, or gh's own error text (for example a network error). An empty login counts as not ready.
+- `sink.sh` added the `.gitignore` pattern onto the last line when the file had no final newline (for example `node_modules*.adversarial-review.md`). It now adds a newline first. A pattern on a CRLF line counts as present. A `.gitignore` that cannot be written is a warning, not an abort.
+- The crash message (exit 3) in `pr-audit.py` and `sink.sh` said no audit trail was saved. Some posts may already be on the PR, so it now says the trail may be partial.
+- A thread opener without `subject_type` is treated as file-level when it has no line, so the summary still notes the lost line anchor.
+
 ## [0.1.0] - 2026-06-02
 
 ### Added

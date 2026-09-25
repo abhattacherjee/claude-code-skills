@@ -2,7 +2,7 @@
 name: adversarial-review
 description: "Runs a Claude↔Gemini adversarial code review on a PR diff or working-tree diff, surfacing only findings both models independently confirm (high-precision, both-confirm rule). Use when: (1) reviewing a PR or working-tree diff with adversarial rigor and you want fewer false positives, (2) you want only findings two independent AI models agree on rather than a single-model opinion, (3) replacing a lost external PR reviewer (e.g. Copilot) with a second independent model cross-examining Claude's analysis, (4) running a high-precision pre-merge review before shipping to production. Supports automatic PR mode (posts review comments) and local mode (terminal report + gitignored markdown file). Degrades loudly to Claude-only review when Gemini is unavailable."
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # Adversarial Review
@@ -28,6 +28,9 @@ Gemini setup is **guided automatically** via Step 0 below. When the skill runs, 
 
 # Force large-diff past the size warning
 /adversarial-review --force
+
+# Review without posting anything to the PR (report + local file only)
+/adversarial-review --no-post
 ```
 
 ---
@@ -96,7 +99,7 @@ Tell the user Gemini CLI is not installed and show the `INSTALL_HINT`. ASK wheth
 ```bash
 npm install -g @google/gemini-cli
 ```
-After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. If the user declines, or if install fails, proceed in **degraded Claude-only mode** (print the loud banner from the Degradation Behavior section) and continue directly to the detect-mode step.
+After install succeeds, re-run `ensure-gemini.sh --check` to re-evaluate auth. If the user declines, or if install fails, set `ADVERSARY="claude-only"`, proceed in **degraded Claude-only mode** (print the loud banner from the Degradation Behavior section), and continue directly to the detect-mode step.
 
 **Case B — installed but `GEMINI_AUTHED=no`:**
 Tell the user Gemini is installed but lacks a headless-capable credential, and show the `AUTH_HINT`. **Emphasise that interactive Google login is NOT sufficient** — the skill's headless calls require an API key. ASK the user to:
@@ -106,13 +109,13 @@ Tell the user Gemini is installed but lacks a headless-capable credential, and s
 
 **Do NOT suggest** `gemini` interactive login — it produces OAuth credentials insufficient for headless `-p`/`-o json` calls.
 
-Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, proceed in **degraded Claude-only mode**.
+Once the user confirms they've set a credential, re-run `ensure-gemini.sh --check` to confirm `GEMINI_AUTHED=yes`. If they decline, set `ADVERSARY="claude-only"` and proceed in **degraded Claude-only mode**.
 
 **Case C — `GEMINI_AUTHED=unknown`:**
-No user interaction needed. Proceed normally; rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails.
+No user interaction needed. Proceed normally: set `ADVERSARY="gemini"`. Rely on the runtime guard: `gemini-review.sh` exits 3 (`ADVERSARY_UNAVAILABLE`) if Gemini actually fails, which falls back per Degradation Behavior (setting `ADVERSARY="claude-only"`).
 
 **Case D — `GEMINI_INSTALLED=yes` and `GEMINI_AUTHED=yes`:**
-Adversary confirmed available. Continue to Step 1 with no user interaction.
+Adversary confirmed available. Set `ADVERSARY="gemini"`. Continue to Step 1 with no user interaction.
 
 ### Step 1 — Detect Mode
 
@@ -250,6 +253,27 @@ $SCRIPTS/synthesize.py \
 
 Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, and `unrecognized=`. Read and relay these counts and any `low_signal=true` flags and any `unrecognized > 0` count to the user.
 
+### Step 4b — Write the round record
+
+The round record is what `sink.sh` posts to the PR: every finding, and the opposing model's verdict with its reason. Build it from `report.json`, never by hand.
+
+```bash
+RUN_ID="ar-$(date +%Y%m%d-%H%M%S)-$$"
+if [[ "$MODE" == "pr" ]]; then
+  HEAD_SHA="$(gh pr view "$PR" --json headRefOid -q .headRefOid)"
+else
+  HEAD_SHA="$(git rev-parse HEAD)"
+fi
+# ADVERSARY was set in Step 0 ("gemini"), or to "claude-only" on any degraded-mode fallback.
+$SCRIPTS/pr-audit.py record \
+  --report-json "$RUN_DIR/report.json" \
+  --run-id "$RUN_ID" --skill adversarial-review --phase review --round 1 \
+  --adversary "$ADVERSARY" --head-sha "$HEAD_SHA" \
+  --out "$RUN_DIR/round-1.json"
+```
+
+Exit 2 means `report.json` could not be read or did not make a valid record. Tell the user and run Step 5 with `--no-post` and without `--record`.
+
 ### Step 5 — Sink
 
 ```bash
@@ -257,9 +281,21 @@ $SCRIPTS/sink.sh \
   --report-md "$RUN_DIR/report.md" \
   --report-json "$RUN_DIR/report.json" \
   --mode "$MODE" \
+  --record "$RUN_DIR/round-1.json" \
   [--pr "$PR"] \
-  [--branch "$(git branch --show-current)"]
+  [--branch "$(git branch --show-current)"] \
+  [--no-post]
 ```
+
+Pass `--no-post` when the user asked for it. Relay `sink.sh`'s `pr-audit:` line to the user.
+
+Model text is posted as written under your GitHub account, so @mentions and #refs in it will notify people and link issues.
+
+- Exit 0: posted. In pr mode, each finding with a path has a thread on the PR. The opposing model's verdict is a reply in it. Refuted findings' threads are resolved. One summary review lists every finding; it is split into numbered parts if very long. Findings without a path, or that GitHub rejected twice, appear only in the summary.
+- Exit 4: the report was delivered, but the audit trail is incomplete or went to the local file. See the `pr-audit:` lines and tell the user. Rerunning Step 5 with the same record posts only what is missing and updates the summary.
+- Exit 1 or 2: `sink.sh` itself failed. Show the error.
+
+The run directory (`$RUN_DIR`) keeps `round-1.json`. Give the user its path.
 
 ---
 
@@ -291,7 +327,7 @@ If `gemini-review.sh` exits with code 3 (unauthenticated, network error, unparse
 ╚══════════════════════════════════════════════════════════╝
 ```
 
-Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without Gemini. The skill exits 0 (not an error).
+Claude findings are reported as-is with `status=unconfirmed` — they cannot be cross-confirmed without Gemini. The skill exits 0 (not an error). Set `ADVERSARY="claude-only"` whenever this degraded path is taken.
 
 ## Same-Diff Invariant
 
@@ -301,7 +337,7 @@ Both Claude agents (R1) and Gemini (R1 find + R2 judge) receive the **byte-ident
 
 | Mode | Output |
 |---|---|
-| `pr` | Review comments posted to the PR via `sink.sh` (uses `pr-review-loop`'s `pr-review-cli.sh` if present) |
+| `pr` | Terminal report; one PR thread per finding with the verdict as a reply, and one summary review, via `pr-audit.py` (falls back to the local file when `gh` is unavailable) |
 | `local` | Terminal report + `<branch>.adversarial-review.md` (gitignored) in repo root |
 
 ## See Also
@@ -310,5 +346,5 @@ Both Claude agents (R1) and Gemini (R1 find + R2 judge) receive the **byte-ident
 - `scripts/detect-mode.sh` — diff extraction and mode detection
 - `scripts/gemini-review.sh` — R1 find + R2 judge Gemini calls
 - `scripts/synthesize.py` — survivor rule application (4-file symmetric input)
-- `scripts/sink.sh` — output routing (PR comments or local file)
-- `pr-review-loop` plugin — PR comment posting used by sink in PR mode
+- `scripts/sink.sh` — output routing: terminal + local file, and the PR audit trail via `pr-audit.py`
+- `scripts/pr-audit.py` — posts a round record to the PR (`post`), writes it locally (`local`), or builds it from `report.json` (`record`)

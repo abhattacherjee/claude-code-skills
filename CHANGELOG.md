@@ -7,6 +7,15 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Added
+
+- **Review audit trail on the PR (#135, part 1).** `adversarial-review` 0.1.0 -> 0.2.0 and `deep-review` 1.3.1 -> 1.4.0 save every model exchange on the PR, round by round. Each finding gets one thread, refuted ones included; refuted threads are resolved at once. Verdicts, counters, fixes and re-checks are replies in the thread. Each round gets one summary review. A fixed finding's thread closes only when the adversary's latest re-check says resolved. pr-audit.py trusts only markers written by its own gh user. Secrets are redacted and bodies capped before posting. A new shared script, `pr-audit.py`, does the posting. It keeps no local state, so a rerun posts only what is missing and updates its own summary.
+
+### Fixed
+
+- **`adversarial-review` PR mode never posted a comment.** `sink.sh` called `pr-review-cli.sh --pr …`, which that CLI rejects, then printed "PR review comments posted" anyway. The old test suite had no PR-mode test; it only ran `sink.sh --help`. It also never ran in CI. It now has PR-mode tests and runs in CI.
+- **`adversarial-review` `pr-audit.py` and `sink.sh` edge cases (#135).** A gh response that could not be parsed crashed `pr-audit.py` and lost the failures it had collected; it is now a failed post (exit 1). The gh readiness check treats an empty login as not ready and prints the real reason. The exit-3 message now says the trail may be partial, not that nothing was saved. `sink.sh` no longer merges the `.gitignore` pattern into a last line with no newline, counts a CRLF line as present, and warns instead of aborting when `.gitignore` cannot be written.
+
 ## [3.18.1] - 2026-09-24
 
 ### Changed
