@@ -2,7 +2,7 @@
 
 All notable changes to this skill will be documented in this file.
 
-## [0.2.0] - 2026-09-24
+## [0.2.0] - 2026-09-25
 
 ### Added
 
