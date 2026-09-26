@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+## [3.19.0] - 2026-09-25
+
 ### Added
 
 - **Review audit trail on the PR (#135, part 1).** `adversarial-review` 0.1.0 -> 0.2.0 and `deep-review` 1.3.1 -> 1.4.0 save every model exchange on the PR, round by round. Each finding gets one thread, refuted ones included; refuted threads are resolved at once. Verdicts, counters, fixes and re-checks are replies in the thread. Each round gets one summary review. A fixed finding's thread closes only when the adversary's latest re-check says resolved. pr-audit.py trusts only markers written by its own gh user. Secrets are redacted and bodies capped before posting. A new shared script, `pr-audit.py`, does the posting. It keeps no local state, so a rerun posts only what is missing and updates its own summary.
