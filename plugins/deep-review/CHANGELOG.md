@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.4.0] - 2026-09-25
+
+### Added
+
+- Every round of both phases is saved on the PR through adversarial-review's `pr-audit.py`: findings as threads, and verdicts, counters, fixes and re-checks as replies, with one summary review per round. `--no-post` keeps it local. See `references/audit-trail.md`.
+- You write one round record (`audit-round/v1` JSON) per round, and `references/audit-trail.md` says what each `pr-audit.py` exit code means: 0 posted, 1 trail incomplete (carry on and rerun later), 2 invalid record (fix and rerun), 3 crashed (the trail may be partial).
+- Phase 2 picks its adversary with adversarial-review's `pick-adversary.sh`: Codex when it is installed and logged in, then Gemini, then Claude-only. `--adversary codex|gemini` forces one and stops if it is not usable.
+- With Codex, every Codex call goes through `codex-review.sh` (find, judge and counter), never `codex` directly, so the reviewed repo's `AGENTS.md` and project config cannot steer it.
+- Step 2.6: Codex re-checks each fix in the fix range, and `pr-audit.py recheck` records the answers as `recheck` events, so a fixed Phase 2 thread closes when Codex says it is resolved.
+- The adversary's verdict key is `adversary_verdict` (it was `gemini_verdict`); old run files still load.
+- Reviewer dispatch, re-review, the Fix/Step 2.5 implementer dispatch, and the Phase 2 R1/R2 briefs now tell reviewers and implementers to run long harnesses in the foreground, keeping each Bash call under the 10-minute cap (chain calls, or split into chunks, rather than backgrounding it), and send partial results at least every ~20 minutes of a long run, and never go idle waiting on their own background run. The orchestrator checks a background job within about 10 minutes before reporting it is waiting on one.
+
+### Fixed
+
+- Phase 2 R1 told you to call `gemini` directly because `gemini-review.sh` supposedly had no `--mode find`. It does; R1 now uses it.
+
 ## [1.3.1] - 2026-09-24
 
 ### Added

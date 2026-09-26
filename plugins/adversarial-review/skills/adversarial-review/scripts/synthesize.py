@@ -5,18 +5,31 @@ synthesize.py — symmetric convergence of Claude↔Gemini adversarial review ro
 Usage:
   synthesize.py --claude-findings FILE --gemini-findings FILE
                 --gemini-verdicts FILE --claude-verdicts FILE
-                [--md FILE] [--json FILE] [--help]
+                [--adversary gemini|codex|claude-only] [--md FILE] [--json FILE] [--help]
+
+  --adversary-findings and --adversary-verdicts are the same flags as
+  --gemini-findings and --gemini-verdicts. The adversary's verdict on a Claude
+  finding is adversary_verdict; files that still say gemini_verdict are read
+  too. --adversary sets killed_by, the default origin of the adversary's
+  findings, and the labels in the report and the direction lines.
+
+  --adversary claude-only is for the degraded no-adversary path: pass
+  {"findings":[]} for --adversary-findings and {"verdicts":[]} for
+  --adversary-verdicts and --claude-verdicts. Every Claude finding then comes
+  out status=unconfirmed (nothing to confirm it), and report.json's
+  summary.adversary is "claude-only", matching what `pr-audit.py record
+  --adversary claude-only` expects.
 
 Convergence rule (mechanical):
   A finding survives iff its author asserts it AND the opponent confirms it.
   No model adjudicates the other's findings — verdicts are looked up by id.
 
   Claude finding (origin=claude):
-    gemini_verdict=confirm   -> status=survivor
-    gemini_verdict=refute    -> status=rejected, killed_by=gemini
+    adversary_verdict=confirm   -> status=survivor
+    adversary_verdict=refute    -> status=rejected, killed_by=<adversary> (gemini by default)
     missing/none             -> status=unconfirmed
 
-  Gemini finding (origin=gemini):
+  Adversary finding (origin=<adversary>, gemini by default):
     claude_verdict=confirm   -> status=survivor
     claude_verdict=refute    -> status=rejected, killed_by=claude
     missing/none             -> status=unconfirmed
@@ -81,6 +94,14 @@ def compute_confirm_rate(verdict_map: dict, verdict_field: str) -> dict:
     }
 
 
+def count_unjudged(findings, verdict_map):
+    """Findings with an id but no entry at all in the judge's verdict map -- what a
+    partial judge run (missing or unknown ids silently dropped, not defaulted)
+    never answered. Distinct from "unrecognized" (an entry exists, its verdict
+    value doesn't parse)."""
+    return sum(1 for f in findings if f.get("id") and f["id"] not in verdict_map)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -90,11 +111,11 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Convergence rule (mechanical):
-  Claude finding: gemini_verdict=confirm -> survivor
-                  gemini_verdict=refute  -> rejected (killed_by=gemini)
+  Claude finding: adversary_verdict=confirm -> survivor
+                  adversary_verdict=refute  -> rejected (killed_by=<adversary>, gemini by default)
                   missing/none           -> unconfirmed
 
-  Gemini finding: claude_verdict=confirm -> survivor
+  Adversary finding (gemini by default): claude_verdict=confirm -> survivor
                   claude_verdict=refute  -> rejected (killed_by=claude)
                   missing/none           -> unconfirmed
 
@@ -106,12 +127,18 @@ Exit codes:
     )
     parser.add_argument("--claude-findings", required=True, metavar="FILE",
                         help="Claude R1 findings JSON (bare list OR {\"findings\":[...]})")
-    parser.add_argument("--gemini-findings", required=True, metavar="FILE",
-                        help="Gemini R1 findings JSON ({\"findings\":[...]} OR bare list)")
-    parser.add_argument("--gemini-verdicts", required=True, metavar="FILE",
-                        help="Gemini judging Claude: {\"verdicts\":[{\"id\",\"gemini_verdict\",\"reason\",\"confidence\"}]}")
+    parser.add_argument("--gemini-findings", "--adversary-findings", dest="gemini_findings",
+                        required=True, metavar="FILE",
+                        help="Adversary (Gemini or Codex) R1 findings JSON ({\"findings\":[...]} OR bare list)")
+    parser.add_argument("--gemini-verdicts", "--adversary-verdicts", dest="gemini_verdicts",
+                        required=True, metavar="FILE",
+                        help="Adversary judging Claude: {\"verdicts\":[{\"id\",\"adversary_verdict\",\"reason\",\"confidence\"}]}")
+    parser.add_argument("--adversary", choices=("gemini", "codex", "claude-only"), default="gemini",
+                        help="the adversary model: sets killed_by, the default origin of its "
+                             "findings, and the report labels (default: gemini). claude-only "
+                             "is the degraded no-adversary path: pass empty findings/verdicts")
     parser.add_argument("--claude-verdicts", required=True, metavar="FILE",
-                        help="Claude judging Gemini: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
+                        help="Claude judging the adversary: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
     parser.add_argument("--md", metavar="FILE",
                         help="Write human-readable markdown report to this file")
     parser.add_argument("--json", metavar="FILE", dest="json_out",
@@ -242,6 +269,7 @@ def classify_findings(
     gemini_findings: list[dict],
     gemini_verdicts_raw: dict,
     claude_verdicts_raw: dict,
+    adversary="gemini",
 ) -> tuple[list[dict], dict[str, dict], dict[str, dict]]:
     """Apply symmetric convergence and return (findings, gemini_verdict_map, claude_verdict_map).
 
@@ -254,7 +282,7 @@ def classify_findings(
     # resolved Claude finding id (C-NNN); reconcile recovers slug/location-keyed
     # verdicts back to that id.
     gemini_verdict_map: dict[str, dict] = reconcile_verdict_map(
-        gemini_verdicts_raw.get("verdicts", []), claude_findings, "gemini_verdict"
+        gemini_verdicts_raw.get("verdicts", []), claude_findings, "adversary_verdict"
     )
     # claude_verdict_map: Claude's verdicts on Gemini findings, keyed by the
     # resolved Gemini finding id (G-NNN); same recovery applies.
@@ -273,26 +301,28 @@ def classify_findings(
         f.setdefault("killed_by", None)
         f.setdefault("kill_reason", None)
         f.setdefault("claude_verdict", None)
-        f.setdefault("gemini_verdict", None)
+        f.setdefault("adversary_verdict", None)
         f.setdefault("status", None)
 
         fid = f["id"]
         g_verdict = gemini_verdict_map.get(fid)
 
         if g_verdict is None:
-            f["gemini_verdict"] = None
+            f["adversary_verdict"] = None
             f["status"] = "unconfirmed"
-        elif g_verdict.get("gemini_verdict") == "confirm":
-            f["gemini_verdict"] = "confirm"
+        elif g_verdict.get("adversary_verdict") == "confirm":
+            f["adversary_verdict"] = "confirm"
             f["status"] = "survivor"
-        elif g_verdict.get("gemini_verdict") == "refute":
-            f["gemini_verdict"] = "refute"
+        elif g_verdict.get("adversary_verdict") == "refute":
+            f["adversary_verdict"] = "refute"
             f["status"] = "rejected"
-            f["killed_by"] = "gemini"
+            f["killed_by"] = adversary
             f["kill_reason"] = g_verdict.get("reason", "")
         else:
-            f["gemini_verdict"] = g_verdict.get("gemini_verdict")
+            f["adversary_verdict"] = g_verdict.get("adversary_verdict")
             f["status"] = "unconfirmed"
+        if g_verdict is not None:
+            f["verdict_reason"] = g_verdict.get("reason", "") or ""
 
         classified.append(f)
 
@@ -301,11 +331,11 @@ def classify_findings(
         f = dict(finding)
         if not f.get("id"):
             continue  # skip id-less entries defensively
-        f.setdefault("origin", "gemini")
+        f.setdefault("origin", adversary)
         f.setdefault("killed_by", None)
         f.setdefault("kill_reason", None)
         f.setdefault("claude_verdict", None)
-        f.setdefault("gemini_verdict", None)
+        f.setdefault("adversary_verdict", None)
         f.setdefault("status", None)
 
         fid = f["id"]
@@ -325,10 +355,27 @@ def classify_findings(
         else:
             f["claude_verdict"] = c_verdict.get("claude_verdict")
             f["status"] = "unconfirmed"
+        if c_verdict is not None:
+            f["verdict_reason"] = c_verdict.get("reason", "") or ""
 
         classified.append(f)
 
     return classified, gemini_verdict_map, claude_verdict_map
+
+
+ADVERSARY_LABEL = {"gemini": "Gemini", "codex": "Codex", "claude-only": "Claude-only"}
+VERDICT_KEY = "adversary_verdict"
+LEGACY_VERDICT_KEY = "gemini_verdict"
+
+
+def upgrade_verdict_key(items):
+    """Accept run files written before the rename: move gemini_verdict to adversary_verdict."""
+    for item in items:
+        if isinstance(item, dict) and LEGACY_VERDICT_KEY in item:
+            value = item.pop(LEGACY_VERDICT_KEY)
+            if item.get(VERDICT_KEY) is None:
+                item[VERDICT_KEY] = value
+    return items
 
 
 SEVERITY_ORDER = {"critical": 0, "important": 1, "minor": 2}
@@ -345,6 +392,7 @@ def format_markdown(
     survivors: list[dict],
     unconfirmed: list[dict],
     rejected: list[dict],
+    adversary="gemini",
 ) -> str:
     lines: list[str] = []
 
@@ -385,11 +433,11 @@ def format_markdown(
             lines.append(f.get("rationale", ""))
             # Optionally append confirmer's reason
             if origin == "claude":
-                g_v = f.get("gemini_verdict")
+                g_v = f.get("adversary_verdict")
                 if g_v == "confirm":
                     lines.append("")
-                    lines.append("> Confirmed by Gemini.")
-            elif origin == "gemini":
+                    lines.append(f"> Confirmed by {ADVERSARY_LABEL[adversary]}.")
+            else:
                 c_v = f.get("claude_verdict")
                 if c_v == "confirm":
                     lines.append("")
@@ -492,8 +540,13 @@ def main() -> None:
         )
         sys.exit(1)
 
+    upgrade_verdict_key(claude_findings)
+    upgrade_verdict_key(gemini_findings)
+    if isinstance(gemini_verdicts_raw.get("verdicts"), list):
+        upgrade_verdict_key(gemini_verdicts_raw["verdicts"])
+    adv = args.adversary
     classified, gemini_verdict_map, claude_verdict_map = classify_findings(
-        claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw
+        claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw, adv
     )
 
     # Warn on id collisions across origins (both are preserved in the list)
@@ -503,7 +556,7 @@ def main() -> None:
         origin = f.get("origin", "")
         if fid in seen_ids and seen_ids[fid] != origin:
             print(
-                f"Warning: id '{fid}' appears in both claude and gemini findings; "
+                f"Warning: id '{fid}' appears in both claude and {adv} findings; "
                 "both are preserved in output",
                 file=sys.stderr,
             )
@@ -518,44 +571,51 @@ def main() -> None:
 
     # Confirm-rate guard: report rubber-stamp / rubber-reject signals for each judge direction.
     # Reuse the verdict maps built once inside classify_findings (no duplicate reconcile).
-    gem_stats = compute_confirm_rate(gemini_verdict_map, "gemini_verdict")
+    gem_stats = compute_confirm_rate(gemini_verdict_map, "adversary_verdict")
     cla_stats = compute_confirm_rate(claude_verdict_map, "claude_verdict")
+    # Findings whose id got no verdict entry at all from the judge (as opposed to
+    # one with an unrecognized value): what a partial judge run (Task 4: Codex's
+    # validate_judge drops missing/unknown ids, exit 0) silently skipped. These
+    # findings are never confirmed by the convergence rule above -- they stay
+    # "unconfirmed" -- but that count must be visible, not just implied.
+    gem_unjudged = count_unjudged(claude_findings, gemini_verdict_map)
+    cla_unjudged = count_unjudged(gemini_findings, claude_verdict_map)
 
     # Warn on unrecognized verdicts (Fix D)
     if gem_stats["unrecognized"] > 0:
         _warn(
-            f"confirm-rate(gemini_on_claude): {gem_stats['unrecognized']} verdict(s) had an "
+            f"confirm-rate({adv}_on_claude): {gem_stats['unrecognized']} verdict(s) had an "
             "unrecognized verdict value — judge output may be malformed"
         )
     if cla_stats["unrecognized"] > 0:
         _warn(
-            f"confirm-rate(claude_on_gemini): {cla_stats['unrecognized']} verdict(s) had an "
+            f"confirm-rate(claude_on_{adv}): {cla_stats['unrecognized']} verdict(s) had an "
             "unrecognized verdict value — judge output may be malformed"
         )
 
     print(
-        f"gemini_on_claude: confirmed={gem_stats['confirmed']} refuted={gem_stats['refuted']} "
+        f"{adv}_on_claude: confirmed={gem_stats['confirmed']} refuted={gem_stats['refuted']} "
         f"judged={gem_stats['judged']} confirm_rate={gem_stats['confirm_rate']:.3f} "
         f"low_signal={'true' if gem_stats['low_signal'] else 'false'} "
-        f"unrecognized={gem_stats['unrecognized']}"
+        f"unrecognized={gem_stats['unrecognized']} unjudged={gem_unjudged}"
     )
     print(
-        f"claude_on_gemini: confirmed={cla_stats['confirmed']} refuted={cla_stats['refuted']} "
+        f"claude_on_{adv}: confirmed={cla_stats['confirmed']} refuted={cla_stats['refuted']} "
         f"judged={cla_stats['judged']} confirm_rate={cla_stats['confirm_rate']:.3f} "
         f"low_signal={'true' if cla_stats['low_signal'] else 'false'} "
-        f"unrecognized={cla_stats['unrecognized']}"
+        f"unrecognized={cla_stats['unrecognized']} unjudged={cla_unjudged}"
     )
 
     # Warn loudly when low_signal fires (Fix E)
     if gem_stats["low_signal"]:
         _warn(
-            f"confirm-rate guard FIRED (gemini_on_claude): "
+            f"confirm-rate guard FIRED ({adv}_on_claude): "
             f"confirm_rate={gem_stats['confirm_rate']:.3f} over {gem_stats['judged']} judged "
             "— judge may be rubber-stamping/rubber-rejecting; treat survivors with caution"
         )
     if cla_stats["low_signal"]:
         _warn(
-            f"confirm-rate guard FIRED (claude_on_gemini): "
+            f"confirm-rate guard FIRED (claude_on_{adv}): "
             f"confirm_rate={cla_stats['confirm_rate']:.3f} over {cla_stats['judged']} judged "
             "— judge may be rubber-stamping/rubber-rejecting; treat survivors with caution"
         )
@@ -568,6 +628,8 @@ def main() -> None:
                 "unconfirmed": len(unconfirmed),
                 "rejected": len(rejected),
                 "total": len(classified),
+                "adversary": adv,
+                "unjudged": {f"{adv}_on_claude": gem_unjudged, f"claude_on_{adv}": cla_unjudged},
             },
             "findings": classified,
         }
@@ -576,7 +638,7 @@ def main() -> None:
 
     # Write markdown output
     if args.md:
-        md_content = format_markdown(survivors, unconfirmed, rejected)
+        md_content = format_markdown(survivors, unconfirmed, rejected, adv)
         with open(args.md, "w") as f:
             f.write(md_content)
 

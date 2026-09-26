@@ -9,7 +9,7 @@
     "rationale": "User input is concatenated directly into the SQL query without parameterization.",
     "origin": "claude",
     "claude_verdict": null,
-    "gemini_verdict": null,
+    "adversary_verdict": null,
     "status": null,
     "killed_by": null,
     "kill_reason": null
@@ -24,7 +24,7 @@
     "rationale": "The range ends at len(items) - 1 but should end at len(items) to include the last element.",
     "origin": "claude",
     "claude_verdict": null,
-    "gemini_verdict": null,
+    "adversary_verdict": null,
     "status": null,
     "killed_by": null,
     "kill_reason": null
@@ -39,7 +39,7 @@
     "rationale": "The value 3600 (seconds in an hour) should be extracted to a named constant for clarity.",
     "origin": "claude",
     "claude_verdict": null,
-    "gemini_verdict": null,
+    "adversary_verdict": null,
     "status": null,
     "killed_by": null,
     "kill_reason": null
@@ -54,7 +54,7 @@
     "rationale": "The nested loop iterates over the same list twice; a set-based lookup would be O(n).",
     "origin": "claude",
     "claude_verdict": null,
-    "gemini_verdict": null,
+    "adversary_verdict": null,
     "status": null,
     "killed_by": null,
     "kill_reason": null
@@ -69,7 +69,7 @@
     "rationale": "The function handle_request is 110 lines and handles too many concerns; split into smaller units.",
     "origin": "claude",
     "claude_verdict": null,
-    "gemini_verdict": null,
+    "adversary_verdict": null,
     "status": null,
     "killed_by": null,
     "kill_reason": null

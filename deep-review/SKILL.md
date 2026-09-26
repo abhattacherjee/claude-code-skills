@@ -1,8 +1,8 @@
 ---
 name: deep-review
-description: "Use when the user wants a thorough, high-assurance review of code changes — phrases like \"review this until it's clean\", \"converge to zero issues\", \"adversarial review\", \"have Gemini and Claude review\", \"deep review this PR\", or \"make this change ironclad\". Runs TWO phases on a PR or working-tree diff: (1) iterative multi-reviewer review that loops fix->re-review until a round finds zero actionable issues, then (2) a multi-round Gemini-primary adversarial cross-examination (Gemini finds -> Claude judges -> Gemini counters), fixing every confirmed finding. Repeatable across any project/PR. Use when: (1) the user wants a thorough, high-assurance review that converges to zero actionable issues, (2) the user asks for an adversarial or Gemini-and-Claude cross-examination review of a code diff, (3) deep-reviewing a PR or working-tree diff before merge, (4) the user wants to make a change ironclad."
+description: "Use when the user wants a thorough, high-assurance review of code changes — phrases like \"review this until it's clean\", \"converge to zero issues\", \"adversarial review\", \"have Codex or Gemini and Claude review\", \"deep review this PR\", or \"make this change ironclad\". Runs TWO phases on a PR or working-tree diff: (1) iterative multi-reviewer review that loops fix->re-review until a round finds zero actionable issues, then (2) a multi-round adversarial cross-examination with Codex, else Gemini, as the opposing model (it finds -> Claude judges -> it counters), fixing every confirmed finding. Repeatable across any project/PR. Use when: (1) the user wants a thorough, high-assurance review that converges to zero actionable issues, (2) the user asks for an adversarial or Gemini-and-Claude cross-examination review of a code diff, (3) deep-reviewing a PR or working-tree diff before merge, (4) the user wants to make a change ironclad."
 metadata:
-  version: 1.3.1
+  version: 1.4.0
 ---
 
 # Deep Review
@@ -16,9 +16,9 @@ metadata:
 
 A two-phase convergence harness for high-assurance review of a changeset. Phase 1 drives
 specialized reviewers in fix->re-review rounds until they stop finding actionable issues. Phase 2
-runs an adversarial Claude<->Gemini cross-examination so only findings the *opposing* model confirms
-survive. The output is a changeset that passed both a depth gauntlet and a cross-model gauntlet,
-with every confirmed issue fixed and verified.
+runs an adversarial cross-examination between Claude and an opposing model (Codex, else Gemini) so
+only findings the *opposing* model confirms survive. The output is a changeset that passed both a
+depth gauntlet and a cross-model gauntlet, with every confirmed issue fixed and verified.
 
 **Announce at start:** "Using deep-review to run iterative + adversarial review to convergence."
 
@@ -26,7 +26,7 @@ with every confirmed issue fixed and verified.
 
 - The user wants more than a single review pass — they want *convergence* ("until it's clean").
 - High-stakes changes (security-sensitive, load-bearing guards, release candidates).
-- The user explicitly asks for adversarial / multi-model / Gemini review.
+- The user explicitly asks for adversarial / multi-model / Codex / Gemini review.
 
 Not for: a quick one-shot look (use `/pr-review-toolkit:review-pr` alone) or a trivial diff.
 
@@ -39,6 +39,8 @@ Not for: a quick one-shot look (use `/pr-review-toolkit:review-pr` alone) or a t
 /deep-review --phase1-only   # iterative review only (skip adversarial)
 /deep-review --phase2-only   # adversarial only (skip iterative)
 /deep-review --max-rounds N  # cap Phase-1 rounds (default 4)
+/deep-review --no-post       # keep the audit trail local; post nothing to the PR
+/deep-review --adversary codex|gemini  # force the Phase 2 adversary; stops if it is not usable
 ```
 
 ## Prerequisites & composition
@@ -52,8 +54,9 @@ This skill ORCHESTRATES two existing capabilities; it does not reimplement them:
   per-dimension prompts.
 - **Phase 2** uses the `adversarial-review` skill's engine + agents
   (`adversarial-review:adversarial-bug-hunter`, `:adversarial-convention-reviewer`,
-  `:adversarial-cross-examiner`, and `scripts/gemini-review.sh`). If that plugin is absent, run the
-  pipeline manually per the steps below.
+  `:adversarial-cross-examiner`, and its `scripts/pick-adversary.sh`, `scripts/codex-review.sh`,
+  `scripts/gemini-review.sh` and `scripts/pr-audit.py`). If that plugin is absent, run the pipeline
+  manually per the steps below.
 
 Discover whether they're installed before relying on them; degrade with a stated fallback, never
 silently skip a phase.
@@ -81,6 +84,9 @@ silently skip a phase.
    (`ls .github/workflows`, check the job's `runs-on`). If none does, label it **UNCOVERED**, not
    deferred. Recommend a concrete cross-platform check when feasible (`gtar`, `gawk`, or a
    Linux container), and never treat the local suite as covering the unavailable environment.
+6. **Start the audit trail.** Set up `RUN_ID`, `RUN_DIR`, `AUDIT` and the round counter as in
+   `./references/audit-trail.md`. Every round below ends by writing and posting one record, so the
+   PR shows each iteration: findings as threads, verdicts, counters, fixes and re-checks as replies.
 
 ---
 
@@ -97,24 +103,40 @@ dimension** AND the previous round's fixes introduced nothing new.
    docs/comments changed. Each reviewer gets: the diff command, the file list, repo read access,
    the intent context, and an instruction to **return findings grouped CRITICAL / IMPORTANT /
    SUGGESTION with file:line + concrete fix**, and to **say so plainly if clean — do not invent
-   issues to seem thorough.**
+   issues to seem thorough.** Also tell each reviewer: run long harnesses (mutation runs, fuzzers,
+   full suites) in the foreground, keeping each Bash call under the 10-minute cap — chain calls, or
+   split the harness into chunks, rather than backgrounding it — and send partial results to the
+   orchestrator at least every ~20 minutes of a long run. Never go idle "waiting for your
+   background run": an idle teammate is not woken when its own job ends.
 2. **Aggregate.** Deduplicate convergent findings (multiple reviewers flagging the same thing ->
-   higher confidence). Note which are factual vs judgment calls.
+   higher confidence). Note which are factual vs judgment calls. When a reviewer or implementer
+   says it is waiting on a background job, check its output or process within about 10 minutes
+   (`ps -axo pid,etime,command | grep <harness>`, or its scratch output), and ping it if it is
+   idle. Never report "waiting on X" to the user without having looked at X.
 3. **Fix** all Critical/Important via a single **implementer sub-agent** given the exact,
    numbered fix spec (read-then-edit in its own context; this also sidesteps any parent-side
    router restrictions on Read/Edit). Address cheap Suggestions too when they reduce future review
-   noise. The implementer must **verify empirically** — run the tests, and for any new guard/check,
+   noise. Tell the implementer the same never-idle rule as the reviewers: run long harnesses
+   (tests, mutation runs) in the foreground, keeping each Bash call under the 10-minute cap (chain
+   calls, or split into chunks, rather than backgrounding it), and send partial results at least
+   every ~20 minutes of a long run; never go idle waiting on its own background run. The
+   implementer must **verify empirically** — run the tests, and for any new guard/check,
    **prove it fails-first** (a planted-regression that would pass even when the code is broken is a
    silent defect; see Red Flags). Do not commit per-round by default — checkpoint at phase end to
    avoid preflight churn. Before advancing to the re-review, verify the implementer's claims against ground truth in *your own* context per `./references/delegated-verification.md` — a sub-agent can report "done" without writing, or "committed" with only a subset of files. A failed verification is a failure, not a silent retry.
 4. **Re-review (next round).** Re-query the same reviewers (continuing them via SendMessage
    preserves their codebase context) with TWO asks: (a) verify each prior finding is *actually*
    resolved against the new diff — not assumed; (b) check whether the fixes **introduced** any new
-   bug, inconsistency, or regression. A reviewer replies either with new CRITICAL/IMPORTANT items
-   or "CONVERGED — no actionable issues."
+   bug, inconsistency, or regression. Repeat the same rule as the initial dispatch: long harnesses
+   run in the foreground, keeping each Bash call under the 10-minute cap (chain calls, or split
+   into chunks, rather than backgrounding it), and send partial results at least every ~20 minutes
+   of a long run, and never go idle waiting on their own background run. A reviewer replies either
+   with new CRITICAL/IMPORTANT items or "CONVERGED — no actionable issues."
 5. **Converge or iterate.** If all dimensions report CONVERGED -> Phase 1 done. Else apply the new
    fixes and run another round. Respect `--max-rounds` (default 4); if not converged at the cap,
    surface the remaining items to the user rather than looping forever.
+6. **Record the round** per `./references/audit-trail.md` (phase `phase1`): this round's findings
+   with their `resolution` events, and `recheck` events for last round's fixes.
 
 ### Phase 1 convergence is real only when
 
@@ -132,58 +154,112 @@ calls, do so; respect changelog/branch rules).
 
 ---
 
-## Phase 2 — Multi-round Gemini-primary adversarial review
+## Phase 2 — Multi-round adversarial review
 
 Goal: cross-model confirmation. A finding only "survives" when the *opposing* model confirms it;
-single-model findings are retained as UNCONFIRMED, never silently dropped.
+single-model findings are retained as UNCONFIRMED, never silently dropped. The opposing model, the
+adversary, is Codex, else Gemini, else a second independent Claude agent.
 
-### Step 2.0 — Ensure the adversary (Gemini)
+### Step 2.0 — Pick the adversary
 
-Run the adversarial-review skill's `ensure-gemini.sh --check` (or check `command -v gemini` +
-whether `~/.gemini/.env` has `GEMINI_API_KEY`). **Interactive Google login is NOT sufficient** —
-headless calls need an API key.
+`AR_SCRIPTS` is the adversarial-review plugin's `skills/adversarial-review/scripts` directory.
 
-- If Gemini is installed + headless-authed -> proceed.
-- **If not -> PROMPT THE USER at runtime** (this skill's chosen policy): offer to (a) install/auth
-  Gemini now (`npm i -g @google/gemini-cli`; add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`), or
-  (b) proceed Claude-only (self-cross-examination: a second independent Claude agent judges the
-  first's findings) with a loud banner that cross-model confirmation was skipped. Do not decide
-  silently.
+```bash
+unset ADVERSARY
+PICK="$("$AR_SCRIPTS/pick-adversary.sh" ${ADVERSARY_FLAG:+--adversary "$ADVERSARY_FLAG"})"
+PICK_RC=$?
+eval "$PICK"
+```
+
+`eval "$(cmd)"` alone returns eval's own status, not the command's — so the exit code must be
+captured from `$PICK` before `eval` runs, or the "Exit 3" branch below can never be seen and
+`$ADVERSARY` stays unset. `ADVERSARY_FLAG` is the value of `--adversary` when the user passed it.
+Tell the user `ADVERSARY_REASON` in one line.
+
+- `ADVERSARY=codex`: `ADV_REVIEW="$AR_SCRIPTS/codex-review.sh"`. Codex ids are `X-001…`.
+- `ADVERSARY=gemini`: `ADV_REVIEW="$AR_SCRIPTS/gemini-review.sh"`. Renumber its ids `G-001…`.
+  **Interactive Google login is NOT sufficient** — headless calls need an API key.
+- `ADVERSARY=claude-only`: **PROMPT THE USER at runtime** (this skill's chosen policy): offer to
+  (a) set up Codex (install it, then `codex login`) or Gemini (`npm i -g @google/gemini-cli`; add
+  `GEMINI_API_KEY=<key>` to `~/.gemini/.env`), then run `pick-adversary.sh` again, or (b) proceed
+  Claude-only (self-cross-examination: a second independent Claude agent judges the first's
+  findings) with a loud banner that cross-model confirmation was skipped. Do not decide silently.
+- `PICK_RC` is 3: the user forced an adversary that is not usable. Show the `ADVERSARY_UNAVAILABLE`
+  line and stop. Do not fall back.
+
+Never call `codex` directly. `codex-review.sh` is what keeps your config, hooks and ChatGPT
+connectors out of the run (adversarial-review's SKILL.md, "Codex sandbox", says what it does and
+does not stop).
 
 ### Step 2.1 — R1: blind parallel discovery
 
 In one message, launch (none seeing the others):
 - Claude bug-hunter (opus) — bugs/security/perf/correctness, grounded in source.
 - Claude convention-reviewer (sonnet) — convention/maintainability/doc-drift.
-- Gemini finder — run a direct `gemini -m gemini-2.5-pro -p "<brief + diff>"` call (build a
-  prompt file combining the review brief and the diff; parse the JSON findings array from stdout).
-  NOTE: the adversarial-review plugin's `scripts/gemini-review.sh` is R2-**judge-only** (`--diff <file> --findings <r1.json>
-  [--model <m>] [--out <r2.json>]`) — it has NO discovery/`--mode find` mode, so do NOT use it for
-  R1.
+- Adversary finder — `$ADV_REVIEW --diff <DIFF> --mode find --out "$RUN_DIR/r1-$ADVERSARY.json"`.
+  It emits `{"findings":[...]}` with `origin` set to the adversary. **If exit code is 3**
+  (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user forced this adversary): show
+  the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as `PICK_RC` 3 in Step
+  2.0. Never fall back to another model or to Claude-only. Otherwise (auto mode): if Codex was
+  picked automatically and `GEMINI_AUTHED=yes`, switch to Gemini for the whole phase and rerun this
+  step; otherwise follow Step 2.0's Claude-only path.
 
-Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`;
-Gemini -> `G-001..`. Emit an R1 digest (counts by severity/category). An empty findings array is a
-respectable, valid answer.
+Tell both Claude agents the same rule as Phase 1's dispatch: run long harnesses in the foreground,
+keeping each Bash call under the 10-minute cap (chain calls, or split into chunks, rather than
+backgrounding it), and send partial results at least every ~20 minutes of a long run.
+Never go idle waiting on their own background run.
+
+Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`.
+Emit an R1 digest (counts by severity/category). An empty findings array is a respectable, valid
+answer. If a side reports it is waiting on a background job, check its output or process within
+about 10 minutes (`ps -axo pid,etime,command | grep <harness>`, or its scratch output) and ping it
+if it is idle — never report "waiting on R1" to the user without having looked. Record the round
+(phase `phase2-r1`).
 
 ### Step 2.2 — R2: symmetric cross-examination
 
 In one message:
-- Claude cross-examiner (opus) judges every Gemini finding -> `confirm|refute` with reason,
-  grounded in the **current** source (findings can be stale if Phase 1 already fixed them).
-- Gemini judges every Claude finding (`gemini-review.sh --diff <DIFF> --findings <claude-r1.json> [--out <r2.json>]`).
-  - **Reliability note:** the wrapper fails open to nothing if Gemini's JSON lacks `verdicts`
-    (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key` -> empty result). Fall back to a
-    direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
-    verdict:confirm|refute, reason}>"` call (same approach R1 uses) and parse it yourself; treat
-    the direct call as primary, the wrapper as convenience.
+- Claude cross-examiner (opus) judges every adversary finding -> `confirm|refute` with reason,
+  grounded in the **current** source (findings can be stale if Phase 1 already fixed them). Give
+  it the same rule as Step 2.1: run long harnesses in the foreground, keeping each Bash call under
+  the 10-minute cap (chain calls, or split into chunks, rather than backgrounding it), and send
+  partial results at least every ~20 minutes of a long run, and never go idle waiting on its own
+  background run.
+- The adversary judges every Claude finding:
+  `$ADV_REVIEW --diff <DIFF> --findings <claude-r1.json> --mode judge --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"`.
+  Both scripts write the verdict under the key `adversary_verdict`, whichever model gave it.
+  - **If exit code is 3** (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user
+    forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3.
+    Never fall back to another model or to Claude-only. The rest of this step is the auto-mode
+    path.
+  - **Gemini reliability note:** `gemini-review.sh` can come back empty when Gemini's JSON lacks
+    `verdicts` (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key`). Only then, fall back
+    to a direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
+    verdict:confirm|refute, reason}>"` call. Build a prompt file with the brief and each finding,
+    and parse the JSON yourself. Codex has no such fallback: exit 3 from `codex-review.sh` means
+    Codex's verdicts are missing. Write `{"verdicts":[]}` to `$RUN_DIR/r2-$ADVERSARY-verdicts.json`
+    (`synthesize.py` exits 1 on a missing file), and say in the R2 digest that Codex's verdicts
+    are missing. Those Claude findings stay unconfirmed.
 
-Emit an R2 digest (confirmed/refuted/unjudged each direction).
+Emit an R2 digest (confirmed/refuted/unjudged each direction). If a side reports it is waiting on
+a background job, check its output or process within about 10 minutes (`ps -axo pid,etime,command
+| grep <harness>`, or its scratch output) and ping it if it is idle — never report "waiting on R2"
+to the user without having looked. Record the round (phase
+`phase2-r2`): record each judged finding with its `verdict` event; confirmed findings take
+`status: survivor`, refuted ones stay `status: unconfirmed` until the R3 record (see
+./references/audit-trail.md).
 
 ### Step 2.3 — R3: counter-round (the "let the primary counter" round)
 
 This is what makes it >=3 rounds and forces genuine convergence rather than a stalemate:
 - For each finding the opponent **refuted**, send it back to the originator to **concede or
   defend**, grounded in source. Feed the refuter's reason and the relevant current file facts.
+  - With Codex as the originator, use the script:
+    `$AR_SCRIPTS/codex-review.sh --diff <DIFF> --mode counter --findings <refuted-X.json> --out "$RUN_DIR/r3-codex-counters.json"`.
+    Each finding in `<refuted-X.json>` carries Claude's refutation in `kill_reason`. It returns
+    `{"counters":[{"id","position":"concede|defend","reason"}]}`.
+  - For Claude findings that Codex refuted, write Claude's defence into each finding's `rationale`
+    and ask Codex again with `--mode judge`.
 - **Settle factual disputes with direct evidence, not opinion.** If one model claims "X already
   exists / the catch is empty / the name has a space", run the actual `grep`/read and put the
   evidence in front of both. Evidence ends the dispute (in this skill's origin run, a `grep` of
@@ -192,23 +268,31 @@ This is what makes it >=3 rounds and forces genuine convergence rather than a st
   either side on its real merits — if it stays split after evidence, escalate it to the user as an
   explicit decision rather than forcing a verdict.
 
+Record the round (phase `phase2-r3`). For contested findings, record `counter` then `verdict`:
+`survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted
+finding gets `rejected`.
+
 ### Step 2.4 — Converge (survivor rule)
 
 | Finding origin | Survives when |
 |---|---|
-| Claude (C-NNN) | Gemini confirms (R2), or concedes its refutation (R3) |
-| Gemini (G-NNN) | Claude confirms (R2), or concedes its refutation (R3) |
+| Claude (C-NNN) | The adversary confirms (R2), or concedes its refutation (R3) |
+| Adversary (X-NNN Codex, G-NNN Gemini) | Claude confirms (R2), or concedes its refutation (R3) |
 
 - **Survivors** — both models agree -> fix them.
 - **Unconfirmed** — opponent abstained -> report, fix at discretion.
 - **Rejected** — opponent refuted and originator conceded -> record with reason; do not fix.
 
-If the adversarial-review skill is installed, `synthesize.py` applies this rule; otherwise apply it
-by hand and print `survivors / unconfirmed / rejected` counts.
+If the adversarial-review skill is installed, `synthesize.py --adversary "$ADVERSARY"` applies this
+rule; otherwise apply it by hand and print `survivors / unconfirmed / rejected` counts.
 
 ### Step 2.5 — Fix survivors + finalize
 
-Fix all survivors via an implementer sub-agent (same verify-empirically discipline as Phase 1).
+Fix all survivors via an implementer sub-agent (same verify-empirically discipline as Phase 1),
+including the same never-idle rule: run long harnesses in the foreground, keeping each Bash call
+under the 10-minute cap (chain calls, or split into chunks, rather than backgrounding it), and
+send partial results at least every ~20 minutes of a long run; never go idle waiting on its own
+background run.
 Before finalizing, verify the implementer's fixes against ground truth in *your own* context per `./references/delegated-verification.md` — never trust the sub-agent's narration that the survivors were fixed.
 Then finalize:
 - Re-run the full test/build suite; confirm green.
@@ -216,7 +300,64 @@ Then finalize:
   a test suite to a runtime location; regenerate a generated doc/architecture page). A repo's own
   CLAUDE.md often mandates this in the same change-set.
 - Commit Phase 2 with a message naming the survivors and noting what the adversarial pass
-  dismissed (and why). Push; if the repo polls CI after push, check it.
+  dismissed (and why). Push; if the repo polls CI after push, check it. Then record the round
+  (phase `phase2-fix`): a `resolution` event with the pushed commit's `sha` for each survivor.
+
+### Step 2.6 — Adversary re-check rounds (Codex only)
+
+With `ADVERSARY=codex`, Codex checks each fix itself, so fixed Phase 2 threads can close. Right
+after writing the `phase2-fix` record, set:
+
+```bash
+FIX_K="$K"                  # the phase2-fix record's own round number
+FIX_SHA="<its head_sha>"    # the commit that record's resolution events point to
+REVIEWED_SHA="<the head the Phase 2 R1 diff was taken from>"
+RECHECK_ROUND=0             # re-check rounds run so far, capped at 3 (see step 4)
+```
+
+1. `git diff "$REVIEWED_SHA".."$FIX_SHA" > "$RUN_DIR/fix-range-$FIX_K.diff"` — only the changes
+   made since the reviewed head.
+2. `K=$((K+1))`, then
+   `$AR_SCRIPTS/codex-review.sh --diff "$RUN_DIR/fix-range-$FIX_K.diff" --mode find --prior "$RUN_DIR/round-$FIX_K.json" --id-start <highest X number so far + 1> --out "$RUN_DIR/recheck-$K.json"`.
+   The prior record holds each fixed finding and the author's reply, so Codex sees both. `--id-start`
+   must be above every finding id used anywhere in this run so far — Codex's and Claude's alike —
+   so a new finding never reuses a dropped finding's id. Never reuse a `--round` value, here or
+   anywhere else in the run; `K` only ever increases.
+   - **Exit 3** here means Codex became unavailable partway through the re-check loop (auth
+     expiry, quota, a tripped isolation canary) — not at Step 2.0, where it was picked.
+     Stop the re-check loop at once: do not retry, and do not fall back to Gemini or Claude-only,
+     because a different model cannot close a Codex thread (only `codex`'s own re-check does, per
+     ./references/audit-trail.md). Leave every remaining re-check thread open, post the round
+     summary you already have noting Codex became unavailable, and surface it to the user — the
+     same outcome as the Gemini/Claude-only path below, reached mid-loop instead of at Step 2.0.
+   - **Exit 1** means `codex-review.sh` could not use its inputs (for example a missing
+     `--prior` or `--diff` file) or could not write `--out`. Stop the re-check loop the same way
+     as exit 3: do not retry with guessed flags, and leave the remaining threads open. Note it,
+     with the exact stderr message, in the round summary you post, and tell the user.
+3. `python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_DIR/recheck-$K.json" --round "$K" --head-sha "$FIX_SHA" --out "$RUN_DIR/round-$K.json"`,
+   then post it as in ./references/audit-trail.md. A `resolved` re-check closes its thread.
+   - **Exit 2** means the re-check inputs don't make a valid record (see
+     ./references/audit-trail.md for the causes). Stop, report the exact stderr message to the
+     user, and leave the remaining threads open — do not retry with guessed flags.
+4. Read the `pr-audit: unchecked=<N> (<ids>)` line that `recheck` prints on stderr. Each id in it
+   is a finding Codex gave no re-check for. `recheck` carries it into the record unchanged with no
+   events, so its thread stays open. Count every unchecked finding as not resolved.
+   `partly` or `missed`: set `REVIEWED_SHA="$FIX_SHA"`, then fix again (Step 2.5) — this keeps the
+   next fix range to only what changed since *this* re-check, not every earlier fix stacked
+   together. Step 2.5 writes a new `phase2-fix` record; set `FIX_K` to its round and `FIX_SHA` to
+   its `head_sha`, then repeat from 1. New findings in the re-check record: judge them with the
+   cross-examiner (Step 2.2), fix the survivors (Step 2.5) the same way, and repeat from 1.
+   Unchecked findings with nothing else to fix: do not fix again; repeat from 1 with the same
+   `FIX_K`, `FIX_SHA` and `REVIEWED_SHA`, so Codex re-checks the same fix range.
+   `RECHECK_ROUND=$((RECHECK_ROUND+1))` each time through — once per full loop back to step 1
+   (whether that loop was triggered by `partly`/`missed`, by unchecked findings or by new
+   findings), right before checking the cap below. Stop when a re-check round has every finding
+   `resolved`, `unchecked=0` and no new survivors, or once `RECHECK_ROUND` reaches 3 — a fixed cap
+   on re-check rounds, separate from Phase 1's `--max-rounds`; surface whatever is left to the
+   user, and name each finding still unchecked as one Codex never re-checked.
+
+With Gemini or Claude-only there is no re-check round, and fixed Phase 2 threads stay open for a
+person to resolve.
 
 ---
 
@@ -230,6 +371,8 @@ Summarize for the user:
 - Portability concerns that were not executable locally: for each, either the exact CI/toolchain
   coverage it was deferred to, or an explicit **UNCOVERED** marker when no CI job covers that
   environment — plus any concrete command recommended for pre-CI reproduction.
+- Audit trail: the PR link (or local file), rounds posted, and any posting failures with the
+  command to rerun them; the run directory path holding every `round-<k>.json`.
 
 ## Red Flags — do not
 
@@ -258,6 +401,9 @@ Summarize for the user:
 - **Let the adversarial pass rubber-stamp.** The point is the *opposing* model. If running
   Claude-only, use a genuinely independent second agent and say cross-model confirmation was
   skipped.
+- **Call `codex` directly.** Every Codex call goes through adversarial-review's
+  `codex-review.sh`. A direct call runs with your config, hooks and ChatGPT connectors, outside
+  the lockdown.
 - **Silently drop a single-model finding.** Retain as UNCONFIRMED.
 - **Force a verdict on a genuine judgment call.** Escalate keep-vs-delete / design-taste splits to
   the user.
@@ -269,9 +415,10 @@ Summarize for the user:
   matching CI job **(or mark it UNCOVERED when no such job exists)**, and recommend a concrete
   alternate-toolchain check where possible.
 - **Hand a fix to re-review without self-checking it.** A new guard needs its planted-regression in the *same* edit; retiring/disabling/renaming code needs a sweep of *every* descriptor string (manifest, README tagline, comments), not just the banner — don't let the next round be the first to catch your fix's new gap.
+- **Report "waiting on a reviewer" without checking whether it is idle.** An idle teammate is not woken when its own background job ends; check its process or output before telling the user you're waiting on it.
 
 ## Integration
 
 - `pr-review-toolkit:review-pr` — the per-dimension reviewers Phase 1 drives.
-- `adversarial-review:adversarial-review` — the Claude<->Gemini engine Phase 2 drives.
+- `adversarial-review:adversarial-review` — the Claude-versus-adversary engine (Codex or Gemini) Phase 2 drives, and `pr-audit.py` for the audit trail.
 - Repo `CLAUDE.md` — commit/branch/preflight discipline and any "keep X in sync" mandates.

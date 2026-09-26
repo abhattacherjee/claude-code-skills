@@ -141,7 +141,15 @@ INSTALL_HINT="npm install -g @google/gemini-cli   # primary (requires Node >=18)
 AUTH_HINT="Headless review needs an API key — interactive Google login is NOT enough. Get a key at https://aistudio.google.com/apikey and either: (a) export GEMINI_API_KEY=<key> in your shell, or (b) add GEMINI_API_KEY=<key> to ~/.gemini/.env (recommended — auto-loaded by all shells including sub-agents). Vertex: set GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_CLOUD_PROJECT=<project>."
 
 # ---- emit status (eval-safe: KEY='value' with embedded single-quotes escaped) ----
-emit() { local v="${2//\'/\'\\\'\'}"; printf "%s='%s'\n" "$1" "$v"; }
+# bash 3.2's ${var//pattern/replacement} does not collapse a lone backslash
+# before a quote in the replacement text, so build the '\'' escape from
+# variables instead of a literal \'\\\'\' (which round-trips wrong under
+# bash 3.2 whenever a value contains an embedded single quote).
+emit() {
+  local q="'" bs='\'
+  local v="${2//$q/$q$bs$q$q}"
+  printf "%s='%s'\n" "$1" "$v"
+}
 
 emit GEMINI_INSTALLED "$GEMINI_INSTALLED"
 emit GEMINI_VERSION   "$GEMINI_VERSION"

@@ -57,7 +57,7 @@ Output JSON schema:
           "rationale": "<explanation>",
           "origin": "gemini",
           "claude_verdict": null,
-          "gemini_verdict": null,
+          "adversary_verdict": null,
           "status": null,
           "killed_by": null,
           "kill_reason": null
@@ -68,7 +68,7 @@ Output JSON schema:
   judge mode:
     {
       "verdicts": [
-        {"id": "...", "gemini_verdict": "confirm|refute", "reason": "...", "confidence": 0.0}
+        {"id": "...", "adversary_verdict": "confirm|refute", "reason": "...", "confidence": 0.0}
       ]
     }
 
@@ -298,7 +298,7 @@ exactly this structure:
       "rationale": "<explanation of why this is a finding>",
       "origin": "gemini",
       "claude_verdict": null,
-      "gemini_verdict": null,
+      "adversary_verdict": null,
       "status": null,
       "killed_by": null,
       "kill_reason": null
@@ -316,7 +316,7 @@ performance problems, conventions, or maintainability concerns) introduced by th
 Respond with a JSON object with a "findings" key: an array of finding objects.
 Each finding must have: id (unique string), path, line (number or null), severity
 (critical|important|minor), category (bug|security|perf|convention|maintainability),
-title, rationale, origin ("gemini"), and null values for claude_verdict, gemini_verdict,
+title, rationale, origin ("gemini"), and null values for claude_verdict, adversary_verdict,
 status, killed_by, kill_reason.
 PROMPT
     fi
@@ -352,7 +352,7 @@ Output ONLY valid JSON, no prose, no markdown, no explanation. The JSON must hav
 exactly this structure:
 {
   "verdicts": [
-    {"id": "<finding-id>", "gemini_verdict": "confirm|refute", "reason": "<brief reason>", "confidence": 0.0}
+    {"id": "<finding-id>", "adversary_verdict": "confirm|refute", "reason": "<brief reason>", "confidence": 0.0}
   ]
 }
 
@@ -379,7 +379,7 @@ For every confirm, your reason MUST cite the specific diff line(s) or code that 
 the finding. A confirm without grounded evidence is not allowed — refute instead.
 
 Respond with a JSON object with a "verdicts" key: an array of verdict objects.
-Each verdict must have: id (the finding id), gemini_verdict ("confirm" or "refute"),
+Each verdict must have: id (the finding id), adversary_verdict ("confirm" or "refute"),
 reason (brief explanation), confidence (0.0–1.0).
 
 Findings to verdict:
@@ -447,6 +447,11 @@ assert 'verdicts' in data, 'missing verdicts key'
 assert isinstance(data['verdicts'], list), 'verdicts must be a list'
 # Drop entries without a string id so downstream never sees id-less entries
 data['verdicts'] = [v for v in data['verdicts'] if isinstance(v.get('id'), str) and v['id']]
+for v in data['verdicts']:
+    if 'gemini_verdict' in v:
+        old = v.pop('gemini_verdict')
+        if v.get('adversary_verdict') is None:
+            v['adversary_verdict'] = old
 with open('$EXTRACTED_JSON_FILE', 'w') as fh:
     json.dump(data, fh)
 " 2>"$VALIDATE_ERR_FILE"; then
@@ -463,6 +468,11 @@ assert 'findings' in data, 'missing findings key'
 assert isinstance(data['findings'], list), 'findings must be a list'
 # Drop entries without a string id so downstream never sees id-less entries
 data['findings'] = [f for f in data['findings'] if isinstance(f.get('id'), str) and f['id']]
+for f in data['findings']:
+    if 'gemini_verdict' in f:
+        old = f.pop('gemini_verdict')
+        if f.get('adversary_verdict') is None:
+            f['adversary_verdict'] = old
 with open('$EXTRACTED_JSON_FILE', 'w') as fh:
     json.dump(data, fh)
 " 2>"$VALIDATE_ERR_FILE"; then

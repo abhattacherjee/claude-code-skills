@@ -9,7 +9,7 @@
     "rationale": "Rationale for small sample finding one.",
     "origin": "claude",
     "claude_verdict": null,
-    "gemini_verdict": null,
+    "adversary_verdict": null,
     "status": null,
     "killed_by": null,
     "kill_reason": null
@@ -24,7 +24,7 @@
     "rationale": "Rationale for small sample finding two.",
     "origin": "claude",
     "claude_verdict": null,
-    "gemini_verdict": null,
+    "adversary_verdict": null,
     "status": null,
     "killed_by": null,
     "kill_reason": null
