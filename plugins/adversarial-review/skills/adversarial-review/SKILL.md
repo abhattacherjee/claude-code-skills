@@ -24,7 +24,7 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 - `-c project_doc_max_bytes=0` and `-c project_doc_fallback_filenames=[]`, so the reviewed repo's `AGENTS.md` cannot instruct Codex; `-c skills.include_instructions=false`, so its `.agents/skills` cannot either — that setting defaults to true, so a repo's own skill instructions would otherwise land in the prompt. A repo's `.codex/config.toml` applies only to trusted repos, and trust lives in the `config.toml` that is ignored;
 - `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout per Codex call (default 540 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group. A SIGTERM or SIGINT sent to `codex-review.sh` kills that group too, removes its temp dirs, and exits 128+N.
 
-One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. That can pass the Bash tool's 600 s cap, so run `$ADV_REVIEW` with the Bash tool's `run_in_background`.
+One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. That can pass the Bash tool's 600 s cap, so run `$ADV_REVIEW` with the Bash tool's `run_in_background`. When you do, do not go idle waiting on it: check its output or process within about 10 minutes (`ps -axo pid,etime,command | grep codex` or `grep gemini`, or the run directory's output file), and ping or re-check it if it looks stuck. Never tell the user you're "waiting on" the adversary script without having looked at it. Unlike a reviewer that goes quiet on its own background job, your background Bash call here does notify you when it finishes — but a turn that ends without acting on that notification, or without checking in the meantime, leaves the same gap, so still check within about 10 minutes.
 
 Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `codex-review.sh --self-test` reruns the canary on demand.
 
@@ -145,7 +145,7 @@ Launch all three discovery tasks **in a single message** (parallel dispatch). Ne
 
 **(a) Claude finders — two agents in parallel:**
 
-Each receives: absolute path to `DIFF_FILE`, absolute path to `FILES_FILE`, and read access to the repo.
+Each receives: absolute path to `DIFF_FILE`, absolute path to `FILES_FILE`, and read access to the repo. Also tell each: run long harnesses (mutation runs, fuzzers, full suites) in the foreground, keeping each Bash call under the 10-minute cap — chain calls, or split the harness into chunks, rather than backgrounding it — and send partial results to the orchestrator at least every ~20 minutes of a long run. Never go idle "waiting for your background run": an idle teammate is not woken when its own job ends.
 
 - **Bug-hunter** returns `{"findings":[...]}` with `origin="claude"`. Assign sequential ids `BH-001`, `BH-002`, ...
 - **Convention-reviewer** returns `{"findings":[...]}` with `origin="claude"`. Assign sequential ids `CR-001`, `CR-002`, ...
@@ -193,6 +193,10 @@ Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemi
 }
 ```
 
+If either side reports it is waiting on a background job, check its output or process within
+about 10 minutes (`ps -axo pid,etime,command | grep <harness>`, or its scratch output), and ping
+it if it is idle. Never tell the user you're "waiting on" R1 without having looked at it.
+
 **Emit R1 DIGEST** (print to conversation after both sides complete):
 
 ```
@@ -213,6 +217,10 @@ Launch the `adversarial-cross-examiner` agent (opus). Provide:
 - Absolute path to `$RUN_DIR/r1-$ADVERSARY.json` (the adversary's findings)
 - Absolute path to `DIFF_FILE`
 - Repo read access
+- The same rule as Step 2: run long harnesses in the foreground, keeping each Bash call under the
+  10-minute cap (chain calls, or split into chunks, rather than backgrounding it), and send partial
+  results at least every ~20 minutes of a long run, and never go idle waiting on its own
+  background run.
 
 Agent returns `{"verdicts":[{"id":"X-NNN or G-NNN","claude_verdict":"confirm|refute","reason":"..."}]}`. Write to `$RUN_DIR/r2-claude-verdicts.json`.
 
@@ -232,6 +240,10 @@ $ADV_REVIEW \
 - Otherwise: go to the R2 path in Degradation Behavior. It keeps the adversary's R1 findings. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
 
 Both scripts emit `{"verdicts":[{"id":"C-NNN","adversary_verdict":"confirm|refute","reason":"...","confidence":...}]}`. The key is `adversary_verdict` for both models; it was `gemini_verdict` before #135, and old run files still load.
+
+If either side reports it is waiting on a background job, check its output or process within
+about 10 minutes (`ps -axo pid,etime,command | grep <harness>`, or its scratch output), and ping
+it if it is idle. Never tell the user you're "waiting on" R2 without having looked at it.
 
 **Emit R2 DIGEST** (print to conversation after both sides complete):
 

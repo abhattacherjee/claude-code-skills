@@ -18,6 +18,15 @@ def section(text, start, end):
     return text.split(start, 1)[1].split(end, 1)[0]
 
 
+WS = re.compile(r"\s+")
+
+
+def norm(text):
+    """Collapse whitespace/newlines to a single space, so a phrase-match assertion
+    doesn't break just because Markdown line-wraps it mid-phrase (#137 tests)."""
+    return WS.sub(" ", text)
+
+
 class AdversarialReviewDocTests(unittest.TestCase):
     def setUp(self):
         self.text = SKILL.read_text(encoding="utf-8")
@@ -86,6 +95,17 @@ class AdversarialReviewDocTests(unittest.TestCase):
             for name in cr.PASSTHROUGH_ENV:
                 self.assertIn("`%s`" % name, text, (str(path), name))
 
+    def test_plugin_and_skill_changelogs_match_after_the_intro_line(self):
+        # The skill- and plugin-level CHANGELOG.md copies drifted -- PR #138's
+        # final fix wave landed only in the skill copy. Line 3 (index 2) differs
+        # on purpose ("this project" vs "this skill"); every other line must
+        # match verbatim, or the two copies silently diverge again.
+        skill_changelog = HERE.parent / "CHANGELOG.md"
+        plugin_changelog = HERE.parent.parent.parent / "CHANGELOG.md"
+        skill_lines = skill_changelog.read_text(encoding="utf-8").splitlines()
+        plugin_lines = plugin_changelog.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(plugin_lines[3:], skill_lines[3:])
+
     def test_strict_is_documented_as_the_hardened_judge(self):
         # deep-review X-002: --strict must be described as what it does.
         self.assertIn("verbatim", section(self.text, "**Low-signal escalation:**", "- Claude rubber-stamping"))
@@ -141,6 +161,43 @@ class AdversarialReviewDocTests(unittest.TestCase):
         self.assertIn("run_in_background", self.text)
         self.assertIn("SIGTERM", self.text)
 
+    def test_step_2_r1_dispatch_never_idle_on_its_own_background_run(self):
+        # #137: a reviewer that starts a harness in the background and says "I'll
+        # report once it finishes" goes idle -- it is not woken when its own job
+        # ends. R1's Claude finders must carry the never-idle rule.
+        step2 = norm(section(self.text, "### Step 2 — R1", "### Step 3 — R2"))
+        self.assertIn("10-minute cap", step2)
+        self.assertIn("20 minutes", step2)
+        self.assertIn("Never go idle", step2)
+
+    def test_step_2_orchestrator_checks_before_reporting_waiting(self):
+        # #137: the orchestrator must not report "waiting on X" without having
+        # checked X's process or output within ~10 minutes.
+        step2 = section(self.text, "### Step 2 — R1", "### Step 3 — R2")
+        self.assertIn("ps -axo pid,etime,command", step2)
+        self.assertIn("10 minutes", step2)
+        self.assertIn('waiting on', step2.lower())
+
+    def test_step_3_r2_dispatch_never_idle_on_its_own_background_run(self):
+        step3 = norm(section(self.text, "### Step 3 — R2", "### Step 4 — Converge"))
+        self.assertIn("10-minute cap", step3)
+        self.assertIn("never go idle", step3.lower())
+
+    def test_step_3_orchestrator_checks_before_reporting_waiting(self):
+        step3 = section(self.text, "### Step 3 — R2", "### Step 4 — Converge")
+        self.assertIn("ps -axo pid,etime,command", step3)
+        self.assertIn("10 minutes", step3)
+        self.assertIn('waiting on', step3.lower())
+
+    def test_codex_sandbox_run_in_background_has_orchestrator_check(self):
+        # #137: the Codex/Gemini adversary scripts are the other background job the
+        # orchestrator waits on (Codex sandbox's run_in_background note).
+        sandbox = section(self.text, "### Codex sandbox", "## Quick Start")
+        self.assertIn("run_in_background", sandbox)
+        self.assertIn("do not go idle waiting on it", sandbox)
+        self.assertIn("ps -axo pid,etime,command", sandbox)
+        self.assertIn("10 minutes", sandbox)
+
 
 class PluginReadmeDocTests(unittest.TestCase):
     """Fix round 1: plugins/adversarial-review/README.md's `## Contents` bullets
@@ -171,6 +228,37 @@ class PluginReadmeDocTests(unittest.TestCase):
             line for line in agents.splitlines() if "adversarial-cross-examiner" in line
         ]
         self.assertIn("Codex", cross_examiner_line)
+
+
+AGENTS_DIR = HERE.parent.parent.parent / "agents"
+
+
+class AgentNeverIdleOnOwnBackgroundRunTests(unittest.TestCase):
+    """#137: each agent that a reviewer dispatch can hand a long harness to must
+    carry the never-idle rule in its own instructions, not only in the skill
+    that dispatches it -- whoever dispatches it (adversarial-review, deep-review,
+    or a future caller) gets the rule for free."""
+
+    def test_bug_hunter_never_idle_on_its_own_background_run(self):
+        text = (AGENTS_DIR / "adversarial-bug-hunter.md").read_text(encoding="utf-8")
+        rules = text.split("## Rules", 1)[1]
+        self.assertIn("10-minute cap", rules)
+        self.assertIn("20 minutes", rules)
+        self.assertIn("Never go idle", rules)
+
+    def test_convention_reviewer_never_idle_on_its_own_background_run(self):
+        text = (AGENTS_DIR / "adversarial-convention-reviewer.md").read_text(encoding="utf-8")
+        rules = text.split("## Rules", 1)[1]
+        self.assertIn("10-minute cap", rules)
+        self.assertIn("20 minutes", rules)
+        self.assertIn("Never go idle", rules)
+
+    def test_cross_examiner_never_idle_on_its_own_background_run(self):
+        text = (AGENTS_DIR / "adversarial-cross-examiner.md").read_text(encoding="utf-8")
+        rules = text.split("## Rules", 1)[1]
+        self.assertIn("10-minute cap", rules)
+        self.assertIn("20 minutes", rules)
+        self.assertIn("Never go idle", rules)
 
 
 REPO = HERE.parents[4]
@@ -260,6 +348,65 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("Stop the re-check loop", exit1)
         self.assertIn("leave the remaining threads open", exit1)
         self.assertIn("round summary", exit1)
+
+    def test_phase1_step1_dispatch_never_idle_on_its_own_background_run(self):
+        # #137: reviewers must run long harnesses in the foreground and never go
+        # idle waiting on their own background job.
+        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
+        step1 = norm(section(each_round, "1. **Dispatch", "2. **Aggregate"))
+        self.assertIn("10-minute cap", step1)
+        self.assertIn("20 minutes", step1)
+        self.assertIn("Never go idle", step1)
+
+    def test_phase1_step2_aggregate_checks_before_reporting_waiting(self):
+        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
+        step2 = section(each_round, "2. **Aggregate", "3. **Fix")
+        self.assertIn("ps -axo pid,etime,command", step2)
+        self.assertIn("10 minutes", step2)
+        self.assertIn('Never report "waiting on X"', step2)
+
+    def test_phase1_step3_fix_implementer_never_idle_on_its_own_background_run(self):
+        # #137 follow-up: item 2 (Aggregate) tells the orchestrator to watch a
+        # background job, but item 3 (Fix) never told the implementer itself the
+        # never-idle rule. It must carry the same rule as the reviewers.
+        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
+        step3 = norm(section(each_round, "3. **Fix", "4. **Re-review"))
+        self.assertIn("10-minute cap", step3)
+        self.assertIn("20 minutes", step3)
+        self.assertIn("never go idle", step3.lower())
+
+    def test_phase1_step4_rereview_never_idle_on_its_own_background_run(self):
+        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
+        step4 = section(each_round, "4. **Re-review", "5. **Converge")
+        self.assertIn("foreground", step4)
+        self.assertIn("never go idle", step4.lower())
+
+    def test_step_2_1_r1_briefs_never_idle_and_orchestrator_checks(self):
+        step21 = section(self.read("SKILL.md"), "### Step 2.1", "### Step 2.2")
+        self.assertIn("10-minute cap", step21)
+        self.assertIn("never go idle", step21.lower())
+        self.assertIn("ps -axo pid,etime,command", step21)
+        self.assertIn("10 minutes", step21)
+
+    def test_step_2_2_r2_briefs_never_idle_and_orchestrator_checks(self):
+        step22 = norm(section(self.read("SKILL.md"), "### Step 2.2", "### Step 2.3"))
+        self.assertIn("10-minute cap", step22)
+        self.assertIn("never go idle", step22.lower())
+        self.assertIn("ps -axo pid,etime,command", step22)
+        self.assertIn("10 minutes", step22)
+
+    def test_step_2_5_implementer_never_idle_on_its_own_background_run(self):
+        # #137 follow-up: Step 2.5's implementer dispatch (Phase 2's fix step) must
+        # carry the same never-idle rule as Phase 1's Fix step and the R1/R2 briefs.
+        step25 = norm(section(self.read("SKILL.md"), "### Step 2.5", "### Step 2.6"))
+        self.assertIn("10-minute cap", step25)
+        self.assertIn("20 minutes", step25)
+        self.assertIn("never go idle", step25.lower())
+
+    def test_red_flags_names_idle_reviewer_wait(self):
+        red_flags = section(self.read("SKILL.md"), "## Red Flags", "## Integration")
+        self.assertIn(
+            'Report "waiting on a reviewer" without checking whether it is idle', red_flags)
 
     def test_step_2_1_and_2_2_stop_on_a_forced_unavailable_adversary(self):
         # #135 follow-up: adversarial-review's own Step 2/3 already stop the run
