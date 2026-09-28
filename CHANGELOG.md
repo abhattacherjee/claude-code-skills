@@ -9,7 +9,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ### Added
 
-- **Portable Codex hooks** (`.codex/hooks.json`, #141). Codex now runs the four git-flow hooks in `.claude/hooks/` (`prevent-direct-push`, `require-preflight`, `validate-branch-name`, `update-changelog-before-pr`). Each path is found with `git rev-parse --show-toplevel`, so it works in any clone or worktree, and there is no second copy of the scripts.
+- **Portable Codex hooks** (`.codex/hooks.json`, #141). Codex now runs the four git-flow hooks in `.claude/hooks/` (`prevent-direct-push`, `require-preflight`, `validate-branch-name`, `update-changelog-before-pr`). Each path is found with `git rev-parse --show-toplevel`, and passed to the script as `CLAUDE_PROJECT_DIR`, so it works in any clone or worktree and from any subdirectory. There is no second copy of the scripts.
 
 ## [3.19.0] - 2026-09-25
 
