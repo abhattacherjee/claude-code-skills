@@ -1,0 +1,32 @@
+{
+  "description": "Repository Git policy checks shared with Claude Code.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if root=$(git rev-parse --show-toplevel 2>/dev/null); then python3 \"$root/.claude/hooks/prevent-direct-push.py\"; else printf 'Codex policy hook skipped: no Git worktree\\n' >&2; fi",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "if root=$(git rev-parse --show-toplevel 2>/dev/null); then python3 \"$root/.claude/hooks/require-preflight.py\"; else printf 'Codex policy hook skipped: no Git worktree\\n' >&2; fi",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "if root=$(git rev-parse --show-toplevel 2>/dev/null); then python3 \"$root/.claude/hooks/validate-branch-name.py\"; else printf 'Codex policy hook skipped: no Git worktree\\n' >&2; fi",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "if root=$(git rev-parse --show-toplevel 2>/dev/null); then python3 \"$root/.claude/hooks/update-changelog-before-pr.py\"; else printf 'Codex policy hook skipped: no Git worktree\\n' >&2; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
