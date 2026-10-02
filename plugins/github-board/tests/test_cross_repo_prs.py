@@ -217,3 +217,14 @@ def test_apply_still_promotes_a_same_repo_pr(tmp_path):
     done, calls = _apply(tmp_path, "o/r", "--apply")
     assert done.returncode == 0, done.stdout + done.stderr
     assert [c for c in calls if c.startswith("issue comment")]
+
+
+# X-002 (recheck): an unmerged FOREIGN PR that closes our issue by URL or owner/repo#N went
+# into neither linkedPRCount nor foreignPRs, so the issue still promoted as "nopr". A foreign
+# PR may never credit the issue, but it does claim it, so the card is held as foreign.
+@pytest.mark.parametrize("body", ["Fixes https://github.com/o/r/issues/42", "Closes o/r#42"])
+def test_an_unmerged_foreign_pr_closing_our_issue_holds_it(tmp_path, body):
+    out, calls = _find(tmp_path, _timeline(_pr("evil/fork", body, merged=False)))
+    assert out["candidates"] == [], f"{body!r}: promoted as nopr"
+    assert [c["promoteClass"] for c in out["held"]] == ["hold-foreign-pr"]
+    assert not [c for c in calls if "compare" in c]

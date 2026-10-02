@@ -13,7 +13,7 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commit and looked up the release in the foreign repo. Only PRs in the issue's own
   repo are credited now (formal links too), a fully-qualified `owner/repo#N` counts
   only when it names the issue's repo, and reachability always uses the issue's repo.
-  A foreign merged PR that claims the issue holds the card in the new
+  A foreign PR that claims the issue, merged or not, holds the card in the new
   **`hold-foreign-pr`** class. `apply-promotions.sh` also refuses (exit 1, no move, no
   comment) a `merged` candidate whose merged PRs are all from another repo.
 

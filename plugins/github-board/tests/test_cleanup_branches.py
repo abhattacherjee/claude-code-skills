@@ -187,3 +187,30 @@ def test_different_root_packages_do_not_supersede(tmp_path):
            "13|dependabot/npm_and_yarn/express-4.17.22|Bump express")
     done, _ = _run(tmp_path, [], prs=prs)
     assert "SUPERSEDED" not in done.stdout, done.stdout
+
+
+# X-009: the dep_key reached `grep "^${dep_key}|"` as a regex, so the `.` in socket.io also
+# matched socket-io and closed an unrelated PR. Keys must compare as whole, literal strings.
+@pytest.mark.parametrize("old,new", [
+    ("socket.io", "socket-io"),
+    ("socket-io", "socket.io"),
+    ("foo", "foo-bar"),
+    ("foo-bar", "foo"),
+    ("foo", "@scope/foo"),
+    ("@scope/foo", "foo"),
+])
+def test_a_package_is_superseded_only_by_the_same_package(tmp_path, old, new):
+    prs = (f"12|dependabot/npm_and_yarn/{old}-1.0.0|Bump {old}\n"
+           f"13|dependabot/npm_and_yarn/{new}-1.0.1|Bump {new}")
+    done, closes = _run(tmp_path, [], prs=prs)
+    assert "SUPERSEDED" not in done.stdout, done.stdout
+    assert closes == [], closes
+
+
+@pytest.mark.parametrize("name", ["socket.io", "@scope/foo"])
+def test_the_same_package_with_regex_characters_still_supersedes(tmp_path, name):
+    prs = (f"12|dependabot/npm_and_yarn/{name}-1.0.0|Bump {name}\n"
+           f"13|dependabot/npm_and_yarn/{name}-1.0.1|Bump {name}")
+    done, closes = _run(tmp_path, [], prs=prs)
+    assert "SUPERSEDED: PR #12" in done.stdout, done.stdout
+    assert any(c.startswith("pr close 12") for c in closes), closes

@@ -61,6 +61,27 @@ def test_backfill_with_an_empty_repo_still_exits_0(tmp_path):
     assert "No items found to backfill." in r.stdout
 
 
+# X-008 (refuted, kept as a guard): an empty list leaves the read loop with status 1, but
+# bash 3.2 and 5.2 both ignore it under set -e, so one empty list never stops the other.
+@pytest.mark.parametrize("issues,prs", [("", "https://github.com/octo/app/pull/2"),
+                                        ("https://github.com/octo/app/issues/1", "")])
+def test_backfill_one_empty_list_does_not_stop_the_other(tmp_path, issues, prs):
+    board = tmp_path / "board.txt"
+    env, _ = _stub(tmp_path, f'''
+case "$1 $2" in
+  "issue list") [ -n "{issues}" ] && echo "{issues}"; exit 0 ;;
+  "pr list") [ -n "{prs}" ] && echo "{prs}"; exit 0 ;;
+  "project item-add") echo "$7" >> "{board}"; exit 0 ;;
+  "project item-list") cat "{board}"; exit 0 ;;
+esac
+exit 1''')
+    r = subprocess.run(["bash", str(BACKFILL), *BACKFILL_ARGS, "--include-prs"],
+                       capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Backfilled 1 items (1 added, 0 failed)" in r.stdout, r.stdout
+    assert board.read_text().split() == [issues or prs]
+
+
 # ---- X-005: apply-plan.sh -----------------------------------------------------------
 
 PAGES = [[{"title": f"m{i}"} for i in range(100)], [{"title": "v3.7"}]]

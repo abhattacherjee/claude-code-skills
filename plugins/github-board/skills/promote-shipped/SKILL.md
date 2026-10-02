@@ -152,7 +152,7 @@ exactly one `promoteClass`. Three promote, six hold:
 | `hold-unreleased` | has a merged PR, none reachable from `main` | — |
 | `hold-unmerged-pr` | `COMPLETED`, linked PRs exist but none merged | — |
 | `hold-no-fallback` | `--no-fallback-discovery` passed, so no evidence to reason from | — |
-| `hold-foreign-pr` | no merged PR in the issue's repo, but a merged PR from **another** repo claims the issue — its merge commit says nothing about this repo's releases | — |
+| `hold-foreign-pr` | no merged PR in the issue's repo, but a PR from **another** repo, merged or not, claims the issue — its merge commit says nothing about this repo's releases | — |
 | `hold-discovery-failed` | fallback discovery hit an API/auth/rate-limit error — the PR set could not be verified | — |
 | `hold-other` | non-Issue content with no merged PR | — |
 

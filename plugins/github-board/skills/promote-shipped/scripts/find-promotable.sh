@@ -41,8 +41,8 @@
 #                       verified — it is never promoted. An API failure must never
 #                       be able to manufacture the "zero linked PRs" evidence that
 #                       "nopr" promotes on.
-#     hold-foreign-pr   No merged PR in the issue's repo, but a merged PR from ANOTHER
-#                       repository claims the issue (a cross-repo closing reference or a
+#     hold-foreign-pr   No merged PR in the issue's repo, but a PR from ANOTHER repository,
+#                       merged or not, claims the issue (a cross-repo closing reference or a
 #                       timeline cross-reference). Its merge commit says nothing about this
 #                       repo's releases, so the card is held for a human, never promoted
 #                       (and never falls through to "nopr").
@@ -67,8 +67,8 @@
 #      owner/repo#N of this repo, or this repo's issue URL); connected/closer PRs are
 #      kept directly. An unmerged PR found this way adds to .linkedPRCount, so the
 #      issue is held as hold-unmerged-pr instead of promoted as "nopr". Only PRs in the issue's own repo are
-#      kept (formal links included); a foreign one that claims the issue holds it as
-#      hold-foreign-pr. Every discovered PR still passes through the same main-
+#      kept (formal links included); a foreign one that claims the issue, merged or not,
+#      holds it as hold-foreign-pr. Every discovered PR still passes through the same main-
 #      reachability guard, so the fallback can only add genuinely-shipped items.
 #
 # The reachability check uses GitHub's compare API:
@@ -194,7 +194,7 @@ COARSE=$(echo "$INV" | jq --arg doneOpt "$DONE_OPT" '
               | [(.issue.linkedPRs // [])[]
                  | select(.merged == true)
                  | select(((.repo // "") | ascii_downcase) != $ir)
-                 | {number, repo}]
+                 | {number, repo, merged: true}]
             else [] end
           )
         }
@@ -303,7 +303,7 @@ if [ "$FALLBACK" = "true" ]; then
       else
         CAND=$(echo "$CAND" | jq --argjson f "$FOUND" \
           '.mergedPRs = [$f[] | select(.merged and (.foreign | not)) | del(.foreign, .prRepo, .merged)]
-           | .foreignPRs = ((.foreignPRs // []) + [$f[] | select(.merged and .foreign) | {number, repo: .prRepo}])
+           | .foreignPRs = ((.foreignPRs // []) + [$f[] | select(.foreign) | {number, repo: .prRepo, merged}])
            | .linkedPRCount = ((.linkedPRCount // 0) + ([$f[] | select((.merged | not) and (.foreign | not))] | length))')
       fi
     fi
@@ -464,7 +464,7 @@ if [ "$HUMAN" = "true" ]; then
         elif .promoteClass == "hold-no-fallback" then
           "no formal closing link and --no-fallback-discovery was passed"
         elif .promoteClass == "hold-foreign-pr" then
-          "merged PR(s) from another repository claim this issue: " + ([.foreignPRs[] | "\(.repo)#\(.number)"] | join(", ")) + " — not verified here; not promoted"
+          "PR(s) from another repository claim this issue: " + ([.foreignPRs[] | "\(.repo)#\(.number)\(if .merged == false then " (unmerged)" else "" end)"] | join(", ")) + " — not verified here; not promoted"
         elif .promoteClass == "hold-discovery-failed" then
           "PR discovery failed (API/auth/rate-limit) — could not verify; not promoted"
         else "no merged PR" end;
