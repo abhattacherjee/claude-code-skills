@@ -38,7 +38,7 @@ Examples:
   cleanup-branches.sh              # See what would be cleaned
   cleanup-branches.sh --delete     # Clean everything
 
-Requires: git, gh (GitHub CLI, authenticated)
+Requires: git, gh (GitHub CLI, authenticated), jq
 EOF
   exit 0
 }
@@ -63,10 +63,16 @@ if ! command -v gh &>/dev/null; then
   exit 1
 fi
 
+if ! command -v jq &>/dev/null; then
+  echo "ERROR: jq not found (needed to match tracking issues). Install: brew install jq" >&2
+  exit 1
+fi
+
 REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || {
   echo "ERROR: Could not determine GitHub repo. Run 'gh auth login' first." >&2
   exit 1
 }
+REPO_OWNER="${REPO%%/*}"
 CURRENT_BRANCH=$(git branch --show-current)
 
 echo "=== Git Branch Cleanup Audit ==="
@@ -207,7 +213,8 @@ echo ""
 # Category 5: Issue-tracked Dependabot PRs
 # Open Dependabot PRs whose updates are tracked through GitHub issues
 # (created by dependabot-triage agent). The PR is stale because
-# the work is being tracked/resolved via the issue instead.
+# the work is being tracked/resolved via the issue instead. Only an issue by
+# the repo owner or a bot that names the PR exactly (`PR #<n>` or its URL) counts.
 # ─────────────────────────────────────────────────────────
 echo "--- Category 5: Issue-tracked Dependabot PRs ---"
 
@@ -220,26 +227,35 @@ if [[ -f "$TMPDIR_CLEANUP/dependabot_prs.txt" ]]; then
     number=$(echo "$number" | xargs)
     title=$(echo "$title" | xargs)
 
-    # Extract package name from title: "Bump <pkg> from X to Y" or "Bump the <group> group..."
-    pkg_name=""
-    if echo "$title" | grep -qE '^Bump .+ from .+ to '; then
-      pkg_name=$(echo "$title" | sed -E 's/^Bump (.+) from .+ to .+$/\1/' | sed 's/ in .*$//')
-    fi
-
-    # Search for GitHub issues that reference this PR number
+    # A tracking issue must name this PR exactly: the token `PR #<n>` (case-sensitive, at a
+    # word boundary on both sides) or the PR's full URL, in its title or body. And it must be
+    # written by the repo owner or a bot (the triage agent). GitHub's search is fuzzy, so its
+    # hits are only candidates; the filter below decides. There is deliberately no search by
+    # package name: an issue that merely mentions the package says nothing about this PR, and
+    # closing a PR on that evidence was a real defect.
     issue_refs=""
-    if [[ -n "$number" ]]; then
-      # Search for issues mentioning this PR
-      issue_refs=$(gh issue list --state all --search "PR #$number" \
-        --json number,title,state \
-        --jq '.[] | "\(.number)|\(.title)|\(.state)"' 2>/dev/null || true)
-    fi
-
-    # Also search by package name if we extracted one
-    if [[ -n "$pkg_name" && -z "$issue_refs" ]]; then
-      issue_refs=$(gh issue list --state all --search "$pkg_name dependabot" \
-        --json number,title,state \
-        --jq '.[] | "\(.number)|\(.title)|\(.state)"' 2>/dev/null || true)
+    if [[ "$number" =~ ^[0-9]+$ ]]; then
+      if ! raw_issues=$(gh issue list --state all --search "PR #$number" --limit 100 \
+          --json number,title,state,body,author 2>/dev/null); then
+        echo "  WARN: could not search issues for PR #$number; leaving it open"
+        continue
+      fi
+      issue_refs=$(printf '%s' "$raw_issues" | jq -r \
+        --arg n "$number" --arg owner "$REPO_OWNER" --arg url "https://github.com/$REPO/pull/$number" '
+        .[]
+        | select(((.title // "") + "\n" + (.body // ""))
+                 | test("(^|[^A-Za-z0-9_])PR #" + $n + "([^0-9A-Za-z_]|$)")
+                   or (index($url) as $i | $i != null
+                       and ((.[($i + ($url | length)):] | test("^[0-9]")) | not)))
+        | select((.author.login // "") as $a
+                 | ($a | ascii_downcase) == ($owner | ascii_downcase)
+                   or (.author.is_bot // false)
+                   or ($a | startswith("app/"))
+                   or ($a | endswith("[bot]")))
+        | "\(.number)|\(.title | gsub("[|\n\r]"; " "))|\(.state)"' 2>/dev/null) || {
+        echo "  WARN: could not read the issue search for PR #$number; leaving it open"
+        continue
+      }
     fi
 
     # If we found tracking issues, this PR is issue-tracked

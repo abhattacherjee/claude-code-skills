@@ -69,7 +69,7 @@ Verified 2026-06-03 on a real repo: script reported "Nothing to clean up" while 
 
 ### Issue-tracked Dependabot PRs need cross-referencing
 
-When `dependabot-triage` classifies a PR as Category B (major version bump), it creates a GitHub issue and labels the PR `needs-dedicated-review`. However, the PR itself stays open indefinitely. The script cross-references each open Dependabot PR with GitHub issues via `gh issue list --state all --search "PR #N"` and by package name. If tracking issues exist (open or closed), the PR is stale and can be closed with a comment linking to the issues.
+When `dependabot-triage` classifies a PR as Category B (major version bump), it creates a GitHub issue and labels the PR `needs-dedicated-review`. However, the PR itself stays open indefinitely. The script searches GitHub issues for `"PR #N"` for each open Dependabot PR, then keeps only issues that contain the exact token `PR #N` (case-sensitive, at a word boundary) or the PR's full URL, and that were written by the repo owner or a bot. An issue that only mentions the package never counts. If a tracking issue exists (open or closed), the script prints it and the PR is closed with a comment linking to it.
 
 **Key behavior**: GitHub auto-deletes Dependabot branches when PRs are closed — no separate branch deletion is needed for this category.
 

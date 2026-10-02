@@ -134,6 +134,10 @@ def test_an_empty_column_does_not_shift_every_later_field(tmp_path, empty_field,
     cand["mergedPRs"] = [{"number": 8, "baseRefName": "main", "repo": "o/r",
                           "mergeCommitOid": "abc123", "inMain": "yes"}]
     cand[empty_field] = None
+    if empty_field == "repo":
+        # A PR repo that differs from the candidate's is now refused as cross-repo, so null
+        # both to keep this test about column shifting.
+        cand["mergedPRs"][0]["repo"] = None
 
     # --release-tag skips the release lookup, so the preview prints a comment
     # label with no `gh` involved. Without --no-release-comment, which would

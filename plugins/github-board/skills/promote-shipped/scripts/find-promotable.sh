@@ -2,7 +2,7 @@
 # find-promotable.sh — Filter board inventory to items eligible for "Done" promotion.
 #
 # Every candidate (status set, not already Done, closed Issue or merged PR) is
-# assigned exactly one promoteClass. Three promote, five hold:
+# assigned exactly one promoteClass. Three promote, six hold:
 #
 #   PROMOTE
 #     merged            >=1 associated merged PR whose mergeCommit.oid is reachable
@@ -41,6 +41,11 @@
 #                       verified — it is never promoted. An API failure must never
 #                       be able to manufacture the "zero linked PRs" evidence that
 #                       "nopr" promotes on.
+#     hold-foreign-pr   No merged PR in the issue's repo, but a merged PR from ANOTHER
+#                       repository claims the issue (a cross-repo closing reference or a
+#                       timeline cross-reference). Its merge commit says nothing about this
+#                       repo's releases, so the card is held for a human, never promoted
+#                       (and never falls through to "nopr").
 #     hold-other        Non-Issue content that reached Stage 2 without a merged PR.
 #
 # Ordering matters: "merged" is checked first, and hold-unreleased before wontfix,
@@ -58,8 +63,10 @@
 #      issue has no merged linked PR (the normal case for PRs merged to `develop`,
 #      where GitHub never records the closing link), discover merged PRs from the
 #      issue timeline. A cross-referenced PR is kept ONLY if its body has a closing
-#      keyword for THIS issue (Closes/Fixes/Resolves #N); connected/closer PRs are
-#      kept directly. Every discovered PR still passes through the same main-
+#      keyword for THIS issue (Closes/Fixes/Resolves #N or owner/repo#N of this repo);
+#      connected/closer PRs are kept directly. Only PRs in the issue's own repo are
+#      kept (formal links included); a foreign one that claims the issue holds it as
+#      hold-foreign-pr. Every discovered PR still passes through the same main-
 #      reachability guard, so the fallback can only add genuinely-shipped items.
 #
 # The reachability check uses GitHub's compare API:
@@ -161,11 +168,15 @@ COARSE=$(echo "$INV" | jq --arg doneOpt "$DONE_OPT" '
           # ALL linked PRs, merged or not — the signal that separates a genuine
           # no-PR closure from work stalled in an unmerged PR.
           linkedPRCount: (if .contentType == "Issue" then ((.issue.linkedPRs // []) | length) else 0 end),
+          # Only PRs in the repo of the issue count (see discover_prs_for_issue). A merged
+          # PR from another repo is kept aside in foreignPRs, which holds the card.
           mergedPRs: (
             if .contentType == "Issue" then
-              [(.issue.linkedPRs // [])[]
-               | select(.merged == true)
-               | {number, baseRefName, mergedAt, mergeCommitOid, repo, discovered: false}]
+              ((.issue.repo // "") | ascii_downcase) as $ir
+              | [(.issue.linkedPRs // [])[]
+                 | select(.merged == true)
+                 | select(((.repo // "") | ascii_downcase) == $ir)
+                 | {number, baseRefName, mergedAt, mergeCommitOid, repo, discovered: false}]
             else
               [{number: .pullRequest.number,
                 baseRefName: .pullRequest.baseRefName,
@@ -174,6 +185,15 @@ COARSE=$(echo "$INV" | jq --arg doneOpt "$DONE_OPT" '
                 repo: .pullRequest.repo,
                 discovered: false}]
             end
+          ),
+          foreignPRs: (
+            if .contentType == "Issue" then
+              ((.issue.repo // "") | ascii_downcase) as $ir
+              | [(.issue.linkedPRs // [])[]
+                 | select(.merged == true)
+                 | select(((.repo // "") | ascii_downcase) != $ir)
+                 | {number, repo}]
+            else [] end
           )
         }
     ]
@@ -211,20 +231,32 @@ discover_prs_for_issue() {
         }
       }
     }'
-  # Build the jq filter with the issue number and repo interpolated as literals.
-  # Using a variable avoids complex shell quoting around the regex parentheses.
+  # Only a PR in the ISSUE's repo can close the issue. A CrossReferencedEvent can come from
+  # any repo, and a foreign PR's `fixes #N` closes #N of ITS OWN repo, so it must never be
+  # credited here (its merge commit would also be checked against the wrong repo). A foreign
+  # PR that does claim this issue is returned as {foreign:true} so the candidate is held, not
+  # promoted on the "no linked PR" rule. The repo and number are checked before they are
+  # pasted into the filter below as literals.
+  if ! printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
+     || ! printf '%s' "$num" | grep -Eq '^[0-9]+$'; then
+    echo "[find-promotable] discovery skipped: malformed reference repo='$repo' num='$num'" >&2
+    echo "FAILED"; return
+  fi
+  local repo_lc repo_re
+  repo_lc=$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')
+  # Regex-escape the dots; the other allowed characters are literal in a regex.
+  repo_re=$(printf '%s' "$repo" | sed 's/[.]/\\\\./g')
   local jq_filter
   jq_filter='[ .data.repository.issue.timelineItems.nodes[]
     | {t:.__typename, pr:(.closer // .subject // .source)}
     | select(.pr != null and (.pr|type)=="object" and .pr.__typename=="PullRequest" and .pr.merged==true)
     | select( (.t=="ClosedEvent" or .t=="ConnectedEvent")
-              or ( (.pr.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+#'"${num}"'\\b") ) )
+              or ( (.pr.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+('"${repo_re}"')?#'"${num}"'\\b") ) )
+    | ((.pr.repository.nameWithOwner // "") | ascii_downcase) as $prRepo
     | {number:.pr.number, baseRefName:.pr.baseRefName, mergedAt:.pr.mergedAt, mergeCommitOid:.pr.mergeCommit.oid,
-       # the PRs own repo, not the issues: a CrossReferencedEvent can be sourced
-       # from another repository, and this value feeds both the reachability
-       # compare and the release lookup.
-       repo:(.pr.repository.nameWithOwner // "'"${repo}"'"), discovered:true}
-  ] | unique_by(.number)'
+       repo:"'"${repo}"'", foreign:($prRepo != "'"${repo_lc}"'"), prRepo:.pr.repository.nameWithOwner,
+       discovered:true}
+  ] | unique_by([.prRepo, .number])'
   # stdout and rc are captured SEPARATELY so an API/jq failure is distinguishable
   # from a genuine empty result. owner/repo are String! (-f, no type inference);
   # num is a real Int! so it keeps -F.
@@ -262,7 +294,9 @@ if [ "$FALLBACK" = "true" ]; then
         # classifies it hold-discovery-failed, which never promotes.
         CAND=$(echo "$CAND" | jq '. + {discoveryFailed: true}')
       else
-        CAND=$(echo "$CAND" | jq --argjson f "$FOUND" '.mergedPRs = $f')
+        CAND=$(echo "$CAND" | jq --argjson f "$FOUND" \
+          '.mergedPRs = [$f[] | select(.foreign | not) | del(.foreign, .prRepo)]
+           | .foreignPRs = ((.foreignPRs // []) + [$f[] | select(.foreign) | {number, repo: .prRepo}])')
       fi
     fi
     DISCOVERED_CANDS=$(jq -n --argjson a "$DISCOVERED_CANDS" --argjson b "$CAND" '$a + [$b]')
@@ -324,7 +358,9 @@ while IFS= read -r CAND; do
   TAGGED_PRS="[]"
   while IFS= read -r PR; do
     [ -z "$PR" ] && continue
-    REPO=$(echo "$PR" | jq -r '.repo // ""')
+    # The candidate's repo, never the PR's: only same-repo PRs reach this point, and the
+    # reachability verdict must be about the repo the issue lives in.
+    REPO=$(echo "$CAND" | jq -r '.repo // ""')
     SHA=$(echo "$PR" | jq -r '.mergeCommitOid // ""')
     REACH=$(is_in_main "$REPO" "$SHA")
     TAGGED=$(echo "$PR" | jq --arg r "$REACH" '. + {inMain: $r}')
@@ -341,6 +377,7 @@ CLASSIFIED=$(jq -n --argjson cands "$ENRICHED_CANDS" --arg fallback "$FALLBACK" 
     if   ((.mergedPRs // []) | any(.inMain == "yes"))  then "merged"
     elif ((.mergedPRs // []) | length) > 0             then "hold-unreleased"
     elif .contentType != "Issue"                       then "hold-other"
+    elif ((.foreignPRs // []) | length) > 0            then "hold-foreign-pr"
     elif $fallback != "true"                           then "hold-no-fallback"
     elif (.discoveryFailed // false)                   then "hold-discovery-failed"
     elif .stateReason == "NOT_PLANNED"                 then "wontfix"
@@ -418,6 +455,8 @@ if [ "$HUMAN" = "true" ]; then
           "\(.linkedPRCount) linked PR(s), none merged — work may be stalled"
         elif .promoteClass == "hold-no-fallback" then
           "no formal closing link and --no-fallback-discovery was passed"
+        elif .promoteClass == "hold-foreign-pr" then
+          "merged PR(s) from another repository claim this issue: " + ([.foreignPRs[] | "\(.repo)#\(.number)"] | join(", ")) + " — not verified here; not promoted"
         elif .promoteClass == "hold-discovery-failed" then
           "PR discovery failed (API/auth/rate-limit) — could not verify; not promoted"
         else "no merged PR" end;

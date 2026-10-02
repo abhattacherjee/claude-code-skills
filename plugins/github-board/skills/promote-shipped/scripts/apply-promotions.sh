@@ -343,8 +343,21 @@ COMMENT_SKIPPED=0
 COMMENT_FAIL=0
 FAILED_ITEMS="[]"
 
-while IFS=$'\037' read -r ITEM_ID NUMBER TITLE STATUS URL REPO PCLASS MERGE_SHA; do
+while IFS=$'\037' read -r ITEM_ID NUMBER TITLE STATUS URL REPO PCLASS MERGE_SHA FOREIGN; do
   LINE_PREFIX="  #${NUMBER}  ${TITLE:0:60}"
+
+  # A "merged" candidate whose only merged PR lives in another repository is refused: that
+  # PR's merge commit says nothing about this repo's releases. find-promotable.sh never
+  # emits one; this guards an old or hand-edited candidates file. Nothing is moved and
+  # nothing is commented, and it counts as a failure (exit 1).
+  if [ "$FOREIGN" = "1" ]; then
+    echo "${LINE_PREFIX}"
+    echo "    REFUSED: its merged PR is from another repository, not $REPO — not moved, no comment"
+    FAIL=$((FAIL + 1))
+    FAILED_ITEMS=$(jq -n --argjson cur "$FAILED_ITEMS" --arg id "$ITEM_ID" --arg num "$NUMBER" \
+      '$cur + [{itemId: $id, number: ($num | tonumber? // $num), error: "refused: merged PR from another repository"}]')
+    continue
+  fi
 
   # Resolve release info for this candidate (used in dry-run preview AND apply).
   # Only the "merged" class has a merge commit to resolve a release from; the
@@ -463,8 +476,15 @@ done < <(echo "$DATA" | jq -r "$JQ_CLEAN"'
       ((.promoteClass // "merged")|clean),
       # map|.[0] rather than a generator: a generator yields NOTHING for the
       # no-merged-PR classes, which silently drops the column and shifts every
-      # field in the read. This always emits exactly 8 columns.
-      (((((.mergedPRs // []) | map(select(.inMain == "yes" or .inMain == null)))[0].mergeCommitOid) // "")|clean)
+      # field in the read. This always emits exactly 9 columns (with the next one).
+      # Only a PR in the repo of the candidate (case-insensitive) supplies the merge SHA.
+      ((.repo // "") | ascii_downcase) as $cr
+      | ((.mergedPRs // []) | map(select((.inMain == "yes" or .inMain == null)
+                                         and (((.repo // "") | ascii_downcase) == $cr)))) as $own
+      | ((($own[0].mergeCommitOid) // "")|clean),
+      # 9th column: 1 when a "merged" candidate has merged PRs but none in its own repo.
+      (if ((.promoteClass // "merged") == "merged") and ($own | length) == 0
+          and ((.mergedPRs // []) | length) > 0 then "1" else "0" end)
     ] | join("\u001f")
 ' | awk -F'\037' '!seen[$1]++')   # one row per item
 # Emitting 8 columns was never enough: with IFS=$'\t' an EMPTY column vanishes,

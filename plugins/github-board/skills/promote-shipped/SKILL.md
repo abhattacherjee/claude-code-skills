@@ -137,7 +137,7 @@ option). If it can't find one, it bails with exit 5 — surface the error and st
 ```
 
 Every candidate (status set, not already Done, closed Issue or merged PR) is assigned
-exactly one `promoteClass`. Three promote, five hold:
+exactly one `promoteClass`. Three promote, six hold:
 
 | `promoteClass` | Condition | Comment posted |
 |---|---|---|
@@ -147,6 +147,7 @@ exactly one `promoteClass`. Three promote, five hold:
 | `hold-unreleased` | has a merged PR, none reachable from `main` | — |
 | `hold-unmerged-pr` | `COMPLETED`, linked PRs exist but none merged | — |
 | `hold-no-fallback` | `--no-fallback-discovery` passed, so no evidence to reason from | — |
+| `hold-foreign-pr` | no merged PR in the issue's repo, but a merged PR from **another** repo claims the issue — its merge commit says nothing about this repo's releases | — |
 | `hold-discovery-failed` | fallback discovery hit an API/auth/rate-limit error — the PR set could not be verified | — |
 | `hold-other` | non-Issue content with no merged PR | — |
 
@@ -211,8 +212,11 @@ matter what its `stateReason` says.
 > merged to `develop`, since GitHub only records the closing link on default-branch
 > merges), `find-promotable.sh` discovers the closing PR from the issue timeline. A
 > cross-referenced PR is accepted only if its body contains a closing keyword for
-> that exact issue (`Closes/Fixes/Resolves #N`); connected/closer links are accepted
-> directly. Every discovered PR still passes the same main-reachability guard, so the
+> that exact issue (`Closes/Fixes/Resolves #N`, or `owner/repo#N` naming the issue's
+> own repo); connected/closer links are accepted directly. Only a PR in the **issue's
+> own repo** is accepted: a PR from another repo is never credited, and when one claims
+> the issue the card is held as `hold-foreign-pr`. Reachability and the release lookup
+> always use the issue's repo. Every discovered PR still passes the same main-reachability guard, so the
 > fallback can only add genuinely-shipped items — it never promotes unreleased work.
 > Pass `--no-fallback-discovery` to restrict to formal links only.
 >

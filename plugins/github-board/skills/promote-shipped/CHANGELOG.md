@@ -5,6 +5,17 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [2.0.0] — 2026-10-02
 
+### Security
+- **A pull request from another repository can no longer promote an issue.** Timeline
+  discovery accepted any merged cross-referenced PR whose body said `fixes #N`, even
+  from a different repo (where `#N` means that repo's issue), then checked its merge
+  commit and looked up the release in the foreign repo. Only PRs in the issue's own
+  repo are credited now (formal links too), a fully-qualified `owner/repo#N` counts
+  only when it names the issue's repo, and reachability always uses the issue's repo.
+  A foreign merged PR that claims the issue holds the card in the new
+  **`hold-foreign-pr`** class. `apply-promotions.sh` also refuses (exit 1, no move, no
+  comment) a `merged` candidate whose merged PRs are all from another repo.
+
 ### Fixed
 - **`find-promotable.sh` no longer fails OPEN when timeline PR discovery errors.**
   The fallback query's result was `|| echo "[]"`, so an auth expiry, rate limit,
