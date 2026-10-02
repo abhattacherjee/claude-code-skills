@@ -87,7 +87,10 @@ skill-authoring/
 ├── LICENSE
 ├── README.md
 ├── references/
+    ├── agent-teams.md
     ├── quality-checklist.md
+    ├── skill-templates.md
+    ├── task-tracking-pattern.md
 ├── scripts/
     ├── validate-skill.sh
 ├── SKILL.md

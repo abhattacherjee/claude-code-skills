@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>__LABEL__</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__SCRIPTS__/run-sync.sh</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<array>
+__CALENDAR__
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>XDG_CONFIG_HOME</key>
+		<string>__XDG_CONFIG_HOME__</string>
+		<key>XDG_CACHE_HOME</key>
+		<string>__XDG_CACHE_HOME__</string>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/weekly-focus/sync.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/weekly-focus/sync.err.log</string>
+</dict>
+</plist>
