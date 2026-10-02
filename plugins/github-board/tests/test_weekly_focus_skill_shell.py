@@ -72,3 +72,42 @@ def test_skill_commands_run_in_shell(shell, tmp_path):
     out = [l for l in r.stdout.splitlines() if l.startswith("STUB ")]
     assert len(out) == len(_commands())
     assert out[0] == "STUB sync --json"
+
+
+KNOWN = {"sync", "show", "set", "init", "config"}
+
+
+def _text():
+    return SKILL.read_text()
+
+
+def test_every_wf_command_is_a_known_subcommand():
+    for cmd in _commands():
+        m = re.search(r'"\$WF"\s+(\S+)', cmd)
+        assert m and m.group(1) in KNOWN, cmd
+
+
+def test_no_hard_coded_weekday_table_or_capacity():
+    text = _text()
+    for stale in ("Today's lane: Mon", "Tue/Wed Product", "Fri Season", "sized for 10-20h",
+                  "at most 3 repos"):
+        assert stale not in text
+
+
+def test_schedule_and_capacity_come_from_show_json():
+    text = _text()
+    for key in ("`schedule`", "`capacity`", "`default_lane`", "`config_warnings`"):
+        assert key in text
+
+
+def test_init_flow_is_present():
+    text = _text()
+    assert "## Mode: init" in text
+    assert 'python3 "$WF" init --from "$CFG_JSON"' in text
+    assert 'python3 "$WF" init --force --from "$CFG_JSON"' in text
+    assert 'python3 "$WF" config' in text
+    assert "Write this to `~/.config/github-board/config.json`?" in text
+    assert "gh auth refresh -s read:project,project" in text
+    for q in ("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8"):
+        assert f"**{q}" in text
+    assert "--takeover" in text and "never pass `--takeover` unasked" in text
