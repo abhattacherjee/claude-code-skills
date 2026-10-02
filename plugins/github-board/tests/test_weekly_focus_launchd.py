@@ -727,3 +727,17 @@ def test_a_failed_reinstall_of_one_label_does_not_silence_the_other(installed, t
     installed.run("run-sync.sh", LAUNCHCTL_PRINT_RC=1, LAUNCHCTL_BOOTSTRAP_RC=5, NOW=T0 + HOUR)
     assert any("reinstall FAILED" in n and WATCHDOG in n for n in installed.log("osascript")), \
         "the watchdog failure was hidden by the sync label's stamp"
+
+
+def test_an_unreadable_enabled_flag_never_silences_the_watchdog(installed, tmp_path):
+    # Fail closed: only an explicit `false` turns the jobs off. A read that fails (here a
+    # GB_PYTHON that refuses exactly that key) must not look like "disabled".
+    wrapper = tmp_path / "py-wrapper"
+    wrapper.write_text(f'#!/bin/bash\ncase "$*" in *plan_week.launchd.enabled*) exit 1 ;; esac\n'
+                       f'exec "{sys.executable}" "$@"\n')
+    wrapper.chmod(0o755)
+    installed.set_heartbeat(HOUR)
+    (installed.la / f"{SYNC}.plist").unlink()
+    r = installed.run("watchdog.sh", GB_PYTHON=wrapper)
+    assert "enabled is false" not in r.stdout
+    assert (installed.la / f"{SYNC}.plist").exists() or "reinstall-failed" in r.stdout, r.stdout + r.stderr

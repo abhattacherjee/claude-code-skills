@@ -36,8 +36,9 @@ like "what do I work on next") is the normal way to use this.
   sync --json and show --json carry config_warnings: frozen or always entries that match no
   open issue (a renamed or deleted repo, or a closed issue).
 
-Exit codes: 0 ok; 1 error; 2 usage or invalid config (names the key); 3 sync skipped
-(GraphQL budget low) or init refused; 4 no config yet (run `plan-week init`).
+Exit codes: 0 ok; 1 error (including a board without a Lane or Focus option the config names);
+2 usage or invalid config (names the key); 3 sync skipped (GraphQL budget low) or init refused;
+4 no config yet, or a config without a plan_week section (run `plan-week init`).
 
 "Current milestone" = the lowest-versioned open milestone that still has open issues
 (titles starting with a version: v0.6, V1.2, 0.4, v2.0 — ...). Backlog/theme milestones, and any

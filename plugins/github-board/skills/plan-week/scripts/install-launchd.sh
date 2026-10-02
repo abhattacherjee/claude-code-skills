@@ -138,7 +138,11 @@ install_copy() { # install_copy <copy dir>: (re)create it from this plugin; non-
   done
   find "$new" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null
   if [ -e "$dest" ]; then mv "$dest" "$old" || { rm -rf "$new"; return 1; }; fi
-  mv "$new" "$dest" || { echo "could not move $new to $dest" >&2; return 1; }
+  if ! mv "$new" "$dest"; then
+    echo "could not move $new to $dest" >&2
+    [ -e "$old" ] && mv "$old" "$dest"       # put the copy the jobs use back
+    return 1
+  fi
   rm -rf "$old"
 }
 

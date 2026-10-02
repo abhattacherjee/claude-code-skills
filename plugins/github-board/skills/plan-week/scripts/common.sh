@@ -86,8 +86,9 @@ if [ "$_gb_rc" -ne 0 ]; then
 fi
 rm -f "$_gb_err"
 SYNC_LABEL="$LABEL_PREFIX-sync"
-# launchd_enabled: plan_week.launchd.enabled is true. When it is false the jobs must not
-# reinstall each other (that would fail with exit 2 and alert every 6h for nothing).
-launchd_enabled() { [ "$(gb_config_get plan_week.launchd.enabled 2>/dev/null)" = true ]; }
+# launchd_enabled: false only when plan_week.launchd.enabled reads exactly `false`. Then the
+# jobs must not reinstall each other (that would fail with exit 2 and alert every 6h for
+# nothing). A failed read counts as enabled, so it can never silence the watchdog.
+launchd_enabled() { [ "$(gb_config_get plan_week.launchd.enabled 2>/dev/null)" != false ]; }
 WATCHDOG_LABEL="$LABEL_PREFIX-watchdog"
 LABELS="$SYNC_LABEL $WATCHDOG_LABEL"
