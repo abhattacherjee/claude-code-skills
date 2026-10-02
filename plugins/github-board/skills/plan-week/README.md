@@ -20,9 +20,11 @@ Check with: `gh api graphql -f query='{user(login:"abhattacherjee"){projectV2(nu
 
 ## Install
 
+Set `PW` to this skill's directory in the installed plugin.
+
 ```bash
-~/.claude/skills/weekly-focus/scripts/install-launchd.sh            # both agents
-~/.claude/skills/weekly-focus/scripts/install-launchd.sh --only com.abhattacherjee.weekly-focus-watchdog
+"$PW"/scripts/install-launchd.sh            # both agents
+"$PW"/scripts/install-launchd.sh --only com.abhattacherjee.weekly-focus-watchdog
 ```
 
 It renders the templates (`__HOME__` becomes `$HOME`) into `~/Library/LaunchAgents/`, creates the log and state directories, then runs `launchctl bootout` and `launchctl bootstrap` for each label.
@@ -38,7 +40,7 @@ done
 ## Check
 
 ```bash
-~/.claude/skills/weekly-focus/scripts/install-launchd.sh --check    # exit 1 if a plist is missing or differs
+"$PW"/scripts/install-launchd.sh --check    # exit 1 if a plist is missing or differs
 launchctl print gui/$(id -u)/com.abhattacherjee.weekly-focus-sync
 ls -l ~/.local/state/weekly-focus/                                   # last-success, last-error, alert-* stamps
 tail ~/Library/Logs/weekly-focus/{sync,watchdog}.log

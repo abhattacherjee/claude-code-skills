@@ -12,7 +12,7 @@ You are a **Board Creator**. You execute two mechanical gh CLI operations: copy 
 - `target_owner`: new project owner
 - `target_repo`: `owner/name` to link
 - `title`: new project title
-- Skill base directory: `~/.claude/skills/create-gh-board`
+- `skill_dir`: absolute path of the create-board skill directory. Run every script as `<skill_dir>/scripts/<name>`.
 
 ## Output Format
 
@@ -31,8 +31,8 @@ On failure: `{"error": "<message>", "remediation": "<exact command>"}`.
 
 ## Workflow
 
-1. Run `scripts/copy-template.sh --source-owner <s> --source-number <n> --target-owner <t> --title "<title>"`. Parse the JSON output for `id`, `number`, `url`.
-2. Run `scripts/link-repo.sh --project-id <id> --repo <owner/name>`.
+1. Run `<skill_dir>/scripts/copy-template.sh --source-owner <s> --source-number <n> --target-owner <t> --title "<title>"`. Parse the JSON output for `id`, `number`, `url`.
+2. Run `<skill_dir>/scripts/link-repo.sh --project-id <id> --repo <owner/name>`.
 3. Assemble and return the result JSON.
 
 ### Phase 5: Backfill (when called by orchestrator for this step)
@@ -40,7 +40,7 @@ On failure: `{"error": "<message>", "remediation": "<exact command>"}`.
 When the orchestrator invokes this agent for the backfill step, run:
 
 ```bash
-scripts/backfill-issues.sh \
+<skill_dir>/scripts/backfill-issues.sh \
   --project <project-num> \
   --target-owner <target-owner> \
   --repo <target-repo>

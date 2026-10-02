@@ -13,17 +13,17 @@ Moving a Project (v2) card between Status columns mid-lifecycle (e.g. -> **In Pr
 ## Quick Check
 ```bash
 # List the board's Status columns (names vary per board)
-./scripts/board-move.sh --list-status --repo OWNER/REPO
+"${CLAUDE_SKILL_DIR}/scripts/board-move.sh" --list-status --repo OWNER/REPO
 
 # Move a card (fuzzy column match, case-insensitive)
-./scripts/board-move.sh --issue 28 --to "In Progress"
-./scripts/board-move.sh --pr 31 --to "Development Complete"
+"${CLAUDE_SKILL_DIR}/scripts/board-move.sh" --issue 28 --to "In Progress"
+"${CLAUDE_SKILL_DIR}/scripts/board-move.sh" --pr 31 --to "Development Complete"
 
 # Preview without applying; add the card if it isn't on the board yet
-./scripts/board-move.sh --issue 9 --to done --dry-run
-./scripts/board-move.sh --issue 9 --to "Up Next" --add
+"${CLAUDE_SKILL_DIR}/scripts/board-move.sh" --issue 9 --to done --dry-run
+"${CLAUDE_SKILL_DIR}/scripts/board-move.sh" --issue 9 --to "Up Next" --add
 
-./scripts/board-move.sh --help
+"${CLAUDE_SKILL_DIR}/scripts/board-move.sh" --help
 ```
 Defaults to the current repo and its single linked board; pass `--repo` / `--project <number>` to disambiguate.
 

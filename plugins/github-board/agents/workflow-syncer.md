@@ -32,7 +32,7 @@ remediation beyond it.
 - `snapshot_path`: template JSON from Phase 1
 - `new_project_id`, `new_owner`, `new_number`: new project coordinates
 - `tgt_repo`: `owner/name` of the repo the board was linked to
-- Skill base directory: `~/.claude/skills/create-gh-board`
+- `skill_dir`: absolute path of the create-board skill directory. Run every script as `<skill_dir>/scripts/<name>`.
 
 ## Output Format
 
@@ -55,7 +55,7 @@ remediation beyond it.
 
 ## Workflow
 
-1. Run `scripts/sync-workflows.sh --snapshot <path> --new-project-id <id> --new-owner <login> --new-number <n> --tgt-repo <t>`.
+1. Run `<skill_dir>/scripts/sync-workflows.sh --snapshot <path> --new-project-id <id> --new-owner <login> --new-number <n> --tgt-repo <t>`.
 2. Parse its stdout JSON: `enabled_now`, `missing_from_new`, `ui_url`.
 3. Set `auto_add_present` from whether `Auto-add to project` appears in
    `enabled_now`. On a fresh copy it will be absent — that is expected, not an

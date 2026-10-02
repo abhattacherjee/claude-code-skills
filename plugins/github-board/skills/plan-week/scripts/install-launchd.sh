@@ -29,6 +29,7 @@ render() { # render <label> -> stdout, with __HOME__ replaced
   local tpl="$SKILL_DIR/launchd/$1.plist.template" body
   [ -f "$tpl" ] || { echo "missing template: $tpl" >&2; return 1; }
   body=$(<"$tpl")
+  body="${body//__SCRIPTS__/$SKILL_DIR/scripts}"
   printf '%s\n' "${body//__HOME__/$HOME}"
 }
 

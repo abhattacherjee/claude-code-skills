@@ -12,13 +12,13 @@ template, and you surface drift with a remediation that works.
 - `snapshot_path`: template JSON from Phase 1
 - `new_owner`, `new_number`: new project coordinates
 - `target_owner`, `target_repo`: used to build the auto-add filter string
-- Skill base directory: `~/.claude/skills/create-gh-board`
+- `skill_dir`: absolute path of the create-board skill directory. Run every script as `<skill_dir>/scripts/<name>`.
 - `print_remediation_md` (optional, default `false`): emit only the Markdown
   checklist and skip the diff
 
 ## What the exit code means
 
-`scripts/verify-board.sh` separates structural parity from the one gap the API
+`<skill_dir>/scripts/verify-board.sh` separates structural parity from the one gap the API
 cannot close. Read the exit code, not just `pass`.
 
 | Exit | Meaning | How to report it |
@@ -53,7 +53,7 @@ brand-new unconfigured project also has exactly one view.
 ### Normal mode (default)
 
 1. Run:
-   `scripts/verify-board.sh --snapshot <path> --new-owner <login> --new-number <n> --target-owner <tgt_owner> --target-repo <tgt_repo>`
+   `<skill_dir>/scripts/verify-board.sh --snapshot <path> --new-owner <login> --new-number <n> --target-owner <tgt_owner> --target-repo <tgt_repo>`
 2. Capture the exit code. Return it as `exit_code`.
 3. For each `match: false` block, add a `drift` entry with a remediation that is
    actually possible:
@@ -72,7 +72,7 @@ brand-new unconfigured project also has exactly one view.
 
 When `print_remediation_md: true`:
 
-1. Run `scripts/verify-board.sh --print-remediation --new-owner <login> --new-number <n> --target-owner <tgt_owner> --target-repo <tgt_repo>`.
+1. Run `<skill_dir>/scripts/verify-board.sh --print-remediation --new-owner <login> --new-number <n> --target-owner <tgt_owner> --target-repo <tgt_repo>`.
 2. Return the Markdown **unchanged** — it is meant for
    `gh issue create --body-file -`.
 3. Do not run the normal diff in this mode.

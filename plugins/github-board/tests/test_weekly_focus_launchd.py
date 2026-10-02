@@ -423,7 +423,7 @@ def test_plist_templates_have_no_keepalive_and_use_home_placeholder(label):
     text = (SKILL / "launchd" / f"{label}.plist.template").read_text()
     assert "KeepAlive" not in text
     assert f"<string>{label}</string>" in text
-    assert "__HOME__/.claude/skills/weekly-focus/scripts/" in text
+    assert "__SCRIPTS__/" in text and ".claude" not in text
     assert ("RunAtLoad" in text) == (label == WATCHDOG)
 
 

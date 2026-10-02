@@ -1,4 +1,4 @@
-"""SKILL.md's own commands must run in the shells the Bash tool uses (#217).
+"""plan-week SKILL.md's own commands must run in the shells the Bash tool uses (#217, #146).
 
 The skill once set WF="python3 <path>" and called `$WF sync`. zsh does not
 word-split an unquoted variable, so every mode failed with "no such file or
@@ -50,16 +50,23 @@ def test_every_wf_call_quotes_the_variable():
         assert '"$WF"' in cmd, f"unquoted $WF in SKILL.md command: {cmd!r}"
 
 
+def test_wf_points_at_the_skill_dir_placeholder():
+    assert _wf_assignment().startswith('WF="${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py"')
+
+
 @pytest.mark.parametrize("shell", ["zsh", "bash"])
 def test_skill_commands_run_in_shell(shell, tmp_path):
     exe = shutil.which(shell)
     if not exe:
         pytest.skip(f"{shell} not installed")
-    stub = tmp_path / ".claude" / "skills" / "weekly-focus" / "scripts" / "weekly-focus.py"
+    skill_dir = tmp_path / "plan-week"
+    stub = skill_dir / "scripts" / "weekly-focus.py"
     stub.parent.mkdir(parents=True)
     stub.write_text(STUB)
-    script = "\n".join([re.split(r"\s+#\s", _wf_assignment())[0]] +[f"{c} || exit 9" for c in _commands()])
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
+    # Claude Code substitutes ${CLAUDE_SKILL_DIR} as text when the skill loads; do the same.
+    assign = re.split(r"\s+#\s", _wf_assignment())[0].replace("${CLAUDE_SKILL_DIR}", str(skill_dir))
+    script = "\n".join([assign] + [f"{c} || exit 9" for c in _commands()])
+    env = {"HOME": str(tmp_path / "home"), "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
     r = subprocess.run([exe, "-c", script], capture_output=True, text=True, env=env)
     assert r.returncode == 0, f"{shell} failed: {r.stderr}"
     out = [l for l in r.stdout.splitlines() if l.startswith("STUB ")]

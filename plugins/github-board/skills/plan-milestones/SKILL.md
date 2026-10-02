@@ -18,19 +18,19 @@ everything else somewhere with its own theme.
 ## Quick Check
 
 ```bash
-./scripts/milestone-report.sh                      # themes, open issues, accretion flags
-./scripts/milestone-report.sh --unassigned         # + open issues with NO milestone
-./scripts/milestone-report.sh --json               # machine-readable
-./scripts/apply-plan.sh --plan plan.json           # dry-run (default)
-./scripts/apply-plan.sh --plan plan.json --apply   # write
-./scripts/task-manifest.sh refocus                 # task checklist
+"${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh"                      # themes, open issues, accretion flags
+"${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh" --unassigned         # + open issues with NO milestone
+"${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh" --json               # machine-readable
+"${CLAUDE_SKILL_DIR}/scripts/apply-plan.sh" --plan plan.json           # dry-run (default)
+"${CLAUDE_SKILL_DIR}/scripts/apply-plan.sh" --plan plan.json --apply   # write
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" refocus                 # task checklist
 ```
 
 Requires `gh` (authenticated) and `jq`.
 
 ## Progress Tracking (MANDATORY)
 
-Build the checklist from `./scripts/task-manifest.sh refocus` before starting. Mark each
+Build the checklist from `"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" refocus` before starting. Mark each
 task `in_progress` before it and `completed` after. On abort, mark the rest `deleted` —
 never leave a triage looking finished when the moves were never applied.
 
@@ -48,7 +48,7 @@ never leave a triage looking finished when the moves were never applied.
 ### 1. Gather
 
 ```bash
-./scripts/milestone-report.sh --unassigned
+"${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh" --unassigned
 ```
 
 Read two things from the output:
@@ -122,9 +122,9 @@ Write the plan, dry-run it, then apply:
 ```
 
 ```bash
-./scripts/apply-plan.sh --plan plan.json            # preview
-./scripts/apply-plan.sh --plan plan.json --apply    # write
-./scripts/milestone-report.sh                       # verify the resulting split
+"${CLAUDE_SKILL_DIR}/scripts/apply-plan.sh" --plan plan.json            # preview
+"${CLAUDE_SKILL_DIR}/scripts/apply-plan.sh" --plan plan.json --apply    # write
+"${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh"                       # verify the resulting split
 ```
 
 The script **refuses** a plan whose move lacks a real rationale (≥10 chars), and refuses

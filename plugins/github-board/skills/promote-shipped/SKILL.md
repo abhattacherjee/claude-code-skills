@@ -19,17 +19,17 @@ skill reads it and promotes them in one pass.
 
 ```bash
 # 1. Discover boards for a repo (returns 0/1/N boards as JSON)
-./scripts/discover-boards.sh <owner> <repo> --json
+"${CLAUDE_SKILL_DIR}/scripts/discover-boards.sh" <owner> <repo> --json
 
 # 2. Inventory items + status field (use board ID from step 1)
-./scripts/inventory-board.sh --board-id <PVT_xxx> > /tmp/release-board-inv.json
+"${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id <PVT_xxx> > /tmp/release-board-inv.json
 
 # 3. Filter to promotable candidates (closed issue + merged PR + status != Done)
-./scripts/find-promotable.sh /tmp/release-board-inv.json > /tmp/release-board-cand.json
+"${CLAUDE_SKILL_DIR}/scripts/find-promotable.sh" /tmp/release-board-inv.json > /tmp/release-board-cand.json
 
 # 4. Preview, then apply
-./scripts/apply-promotions.sh /tmp/release-board-cand.json --dry-run
-./scripts/apply-promotions.sh /tmp/release-board-cand.json --apply
+"${CLAUDE_SKILL_DIR}/scripts/apply-promotions.sh" /tmp/release-board-cand.json --dry-run
+"${CLAUDE_SKILL_DIR}/scripts/apply-promotions.sh" /tmp/release-board-cand.json --apply
 ```
 
 ## Pre-flight
@@ -47,7 +47,7 @@ gh auth refresh -s read:project,project
 Generate the task checklist before starting:
 
 ```bash
-./scripts/task-manifest.sh full-run
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full-run
 ```
 
 | # | subject | activeForm |
@@ -72,7 +72,7 @@ Generate the task checklist before starting:
 ### Phase 1 — Discover boards
 
 ```bash
-./scripts/discover-boards.sh <owner> <repo> --json > /tmp/release-board-list.json
+"${CLAUDE_SKILL_DIR}/scripts/discover-boards.sh" <owner> <repo> --json > /tmp/release-board-list.json
 COUNT=$(jq '.boards | length' /tmp/release-board-list.json)
 ```
 
@@ -86,8 +86,8 @@ COUNT=$(jq '.boards | length' /tmp/release-board-list.json)
 
 ```bash
 BOARD_ID=$(jq -r '.boards[<picked-index>].id' /tmp/release-board-list.json)
-./scripts/inventory-board.sh --board-id "$BOARD_ID" > /tmp/release-board-inv.json
-./scripts/inventory-board.sh --board-id "$BOARD_ID" --human   # also show summary
+"${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id "$BOARD_ID" > /tmp/release-board-inv.json
+"${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id "$BOARD_ID" --human   # also show summary
 ```
 
 The script auto-detects the Status field (single-select with a `done|released|shipped`
@@ -96,8 +96,8 @@ option). If it can't find one, it bails with exit 5 — surface the error and st
 ### Phase 3 — Find promotable
 
 ```bash
-./scripts/find-promotable.sh /tmp/release-board-inv.json --human
-./scripts/find-promotable.sh /tmp/release-board-inv.json > /tmp/release-board-cand.json
+"${CLAUDE_SKILL_DIR}/scripts/find-promotable.sh" /tmp/release-board-inv.json --human
+"${CLAUDE_SKILL_DIR}/scripts/find-promotable.sh" /tmp/release-board-inv.json > /tmp/release-board-cand.json
 ```
 
 Every candidate (status set, not already Done, closed Issue or merged PR) is assigned
@@ -127,8 +127,8 @@ the looser legacy filter (rarely correct; it cannot reach the no-PR classes at a
 > reports the gap: each succeeds on its own subset.
 >
 > ```bash
-> ./scripts/find-promotable.sh inv.json > /tmp/cand-default.json                   # reaches nopr + wontfix
-> ./scripts/find-promotable.sh inv.json --skip-main-check > /tmp/cand-merged.json  # reaches merged
+> "${CLAUDE_SKILL_DIR}/scripts/find-promotable.sh" inv.json > /tmp/cand-default.json                   # reaches nopr + wontfix
+> "${CLAUDE_SKILL_DIR}/scripts/find-promotable.sh" inv.json --skip-main-check > /tmp/cand-merged.json  # reaches merged
 > ```
 >
 > Apply both candidate sets, then check the arithmetic: the promoted total should
@@ -177,7 +177,7 @@ If the candidate count is 0, exit cleanly — board is in sync with main.
 ### Phase 4 — Preview
 
 ```bash
-./scripts/apply-promotions.sh /tmp/release-board-cand.json --dry-run
+"${CLAUDE_SKILL_DIR}/scripts/apply-promotions.sh" /tmp/release-board-cand.json --dry-run
 ```
 
 Always run dry-run first. The preview shows per-item: current → Done transition
@@ -196,7 +196,7 @@ The user can also type a custom answer ("apply but skip #X") — handle by mutat
 the candidate JSON before calling `--apply`.
 
 ```bash
-./scripts/apply-promotions.sh /tmp/release-board-cand.json --apply
+"${CLAUDE_SKILL_DIR}/scripts/apply-promotions.sh" /tmp/release-board-cand.json --apply
 ```
 
 For each candidate the apply phase performs two writes:

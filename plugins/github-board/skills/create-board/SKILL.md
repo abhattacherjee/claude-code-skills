@@ -52,10 +52,10 @@ Three consequences that drive the whole design:
 ## Quick Check
 
 ```bash
-./scripts/inspect-template.sh --owner abhattacherjee --number 31   # snapshot the template
-./scripts/audit-board.sh --owner abhattacherjee --all              # drift sweep, read-only
-./scripts/task-manifest.sh full                                    # task list for creation
-./scripts/task-manifest.sh audit                                   # task list for the audit
+"${CLAUDE_SKILL_DIR}/scripts/inspect-template.sh" --owner abhattacherjee --number 31   # snapshot the template
+"${CLAUDE_SKILL_DIR}/scripts/audit-board.sh" --owner abhattacherjee --all              # drift sweep, read-only
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full                                    # task list for creation
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" audit                                   # task list for the audit
 ```
 
 ## When to Use
@@ -100,7 +100,7 @@ default here; copying does not need the badge.
 
 ## Progress Tracking (MANDATORY)
 
-Build the checklist from `scripts/task-manifest.sh <workflow>` before starting.
+Build the checklist from `"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" <workflow>` before starting.
 TaskUpdate `in_progress` before each phase, `completed` after. On abort, mark
 the rest `deleted`.
 
@@ -112,6 +112,9 @@ the rest `deleted`.
 | 4 | Check `Auto-add to project` | `github-board:workflow-syncer` | `sonnet` |
 | 5 | Backfill existing issues | `github-board:board-creator` (continued) | `haiku` |
 | 6 | Verify against template | `github-board:board-verifier` | `sonnet` |
+
+Every agent dispatch passes `skill_dir: ${CLAUDE_SKILL_DIR}` plus the inputs the agent lists.
+The agents run each script as `<skill_dir>/scripts/<name>`.
 
 ## Workflow: `full`
 
@@ -172,7 +175,7 @@ gives exit `0`.
 For a tracking issue:
 
 ```bash
-scripts/verify-board.sh --print-remediation \
+"${CLAUDE_SKILL_DIR}/scripts/verify-board.sh" --print-remediation \
   --new-owner <owner> --new-number <n> --target-repo <repo> \
   | gh issue create --repo <owner/repo> --title "Enable board auto-add" --body-file -
 ```
@@ -180,9 +183,9 @@ scripts/verify-board.sh --print-remediation \
 ## Workflow: `audit` (read-only)
 
 ```bash
-./scripts/audit-board.sh --owner <login> --number <n>     # one board
-./scripts/audit-board.sh --owner <login> --all            # every open board
-./scripts/audit-board.sh --owner <login> --all --json     # one JSON object per line
+"${CLAUDE_SKILL_DIR}/scripts/audit-board.sh" --owner <login> --number <n>     # one board
+"${CLAUDE_SKILL_DIR}/scripts/audit-board.sh" --owner <login> --all            # every open board
+"${CLAUDE_SKILL_DIR}/scripts/audit-board.sh" --owner <login> --all --json     # one JSON object per line
 ```
 
 Compares Status options, view shape and `Auto-add to project` against the

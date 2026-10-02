@@ -10,7 +10,7 @@ metadata:
 Board: user project "Weekly Focus" (abhattacherjee). All logic is in the script; this file only decides what to say.
 
 ```bash
-WF="$HOME/.claude/skills/weekly-focus/scripts/weekly-focus.py"   # path only: zsh does not word-split $WF
+WF="${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py"   # path only: zsh does not word-split $WF
 ```
 
 ## Every mode

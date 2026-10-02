@@ -15,13 +15,13 @@ Git Flow workflows and Dependabot generate many branches. After squash-merges, h
 
 ```bash
 # Dry-run audit (report only)
-~/.claude/skills/git-branch-cleanup/scripts/cleanup-branches.sh
+"${CLAUDE_SKILL_DIR}/scripts/cleanup-branches.sh"
 
 # Actually delete stale branches
-~/.claude/skills/git-branch-cleanup/scripts/cleanup-branches.sh --delete
+"${CLAUDE_SKILL_DIR}/scripts/cleanup-branches.sh" --delete
 
 # Usage
-~/.claude/skills/git-branch-cleanup/scripts/cleanup-branches.sh --help
+"${CLAUDE_SKILL_DIR}/scripts/cleanup-branches.sh" --help
 ```
 
 ## What It Detects

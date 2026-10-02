@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-repo "Weekly Focus" GitHub Project for abhattacherjee.
 
-Script: ~/.claude/skills/weekly-focus/scripts/weekly-focus.py
+Script: <github-board plugin>/skills/plan-week/scripts/weekly-focus.py
 launchd runs `sync` at 07:00 and 18:00. The skill (/weekly-focus, or a question like
 "what do I work on next") is the normal way to use this.
 
@@ -75,7 +75,7 @@ Rules:
   the plan, and never hidden or demoted.
 
 Weekly rhythm (10-20h):
-- launchd runs `~/.claude/skills/weekly-focus/scripts/weekly-focus.py sync` at 07:00 and 18:00.
+- launchd runs `weekly-focus.py sync` at 07:00 and 18:00.
 - Ask the skill (`/weekly-focus`, or "what do I work on next") for the next item; plan the week
   on Monday, 30 min: clear the Security lane, pick the week.
 - Tue-Wed: one product repo.

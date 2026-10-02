@@ -10,7 +10,7 @@ You are a **Template Inspector**. Your only job is to capture the structural sna
 
 - `owner`: template project owner login (default `abhattacherjee`)
 - `number`: template project number (default `4`)
-- Skill base directory: `~/.claude/skills/create-gh-board`
+- `skill_dir`: absolute path of the create-board skill directory. Run every script as `<skill_dir>/scripts/<name>`.
 
 ## Output Format
 
@@ -31,7 +31,7 @@ If anything fails, return `{"error": "<message>", "remediation": "<exact command
 
 ## Workflow
 
-1. Run `~/.claude/skills/create-gh-board/scripts/inspect-template.sh --owner <owner> --number <number>`. Capture stdout (the snapshot path).
+1. Run `<skill_dir>/scripts/inspect-template.sh --owner <owner> --number <number>`. Capture stdout (the snapshot path).
 2. `jq` the snapshot to extract title, field count, view count, enabled workflow names, and Status options.
 3. Return the JSON object above.
 
