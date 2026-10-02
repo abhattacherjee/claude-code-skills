@@ -1,0 +1,232 @@
+# github-board plugin — design
+
+Issue: #146. Milestone: v3.20. Date: 2026-10-02.
+
+## Goal
+
+One `/plugin install github-board@claude-code-skills` installs the seven GitHub-workflow
+skills and the four agents one of them dispatches. The skills get short verb names. The
+old bare skills in `~/.claude/skills/` keep working next to the plugin until they are
+deleted by hand.
+
+## Scope
+
+In this PR:
+
+- the plugin itself (Phase 1 of the issue's migration path)
+- callers of the old names inside this repo
+
+Not in this PR:
+
+- callers in other repos (claude-code-config, git-flow, obsidian-brain, codex-config) —
+  one small PR per repo afterwards
+- handing the launchd jobs to the plugin (Phase 3) — a manual runbook step in the README
+- deleting the bare copies (Phase 4) — a manual runbook step in the README
+
+## Decision: author directly in `plugins/github-board/`
+
+Same pattern as `plugins/adversarial-review/`: the plugin directory is the only source.
+
+Rejected: root source folders plus `plugin-manifest.json` assembled by
+`prepare-plugin.sh` (the `deep-review` pattern). That keeps two copies of seven skills,
+and it depends on generator defects already filed for v3.22 (#66, #82, #106).
+
+Rejected: one plugin per skill. The issue's argument is a single install for a pipeline.
+
+## Layout
+
+```
+plugins/github-board/
+  .claude-plugin/plugin.json        name github-board, version 1.0.0
+  README.md                         skills, agents, migration runbook (Phases 3-4)
+  CHANGELOG.md
+  LICENSE
+  skills/
+    create-board/                   was create-gh-board
+    triage-issues/                  was github-issue-triage
+    plan-milestones/                was github-milestone-planning
+    plan-week/                      was weekly-focus
+    move-card/                      was github-board-move
+    promote-shipped/                was github-release-board-promote
+    prune-branches/                 was git-branch-cleanup
+  agents/
+    template-inspector.md           was gh-board-template-inspector
+    board-creator.md                was gh-board-creator
+    workflow-syncer.md              was gh-board-workflow-syncer
+    board-verifier.md               was gh-board-verifier
+  tests/                            pytest suites moved with their code, plus new ones
+```
+
+The root `.claude-plugin/marketplace.json` gets one `github-board` row. The repo-root
+`github-board-move/` folder is deleted; its content moves to `skills/move-card/`.
+
+## Sources
+
+Each skill is copied from where its newest version lives. Checked 2026-10-02 by
+`diff -rq` between each source and the installed copy.
+
+| New name | Source | Notes |
+|---|---|---|
+| `create-board` | `~/.claude/skills/create-gh-board/` | Installed copy is newer than claude-code-config's: `backfill-issues.sh` (read-back and one retry after `item-add`) and `verify-board.sh` (accepts `owner/name`) were edited 2026-10-02 and never committed upstream. Take the installed copy. |
+| `triage-issues` | `~/.claude/skills/github-issue-triage/` | No upstream. |
+| `plan-milestones` | `~/.claude/skills/github-milestone-planning/` | No upstream. |
+| `plan-week` | claude-code-config `skills/weekly-focus/` | Identical to the installed copy apart from `README.md`, which exists only upstream. |
+| `move-card` | this repo's `github-board-move/` | |
+| `promote-shipped` | claude-code-config `skills/github-release-board-promote/` | Identical to the installed copy. Its five pytest files move too. |
+| `prune-branches` | `~/.claude/skills/git-branch-cleanup/` | No upstream. |
+| four agents | claude-code-config `agents/gh-board-*.md` | Identical to `~/.claude/agents/`. |
+
+Per-skill `plugin-manifest.json` files are dropped; `plugin.json` replaces them.
+Per-skill `CHANGELOG.md` files are kept.
+
+## Renames
+
+For each skill:
+
+- directory and frontmatter `name:` take the new name
+- `metadata.version` gets a major bump, because the invocation name changed
+- the description keeps the old trigger phrases, so the same user wording still matches
+  (and adds the old name as a phrase, e.g. "weekly focus")
+- every `See Also` link and every mention of a sibling skill uses the new name
+- the skill's own `task-manifest.sh` subjects and any user-facing text that print the old
+  name use the new one
+
+For each agent:
+
+- file and frontmatter `name:` take the new name
+- its "NOT user-invocable — spawned by …" line names `create-board`
+- `create-board`'s `SKILL.md` dispatches `github-board:template-inspector`,
+  `github-board:board-creator`, `github-board:workflow-syncer` and
+  `github-board:board-verifier`. Plugin agents are namespaced `<plugin>:<agent>`, and the
+  docs do not say a bare name resolves.
+
+The old `gh-board-*` agents in `~/.claude/agents/` keep their names, so the two sets
+never clash while both are installed.
+
+## Paths
+
+Claude Code fills in `${CLAUDE_SKILL_DIR}` and `${CLAUDE_PLUGIN_ROOT}` in a plugin
+SKILL.md's text when the skill loads. They are not environment variables in the Bash
+tool. So:
+
+- every command in a SKILL.md that runs a bundled script uses
+  `"${CLAUDE_SKILL_DIR}/scripts/<script>"`
+- scripts keep locating their own directory from `BASH_SOURCE[0]` / `__file__`, as they
+  do today
+- the plugin contains no `~/.claude/skills/` or `$HOME/.claude/skills/` path. A test
+  enforces this; the only allowed mentions are in the README's migration runbook and in
+  CHANGELOG history.
+
+## plan-week: shared state and launchd
+
+While both `/weekly-focus` and `/github-board:plan-week` are installed they must read and
+write the same state. The plugin keeps unchanged:
+
+- `STATE_DIR` default `~/.local/state/weekly-focus`
+- `LOG_DIR` default `~/Library/Logs/weekly-focus`
+- launchd labels `com.abhattacherjee.weekly-focus-sync` and
+  `com.abhattacherjee.weekly-focus-watchdog`, and the plist file names
+- the GitHub board ("Weekly Focus") and its fields
+
+The launchd jobs must survive plugin upgrades. The installed plugin lives under a
+versioned cache path (`~/.claude/plugins/cache/<marketplace>/github-board/<version>/`),
+so a plist that points there breaks on the next upgrade. Instead:
+
+- `install-launchd.sh` writes a stable symlink `~/.local/share/github-board/current` that
+  points at the plugin root it ran from, then renders the plists against
+  `~/.local/share/github-board/current/skills/plan-week/scripts/`. The symlink path can be
+  overridden (`GITHUB_BOARD_LINK`) for tests.
+- Re-running `install-launchd.sh` from a newer plugin version re-points the symlink. The
+  README says to do this after each plugin update.
+- **Takeover guard.** Before writing, `install-launchd.sh` reads any existing plist for
+  each label. If its `ProgramArguments` point outside the stable symlink (for example at
+  `~/.claude/skills/weekly-focus/scripts/`), it refuses with exit 3 and a message naming
+  the current owner, unless `--takeover` is passed. A missing plist is not an owner and
+  does not block. An unreadable plist blocks too, because its owner cannot be known.
+- **`--check`** fails (non-zero) when the symlink is missing, dangling, or points at a
+  directory without `skills/plan-week/scripts/run-sync.sh`, in addition to its existing
+  checks.
+
+The plist templates replace `__HOME__/.claude/skills/weekly-focus/scripts/` with a
+`__SCRIPTS__` placeholder that `install-launchd.sh` fills in.
+
+This PR does not run `--takeover` on this machine. The bare `weekly-focus` keeps owning
+the jobs until the Phase 3 runbook step.
+
+## Callers in this repo
+
+Updated to the new names:
+
+- `skill-authoring/SKILL.md` and `skill-authoring/references/task-tracking-pattern.md`
+- the same two files under `plugins/skill-authoring/skills/skill-authoring/`
+- `plugins/skill-publishing/skills/skill-publishing/scripts/validate-pre-sync.sh`
+- `README.md` (the `github-board-move` install line goes; a `github-board` plugin entry
+  is added)
+
+Left as they are: comments in `scripts/test-sync-hygiene.sh` that describe the old names
+on purpose, and CHANGELOG history.
+
+## Tests
+
+Moved, with paths updated to the new layout:
+
+- claude-code-config `tests/test_weekly_focus.py`, `test_weekly_focus_launchd.py`,
+  `test_weekly_focus_skill_shell.py` → `plugins/github-board/tests/`
+- `promote-shipped`'s five pytest files → `plugins/github-board/tests/`
+
+New:
+
+- **structure test:** exactly the seven skill directories and four agent files exist;
+  each `name:` matches its directory or file name; every `github-board:<agent>` that a
+  skill dispatches exists under `agents/`; no old skill or agent name appears in any
+  skill or agent file except as a trigger phrase or a "was …" note; no `~/.claude/skills/`
+  path outside the allowed files
+- **launchd tests:** symlink written and re-pointed; takeover refused (exit 3) when an
+  existing plist points at another copy, allowed with `--takeover`; `--check` fails on a
+  missing and on a dangling symlink
+- **clean-HOME smoke test** (a script under `tests/`, run in CI and locally): with
+  `HOME` set to an empty temp dir, so nothing can fall back to an installed copy, run
+  `plan-milestones`'s `milestone-report.sh --help`, `plan-week`'s `weekly-focus.py
+  --help`, and `create-board`'s `task-manifest.sh`. Each must exit 0.
+
+CI: a new job in `.github/workflows/validate-skill.yml` runs `pytest
+plugins/github-board/tests` and the smoke script. `scripts/validate-plugin.sh
+plugins/github-board` must pass; it already checks that agent references in SKILL.md
+resolve against `agents/`.
+
+The live parts of the issue's smoke test (`plan-week sync --json` against GitHub,
+`create-board` reaching its first agent dispatch) are run by hand during the review
+phase, not in CI, because they need GitHub credentials.
+
+## Error handling
+
+- `install-launchd.sh`: exit 3 on a refused takeover, exit 1 on a failed `launchctl`
+  step, exit 2 on bad arguments. Never exit 0 when it wrote nothing it was asked to.
+- `--check`: non-zero on any failed check, including a missing or dangling symlink.
+- Everything else keeps its current exit codes.
+
+## Migration runbook (README)
+
+The plugin README carries the issue's Phases 3 and 4 as copy-paste steps:
+
+- Phase 3: run the plugin's `install-launchd.sh --takeover`, then `--check`, then one
+  manual `weekly-focus.py sync --json`; update the boot-doctor service manifest's
+  `restart_command`s. Rollback: run the bare copy's `install-launchd.sh`.
+- Phase 4: drop `weekly-focus`, `create-gh-board` and `github-release-board-promote` from
+  claude-code-config's `sync.sh` `SKILLS` array first; diff each bare copy against the
+  plugin; delete the seven bare skill directories and the four `gh-board-*.md` agents;
+  confirm only `github-board:` names remain.
+
+## Acceptance
+
+This PR closes #146. Before the PR opens, #146's acceptance criteria are narrowed to
+Phase 1 plus this repo's callers, and the rest moves to follow-up issues that the PR
+body links:
+
+- one issue in this repo for the Phase 3 launchd handover and the Phase 4 removal, both
+  run by hand from the README runbook
+- one issue in each other repo whose callers use the old names: claude-code-config,
+  git-flow, obsidian-brain, codex-config
+
+They are separate issues because each is a different repo or a manual step on this
+machine, which a claude-code-skills PR cannot carry.
