@@ -29,6 +29,7 @@ like "what do I work on next") is the normal way to use this.
                                   optional "create_board"}) on stdin, or from FILE. Refuses
                                   (exit 3) to replace a different existing section without --force.
   weekly-focus.py config          print the current config as JSON (exit 4 when there is none)
+  --no-cache (any command)        never read or write the board-id cache (~/.cache/github-board)
   weekly-focus.py --help          this text (needs no config)
 
   --json on show also carries the config's schedule, capacity, lanes and default_lane.
@@ -135,6 +136,9 @@ class GhError(RuntimeError):
 
 
 RATE_RE = re.compile(r"rate limit|RATE_LIMIT", re.I)
+SCOPE_RE = re.compile(r"required scopes|INSUFFICIENT_SCOPES|missing required scopes?|lacks the project scope", re.I)
+CACHE_MODE = "use"      # "use" | "refresh" (skip reads, write fresh) | "off" (--no-cache)
+_CACHE_USED = False
 
 
 def _local_hm(ts):
@@ -168,6 +172,10 @@ def gh(*args, parse=True):
         except subprocess.CalledProcessError as e:
             err = " ".join((e.stderr or "").split())
             body = " ".join((e.stdout or "").split()) if isinstance(e.stdout, str) else ""
+            if SCOPE_RE.search(err) or SCOPE_RE.search(body):
+                raise GhError("GitHub token lacks the project scope; run "
+                              f"`gh auth refresh -s read:project,project` (gh {' '.join(args[:2])}: "
+                              f"{err[:200]})") from e
             probable = args[:1] == ("project",) and "unknown owner type" in err.lower()
             if RATE_RE.search(err) or RATE_RE.search(body) or probable:
                 reset = _reset_hint()
@@ -205,6 +213,49 @@ def _cached(key, fn):
     if key not in _CACHE:
         _CACHE[key] = fn()
     return _CACHE[key]
+
+
+def _cache_key(name):
+    return f"plan-week-{OWNER}-{name}"
+
+
+def _cache_read(name):
+    """A cached board lookup, or None. Records that cached ids were used this run."""
+    global _CACHE_USED
+    if CACHE_MODE != "use":
+        return None
+    value = gbconfig.cache_get(_cache_key(name))
+    if value is not None:
+        _CACHE_USED = True
+    return value
+
+
+def _cache_write(name, value):
+    if CACHE_MODE != "off":
+        gbconfig.cache_put(_cache_key(name), value)
+
+
+def _run_with_refetch(fn):
+    """Run fn. If it fails while ids from the disk cache are in use, drop the cache and run it
+    once more with fresh lookups.
+
+    Any gh failure counts, not only "Could not resolve ...": a stale Lane or Focus option id
+    fails with other text, and would otherwise fail every run until the entry ages out.
+    Rate-limit and missing-scope errors are never retried. Each command is idempotent
+    (sync adds only what is missing; set re-sets the same Focus), so a rerun is safe.
+    """
+    global CACHE_MODE
+    try:
+        return fn()
+    except GhError as e:
+        msg = str(e)
+        if not (_CACHE_USED and CACHE_MODE == "use") or RATE_RE.search(msg) or SCOPE_RE.search(msg):
+            raise
+    print("weekly-focus: cached board ids look stale; refetching once", file=sys.stderr)
+    gbconfig.cache_drop_prefix(f"plan-week-{OWNER}-")
+    _CACHE.clear()
+    CACHE_MODE = "refresh"
+    return fn()
 
 
 _PROJECTS_Q = (
@@ -257,10 +308,14 @@ def list_projects():
 
 def find_or_create_project():
     def find():
-        for p in list_projects():
-            if p["title"] == TITLE:
-                return p
-        return gh("project", "create", "--owner", OWNER, "--title", TITLE, "--format", "json")
+        hit = _cache_read(f"project-{TITLE}")
+        if isinstance(hit, dict) and all(k in hit for k in ("id", "number", "url")):
+            return hit
+        p = next((q for q in list_projects() if q["title"] == TITLE), None)
+        if p is None:
+            p = gh("project", "create", "--owner", OWNER, "--title", TITLE, "--format", "json")
+        _cache_write(f"project-{TITLE}", {k: p.get(k) for k in ("id", "number", "url", "title")})
+        return p
     return _cached("project", find)
 
 
@@ -276,8 +331,18 @@ def field_map(num):
     return {f["name"]: f for f in fields if f.get("name")}
 
 
+def _fields_complete(out):
+    """A cached field map is usable only if it has every field and option FIELDS needs."""
+    return isinstance(out, dict) and all(
+        isinstance(out.get(name), dict) and all(o in out[name].get("opts", {}) for o in opts)
+        for name, opts in FIELDS.items())
+
+
 def ensure_fields(num):
     def read():
+        hit = _cache_read(f"fields-{num}")
+        if _fields_complete(hit):
+            return hit
         have = field_map(num)
         created = False
         for name, opts in FIELDS.items():
@@ -293,6 +358,7 @@ def ensure_fields(num):
         if "Status" in have:
             out["Status"] = {"id": have["Status"]["id"],
                              "opts": {o["name"]: o["id"] for o in have["Status"]["options"]}}
+        _cache_write(f"fields-{num}", out)
         return out
     return _cached(("fields", num), read)
 
@@ -852,11 +918,14 @@ def init_cmd(args):
 
 
 def main(argv):
+    global CACHE_MODE
     if argv[:1] and argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return
-    args = [a for a in argv if a != "--json"]
+    args = [a for a in argv if a not in ("--json", "--no-cache")]
     as_json = "--json" in argv
+    if "--no-cache" in argv:
+        CACHE_MODE = "off"
     cmd = args[0] if args else "show"
     if cmd not in COMMANDS:
         print(__doc__, file=sys.stderr)
@@ -867,14 +936,18 @@ def main(argv):
     apply_config(gbconfig.load(require=("plan_week",)))
     if cmd == "config":
         print(json.dumps(CONFIG, indent=2))
-    elif cmd == "sync":
-        sync(as_json)
-    elif cmd == "set":
-        set_focus(args[1] if len(args) > 1 else "", args[2:])
-    elif cmd == "pick":
-        pick(args[1:])
-    else:
-        show(as_json)
+        return
+
+    def run():
+        if cmd == "sync":
+            sync(as_json)
+        elif cmd == "set":
+            set_focus(args[1] if len(args) > 1 else "", args[2:])
+        elif cmd == "pick":
+            pick(args[1:])
+        else:
+            show(as_json)
+    _run_with_refetch(run)
 
 
 if __name__ == "__main__":
