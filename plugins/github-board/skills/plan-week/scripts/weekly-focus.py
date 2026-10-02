@@ -24,6 +24,11 @@ like "what do I work on next") is the normal way to use this.
   weekly-focus.py show [--json]   print open items by Focus and Lane, with milestone;
                                   flags This week items outside their repo's current milestone
                                   and in-progress items outside the plan (unplanned)
+  weekly-focus.py init [--force] [--from FILE]
+                                  write the config from a JSON payload ({"owner", "plan_week",
+                                  optional "create_board"}) on stdin, or from FILE. Refuses
+                                  (exit 3) to replace a different existing section without --force.
+  weekly-focus.py config          print the current config as JSON (exit 4 when there is none)
   weekly-focus.py --help          this text (needs no config)
 
   --json on show also carries the config's schedule, capacity, lanes and default_lane.
@@ -31,7 +36,7 @@ like "what do I work on next") is the normal way to use this.
   open issue (a renamed or deleted repo, or a closed issue).
 
 Exit codes: 0 ok; 1 error; 2 usage or invalid config (names the key); 3 sync skipped
-(GraphQL budget low); 4 no config yet (run `plan-week init`).
+(GraphQL budget low) or init refused; 4 no config yet (run `plan-week init`).
 
 "Current milestone" = the lowest-versioned open milestone that still has open issues
 (titles starting with a version: v0.6, V1.2, 0.4, v2.0 — ...). Backlog/theme milestones, and any
@@ -828,7 +833,22 @@ def show(as_json=False):
         print(f"warning: {w}", file=sys.stderr)
 
 
-COMMANDS = ("sync", "set", "pick", "show")
+COMMANDS = ("sync", "set", "pick", "show", "init", "config")
+
+
+def init_cmd(args):
+    """init [--force] [--from FILE]: merge the payload into the config through lib/config.py."""
+    force = "--force" in args
+    rest = [a for a in args if a != "--force"]
+    from_file = None
+    if rest[:1] == ["--from"]:
+        if len(rest) < 2:
+            raise gbconfig.ConfigError("--from needs a file", "--from")
+        from_file, rest = rest[1], rest[2:]
+    if rest:
+        raise gbconfig.ConfigError(f"unknown init argument(s): {' '.join(rest)}", "init")
+    path = gbconfig.init_config(gbconfig.read_payload(from_file), require="plan_week", force=force)
+    print(f"wrote {path}")
 
 
 def main(argv):
@@ -841,8 +861,13 @@ def main(argv):
     if cmd not in COMMANDS:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
+    if cmd == "init":
+        init_cmd(args[1:])
+        return
     apply_config(gbconfig.load(require=("plan_week",)))
-    if cmd == "sync":
+    if cmd == "config":
+        print(json.dumps(CONFIG, indent=2))
+    elif cmd == "sync":
         sync(as_json)
     elif cmd == "set":
         set_focus(args[1] if len(args) > 1 else "", args[2:])
