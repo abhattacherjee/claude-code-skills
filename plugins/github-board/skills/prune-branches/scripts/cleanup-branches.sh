@@ -207,7 +207,8 @@ if [[ -f "$TMPDIR_CLEANUP/versioned_prs.txt" ]]; then
     # Get all PRs for this dep_key, sorted by PR number descending
     # Compare the whole first field as a literal string. A grep regex let the `.` in
     # socket.io match socket-io, so one package's PR closed another's (X-009).
-    prs_for_key=$(awk -F'|' -v k="$dep_key" '$1 == k' "$TMPDIR_CLEANUP/versioned_prs.txt" \
+    # The "" concatenation forces string comparison; awk would treat 1e2 and 100 as equal numbers (X-010).
+    prs_for_key=$(awk -F'|' -v k="$dep_key" '$1 "" == k ""' "$TMPDIR_CLEANUP/versioned_prs.txt" \
       | sort -t'|' -k2 -rn)
     pr_count=$(echo "$prs_for_key" | wc -l | tr -d ' ')
 

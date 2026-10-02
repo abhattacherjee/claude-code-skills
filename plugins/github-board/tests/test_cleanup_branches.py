@@ -207,6 +207,30 @@ def test_a_package_is_superseded_only_by_the_same_package(tmp_path, old, new):
     assert closes == [], closes
 
 
+# X-010: awk compares two numeric-looking strings as numbers, so 1e2 == 100 and 1.0 == 1.
+@pytest.mark.parametrize("old,new", [
+    ("1e2", "100"),
+    ("100", "1e2"),
+    ("1.0", "1"),
+    ("1", "1.0"),
+])
+def test_numeric_looking_package_names_do_not_supersede_each_other(tmp_path, old, new):
+    prs = (f"12|dependabot/npm_and_yarn/{old}-1.0.0|Bump {old}\n"
+           f"13|dependabot/npm_and_yarn/{new}-1.0.1|Bump {new}")
+    done, closes = _run(tmp_path, [], prs=prs)
+    assert "SUPERSEDED" not in done.stdout, done.stdout
+    assert closes == [], closes
+
+
+@pytest.mark.parametrize("name", ["1e2", "1.0"])
+def test_the_same_numeric_looking_package_still_supersedes(tmp_path, name):
+    prs = (f"12|dependabot/npm_and_yarn/{name}-1.0.0|Bump {name}\n"
+           f"13|dependabot/npm_and_yarn/{name}-1.0.1|Bump {name}")
+    done, closes = _run(tmp_path, [], prs=prs)
+    assert "SUPERSEDED: PR #12" in done.stdout, done.stdout
+    assert any(c.startswith("pr close 12") for c in closes), closes
+
+
 @pytest.mark.parametrize("name", ["socket.io", "@scope/foo"])
 def test_the_same_package_with_regex_characters_still_supersedes(tmp_path, name):
     prs = (f"12|dependabot/npm_and_yarn/{name}-1.0.0|Bump {name}\n"

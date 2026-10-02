@@ -17,4 +17,4 @@ All notable changes to the **github-board** plugin are documented here.
 - `promote-shipped` credits every closing form GitHub accepts (`Fixes: #N`, the issue's own URL), so a develop-only merge is held as `hold-unreleased`, and an unmerged closing PR holds the issue as `hold-unmerged-pr`; neither falls through to `nopr`.
 - `prune-branches` never deletes a temp branch when its open-PR lookup fails: the branch is reported as `UNKNOWN` and the script exits 3.
 - `prune-branches` closes a Dependabot PR only for an issue that names it exactly (`PR #<n>` or its URL) and was written by the repo owner or an allowlisted login.
-- `prune-branches` treats a Dependabot PR as superseded only by a newer PR for the exact same package name; `socket.io` no longer supersedes `socket-io`, and `foo` never matches `foo-bar` or `@scope/foo`.
+- `prune-branches` treats a Dependabot PR as superseded only by a newer PR for the exact same package name; `socket.io` no longer supersedes `socket-io`, and `foo` never matches `foo-bar` or `@scope/foo`, and numeric-looking names (X-010) such as `1e2` and `100`, or `1.0` and `1`, stay distinct.
