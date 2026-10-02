@@ -14,8 +14,8 @@
 
 set -euo pipefail
 
-TEMPLATE_OWNER="abhattacherjee"
-TEMPLATE_NUMBER="31"
+TEMPLATE_OWNER=""      # --template-owner, else create_board.template_owner in the config
+TEMPLATE_NUMBER=""     # --template, else create_board.template_number
 OWNER=""
 NUMBER=""
 ALL=false
@@ -41,8 +41,9 @@ Flags:
   --owner <login>          Owner whose board(s) to audit. Required.
   --number <n>             Audit a single board. Mutually exclusive with --all.
   --all                    Audit every open board this owner has.
-  --template-owner <login> Template owner. Default: $TEMPLATE_OWNER
-  --template <n>           Template project number. Default: $TEMPLATE_NUMBER
+  --template-owner <login> Template owner. Default: create_board.template_owner in the
+                           github-board config (create-board init writes it).
+  --template <n>           Template project number. Default: create_board.template_number.
   --json                   Emit one JSON object per board instead of text.
   -h, --help               Show this help.
 
@@ -72,6 +73,19 @@ if [ "$ALL" = true ] && [ -n "$NUMBER" ]; then
 fi
 if [ "$ALL" = false ] && [ -z "$NUMBER" ]; then
   echo "Need --number <n> or --all" >&2; usage >&2; exit 2
+fi
+
+# Flags win; otherwise the template comes from the github-board config.
+if [ -z "$TEMPLATE_OWNER" ] || [ -z "$TEMPLATE_NUMBER" ]; then
+  . "$(dirname "$0")/../../../lib/config.sh"
+  if cfg_owner="$(gb_config_get create_board.template_owner)" \
+     && cfg_number="$(gb_config_get create_board.template_number)"; then
+    TEMPLATE_OWNER="${TEMPLATE_OWNER:-$cfg_owner}"
+    TEMPLATE_NUMBER="${TEMPLATE_NUMBER:-$cfg_number}"
+  else
+    echo "No template board: pass --template-owner <login> --template <n>, or run create-board init." >&2
+    exit 2
+  fi
 fi
 
 HERE="$(dirname "$0")"

@@ -52,10 +52,11 @@ Three consequences that drive the whole design:
 ## Quick Check
 
 ```bash
-"${CLAUDE_SKILL_DIR}/scripts/inspect-template.sh" --owner abhattacherjee --number 31   # snapshot the template
-"${CLAUDE_SKILL_DIR}/scripts/audit-board.sh" --owner abhattacherjee --all              # drift sweep, read-only
-"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full                                    # task list for creation
-"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" audit                                   # task list for the audit
+"${CLAUDE_SKILL_DIR}/scripts/init-config.sh" --show                              # the configured template
+"${CLAUDE_SKILL_DIR}/scripts/inspect-template.sh" --owner <template-owner> --number <n>   # snapshot it
+"${CLAUDE_SKILL_DIR}/scripts/audit-board.sh" --owner <login> --all               # drift sweep, read-only
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full                              # task list for creation
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" audit                             # task list for the audit
 ```
 
 ## When to Use
@@ -65,7 +66,7 @@ Three consequences that drive the whole design:
 | `/github-board:create-board owner/repo` | `full` — copy, link, backfill, verify |
 | "replicate our board on X repo" | `full`, target = X |
 | "which boards have drifted?" / "is auto-add on everywhere?" | `audit` |
-| Non-default template | `full` with `--template <num> --template-owner <login>` |
+| A template other than the configured one | `full` with `--template <num> --template-owner <login>` |
 | Several repos at once | Run `full` once per repo; each is independent |
 
 ## Inputs
@@ -73,13 +74,15 @@ Three consequences that drive the whole design:
 | Arg | Required | Default | Notes |
 |---|---|---|---|
 | `<repo>` | yes | — | Target repo as `owner/name`. The new project links to it. |
-| `--template <num>` | no | `31` | Source ProjectV2 number. |
-| `--template-owner <login>` | no | `abhattacherjee` | Source project owner. |
+| `--template <num>` | no | `create_board.template_number` from the config | Source ProjectV2 number. |
+| `--template-owner <login>` | no | `create_board.template_owner` from the config | Source project owner. |
 | `--target-owner <login>` | no | inferred from `<repo>` | Use a different login to put the board under an org. |
 | `--title <string>` | no | `<RepoName> Project Board` | New project title. |
 | `--dry-run` | no | off | Inspect template and show the plan; create nothing. |
 
-## The template (project #31, "TEMPLATE — Standard Repo Board")
+## The template
+
+The template is the board `create_board` in the github-board config names. The layout this skill expects of it:
 
 | Aspect | Value |
 |---|---|
@@ -90,13 +93,12 @@ Three consequences that drive the whole design:
 | Fields | 13 total: Title, Assignees, Status, Labels, Linked PRs, Milestone, Repository, Reviewers, Parent issue, Sub-issues progress, Created, Updated, Closed |
 | Workflows | the 6 defaults. `Auto-add to project` is deliberately **not** set, because it would be scoped to the wrong repo. |
 
-The option descriptions match the Git Flow rules in `~/.claude/CLAUDE.md`:
+The option descriptions follow Git Flow:
 `Development Complete` means merged to `develop`, `Done` means shipped to `main`.
 
 The template is **not** marked with `markProjectV2AsTemplate` — that mutation
 rejects user-owned projects (*"Only projects owned by an Organization can be
-marked as a template"*). It is a template by convention and by its `#31`
-default here; copying does not need the badge.
+marked as a template"*). It is a template by convention; copying does not need the badge.
 
 ## Progress Tracking (MANDATORY)
 
@@ -120,6 +122,7 @@ The agents run each script as `<skill_dir>/scripts/<name>`.
 
 ### Phase 0 — Validate
 
+- Resolve the template: `--template-owner`/`--template` win; else `init-config.sh --show` → `create_board`; else run **Mode: init** first.
 - `gh auth status` shows the `project` scope. If not: `gh auth refresh -s project`.
 - `gh repo view <repo>` succeeds.
 - `gh project view <num> --owner <login>` succeeds for the template.
@@ -203,6 +206,23 @@ Repair guidance the audit prints, and the reason for each:
 | view drifted | Name, layout and filter: `updateProjectV2View`. Columns or swimlanes: re-copy the template — they are read-only. |
 | status drifted | `updateProjectV2Field`, **sending each option's existing `id`**. Without ids you clear item values and disable workflows. |
 
+## Mode: init
+
+One question: which existing board should new boards copy? Suggest from
+`gh project list --owner <login> --format json --jq '.projects[] | select(.closed == false) | "\(.number)\t\(.title)"'`
+for the logged-in user (`gh api user --jq .login`) and each of their orgs (`gh api user/orgs --jq '.[].login'`).
+Default: none — then ask again the first time a board is created.
+
+Show the result and ask once: "Write this to `~/.config/github-board/config.json`?" On yes:
+
+```bash
+"${CLAUDE_SKILL_DIR}/scripts/init-config.sh" < "$CFG_JSON"           # {"create_board": {...}}
+"${CLAUDE_SKILL_DIR}/scripts/init-config.sh" --force < "$CFG_JSON"   # replacing a different template
+```
+
+Add `"owner": "<login>"` to the payload only when `init-config.sh --show` exits 4 (no config yet).
+Exit 3: a different template is configured; ask before passing `--force`.
+
 ## Sub-Agent Registry
 
 | Agent | Concurrency | Purpose | Model |
@@ -236,7 +256,7 @@ One manual step — no API can do this:
 
 - The `project` OAuth scope is required: `gh auth refresh -s project`.
 - Copying across owners (user → org) needs admin on both sides.
-- The default template is **private**; cross-account use needs collaborator access.
+- A private template board needs collaborator access for cross-account use.
 - `gh api graphql -F opts=<json>` cannot pass a list of input objects. Inline the
   literals into the query, or use `gh api graphql --input`.
 - `gh api graphql` exits 0 on a `data: null` + `errors` envelope. Check `.errors`.

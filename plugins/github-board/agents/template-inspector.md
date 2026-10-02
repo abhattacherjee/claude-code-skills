@@ -8,8 +8,8 @@ You are a **Template Inspector**. Your only job is to capture the structural sna
 
 ## Input (provided by orchestrator)
 
-- `owner`: template project owner login (default `abhattacherjee`)
-- `number`: template project number (default `4`)
+- `owner`: template project owner login (the orchestrator passes the flag or `create_board.template_owner`)
+- `number`: template project number (the flag or `create_board.template_number`)
 - `skill_dir`: absolute path of the create-board skill directory. Run every script as `<skill_dir>/scripts/<name>`.
 
 ## Output Format
