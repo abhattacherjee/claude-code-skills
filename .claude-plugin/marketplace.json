@@ -66,7 +66,7 @@
       "name": "skill-authoring",
       "source": "./plugins/skill-authoring",
       "description": "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism",
-      "version": "2.3.0"
+      "version": "2.3.1"
     },
     {
       "name": "skill-publishing",

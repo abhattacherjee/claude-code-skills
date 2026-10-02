@@ -107,17 +107,11 @@ def test_marketplace_lists_the_plugin():
 
 
 REPO = PLUGIN.parent.parent
-# skill-authoring still names github-issue-triage. Any edit under skill-authoring/ trips
-# validate-skill.sh, because its SKILL.md is 621 lines against a 500-line limit (true before
-# #146), and the in-repo copies mirror a live authoring copy outside the repo. Renaming it
-# needs that skill trimmed first, so the four files are strict xfails: fixing them turns these
-# into XPASS failures, which says to drop the marker.
-_SKILL_AUTHORING_BLOCKED = pytest.mark.xfail(
-    strict=True, reason="skill-authoring/SKILL.md is over validate-skill.sh's 500-line limit")
-CALLERS = [pytest.param(rel, marks=_SKILL_AUTHORING_BLOCKED) for rel in (
-               "skill-authoring/SKILL.md", "skill-authoring/references/task-tracking-pattern.md",
-               "plugins/skill-authoring/skills/skill-authoring/SKILL.md",
-               "plugins/skill-authoring/skills/skill-authoring/references/task-tracking-pattern.md")]
+# skill-authoring used to name github-issue-triage; it was renamed once its SKILL.md was
+# trimmed under validate-skill.sh's 500-line limit (2.6.1).
+CALLERS = ["skill-authoring/SKILL.md", "skill-authoring/references/task-tracking-pattern.md",
+           "plugins/skill-authoring/skills/skill-authoring/SKILL.md",
+           "plugins/skill-authoring/skills/skill-authoring/references/task-tracking-pattern.md"]
 CALLERS += ["plugins/skill-publishing/skills/skill-publishing/scripts/validate-pre-sync.sh",
             "README.md"]
 
@@ -135,6 +129,15 @@ def test_root_readme_lists_the_plugin():
     text = (REPO / "README.md").read_text()
     assert "[github-board](./plugins/github-board/)" in text
     assert "/github-board-move" not in text
+
+
+def test_the_two_skill_authoring_copies_are_identical():
+    import filecmp
+    root, plugin = REPO / "skill-authoring", REPO / "plugins" / "skill-authoring" / "skills" / "skill-authoring"
+    for rel in ("SKILL.md", "CHANGELOG.md", "references/agent-teams.md",
+                "references/skill-templates.md", "references/task-tracking-pattern.md",
+                "references/quality-checklist.md"):
+        assert filecmp.cmp(root / rel, plugin / rel, shallow=False), rel
 
 
 def test_old_root_skill_dir_is_gone():

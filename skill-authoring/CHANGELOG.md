@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.1] - 2026-10-02
+
+### Changed
+
+- **SKILL.md is back under the 500-line limit** (621 → 474 lines). Two whole sections moved verbatim into references, each replaced by a one-line pointer: "Agent Teams Orchestration" → `references/agent-teams.md`, "Skill Template" → `references/skill-templates.md`. No content was rewritten. `validate-skill.sh` passes again, which unblocks edits to this skill.
+- Examples name `triage-issues` (github-board plugin), the new name of `github-issue-triage` (#146). This resolves the skill-authoring part of #17.
+
 ## [2.6.0] - 2026-03-20
 
 ### Added
