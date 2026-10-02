@@ -4,6 +4,7 @@ The module is loaded by path. Its `gh` function (and, for `show`, the
 functions built on it) is replaced with fakes, so no test ever runs the real
 `gh` or touches the network.
 """
+import copy
 import datetime
 import importlib.util
 import json
@@ -15,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from gbtest import TEST_CFG, write_config
+
 SCRIPT = Path(__file__).resolve().parent.parent / "skills" / "plan-week" / "scripts" / "weekly-focus.py"
 
 
@@ -22,6 +25,7 @@ def _load(path: Path = SCRIPT, stub_gh=True):
     spec = importlib.util.spec_from_file_location("weekly_focus", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    mod.apply_config(copy.deepcopy(TEST_CFG))
 
     def _no_gh(*a, **k):
         raise AssertionError(f"real gh called: {a}")
@@ -111,13 +115,13 @@ def _keys(wf, issues, current):
 
 
 def test_frozen_repo_p1_issue_is_excluded(wf):
-    issues = {"marauders-map#1": _issue("marauders-map", ["P1-high"], "v1.0")}
-    assert _keys(wf, issues, {"marauders-map": "v1.0"}) == []
+    issues = {"frozen-repo#1": _issue("frozen-repo", ["P1-high"], "v1.0")}
+    assert _keys(wf, issues, {"frozen-repo": "v1.0"}) == []
 
 
 def test_always_issue_is_included_even_though_repo_is_frozen(wf):
-    issues = {"tiny-vacation-agent#951": _issue("tiny-vacation-agent")}
-    assert _keys(wf, issues, {}) == ["tiny-vacation-agent#951"]
+    issues = {"frozen-repo#951": _issue("frozen-repo")}
+    assert _keys(wf, issues, {}) == ["frozen-repo#951"]
 
 
 @pytest.mark.parametrize("label", ["P1-high", "priority: P1", "security"])
@@ -152,15 +156,15 @@ def test_issue_without_milestone_is_excluded_unless_hot(wf):
 # ---- lane_for -------------------------------------------------------------
 
 def test_security_label_gives_security_lane_even_in_the_season_repo(wf):
-    assert wf.lane_for("fantasy-football-advisor", ["Security"]) == "Security"
+    assert wf.lane_for("season-repo", ["Security"]) == "Security"
 
 
 def test_season_repo_gives_season_lane(wf):
-    assert wf.lane_for("fantasy-football-advisor", ["bug"]) == "Season"
+    assert wf.lane_for("season-repo", ["bug"]) == "Season"
 
 
 def test_tooling_repo_gives_tooling_lane(wf):
-    assert wf.lane_for("claude-code-config", []) == "Tooling"
+    assert wf.lane_for("tool-a", []) == "Tooling"
 
 
 def test_other_repo_gives_product_lane(wf):
@@ -174,7 +178,7 @@ def test_show_flags_only_this_week_items_outside_the_current_milestone(wf, monke
     monkeypatch.setattr(wf, "open_issues", lambda: {
         "app#1": _issue("app", [], "v2.0"),            # this week, not current
         "app#2": _issue("app", [], "v1.0"),            # this week, current
-        "marauders-map#3": _issue("marauders-map", [], "v9.0"),  # this week, frozen
+        "frozen-repo#3": _issue("frozen-repo", [], "v9.0"),  # this week, frozen
         "app#4": _issue("app", [], "v2.0"),            # next, not current
         "app#5": _issue("app", [], "v2.0"),            # done
     })
@@ -182,22 +186,22 @@ def test_show_flags_only_this_week_items_outside_the_current_milestone(wf, monke
     monkeypatch.setattr(wf, "board_items", lambda num: {
         "app#1": {"focus": "This week", "lane": "Product", "title": "t1"},
         "app#2": {"focus": "This week", "lane": "Product", "title": "t2"},
-        "marauders-map#3": {"focus": "This week", "lane": "Product", "title": "t3"},
+        "frozen-repo#3": {"focus": "This week", "lane": "Product", "title": "t3"},
         "app#4": {"focus": "Next", "lane": "Product", "title": "t4"},
         "app#5": {"focus": "This week", "lane": "Product", "title": "t5", "status": "Done"},
     })
     wf.show()
     out = capsys.readouterr().out.splitlines()
     lines = {}
-    for key in ("app#1", "app#2", "marauders-map#3", "app#4", "app#5"):
+    for key in ("app#1", "app#2", "frozen-repo#3", "app#4", "app#5"):
         hit = [l for l in out if f" {key} " in l]
         if hit:
             lines[key] = hit[0]
-    assert set(lines) == {"app#1", "app#2", "marauders-map#3", "app#4"}
+    assert set(lines) == {"app#1", "app#2", "frozen-repo#3", "app#4"}
     assert "app#5" not in lines
     assert lines["app#1"].endswith("<- not current (v1.0)")
     assert "<- not current" not in lines["app#2"]
-    assert "<- not current" not in lines["marauders-map#3"]
+    assert "<- not current" not in lines["frozen-repo#3"]
     assert "<- not current" not in lines["app#4"]
 
 
@@ -233,7 +237,7 @@ def _proj(pid, title, closed=False):
     return {"id": pid, "title": title, "closed": closed}
 
 
-def _node(status, number, repo="app", owner="abhattacherjee", state="OPEN", updated=None):
+def _node(status, number, repo="app", owner="octo-user", state="OPEN", updated=None):
     n = {"content": {"number": number, "state": state, "updatedAt": updated or _iso(1),
                      "repository": {"name": repo, "owner": {"login": owner}}}}
     n["fieldValueByName"] = {"name": status} if status else None
@@ -306,7 +310,7 @@ def test_board_in_progress_skips_weekly_focus_template_and_closed_projects(wf, m
 # ---- pr_linked ------------------------------------------------------------
 
 def test_pr_linked_returns_open_owned_closing_issues(wf, monkeypatch):
-    def ref(n, state="OPEN", owner="abhattacherjee", repo="app"):
+    def ref(n, state="OPEN", owner="octo-user", repo="app"):
         return {"number": n, "state": state, "repository": {"name": repo, "owner": {"login": owner}}}
     _fake_gh(monkeypatch, wf, projects=[], prs=[
         {"closingIssuesReferences": {"nodes": [ref(1), ref(2, state="CLOSED"), ref(3, owner="x")]}},
@@ -316,7 +320,7 @@ def test_pr_linked_returns_open_owned_closing_issues(wf, monkeypatch):
     assert wf.pr_linked() == {"app#1", "other#4"}
 
 
-def _pr(body, repo="claude-code-config", owner="abhattacherjee", refs=()):
+def _pr(body, repo="tool-a", owner="octo-user", refs=()):
     return {"body": body, "repository": {"name": repo, "owner": {"login": owner}},
             "closingIssuesReferences": {"nodes": list(refs)}}
 
@@ -325,18 +329,18 @@ def test_pr_into_develop_links_its_issue_from_the_body(wf, monkeypatch):
     # Live repro (#217): PR #218 targets develop, so GitHub leaves
     # closingIssuesReferences empty even though the body says "Closes #217".
     _fake_gh(monkeypatch, wf, projects=[], prs=[_pr("fix\n\nCloses #217\n")])
-    assert wf.pr_linked(open_keys={"claude-code-config#217"}) == {"claude-code-config#217"}
+    assert wf.pr_linked(open_keys={"tool-a#217"}) == {"tool-a#217"}
 
 
 def test_body_closing_keywords_and_forms(wf):
-    body = ("Fixes #1. resolved #2, Close: #3\ncloses abhattacherjee/other#4\n"
+    body = ("Fixes #1. resolved #2, Close: #3\ncloses octo-user/other#4\n"
             "Closes someone/else#5\nRefs #6, closing #7, see #8, issue #9")
     assert wf.body_closing_keys(_pr(body, repo="app")) == {"app#1", "app#2", "app#3", "other#4"}
 
 
 def test_body_links_count_only_for_open_owned_issues(wf, monkeypatch):
     _fake_gh(monkeypatch, wf, projects=[], prs=[_pr("Closes #1\nCloses #2")])
-    assert wf.pr_linked(open_keys={"claude-code-config#1"}) == {"claude-code-config#1"}
+    assert wf.pr_linked(open_keys={"tool-a#1"}) == {"tool-a#1"}
 
 
 def test_body_links_are_skipped_without_open_keys(wf, monkeypatch):
@@ -362,16 +366,16 @@ def test_keywords_in_code_and_comments_do_not_link(wf):
 
 
 def test_full_issue_url_links(wf):
-    body = "Closes https://github.com/abhattacherjee/other/issues/5"
+    body = "Closes https://github.com/octo-user/other/issues/5"
     assert wf.body_closing_keys(_pr(body, repo="app")) == {"other#5"}
 
 
 def test_owner_is_compared_case_insensitively(wf):
-    assert wf.body_closing_keys(_pr("Closes Abhattacherjee/app#4", repo="x")) == {"app#4"}
+    assert wf.body_closing_keys(_pr("Closes Octo-user/app#4", repo="x")) == {"app#4"}
 
 
 def test_pr_linked_returns_the_open_issues_own_repo_spelling(wf, monkeypatch):
-    _fake_gh(monkeypatch, wf, projects=[], prs=[_pr("Closes abhattacherjee/App#4")])
+    _fake_gh(monkeypatch, wf, projects=[], prs=[_pr("Closes octo-user/App#4")])
     assert wf.pr_linked(open_keys={"app#4"}) == {"app#4"}
 
 
@@ -506,11 +510,11 @@ def test_sync_unplanned_for_frozen_and_not_current_only(wf, monkeypatch, capsys)
     Board(wf, monkeypatch, items={}, current={"app": "v1.0"},
           issues={"app#1": _iss("app", "v2.0"),                # not current
                   "app#2": _iss("app", "v1.0"),                # planned
-                  "marauders-map#3": _iss("marauders-map", "v1.0"),   # frozen
+                  "frozen-repo#3": _iss("frozen-repo", "v1.0"),   # frozen
                   "app#4": _iss("app", None)},                 # no milestone
-          in_progress={"app#1", "app#2", "marauders-map#3", "app#4"})
+          in_progress={"app#1", "app#2", "frozen-repo#3", "app#4"})
     out = _sync_json(wf, capsys)
-    assert out["unplanned"] == ["app#1", "app#4", "marauders-map#3"]
+    assert out["unplanned"] == ["app#1", "app#4", "frozen-repo#3"]
     assert "app#2" not in out["unplanned"]
 
 
@@ -552,7 +556,7 @@ def test_sync_json_shape_and_human_output(wf, monkeypatch, capsys):
     out = _sync_json(wf, capsys)
     assert set(out) == {"url", "current", "added", "started", "stopped", "stale_in_progress",
                         "lane_changed", "focus_filled", "unplanned", "new_since_monday", "closed_since_monday",
-                        "done_this_week", "graphql_cost"}
+                        "done_this_week", "graphql_cost", "config_warnings"}
     assert out["url"] == "URL36" and out["current"] == {"app": "v1.0"}
 
 
@@ -563,7 +567,7 @@ def test_show_json_field_values(wf, monkeypatch, capsys):
     monkeypatch.setattr(wf, "open_issues", lambda: {
         "app#1": _iss("app", "v2.0"),
         "app#2": _iss("app", "v1.0"),
-        "marauders-map#3": _iss("marauders-map", "v9.0"),
+        "frozen-repo#3": _iss("frozen-repo", "v9.0"),
         "app#4": _iss("app", "v1.0"),
         "app#5": _iss("app", "v1.0"),
     })
@@ -571,7 +575,7 @@ def test_show_json_field_values(wf, monkeypatch, capsys):
     monkeypatch.setattr(wf, "board_items", lambda num: {
         "app#1": {"focus": "This week", "lane": "Product", "status": "In Progress", "title": "t1"},
         "app#2": {"focus": "This week", "lane": "Product", "status": "Todo", "title": "t2"},
-        "marauders-map#3": {"focus": "Next", "lane": "Product", "status": "In Progress", "title": "t3"},
+        "frozen-repo#3": {"focus": "Next", "lane": "Product", "status": "In Progress", "title": "t3"},
         "app#4": {"focus": "This week", "lane": "Tooling", "title": "t4"},
         "app#5": {"focus": "This week", "lane": "Product", "status": "Done", "title": "t5"},
     })
@@ -580,7 +584,7 @@ def test_show_json_field_values(wf, monkeypatch, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["url"] == "URL36" and data["week_start"] == "2026-09-28"
     by = {i["key"]: i for i in data["items"]}
-    assert set(by) == {"app#1", "app#2", "marauders-map#3", "app#4"}   # Done is dropped
+    assert set(by) == {"app#1", "app#2", "frozen-repo#3", "app#4"}   # Done is dropped
     a1 = by["app#1"]
     assert (a1["repo"], a1["number"], a1["url"], a1["title"]) == ("app", 1, "https://x/app", "t1")
     assert (a1["focus"], a1["lane"], a1["status"]) == ("This week", "Product", "In Progress")
@@ -588,7 +592,7 @@ def test_show_json_field_values(wf, monkeypatch, capsys):
     assert a1["in_progress"] and a1["not_current"] and a1["unplanned"] and not a1["frozen"]
     a2 = by["app#2"]
     assert not (a2["in_progress"] or a2["not_current"] or a2["unplanned"])
-    m3 = by["marauders-map#3"]     # frozen + in progress: unplanned, but not a not_current flag
+    m3 = by["frozen-repo#3"]     # frozen + in progress: unplanned, but not a not_current flag
     assert m3["frozen"] and m3["unplanned"] and not m3["not_current"]
     assert by["app#4"]["status"] == "" and not by["app#4"]["in_progress"]
 
@@ -653,7 +657,7 @@ def test_in_progress_keys_treats_pr_link_as_fresh(wf, monkeypatch):
              items_by_project={"P1": [_node("In Progress", 1, updated=_iso(90))]},
              prs=[{"closingIssuesReferences": {"nodes": [
                  {"number": 1, "state": "OPEN",
-                  "repository": {"name": "app", "owner": {"login": "abhattacherjee"}}}]}}])
+                  "repository": {"name": "app", "owner": {"login": "octo-user"}}}]}}])
     keys, stale, _ = wf.in_progress_keys()
     assert keys == {"app#1"} and stale == []
 
@@ -826,8 +830,11 @@ def test_script_prints_one_error_line_and_no_traceback():
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
         code = ("import runpy,sys,time;time.sleep=lambda s:None;"
                 f"sys.argv=['weekly-focus.py','show'];runpy.run_path({str(SCRIPT)!r},run_name='__main__')")
-        r = subprocess.run(["python3", "-c", code], capture_output=True, text=True, timeout=60,
-                           env={"PATH": f"{d}:{os.environ['PATH']}"})
+        cfg_home = Path(d) / "cfg"
+        write_config(cfg_home, TEST_CFG)
+        env = {"PATH": f"{d}:{os.environ['PATH']}", "HOME": d,
+               "XDG_CONFIG_HOME": str(cfg_home), "XDG_CACHE_HOME": str(Path(d) / "cache")}
+        r = subprocess.run(["python3", "-c", code], capture_output=True, text=True, timeout=60, env=env)
     assert r.returncode == 1
     assert r.stderr.startswith("weekly-focus: error: gh api graphql failed")
     assert "HTTP 401 bad credentials" in r.stderr
@@ -837,7 +844,7 @@ def test_script_prints_one_error_line_and_no_traceback():
 # ---- lean board reads (no gh project list / field-list / item-list) --------
 
 def _item_node(iid, number, repo="app", focus="Next", lane="Product", status="Todo", title="t",
-               owner="abhattacherjee"):
+               owner="octo-user"):
     return {"id": iid, "focus": {"name": focus} if focus else None,
             "lane": {"name": lane} if lane else None,
             "status": {"name": status} if status else None,
@@ -1134,27 +1141,27 @@ def _lane_case(wf, monkeypatch, repo, lane, labels):
 
 
 def test_sync_fills_an_empty_lane(wf, monkeypatch, capsys):
-    b = _lane_case(wf, monkeypatch, "claude-code-config", "", ["bug"])
+    b = _lane_case(wf, monkeypatch, "tool-a", "", ["bug"])
     out = _sync_json(wf, capsys)
     assert b.sets == [("i1", "L", "Tooling")]
-    assert out["lane_changed"] == [{"key": "claude-code-config#1", "from": "", "to": "Tooling"}]
+    assert out["lane_changed"] == [{"key": "tool-a#1", "from": "", "to": "Tooling"}]
 
 
 def test_sync_lifts_a_lane_to_security_when_a_security_label_appears(wf, monkeypatch, capsys):
-    b = _lane_case(wf, monkeypatch, "claude-code-config", "Tooling", ["Security"])
+    b = _lane_case(wf, monkeypatch, "tool-a", "Tooling", ["Security"])
     out = _sync_json(wf, capsys)
-    assert out["lane_changed"] == [{"key": "claude-code-config#1", "from": "Tooling",
+    assert out["lane_changed"] == [{"key": "tool-a#1", "from": "Tooling",
                                     "to": "Security"}]
     assert b.sets == [("i1", "L", "Security")]
 
 
 def test_sync_keeps_security_lane_after_the_label_is_removed(wf, monkeypatch, capsys):
-    b = _lane_case(wf, monkeypatch, "claude-code-config", "Security", ["bug"])
+    b = _lane_case(wf, monkeypatch, "tool-a", "Security", ["bug"])
     assert _sync_json(wf, capsys)["lane_changed"] == [] and b.sets == []
 
 
 def test_sync_leaves_a_hand_set_lane_alone(wf, monkeypatch, capsys):
-    b = _lane_case(wf, monkeypatch, "claude-code-config", "Product", ["bug"])   # repo is TOOLING
+    b = _lane_case(wf, monkeypatch, "tool-a", "Product", ["bug"])   # repo is TOOLING
     assert _sync_json(wf, capsys)["lane_changed"] == [] and b.sets == []
     wf.sync()
     assert "lane changed 0: -" in capsys.readouterr().out
@@ -1196,3 +1203,42 @@ def test_sync_fills_empty_focus_on_candidate_but_not_a_set_one(wf, monkeypatch, 
     assert out["focus_filled"] == ["app#1"]
     assert ("i1", "F", "Next") in b.sets
     assert not [s for s in b.sets if s[0] == "i2"]
+
+
+# ---- config warnings (#146) -------------------------------------------------
+
+def test_sync_json_reports_config_entries_with_no_open_issue(wf, monkeypatch, capsys):
+    # frozen-repo was renamed: its issues now come back as new-name#N, so the config's
+    # frozen and always entries match nothing. Sync carries on and says so.
+    Board(wf, monkeypatch, items={}, issues={"new-name#951": _iss("new-name", "v1.0")},
+          current={"new-name": "v1.0"}, in_progress=set())
+    out = _sync_json(wf, capsys)
+    assert out["added"] == ["new-name#951"]
+    assert any("frozen repo 'frozen-repo'" in w for w in out["config_warnings"])
+    assert any("always issue 'frozen-repo#951'" in w for w in out["config_warnings"])
+
+
+def test_sync_has_no_warning_when_frozen_and_always_still_match(wf, monkeypatch, capsys):
+    Board(wf, monkeypatch, items={}, issues={"frozen-repo#951": _iss("frozen-repo", None)},
+          current={}, in_progress=set())
+    assert _sync_json(wf, capsys)["config_warnings"] == []
+
+
+def test_sync_human_output_prints_config_warnings_on_stderr(wf, monkeypatch, capsys):
+    Board(wf, monkeypatch, items={}, issues={}, current={}, in_progress=set())
+    wf.sync()
+    err = capsys.readouterr().err
+    assert "warning: frozen repo 'frozen-repo'" in err
+
+
+def test_show_json_reports_config_warnings_schedule_and_capacity(wf, monkeypatch, capsys):
+    monkeypatch.setattr(wf, "find_or_create_project", lambda: {"number": 36, "url": "URL36"})
+    monkeypatch.setattr(wf, "open_issues", lambda: {"app#1": _iss("app", "v1.0")})
+    monkeypatch.setattr(wf, "current_milestones", lambda repos: {"app": "v1.0"})
+    monkeypatch.setattr(wf, "board_items", lambda num: {})
+    wf.show(as_json=True)
+    data = json.loads(capsys.readouterr().out)
+    assert data["schedule"] == TEST_CFG["plan_week"]["schedule"]
+    assert data["capacity"] == TEST_CFG["plan_week"]["capacity"]
+    assert data["lanes"] == ["Security", "Season", "Tooling"] and data["default_lane"] == "Product"
+    assert len(data["config_warnings"]) == 2

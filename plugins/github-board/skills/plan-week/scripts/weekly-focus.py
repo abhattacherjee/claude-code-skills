@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Cross-repo "Weekly Focus" GitHub Project for abhattacherjee.
+"""Cross-repo "Weekly Focus" GitHub Project, driven by the github-board config.
 
 Script: <github-board plugin>/skills/plan-week/scripts/weekly-focus.py
-launchd runs `sync` at 07:00 and 18:00. The skill (/weekly-focus, or a question like
-"what do I work on next") is the normal way to use this.
+Config: ${XDG_CONFIG_HOME:-~/.config}/github-board/config.json gives the owner, board title,
+lanes, schedule, frozen and always lists, capacity and launchd settings.
+launchd runs `sync` at the configured times. The skill (/github-board:plan-week, or a question
+like "what do I work on next") is the normal way to use this.
 
   weekly-focus.py sync [--json]   create the board if missing, add (as Focus=Next) every open
                                   issue in each active repo's current milestone, plus
@@ -22,37 +24,60 @@ launchd runs `sync` at 07:00 and 18:00. The skill (/weekly-focus, or a question 
   weekly-focus.py show [--json]   print open items by Focus and Lane, with milestone;
                                   flags This week items outside their repo's current milestone
                                   and in-progress items outside the plan (unplanned)
+  weekly-focus.py --help          this text (needs no config)
+
+  --json on show also carries the config's schedule, capacity, lanes and default_lane.
+  sync --json and show --json carry config_warnings: frozen or always entries that match no
+  open issue (a renamed or deleted repo, or a closed issue).
+
+Exit codes: 0 ok; 1 error; 2 usage or invalid config (names the key); 3 sync skipped
+(GraphQL budget low); 4 no config yet (run `plan-week init`).
 
 "Current milestone" = the lowest-versioned open milestone that still has open issues
 (titles starting with a version: v0.6, V1.2, 0.4, v2.0 — ...). Backlog/theme milestones, and any
-milestone whose title or description says "paused", never count. Frozen repos are skipped
-by sync. Edit FROZEN to thaw one.
+milestone whose title or description says "paused", never count. Frozen repos
+(plan_week.frozen) are skipped by sync. Edit the config to thaw one.
 """
 import datetime
+import importlib.util
 import json
 import re
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-OWNER = "abhattacherjee"
+
+def _load_github_board_lib():
+    """lib/config.py of the plugin this script ships in (found from this file, never from HOME)."""
+    path = Path(__file__).resolve().parents[3] / "lib" / "config.py"
+    spec = importlib.util.spec_from_file_location("github_board_config", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+gbconfig = _load_github_board_lib()
+
+# Filled in from the github-board config by apply_config(); main() calls it. Nothing here
+# carries a user's values; tests call apply_config() with their own.
+CONFIG = {}
+OWNER = ""
 TITLE = "Weekly Focus"
-FROZEN = {
-    "tiny-vacation-agent", "wealth-management", "knowledge-base-ui", "marauders-map",
-    "prime-plays-ui-demo", "local-llm", "agents-monorepo", "obsidian-wiki", "spec-docs",
-}
-# Issues pulled in even though their repo is frozen.
-ALWAYS = {"tiny-vacation-agent#951"}
-TOOLING = {
-    "claude-code-config", "obsidian-brain", "claude-code-skills", "cc-token-router",
-    "harden-repo", "git-flow", "codex-config", "cc-telemetry-dashboard",
-}
-SEASON = {"fantasy-football-advisor"}
+FROZEN = set()
+ALWAYS = set()          # repo#N pulled in even though the repo is frozen
+LANES = []              # [{"name", "labels_containing"?, "repos"?}]; first match wins
+DEFAULT_LANE = "Product"
+SCHEDULE = None         # {"mon": [lane, ...], ...}, or None for no fixed days
+CAPACITY = {"max_repos_besides_security": 3, "hours": [10, 20]}
+LAUNCHD = {"enabled": False, "times": [], "label_prefix": ""}
 FIELDS = {
     "Focus": ["This week", "Next", "Later"],
-    "Lane": ["Security", "Product", "Season", "Tooling"],
+    "Lane": [],
 }
+DAY_NAMES = (("mon", "Mon"), ("tue", "Tue"), ("wed", "Wed"), ("thu", "Thu"), ("fri", "Fri"),
+             ("sat", "Sat"), ("sun", "Sun"))
 IN_PROGRESS_STATUSES = {"in progress", "in review"}
 GH_TIMEOUT = 120
 GH_RETRY_DELAY = 3
@@ -61,29 +86,43 @@ MIN_BUDGET = 300         # sync skips (exit 3) when fewer GraphQL points than th
 EXIT_SKIPPED = 3
 KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+#\d+$")
 VERSIONED = re.compile(r"^[vV]?(\d+(?:\.\d+)*)")
-README = f"""Cross-repo weekly plan. Per-repo boards stay the source of truth for their lifecycle.
 
-Rules:
-- This week takes work only from each repo's current milestone (the lowest-versioned open
-  milestone with open issues). `show` flags any This week item outside it.
-- Security may jump ahead. Move that issue into the current milestone so it ships in the
-  next release. Key rotations with no code change are the exception.
-- At most 3 repos per week besides Security. Everything else stays Next or Later.
 
-- Work already in progress (Status In progress / In review on any of your boards, or an open PR
-  that closes the issue) is pulled in automatically. It is marked unplanned when it is outside
-  the plan, and never hidden or demoted.
-
-Weekly rhythm (10-20h):
-- launchd runs `weekly-focus.py sync` at 07:00 and 18:00.
-- Ask the skill (`/weekly-focus`, or "what do I work on next") for the next item; plan the week
-  on Monday, 30 min: clear the Security lane, pick the week.
-- Tue-Wed: one product repo.
-- Thu: one tooling milestone (one only).
-- Fri: fantasy-football-advisor (in season) + releases.
-
-Frozen (not synced; issues kept open): {", ".join(sorted(FROZEN))}.
-"""
+def board_readme():
+    """The README sync writes to the board, built from the config."""
+    lo, hi = CAPACITY["hours"]
+    if SCHEDULE:
+        days = [f"- {label}: {', '.join(SCHEDULE[key])}" for key, label in DAY_NAMES if SCHEDULE.get(key)]
+    else:
+        days = ["- No fixed days: Security first, then priority order."]
+    if LAUNCHD.get("enabled"):
+        sync_line = f"- launchd runs `weekly-focus.py sync` at {' and '.join(LAUNCHD['times'])}."
+    else:
+        sync_line = "- Run `weekly-focus.py sync` (or ask the skill) to refresh the board."
+    return "\n".join([
+        "Cross-repo weekly plan. Per-repo boards stay the source of truth for their lifecycle.",
+        "",
+        "Rules:",
+        "- This week takes work only from each repo's current milestone (the lowest-versioned open",
+        "  milestone with open issues). `show` flags any This week item outside it.",
+        "- Security may jump ahead. Move that issue into the current milestone so it ships in the",
+        "  next release. Key rotations with no code change are the exception.",
+        f"- At most {CAPACITY['max_repos_besides_security']} repos per week besides Security. "
+        "Everything else stays Next or Later.",
+        "",
+        "- Work already in progress (Status In progress / In review on any of your boards, or an open PR",
+        "  that closes the issue) is pulled in automatically. It is marked unplanned when it is outside",
+        "  the plan, and never hidden or demoted.",
+        "",
+        f"Weekly rhythm ({lo}-{hi}h):",
+        sync_line,
+        "- Ask the skill (`/github-board:plan-week`, or \"what do I work on next\") for the next item;",
+        "  plan the week on its first day, 30 min: clear the Security lane, pick the week.",
+        *days,
+        "",
+        f"Frozen (not synced; issues kept open): {', '.join(sorted(FROZEN)) or 'none'}.",
+        "",
+    ])
 
 
 class GhError(RuntimeError):
@@ -163,19 +202,42 @@ def _cached(key, fn):
     return _CACHE[key]
 
 
-PROJECTS_Q = (
+_PROJECTS_Q = (
     'query($endCursor:String){user(login:"%s"){projectsV2(first:100,after:$endCursor){'
-    "pageInfo{hasNextPage endCursor} nodes{id number title url closed}}}}") % OWNER
-FIELDS_Q = (
+    "pageInfo{hasNextPage endCursor} nodes{id number title url closed}}}}")
+_FIELDS_Q = (
     'query{user(login:"%s"){projectV2(number:%%d){fields(first:100){nodes{'
-    "... on ProjectV2SingleSelectField{id name options{id name}} ... on ProjectV2Field{id name}}}}}}") % OWNER
-BOARD_ITEMS_Q = (
+    "... on ProjectV2SingleSelectField{id name options{id name}} ... on ProjectV2Field{id name}}}}}}")
+_BOARD_ITEMS_Q = (
     'query($endCursor:String){user(login:"%s"){projectV2(number:%%d){items(first:100,after:$endCursor){'
     "pageInfo{hasNextPage endCursor} nodes{id "
     'focus:fieldValueByName(name:"Focus"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
     'lane:fieldValueByName(name:"Lane"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
     'status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
-    "content{... on Issue{number title state repository{name owner{login}}}}}}}}}") % OWNER
+    "content{... on Issue{number title state repository{name owner{login}}}}}}}}}")
+PROJECTS_Q = FIELDS_Q = BOARD_ITEMS_Q = PR_LINKED_Q = ""   # set by apply_config()
+
+
+def apply_config(cfg):
+    """Set this module's settings from a validated github-board config (gbconfig.load())."""
+    global CONFIG, OWNER, TITLE, FROZEN, ALWAYS, LANES, DEFAULT_LANE, SCHEDULE, CAPACITY, LAUNCHD
+    global PROJECTS_Q, FIELDS_Q, BOARD_ITEMS_Q, PR_LINKED_Q
+    pw = cfg["plan_week"]
+    CONFIG = cfg
+    OWNER = cfg["owner"]
+    TITLE = pw["board_title"]
+    FROZEN = set(pw["frozen"])
+    ALWAYS = set(pw["always"])
+    LANES = [dict(lane) for lane in pw["lanes"]]
+    DEFAULT_LANE = pw["default_lane"]
+    SCHEDULE = pw["schedule"]
+    CAPACITY = dict(pw["capacity"])
+    LAUNCHD = dict(pw["launchd"])
+    FIELDS["Lane"] = [lane["name"] for lane in LANES] + [DEFAULT_LANE]
+    PROJECTS_Q = _PROJECTS_Q % OWNER
+    FIELDS_Q = _FIELDS_Q % OWNER
+    BOARD_ITEMS_Q = _BOARD_ITEMS_Q % OWNER
+    PR_LINKED_Q = _PR_LINKED_Q % OWNER
 
 
 def list_projects():
@@ -198,7 +260,7 @@ def find_or_create_project():
 
 
 def write_readme(num):
-    gh("project", "edit", str(num), "--owner", OWNER, "--readme", README,
+    gh("project", "edit", str(num), "--owner", OWNER, "--readme", board_readme(),
        "--description", "Cross-repo weekly focus", "--format", "json")
 
 
@@ -263,19 +325,36 @@ def set_opt(pid, item_id, field, opt):
        "--single-select-option-id", field["opts"][opt], parse=False)
 
 
+def label_lane(labels):
+    """The first lane whose labels_containing matches a label (case-insensitive), else None."""
+    low = [l.lower() for l in labels]
+    for lane in LANES:
+        subs = [s.lower() for s in lane.get("labels_containing", [])]
+        if any(s in l for l in low for s in subs):
+            return lane["name"]
+    return None
+
+
 def lane_for(repo, labels):
-    if any("security" in l.lower() for l in labels):
-        return "Security"
-    if repo in SEASON:
-        return "Season"
-    return "Tooling" if repo in TOOLING else "Product"
+    """First matching lane rule (a label rule or a repo list), else DEFAULT_LANE."""
+    low = [l.lower() for l in labels]
+    for lane in LANES:
+        subs = [s.lower() for s in lane.get("labels_containing", [])]
+        if any(s in l for l in low for s in subs) or repo in lane.get("repos", []):
+            return lane["name"]
+    return DEFAULT_LANE
 
 
 def add(num, pid, fields, key, labels, focus):
     repo, n = key.split("#")
     url = f"https://github.com/{OWNER}/{repo}/issues/{n}"
     item = gh("project", "item-add", str(num), "--owner", OWNER, "--url", url, "--format", "json")
-    set_opt(pid, item["id"], fields["Lane"], lane_for(repo, labels))
+    lane = lane_for(repo, labels)
+    if lane in fields["Lane"]["opts"]:
+        set_opt(pid, item["id"], fields["Lane"], lane)
+    else:
+        print(f"warning: board has no Lane option {lane!r} ({key}); add it to the board's Lane field",
+              file=sys.stderr)
     set_opt(pid, item["id"], fields["Focus"], focus)
     return item["id"]
 
@@ -324,11 +403,11 @@ PROJECT_ITEMS_Q = (
     "after:$endCursor){pageInfo{hasNextPage endCursor} nodes{fieldValueByName(name:\"Status\"){"
     "... on ProjectV2ItemFieldSingleSelectValue{name}} content{... on Issue{number state updatedAt "
     "repository{name owner{login}}}}}}}}}")
-PR_LINKED_Q = (
+_PR_LINKED_Q = (
     "query($endCursor:String){search(query:\"is:pr is:open author:%s\",type:ISSUE,first:100,"
     "after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{body "
     "repository{name owner{login}} "
-    "closingIssuesReferences(first:20){nodes{number state repository{name owner{login}}}}}}}}") % OWNER
+    "closingIssuesReferences(first:20){nodes{number state repository{name owner{login}}}}}}}}")
 # GitHub fills closingIssuesReferences only for PRs into the default branch. Feature PRs
 # target develop, so the closing keywords are read from the PR body too.
 # Keyword and reference must sit on one line ([ \t], not \s). GitHub also accepts the
@@ -492,8 +571,18 @@ def candidates(issues, current):
             yield key, i["labels"]
 
 
+def config_warnings(issues):
+    """Config entries that match no open issue: usually a renamed or deleted repo."""
+    repos = {i["repo"] for i in issues.values()}
+    out = [f"frozen repo {r!r} has no open issues (renamed or deleted? check plan_week.frozen)"
+           for r in sorted(FROZEN - repos)]
+    out += [f"always issue {k!r} is not an open issue (closed, moved, or its repo renamed? "
+            "check plan_week.always)" for k in sorted(ALWAYS - set(issues))]
+    return out
+
+
 def refresh_lanes(pid, fields, have, issues):
-    """Fill an empty Lane, and lift an item to Security once it gains a security label.
+    """Fill an empty Lane, and lift an item to a label lane (e.g. Security) once it gains a matching label.
 
     Any other non-empty Lane is left alone (no downgrade, no overwrite of a hand-set lane).
     Returns [{key, from, to}].
@@ -504,10 +593,11 @@ def refresh_lanes(pid, fields, have, issues):
             continue
         cur = it.get("lane") or ""
         labels = issues[key]["labels"]
+        lifted = label_lane(labels)
         if not cur:
             new = lane_for(issues[key]["repo"], labels)
-        elif cur != "Security" and any("security" in l.lower() for l in labels):
-            new = "Security"
+        elif lifted and cur != lifted:
+            new = lifted
         else:
             continue
         if new not in fields["Lane"]["opts"]:
@@ -554,6 +644,7 @@ def sync(as_json=False):
     fields = ensure_fields(num)
     have = board_items(num)
     issues = open_issues()
+    warnings = config_warnings(issues)
     current = current_milestones({i["repo"] for i in issues.values()} - FROZEN)
     added = []
     for key, labels in candidates(issues, current):
@@ -620,7 +711,7 @@ def sync(as_json=False):
                           "focus_filled": focus_filled, "stale_in_progress": stale_cards,
                           "unplanned": unplanned, "new_since_monday": new_since,
                           "closed_since_monday": closed, "done_this_week": done_this_week,
-                          "graphql_cost": cost},
+                          "graphql_cost": cost, "config_warnings": warnings},
                          indent=2))
         return _finish_sync(failed_boards)
     for repo, title in current.items():
@@ -639,6 +730,8 @@ def sync(as_json=False):
     print(f"closed since {start} {len(closed)}: {' '.join(closed) or '-'}")
     print(f"done this week {len(done_this_week)}: {' '.join(done_this_week) or '-'}")
     print("graphql cost: " + (f"{cost} points" if cost is not None else "unknown"))
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
     _finish_sync(failed_boards)
 
 
@@ -684,8 +777,8 @@ def priority(labels):
     return min(found) if found else None
 
 
-def show_items(p):
-    issues = open_issues()
+def show_items(p, issues=None):
+    issues = open_issues() if issues is None else issues
     current = current_milestones({i["repo"] for i in issues.values()} - FROZEN)
     out = []
     for k, it in board_items(p["number"]).items():
@@ -712,10 +805,14 @@ def show_items(p):
 
 def show(as_json=False):
     p = find_or_create_project()
-    items = show_items(p)
+    issues = open_issues()
+    items = show_items(p, issues)
+    warnings = config_warnings(issues)
     if as_json:
-        print(json.dumps({"url": p["url"], "week_start": week_start().isoformat(), "items": items},
-                         indent=2))
+        print(json.dumps({"url": p["url"], "week_start": week_start().isoformat(),
+                          "schedule": SCHEDULE, "capacity": CAPACITY,
+                          "lanes": [lane["name"] for lane in LANES], "default_lane": DEFAULT_LANE,
+                          "config_warnings": warnings, "items": items}, indent=2))
         return
     order = {"This week": 0, "Next": 1, "Later": 2}
     for it in sorted(items, key=lambda r: (order.get(r["focus"], 3), r["lane"] or "-", r["key"])):
@@ -727,28 +824,40 @@ def show(as_json=False):
         print(f"{it['focus'] or '-':10} {it['lane'] or '-':9} {it['key']:32} "
               f"{(it['milestone'] or '-')[:22]:22} {it['title'][:60]}{flag}")
     print(p["url"])
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+
+
+COMMANDS = ("sync", "set", "pick", "show")
 
 
 def main(argv):
+    if argv[:1] and argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
     args = [a for a in argv if a != "--json"]
     as_json = "--json" in argv
     cmd = args[0] if args else "show"
+    if cmd not in COMMANDS:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    apply_config(gbconfig.load(require=("plan_week",)))
     if cmd == "sync":
         sync(as_json)
     elif cmd == "set":
         set_focus(args[1] if len(args) > 1 else "", args[2:])
     elif cmd == "pick":
         pick(args[1:])
-    elif cmd == "show":
-        show(as_json)
     else:
-        print(__doc__, file=sys.stderr)
-        sys.exit(2)
+        show(as_json)
 
 
 if __name__ == "__main__":
     try:
         main(sys.argv[1:])
+    except gbconfig.ConfigError as e:
+        print(f"weekly-focus: error: {e}", file=sys.stderr)
+        sys.exit(e.exit_code)
     except (GhError, subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
         print(f"weekly-focus: error: {' '.join(str(e).split()) or type(e).__name__}", file=sys.stderr)
         sys.exit(1)
