@@ -92,11 +92,11 @@ python3 "$PW/scripts/weekly-focus.py" sync --json
 
 Then set the `restart_command` of the two plan-week entries in `~/.claude/skills/boot-doctor/services.json` to `~/.local/share/github-board/current/skills/plan-week/scripts/install-launchd.sh`.
 
-Rollback: `~/.claude/skills/weekly-focus/scripts/install-launchd.sh` (the bare copy) rewrites both plists to point back at itself.
+Rollback, only while the bare copy still exists (before Phase 4): `~/.claude/skills/weekly-focus/scripts/install-launchd.sh` rewrites both plists to point back at itself. After Phase 4 the bare copy is gone; to repair the jobs, re-run the plugin's `install-launchd.sh`, adding `--takeover` if a plist still names the bare copy.
 
 ## Phase 4: remove the bare copies
 
-1. In claude-code-config, drop `weekly-focus`, `create-gh-board` and `github-release-board-promote` from `sync.sh`'s `SKILLS` array first, so a sync cannot bring them back.
+1. Before anything else, move the callers of the old names (see the last line of this section), so nothing calls a deleted skill, and confirm the plugin's `install-launchd.sh --check` exits 0, so no job still runs the bare copy. Then, in claude-code-config, drop `weekly-focus`, `create-gh-board` and `github-release-board-promote` from `sync.sh`'s `SKILLS` array, so a sync cannot bring them back.
 2. Diff each bare copy against the plugin; expect only the renames and the config changes:
 
    ```bash

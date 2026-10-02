@@ -2,6 +2,12 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- README: the Phase 3 rollback through the bare `weekly-focus` installer works only before Phase 4; after that, re-run the plugin's `install-launchd.sh`. Phase 4 now says to move the callers of the old names first (#147).
+
 ## [1.0.0] - 2026-10-02
 
 ### Added
