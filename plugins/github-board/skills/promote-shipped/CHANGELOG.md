@@ -172,6 +172,7 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 - **Renamed to `promote-shipped`** and moved into the `github-board` plugin (#146). Invoke it as `/github-board:promote-shipped`. The old name still matches as a trigger phrase.
+- `SKILL.md` is the version that documents what the scripts in this release do (the `hold-discovery-failed` class, the three scope cases, the trimmed description below). The installed copy the plugin was first built from was an older snapshot of it. (#146)
 - Held-item output no longer asserts "merged but not in main" for a reachability
   check that errored; an errored check reads "could not verify".
 - Frontmatter `description` trimmed (811 → 475 chars) — implementation detail and

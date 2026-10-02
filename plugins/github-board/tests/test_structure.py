@@ -146,3 +146,14 @@ def test_plugin_readme_has_the_runbook():
     for heading in ("## Configuration", "## Background sync", "## Phase 3", "## Phase 4"):
         assert heading in text
     assert "--takeover" in text and "install-launchd.sh --check" in text
+
+
+def test_promote_shipped_skill_documents_every_class_the_script_emits():
+    # The SKILL.md first copied in was an older snapshot that listed four hold classes while
+    # find-promotable.sh emits five (hold-discovery-failed was missing).
+    skill = PLUGIN / "skills" / "promote-shipped"
+    script = (skill / "scripts" / "find-promotable.sh").read_text()
+    classes = set(re.findall(r'"((?:hold-[a-z-]+)|merged|nopr|wontfix)"', script))
+    assert len(classes) == 8
+    text = (skill / "SKILL.md").read_text()
+    assert [c for c in sorted(classes) if f"`{c}`" not in text] == []

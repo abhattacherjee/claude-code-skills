@@ -1,6 +1,6 @@
 ---
 name: promote-shipped
-description: "Moves GitHub Projects (v2) board items to Done after a release or hotfix merges to main. Use when: (1) a release branch finished via Git Flow and the GitHub Release is published, (2) a hotfix shipped to main + back-merged to develop, (3) /finalize-release just completed, (4) the project board has closed issues sitting in 'Dev Complete', 'In Review', 'Done in develop', etc. whose linked PRs merged, (5) 'release board promote' or /github-release-board-promote (the old name of this skill). Discovers all Projects V2 boards linked to the repo, asks the user which board when multiple, validates each candidate (closed issue + merged PR + status != Done), shows a dry-run preview, then applies updateProjectV2ItemFieldValue. No-op when the repo has no boards. Covers: GraphQL projectsV2 discovery, status-field auto-detect, closedByPullRequestsReferences."
+description: "Moves GitHub Projects (v2) board items to Done after a release or hotfix merges to main. Use when: (1) a release branch finished via Git Flow and the GitHub Release is published, (2) a hotfix shipped to main + back-merged to develop, (3) /finish just completed a release or hotfix, (4) the board has closed issues sitting in non-Done columns ('Dev Complete', 'In Review', 'Done in develop') whose linked PRs merged, (5) 'release board promote' or /github-release-board-promote (the old name of this skill). Previews before writing. No-op when the repo has no boards."
 metadata:
   version: 2.0.0
 ---
@@ -34,13 +34,44 @@ skill reads it and promotes them in one pass.
 
 ## Pre-flight
 
-The skill requires `gh` CLI scopes `read:project` (read board state) and `project`
-(mutate item field values). If they're missing, every script bails with a clear
-message. Refresh once per machine:
+The skill needs two `gh` scopes: `read:project` to read board state, and `project`
+to change it. They are checked at different points, and not every outcome stops the
+run, so read the three cases below before reaching for a fix.
+
+If you signed in with `gh auth login`, one command grants both:
 
 ```bash
 gh auth refresh -s read:project,project
 ```
+
+That command cannot change a personal access token's permissions. If you
+authenticate with a PAT or `GH_TOKEN`, see the third case.
+
+All three checks ask the same question of the same place: the ACTIVE account on
+the host the run will query, via
+`gh auth status --active --hostname "${GH_HOST:-github.com}"`. `gh` reports on
+every host it knows and one host can hold several accounts, so a scope held
+elsewhere does not count. The invocation is identical in all three scripts, and a
+test enforces that — it drifted once, when only the write path was scoped.
+
+- **`read:project`** is checked by `discover-boards.sh` and `inventory-board.sh`
+  before they do anything. It covers Phases 1-4. Discovery, inventory, filtering
+  and the dry-run preview only read. Reported-and-absent exits **3**.
+- **`project` (write)** is checked by `apply-promotions.sh --apply`, before the
+  first mutation rather than N failures into it. The check asks about the account
+  and host that will actually be used: `gh auth status --active --hostname
+  "${GH_HOST:-github.com}"`. `gh` reports every host it knows, and one host can
+  hold several accounts, so a `project` scope held by another account or on another
+  host does not count. If scopes are reported and `project` is absent, the run
+  exits **3** and prints the fix for both an OAuth login and a PAT.
+  **`--dry-run` is exempt.** It writes nothing, so you can preview the whole run
+  with a read-only token, then grant the scope and apply.
+- **Scopes that cannot be read at all** do not stop any of the three. A fine-grained PAT
+  reports `none`, because it carries permissions rather than OAuth scopes. A bare
+  `GH_TOKEN` often prints no scopes line. Both are frequently Projects-write
+  capable, so the run **warns and continues** instead of blocking a token that
+  probably works. If the token really cannot write, the first item fails and says
+  so.
 
 ## Progress Tracking (MANDATORY)
 
@@ -106,16 +137,17 @@ option). If it can't find one, it bails with exit 5 — surface the error and st
 ```
 
 Every candidate (status set, not already Done, closed Issue or merged PR) is assigned
-exactly one `promoteClass`. Three promote, four hold:
+exactly one `promoteClass`. Three promote, five hold:
 
 | `promoteClass` | Condition | Comment posted |
 |---|---|---|
 | `merged` | ≥1 merged PR whose `mergeCommit.oid` is reachable from `main` | 🚀 Released in `<tag>` |
 | `wontfix` | `stateReason=NOT_PLANNED`, no merged PR | no-merged-PR note |
-| `nopr` | `COMPLETED`, **zero** linked PRs of any kind | no-merged-PR note |
+| `nopr` | closed, **not** `NOT_PLANNED`, **zero** linked PRs of any kind | no-merged-PR note |
 | `hold-unreleased` | has a merged PR, none reachable from `main` | — |
 | `hold-unmerged-pr` | `COMPLETED`, linked PRs exist but none merged | — |
 | `hold-no-fallback` | `--no-fallback-discovery` passed, so no evidence to reason from | — |
+| `hold-discovery-failed` | fallback discovery hit an API/auth/rate-limit error — the PR set could not be verified | — |
 | `hold-other` | non-Issue content with no merged PR | — |
 
 `hold-unreleased` is the critical guard: a PR merged to develop only is *not* yet
@@ -155,8 +187,15 @@ the looser legacy filter (rarely correct; it cannot reach the no-PR classes at a
 > branch that really shipped, rather than against the squashed `main` where the
 > ancestry no longer exists.
 
-**Why `nopr` requires zero linked PRs, not zero merged ones.** An issue closed as
-completed whose PR is still open is stalled work, and promoting it would hide that.
+**Why `nopr` does not claim "completed".** `stateReason` is nullable — GitHub
+returns null for issues closed before the field existed. Requiring `COMPLETED`
+would park every such legacy issue in a hold class that can never resolve, which is
+the permanently-stuck card `wontfix` exists to prevent. The class promotes on what
+is actually observed: closed, not `NOT_PLANNED`, no linked PRs. The comment it
+posts says exactly that and no more.
+
+**Why `nopr` requires zero linked PRs, not zero merged ones.** An issue closed
+whose PR is still open is stalled work, and promoting it would hide that.
 An issue with no linked PR whatsoever is a different animal: an administrative or
 findings-only closure, where the deliverable was filed issues, a local action, or
 supersession. `inventory-board.sh` fetches
@@ -176,6 +215,14 @@ matter what its `stateReason` says.
 > directly. Every discovered PR still passes the same main-reachability guard, so the
 > fallback can only add genuinely-shipped items — it never promotes unreleased work.
 > Pass `--no-fallback-discovery` to restrict to formal links only.
+>
+> **The fallback fails closed.** If the timeline query errors (auth expiry, rate
+> limit, missing scope, network), the PR set is *unknown*, not empty. Collapsing it
+> to `[]` would hand the issue straight to `nopr` — the class that promotes on the
+> evidence "zero linked PRs" — so a transient API failure would promote unreleased
+> work and comment that it was an administrative closure. Such candidates are
+> classified `hold-discovery-failed` and never promoted; the failure is printed to
+> stderr. Re-run once the API is healthy.
 
 If the candidate count is 0, exit cleanly — board is in sync with main.
 
@@ -186,10 +233,24 @@ If the candidate count is 0, exit cleanly — board is in sync with main.
 ```
 
 Always run dry-run first. The preview shows per-item: current → Done transition
-AND the resolved release tag that will appear in the issue comment. If a candidate
-has no release containing its merge commit (rare — usually means the user ran the
-skill before the release shipped), the preview surfaces it as "(no release contains
-<sha>)" so they can abort or wait.
+AND the resolved release tag that will appear in the issue comment. Its header
+names the **target column** (`Target column: <name> [<option id>]`), not just the
+opaque option id — the resolver's last tier is a substring match on
+`done|released|shipped`, and boards in this workflow legitimately contain columns
+like "Done in develop". Check that line before approving.
+
+Two preview lines look alike and mean opposite things — read them before deciding
+to proceed:
+
+- **`(no release contains <sha>)`** — the release list WAS read and checked, and
+  nothing published contains that commit yet. Usually it means the skill ran before
+  the release shipped. Wait for the release, then re-run; the answer will change.
+- **`(release listing UNAVAILABLE for <repo> — see WARN above)`** — the release list
+  could not be read at all (expired auth, rate limit, network), so nothing was
+  checked and nothing is known about where this item shipped. Waiting will not help.
+  Fix the `gh` auth or wait out the rate limit, then re-run — the answer is
+  currently unknown, not negative. The stderr `WARN:` line above carries the actual
+  API error.
 
 ### Phase 5 — Confirm and apply
 
@@ -215,6 +276,23 @@ The release lookup walks `gh api /repos/{owner}/{repo}/releases` oldest-first an
 picks the **smallest** release whose tag contains the PR's merge commit. Per-repo
 release listing and per-(repo,sha) result are cached for the run.
 
+**When the release listing is unavailable** (the Phase 4 state above), the item is
+still moved to Done and its comment is counted as a comment **FAILURE**, not a skip.
+That distinction is deliberate: a "skipped — no release contains `<sha>`" line would
+assert a check that never happened, and the run's summary would read as complete.
+The board is correct either way — only the annotation is missing. To fill it in
+later, re-run `apply-promotions.sh` against the SAME candidates file (the card is
+now Done, so a fresh Phase 3 pass will no longer list it):
+
+```bash
+"${CLAUDE_SKILL_DIR}/scripts/apply-promotions.sh" /tmp/release-board-cand.json --apply
+```
+
+The status mutation is idempotent, so the re-run is safe — but note that items whose
+release comment posted successfully the first time will get a second one. Only the
+no-merged-PR note (`nopr`/`wontfix`) is marker-deduplicated; the 🚀 release comment
+is not. If most items succeeded, comment on the few by hand instead.
+
 Override flags:
 - `--release-tag <tag>` — skip auto-detect, use this tag for every comment.
   Useful when the auto-detect picks the wrong release (e.g. you ran the skill
@@ -235,7 +313,8 @@ markdown table.
 - **No "Done"-like option** — same error path.
 - **Item is a DraftIssue** — filtered out by `find-promotable.sh` (only Issue or PR).
 - **Issue closed but no linked PR at all** — promoted, with an explanatory comment.
-  `stateReason=NOT_PLANNED` → `wontfix`; `COMPLETED` with zero linked PRs → `nopr`.
+  `stateReason=NOT_PLANNED` → `wontfix`; anything else with zero linked PRs → `nopr`
+  (including a null `stateReason`, which legacy issues carry).
   Before v1.4.0 these were filtered out, which parked them in a non-terminal column
   permanently: a wontfix can never acquire a merged PR, so the merge rule could
   never fire, and the card blocked its column from draining on every later release.
@@ -258,6 +337,8 @@ markdown table.
   and unioning them.
 - **Repo with non-`main` default branch** — pass `--base develop` (or whatever
   your release target is) to `find-promotable.sh`.
+- **Timeline discovery hits an API error** — classified `hold-discovery-failed`,
+  reported on stderr, never promoted. An unverifiable PR set is not an empty one.
 
 ## Anti-patterns
 
@@ -270,7 +351,8 @@ markdown table.
   Git Flow violation, not a board-sync problem.
 - **Running this before the release/hotfix is actually merged to main** — the issue
   is closed at PR-merge-to-develop time, but the skill's *trigger* is the release
-  shipping. Calling it earlier promotes items that aren't yet in production.
+  shipping (`/finish` done, Release published). Calling it earlier promotes items
+  that aren't yet in production.
 - **Treating one filter pass as the complete set** — in a squash-release repo,
   `--skip-main-check` reaches only the `merged` class and the default pass reaches
   only `nopr`/`wontfix`. Each reports success on its own subset, so neither surfaces
@@ -279,8 +361,9 @@ markdown table.
 
 ## See Also
 
-- `release-management` — the surrounding release/hotfix workflow. This skill is the
-  optional last step after `/finalize-release`.
+- `git-flow` plugin (`/release`, `/hotfix`, `/finish`) — the surrounding
+  release/hotfix workflow. This skill is the optional last step after `/finish`
+  completes a release or hotfix and the GitHub Release is published.
 - `triage-issues` — different goal (audit + label open issues), but shares the
   closed-issue-with-merged-PR primitive.
 - `references/projects-v2-graphql-snippets.md` — raw GraphQL queries for debugging

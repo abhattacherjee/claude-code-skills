@@ -110,3 +110,18 @@ def test_show_with_a_bad_config_exits_2_naming_the_key(tmp_path):
     r = subprocess.run([sys.executable, str(WEEKLY_FOCUS), "show"], capture_output=True,
                        text=True, timeout=30)
     assert r.returncode == 2 and "plan_week.frozen" in r.stderr
+
+
+@pytest.mark.parametrize("day,monday", [
+    ("2026-12-31", "2026-12-28"),   # ISO week 53
+    ("2027-01-01", "2026-12-28"),   # year rollover, still ISO week 53 of 2026
+    ("2027-01-03", "2026-12-28"),   # Sunday of that week
+    ("2027-01-04", "2027-01-04"),   # Monday of ISO week 1
+    ("2026-03-08", "2026-03-02"),   # US DST starts
+    ("2026-11-01", "2026-10-26"),   # US DST ends
+    ("2028-02-29", "2028-02-28"),   # leap day
+])
+def test_week_start_across_calendar_boundaries(day, monday):
+    import datetime
+    wf = load_weekly_focus(TEST_CFG)
+    assert wf.week_start(datetime.date.fromisoformat(day)).isoformat() == monday
