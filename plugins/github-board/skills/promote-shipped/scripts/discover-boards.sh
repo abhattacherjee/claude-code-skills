@@ -2,8 +2,11 @@
 # discover-boards.sh — List GitHub Projects V2 boards linked to a repo.
 #
 # Usage:
-#   discover-boards.sh <owner> <repo>          # human-readable
-#   discover-boards.sh <owner> <repo> --json   # JSON for scripting
+#   discover-boards.sh <owner> <repo> [--json] [--no-cache]
+#     (no flag: human-readable; --json: JSON for scripting)
+# The board list is cached for 7 days (~/.cache/github-board); --no-cache skips the cache.
+# An empty list is never cached, so a board linked later shows up at once; a second board
+# linked while one is cached shows up when the entry ages out (or with --no-cache).
 #
 # Exit codes: 0=ok (any number of boards, including 0), 2=usage, 3=auth, 4=api
 
@@ -11,13 +14,13 @@ set -eu
 
 usage() {
   cat <<EOF
-Usage: discover-boards.sh <owner> <repo> [--json]
+Usage: discover-boards.sh <owner> <repo> [--json] [--no-cache]
 
 Lists Projects V2 boards linked to the given repository.
 
 Examples:
-  discover-boards.sh abhattacherjee tiny-vacation-agent
-  discover-boards.sh abhattacherjee obsidian-brain --json | jq
+  discover-boards.sh OWNER REPO
+  discover-boards.sh OWNER REPO --json | jq
 
 Requires: gh CLI authenticated with read:project scope.
   gh auth refresh -s read:project,project
@@ -29,8 +32,16 @@ if [ $# -lt 2 ]; then usage >&2; exit 2; fi
 
 OWNER="$1"
 REPO="$2"
+shift 2
 JSON_MODE="false"
-[ "${3:-}" = "--json" ] && JSON_MODE="true"
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON_MODE="true" ;;
+    --no-cache) export GB_NO_CACHE=1 ;;
+    *) echo "Unknown arg: $arg" >&2; usage >&2; exit 2 ;;
+  esac
+done
+. "$(dirname "${BASH_SOURCE[0]}")/../../../lib/config.sh"
 
 # Pre-flight: `read:project` on the account and host this run will query.
 #
@@ -61,7 +72,9 @@ elif ! echo "$SCOPES_LINE" | grep -Eq '(^|[^:[:alnum:]_-])(read:)?project([^:[:a
   exit 3
 fi
 
-QUERY='query($owner:String!, $name:String!) {
+CACHE_KEY="promote-boards-$OWNER-$REPO"
+if ! BOARDS=$(gb_cache_get "$CACHE_KEY"); then
+  QUERY='query($owner:String!, $name:String!) {
   repository(owner:$owner, name:$name) {
     projectsV2(first:50) {
       nodes { id title number url closed }
@@ -69,16 +82,16 @@ QUERY='query($owner:String!, $name:String!) {
   }
 }'
 
-# -f (not -F): owner/name are String!. -F does type inference, so an all-numeric
-# owner or repo name would be sent as an Int and rejected by the schema.
-RESPONSE=$(gh api graphql -f query="$QUERY" -f owner="$OWNER" -f name="$REPO" 2>&1) || {
-  echo "ERROR: GraphQL query failed:" >&2
-  echo "$RESPONSE" >&2
-  exit 4
-}
+  # -f (not -F): owner/name are String!. -F does type inference, so an all-numeric
+  # owner or repo name would be sent as an Int and rejected by the schema.
+  RESPONSE=$(gh api graphql -f query="$QUERY" -f owner="$OWNER" -f name="$REPO" 2>&1) || {
+    echo "ERROR: GraphQL query failed:" >&2
+    echo "$RESPONSE" >&2
+    exit 4
+  }
 
-# Filter out closed boards and project the shape we want.
-BOARDS=$(echo "$RESPONSE" | jq '{
+  # Filter out closed boards and project the shape we want.
+  BOARDS=$(echo "$RESPONSE" | jq '{
   owner: "'"$OWNER"'",
   repo: "'"$REPO"'",
   boards: [
@@ -87,6 +100,11 @@ BOARDS=$(echo "$RESPONSE" | jq '{
     | {id, number, title, url}
   ]
 }')
+  # An empty list is never cached, so a board linked later shows up at once.
+  if [ "$(echo "$BOARDS" | jq '.boards | length')" -gt 0 ]; then
+    printf '%s' "$BOARDS" | gb_cache_put "$CACHE_KEY"
+  fi
+fi
 
 if [ "$JSON_MODE" = "true" ]; then
   echo "$BOARDS"

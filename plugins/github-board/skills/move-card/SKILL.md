@@ -43,6 +43,7 @@ This is the tooling for steps 3 (-> In Progress) and 6 (-> post-merge column) of
 - **The option id is a plain string** — passed to the mutation via `gh api -f oid=` (not `-F`); a typed `-F` errors.
 - **The item must be on the board.** If the issue/PR is not a card yet, pass `--add` (runs `addProjectV2ItemById`); otherwise the script errors with that hint.
 - Idempotent — re-running for the same option is a no-op.
+- **Lookups are cached** for 7 days under `~/.cache/github-board/` (board list and Status options). A failed move, or a `--to` column missing from the cached options, triggers one automatic refetch; `--no-cache` skips the cache (use it right after linking a second board to the repo).
 
 ## See Also
 - `promote-shipped` — release -> Done promotion (validated; main-reachability guarded)

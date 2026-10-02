@@ -179,6 +179,7 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kept. The stale `/finalize-release` trigger is now `/finish` (git-flow plugin).
 
 ### Added
+- `discover-boards.sh` caches the repo's board list for 7 days (`--no-cache` skips it); an empty list is never cached. `inventory-board.sh` drops the cached list when a board id no longer resolves. (#146)
 - `tests/` — pytest regression coverage for the fail-open discovery path, the
   release-lookup pagination and failure handling, the row reconciliation, the
   `statusField.id` guard and the write-scope pre-flight. Every test was proven

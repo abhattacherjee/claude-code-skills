@@ -4,6 +4,9 @@ All notable changes to the **move-card** skill (was `github-board-move`) are doc
 
 ## [2.0.0] - 2026-10-02
 
+### Added
+- `board-move.sh` caches the board list and Status options for 7 days. A failed move or a `--to` column missing from the cached options triggers one refetch; `--no-cache` skips the cache. (#146)
+
 ### Changed
 - **Renamed to `move-card`** and moved into the `github-board` plugin (#146). Invoke it as `/github-board:move-card`. The old name still matches as a trigger phrase.
 

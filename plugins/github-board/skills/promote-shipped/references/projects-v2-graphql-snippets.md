@@ -26,7 +26,7 @@ query($owner:String!, $name:String!) {
 ```
 
 ```bash
-gh api graphql -f query="$QUERY" -f owner=abhattacherjee -f name=tiny-vacation-agent
+gh api graphql -f query="$QUERY" -f owner=OWNER -f name=REPO
 ```
 
 Use `-f` for `String!`/`ID!` variables and reserve `-F` for real `Int!`/`Boolean!`
@@ -179,7 +179,7 @@ gh api graphql -f query='query($id:ID!){node(id:$id){...on ProjectV2{items(first
 
 # Find an item's project linkage from an issue number
 gh api graphql -f query='query($owner:String!,$name:String!,$num:Int!){repository(owner:$owner,name:$name){issue(number:$num){projectItems(first:10){nodes{id project{title}}}}}}' \
-  -f owner=abhattacherjee -f name=tiny-vacation-agent -F num=741
+  -f owner=OWNER -f name=REPO -F num=741
 ```
 
 ## Status option name conventions seen in the wild

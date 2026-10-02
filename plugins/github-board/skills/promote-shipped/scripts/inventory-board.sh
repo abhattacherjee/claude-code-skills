@@ -28,6 +28,7 @@
 # Exit codes: 0=ok, 2=usage, 3=auth, 4=api, 5=no-status-field
 
 set -eu
+. "$(dirname "${BASH_SOURCE[0]}")/../../../lib/config.sh"
 
 usage() {
   cat <<EOF
@@ -114,7 +115,12 @@ META_QUERY='query($id:ID!) {
 
 # -f (not -F) for id/cursor throughout: both are ID!/String! and -F would type-infer.
 META=$(gh api graphql -f query="$META_QUERY" -f id="$BOARD_ID" 2>&1) || {
-  echo "ERROR: meta query failed: $META" >&2; exit 4;
+  echo "ERROR: meta query failed: $META" >&2
+  if echo "$META" | grep -Eq 'Could not resolve to (a|an) [A-Za-z0-9]+ with|NOT_FOUND'; then
+    gb_cache_drop_containing "$BOARD_ID"
+    echo "       Dropped any cached board list naming this id; re-run discover-boards.sh to refetch." >&2
+  fi
+  exit 4
 }
 
 PROJECT=$(echo "$META" | jq '.data.node | {id, title, number}')
@@ -126,6 +132,8 @@ if [ -z "$PROJECT" ] || [ "$PROJECT" = "null" ] || [ "$(echo "$PROJECT" | jq -r 
   echo "ERROR: board id '$BOARD_ID' did not resolve to a ProjectV2 node." >&2
   echo "       Check the id (discover-boards.sh emits it) and your read:project access." >&2
   echo "       Response: $(echo "$META" | tr '\n' ' ' | cut -c1-300)" >&2
+  gb_cache_drop_containing "$BOARD_ID"
+  echo "       Dropped any cached board list naming this id; re-run discover-boards.sh to refetch." >&2
   exit 4
 fi
 

@@ -82,6 +82,11 @@ COUNT=$(jq '.boards | length' /tmp/release-board-list.json)
 - `COUNT > 1` → call `AskUserQuestion` with one option per board (label = title,
   description = `#<number> · <url>`). The user picks.
 
+The board list is cached for 7 days (`--no-cache` skips it). A board linked to the repo while a
+list is cached shows up only when the entry ages out, so pass `--no-cache` right after linking a
+board. If Phase 2 exits 4 saying the board id did not resolve, `inventory-board.sh` has dropped
+the cached list: re-run Phase 1 once.
+
 ### Phase 2 — Inventory
 
 ```bash
