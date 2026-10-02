@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.6.0
+  version: 2.6.1
 ---
 
 # Skill Authoring
@@ -239,72 +239,7 @@ Example flow: `extract-urls.sh` → 3 parallel verification agents → `apply-fi
 
 ### Agent Teams Orchestration
 
-Use Agent Teams when teammates need to **communicate with each other** across phases —
-not just report back to an orchestrator.
-
-#### When to Use Teams vs Sub-Agents
-
-| Signal | Use Teams | Use Sub-Agents |
-|--------|-----------|----------------|
-| Multi-phase workflow with feedback loops | ✓ | |
-| Independent parallel tasks (fan-out) | | ✓ |
-| Teammates need each other's findings | ✓ | |
-| One-shot parallel analysis | | ✓ |
-| Iterative creative workflow (design, video) | ✓ | |
-| Quick research/validation | | ✓ |
-
-#### Team Orchestration Pattern
-
-```
-TeamCreate("my-workflow")
-├── TaskCreate tasks for each work item
-├── Spawn teammates (Agent tool with team_name + name)
-│   ├── Teammate A claims + works tasks
-│   ├── Teammate B claims + works tasks
-│   └── Teammates communicate via SendMessage
-├── Lead monitors progress via TaskList
-├── Lead synthesizes results
-└── TeamDelete (cleanup)
-```
-
-#### Conditional Team Usage
-
-Skills should support both modes — teams when available, sub-agents as fallback:
-
-```markdown
-## Orchestration Mode
-
-Check `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`:
-- **If enabled**: Use TeamCreate for persistent multi-phase coordination
-- **If disabled** (default): Use parallel Agent tool calls (existing pattern)
-
-Both modes produce identical results. Teams add inter-agent communication.
-```
-
-#### Complex Skill Template (Teams Variant)
-
-When using teams instead of anonymous sub-agents:
-
-```markdown
-## Full Workflow (Team Orchestration)
-
-### Step 1: Create Team
-TeamCreate("my-workflow") → spawns shared task list.
-
-### Step 2: Define Tasks
-TaskCreate for each work item (extraction, validation, enrichment, etc.)
-
-### Step 3: Spawn Named Teammates
-Launch via Agent tool with `team_name` + `name` parameters.
-Each teammate claims tasks from the shared list.
-
-### Step 4: Monitor & Synthesize
-Lead polls TaskList, teammates SendMessage findings to each other.
-Lead collects completed results and generates final report.
-
-### Step 5: Cleanup
-TeamDelete("my-workflow")
-```
+See [references/agent-teams.md](references/agent-teams.md): teams vs sub-agents, the team pattern, conditional team usage, and the teams variant of the complex template.
 
 ### Defining Agent Files
 
@@ -419,7 +354,7 @@ Ask: "Does this skill have 3+ sequential phases or take >2 minutes?"
 | Answer | Approach | Example |
 |--------|----------|---------|
 | **Yes — 3+ phases** | Add `scripts/task-manifest.sh` with one entry per phase | `review-dependabot-prs`: 8 tasks across triage→apply→test→deploy |
-| **Yes — multiple workflows** | Add one `case` branch per workflow | `github-issue-triage`: full-audit (5 tasks) + quick-check (2 tasks) |
+| **Yes — multiple workflows** | Add one `case` branch per workflow | `triage-issues` (github-board plugin): full-audit (5 tasks) + quick-check (2 tasks) |
 | **No — 1-2 fast phases** | Skip task manifest — no tracking needed | `catalog-embedding-sync`: single script, <30 seconds |
 
 ### Dry-Run Testing (Step 12)
@@ -452,89 +387,7 @@ heading format but project uses another (e.g., `### Sub-Task` vs `### AC1:`).
 
 ## Skill Template
 
-### Simple Skill (script-only, no agents)
-
-```markdown
----
-name: descriptive-kebab-name
-description: "Third-person description. Use when: (1) ..., (2) ..., (3) .... Covers: topic1, topic2."
-metadata:
-  version: 1.0.0
----
-
-# Skill Title
-
-## Problem
-[2-3 sentences max.]
-
-## Quick Check
-```bash
-./scripts/check.sh              # Report only
-./scripts/check.sh --fix        # Auto-remediate
-```
-
-## Solution
-[Decision guidance for non-scripted parts.]
-
-## See Also
-[Cross-references to related skills.]
-```
-
-### Complex Skill (orchestrator + parallel agents + scripts + task tracking)
-
-```markdown
----
-name: descriptive-kebab-name
-description: "Third-person description. Use when: (1) ..., (2) .... Covers: orchestration, parallel agents, topic."
-metadata:
-  version: 1.0.0
----
-
-# Skill Title
-
-## Problem
-[2-3 sentences max.]
-
-## Quick Check
-```bash
-./scripts/extract.sh --summary          # Pre-processing (deterministic)
-./scripts/task-manifest.sh full-run     # Task checklist for full workflow
-```
-
-## Progress Tracking (MANDATORY)
-
-Create task checklist from `scripts/task-manifest.sh full-run` before starting.
-Mark `in_progress` → `completed` per phase. On abort, mark remaining `deleted`.
-
-## Full Workflow (Orchestration Pattern)
-
-### Step 1: Extract Data (Script)
-```bash
-MANIFEST=$(./scripts/extract.sh --json)
-```
-
-### Step 2: Launch Parallel Agents
-Launch N parallel `general-purpose` agents via the Task tool — one per <domain>.
-Each agent receives its slice of data and saves results to `/tmp/<skill>-report-<domain>.json`.
-
-### Step 3: Apply Fixes (Script)
-```bash
-./scripts/apply-fixes.sh --all --dry-run    # Preview
-./scripts/apply-fixes.sh --all              # Apply
-```
-
-### Step 4: Validate
-```bash
-npm run validate  # Or whatever validation command applies
-```
-
-## Agent Definitions
-- `orchestrator-agent.md` — pure orchestrator, delegates everything
-- `specialist-agent.md` — focused sub-agent, NOT user-invocable
-
-## See Also
-[Cross-references to related skills.]
-```
+See [references/skill-templates.md](references/skill-templates.md) for the simple (script-only) and complex (orchestrator + parallel agents + scripts + task tracking) templates.
 
 ## Quality Checklist
 

@@ -13,7 +13,7 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 | [context-shield](./context-shield/) | 1.3.0 | Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count. | — |
 | [conversation-search](./conversation-search/) | 1.1.0 | Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. | [repo](https://github.com/abhattacherjee/conversation-search) |
 | [figma-ui-designer](./figma-ui-designer/) | 3.2.0 | Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. | — |
-| [skill-authoring](./skill-authoring/) | 2.6.0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | — |
+| [skill-authoring](./skill-authoring/) | 2.6.1 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. | — |
 | [worktree](./worktree/) | 1.0.0 | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. | [repo](https://github.com/abhattacherjee/worktree) |
 
 
@@ -29,10 +29,11 @@ Plugins bundle skills, commands, agents, and hooks into a single installable pac
 | [custom-statusline](./plugins/custom-statusline/) | 1.3.0 | 1 | 0 | 4-tier adaptive statusline with icons for folder, git branch, and context usage |
 | [deep-review](./plugins/deep-review/) | 1.4.0 | 1 | 0 | Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a multi-round adversarial cross-examination with Codex, else Gemini, as the opposing model (it finds -> Claude judges -> it counters -> it re-checks fixes), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks. |
 | [figma-ui-designer](./plugins/figma-ui-designer/) | 3.1.0 | 1 | 0 | Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP |
+| [github-board](./plugins/github-board/) | 1.0.0 | 7 | 0 | GitHub workflow skills in one install: create-board, triage-issues, plan-milestones, plan-week, move-card, promote-shipped and prune-branches, plus the four agents create-board dispatches. Per-user settings live in ~/.config/github-board/config.json. |
 | [obsidian-brain](./plugins/obsidian-brain/) | 2.5.1 | 18 | 0 | Persistent brain for Claude Code sessions using Obsidian. Auto-logs sessions, captures curated insights, enables project-scoped context resume, and provides fast cross-project search via tags and metadata. |
 | [product-video-creation](./plugins/product-video-creation/) | 2.0.0 | 1 | 0 | Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music. |
-| [skill-authoring](./plugins/skill-authoring/) | 2.3.0 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |
-| [skill-publishing](./plugins/skill-publishing/) | 4.4.0 | 1 | 0 | Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos |
+| [skill-authoring](./plugins/skill-authoring/) | 2.3.1 | 1 | 0 | Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism |
+| [skill-publishing](./plugins/skill-publishing/) | 4.5.0 | 1 | 0 | Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos |
 | [smart-screen-recorder](./plugins/smart-screen-recorder/) | 4.3.0 | 1 | 0 | AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos. |
 | [spec-creator](./plugins/spec-creator/) | 2.4.2 | 1 | 0 | Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues). |
 | [spec-implement](./plugins/spec-implement/) | 1.0.0 | 1 | 0 | Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation. |
@@ -87,7 +88,6 @@ cp -r /tmp/claude-code-skills/claudeception ~/.claude/skills/claudeception
 cp -r /tmp/claude-code-skills/context-shield ~/.claude/skills/context-shield
 cp -r /tmp/claude-code-skills/conversation-search ~/.claude/skills/conversation-search
 cp -r /tmp/claude-code-skills/figma-ui-designer ~/.claude/skills/figma-ui-designer
-cp -r /tmp/claude-code-skills/github-board-move ~/.claude/skills/github-board-move
 cp -r /tmp/claude-code-skills/skill-authoring ~/.claude/skills/skill-authoring
 cp -r /tmp/claude-code-skills/worktree ~/.claude/skills/worktree
 rm -rf /tmp/claude-code-skills

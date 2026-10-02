@@ -158,8 +158,9 @@ while IFS= read -r SKILL_NAME <&3; do
 
   # Resolve through skill_source_dir() (_lib.sh, issue #78) instead of
   # hardcoding "$SKILLS_HOME/$SKILL_NAME": that hardcoding is what made this
-  # script blind to every in-repo-source-only skill (github-board-move, the
-  # spec-* family) — it fell into the branch below, was silently skipped, and
+  # script blind to every in-repo-source-only skill (the spec-* family, and
+  # github-board-move before it moved into the github-board plugin) — it fell
+  # into the branch below, was silently skipped, and
   # never counted as anything, so the summary read "Safe to sync" without ever
   # having examined it. skill_source_dir() also doubles as the discovery
   # filter: a directory that is not a skill at all (docs/, build/) has no

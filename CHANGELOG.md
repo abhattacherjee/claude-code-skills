@@ -7,6 +7,18 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+## [3.20.0] - 2026-10-02
+
+### Added
+
+- **`github-board` plugin 1.0.0 (#146).** One install for seven GitHub-workflow skills with short names — `create-board`, `triage-issues`, `plan-milestones`, `plan-week`, `move-card`, `promote-shipped`, `prune-branches` — and the four agents `create-board` dispatches (`github-board:template-inspector`, `board-creator`, `workflow-syncer`, `board-verifier`). Per-user values (owner, lanes, schedule, frozen repos, capacity, launchd labels, the board template) moved out of the code into `~/.config/github-board/config.json`, written by `plan-week init` / `create-board init`; nothing falls back to built-in values. Board ids are cached for 7 days under `~/.cache/github-board/`. plan-week's launchd jobs run through `~/.local/share/github-board/current`, so they survive plugin upgrades, and `install-launchd.sh` refuses (exit 3) to take over jobs another copy owns unless `--takeover` is passed. The repo-root `github-board-move/` moved into the plugin as `move-card`.
+- **Portable Codex hooks** (`.codex/hooks.json`, #141). Codex now runs the four git-flow hooks in `.claude/hooks/` (`prevent-direct-push`, `require-preflight`, `validate-branch-name`, `update-changelog-before-pr`). Each path is found with `git rev-parse --show-toplevel`, and passed to the script as `CLAUDE_PROJECT_DIR`, so it works in any clone or worktree and from any subdirectory. There is no second copy of the scripts.
+
+### Changed
+
+- `validate-skill.sh` (repo root and skill-publishing 4.5.0) accepts the `disable-model-invocation` frontmatter field (#146).
+- `github-board` README: the Phase 3 rollback through the bare `weekly-focus` installer works only before Phase 4; after that, re-run the plugin's `install-launchd.sh`. Phase 4 now says to move the callers of the old names before deleting anything (#147).
+
 ## [3.19.0] - 2026-09-25
 
 ### Added

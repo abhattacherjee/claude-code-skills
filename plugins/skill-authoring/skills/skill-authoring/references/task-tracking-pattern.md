@@ -130,7 +130,7 @@ TaskUpdate(taskId=5, status="deleted")
 Tasks 6-8 are handled by the `release-pipeline` sub-agent.
 Gate at task 4: if tests fail, tasks 4-8 are `deleted`.
 
-### github-issue-triage (5 tasks)
+### triage-issues (5 tasks)
 ```
 1. Inventory open issues
 2. Verify against codebase

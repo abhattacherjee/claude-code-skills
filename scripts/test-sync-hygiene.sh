@@ -361,10 +361,11 @@ chmod +x "$GH_SHIM_DIR/gh"
 # branches, and demo-skill (which exists under BOTH skills-home/ and monorepo/)
 # only ever exercises the first. inrepo-skill exists in the monorepo alone, so it
 # is the only fixture that reaches the `elif [[ -f "$MONOREPO_DIR/$name/SKILL.md" ]]`
-# fallback. That branch is load-bearing in the real repo — github-board-move and
-# the three spec-* skills have no local copy and resolve through it exclusively —
-# and losing it would drop all four from every sync behind a reassuring
-# "SKIP (not a skill: no SKILL.md)" line.
+# fallback. That branch is load-bearing in the real repo — in-repo-source-only
+# skills (such as the three spec-* skills) have no local copy and resolve through
+# it exclusively — and losing it would drop them from every sync behind a
+# reassuring "SKIP (not a skill: no SKILL.md)" line. (github-board-move used to be
+# one of them; it now ships inside the github-board plugin as move-card.)
 #
 # monorepo-add/ is a separate tree rather than a second pass over monorepo/ so
 # that the --add assertions cannot be satisfied by leftovers from the first run.
@@ -2482,8 +2483,9 @@ assert_not_contains "…and the refused plugin is not built anyway" \
 # validate-pre-sync.sh hardcoded SKILL_SRC="$SKILLS_HOME/$SKILL_NAME" and
 # `continue`d whenever the local SKILL.md was absent — the same branch a
 # genuine non-skill directory (docs/, build/) takes. An in-repo-source-only
-# skill (no local copy at all — github-board-move and the three spec-* skills,
-# in the real repo) fell into that branch too: never counted in TOTAL, never
+# skill (no local copy at all — the three spec-* skills in the real repo, and
+# github-board-move before it moved into the github-board plugin) fell into that
+# branch too: never counted in TOTAL, never
 # counted as a FAIL, and the run printed "Safe to sync" without ever having
 # examined it. It now resolves every skill through skill_source_dir() (_lib.sh),
 # the same function sync-monorepo.sh sources its own skills through, so
