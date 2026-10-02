@@ -135,6 +135,11 @@ class GhError(RuntimeError):
     pass
 
 
+class BoardSetupError(RuntimeError):
+    """The board lacks something the config needs (e.g. a Lane option). Exit 1, never a warning
+    that repeats on every run."""
+
+
 RATE_RE = gbconfig.RATE_RE      # shared with move-card (lib/config.py)
 SCOPE_RE = gbconfig.SCOPE_RE
 CACHE_MODE = "use"      # "use" | "refresh" (skip reads, write fresh) | "off" (--no-cache)
@@ -272,7 +277,14 @@ def _run_with_refetch(fn):
         gbconfig.cache_drop_scope(("plan-week", OWNER))
         _CACHE.clear()
         CACHE_MODE = "refresh"
-        return fn()
+        try:
+            return fn()
+        except SystemExit as e:
+            # The retry skipped itself (exit 3: budget low). That must not turn the first
+            # failure into a "skipped" run that run-sync.sh logs and forgets.
+            if e.code == EXIT_SKIPPED:
+                raise GhError(f"{first} (the refetch was then skipped: GraphQL budget low)") from None
+            raise
     except GhError as e:
         if SCOPE_RE.search(str(e)):
             _drop_written()
@@ -376,6 +388,17 @@ def ensure_fields(num):
             have = field_map(num)
         out = {n: {"id": have[n]["id"], "opts": {o["name"]: o["id"] for o in have[n]["options"]}}
                for n in FIELDS}
+        missing = {n: [o for o in opts if o not in out[n]["opts"]] for n, opts in FIELDS.items()}
+        missing = {n: m for n, m in missing.items() if m}
+        if missing:
+            # Not added automatically: updateProjectV2Field replaces the whole option list, and a
+            # slip there disables the board's workflows for good (see create-board's
+            # references/graphql-snippets.md). Fail loudly instead of warning on every run.
+            what = "; ".join(f"{n} field has no option(s) {', '.join(repr(o) for o in m)}"
+                             for n, m in missing.items())
+            raise BoardSetupError(
+                f"board #{num}: {what}. Add them on the board (field menu > Edit options), or "
+                "remove them from plan_week.lanes / default_lane in the config.")
         if "Status" in have:
             out["Status"] = {"id": have["Status"]["id"],
                              "opts": {o["name"]: o["id"] for o in have["Status"]["options"]}}
@@ -977,6 +1000,9 @@ if __name__ == "__main__":
     except gbconfig.ConfigError as e:
         print(f"weekly-focus: error: {e}", file=sys.stderr)
         sys.exit(e.exit_code)
+    except BoardSetupError as e:
+        print(f"weekly-focus: error: {e}", file=sys.stderr)
+        sys.exit(1)
     except (GhError, subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
         print(f"weekly-focus: error: {' '.join(str(e).split()) or type(e).__name__}", file=sys.stderr)
         sys.exit(1)

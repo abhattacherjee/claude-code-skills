@@ -40,6 +40,13 @@ def wf():
     return _load()
 
 
+def _opts(field, first_id=1):
+    """Every option FIELDS needs for `field` (ensure_fields fails on a missing one)."""
+    names = {"Focus": ["This week", "Next", "Later"],
+             "Lane": ["Security", "Season", "Tooling", "Product"]}[field]
+    return [{"id": str(first_id + i), "name": n} for i, n in enumerate(names)]
+
+
 def _ms(title, open_issues=1, description=None):
     return {"title": title, "open_issues": open_issues, "description": description}
 
@@ -884,8 +891,8 @@ def test_no_read_goes_through_gh_project_list_field_list_or_item_list(wf, monkey
             return json.dumps(_proj("PID", "Weekly Focus") | {"number": 36, "url": "U"})
         if "fields(" in query:
             return "\n".join(json.dumps(f) for f in [
-                {"id": "F", "name": "Focus", "options": [{"id": "1", "name": "This week"}]},
-                {"id": "L", "name": "Lane", "options": [{"id": "2", "name": "Product"}]},
+                {"id": "F", "name": "Focus", "options": _opts("Focus", 1)},
+                {"id": "L", "name": "Lane", "options": _opts("Lane", 10)},
                 {"id": "S", "name": "Status", "options": [{"id": "3", "name": "Todo"}]},
                 {"id": "T", "name": "Title"}])
         return "\n".join(json.dumps(_item_node("a", 1)) for _ in range(1))
@@ -893,7 +900,8 @@ def test_no_read_goes_through_gh_project_list_field_list_or_item_list(wf, monkey
     p = wf.find_or_create_project()
     fields = wf.ensure_fields(p["number"])
     wf.board_items(p["number"])
-    assert p["number"] == 36 and fields["Focus"] == {"id": "F", "opts": {"This week": "1"}}
+    assert p["number"] == 36 and fields["Focus"] == {
+        "id": "F", "opts": {"This week": "1", "Next": "2", "Later": "3"}}
     assert fields["Status"]["opts"] == {"Todo": "3"}
     assert not [c for c in calls if c[0] == "project"]
     assert all(c[:2] == ("api", "graphql") for c in calls)
@@ -909,7 +917,8 @@ def test_board_reads_run_once_per_process(wf, monkeypatch):
             return json.dumps({"id": "P", "number": 36, "title": "Weekly Focus", "url": "U"})
         if "fields(" in query:
             return "\n".join(json.dumps(f) for f in [
-                {"id": "F", "name": "Focus", "options": []}, {"id": "L", "name": "Lane", "options": []}])
+                {"id": "F", "name": "Focus", "options": _opts("Focus")},
+                {"id": "L", "name": "Lane", "options": _opts("Lane", 10)}])
         return json.dumps(_item_node("a", 1))
     monkeypatch.setattr(wf, "gh", fake)
     for _ in range(3):
@@ -930,14 +939,14 @@ def test_ensure_fields_creates_missing_then_rereads_once(wf, monkeypatch):
         if args[0] == "project":
             state["created"] = True
             return {}
-        rows = [{"id": "F", "name": "Focus", "options": [{"id": "1", "name": "Next"}]},
+        rows = [{"id": "F", "name": "Focus", "options": _opts("Focus")},
                 {"id": "S", "name": "Status", "options": []}]
         if state["created"]:
-            rows.append({"id": "L", "name": "Lane", "options": [{"id": "2", "name": "Product"}]})
+            rows.append({"id": "L", "name": "Lane", "options": _opts("Lane", 10)})
         return "\n".join(json.dumps(r) for r in rows)
     monkeypatch.setattr(wf, "gh", fake)
     out = wf.ensure_fields(36)
-    assert out["Lane"]["opts"] == {"Product": "2"}
+    assert out["Lane"]["opts"] == {o["name"]: o["id"] for o in _opts("Lane", 10)}
     assert [c[0] for c in calls] == ["api", "project", "api"]      # read, create Lane, re-read
     assert calls[1][:2] == ("project", "field-create") and "Lane" in calls[1]
 

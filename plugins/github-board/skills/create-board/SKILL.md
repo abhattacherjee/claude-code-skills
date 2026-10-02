@@ -213,12 +213,15 @@ One question: which existing board should new boards copy? Suggest from
 for the logged-in user (`gh api user --jq .login`) and each of their orgs (`gh api user/orgs --jq '.[].login'`).
 Default: none — then ask again the first time a board is created.
 
-Show the result and ask once: "Write this to `~/.config/github-board/config.json`?" On yes:
+Show the result and ask once: "Write this to `~/.config/github-board/config.json`?" On yes, pass the JSON on stdin in ONE Bash call (each Bash call is a fresh shell, so no temp-file variable survives), replacing the placeholder line with the JSON you showed:
 
 ```bash
-"${CLAUDE_SKILL_DIR}/scripts/init-config.sh" < "$CFG_JSON"           # {"create_board": {...}}
-"${CLAUDE_SKILL_DIR}/scripts/init-config.sh" --force < "$CFG_JSON"   # replacing a different template
+"${CLAUDE_SKILL_DIR}/scripts/init-config.sh" <<'JSON'
+{"create_board": {"template_owner": "<login>", "template_number": <n>}}
+JSON
 ```
+
+Replacing a different template, after the user confirmed: the same call with `--force` after `init-config.sh`.
 
 Add `"owner": "<login>"` to the payload only when `init-config.sh --show` exits 4 (no config yet).
 Exit 3: a different template is configured; ask before passing `--force`.

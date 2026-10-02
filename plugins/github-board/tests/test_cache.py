@@ -371,3 +371,25 @@ def test_scope_error_keeps_entries_written_by_earlier_runs(gb_config, gbc):
     with pytest.raises(wf.GhError):
         wf.main(["show", "--json"])
     assert gbc.cache_get(PROJECT_KEY)["number"] == 36
+
+
+# ---- S1: a refetch that is skipped for budget must not hide the first failure ----------
+
+def test_a_refetch_skipped_for_budget_surfaces_the_original_error(gb_config, gbc, capsys):
+    gbc.cache_put(PROJECT_KEY, {"id": "PVT_old", "number": 99, "url": "U99", "title": "Weekly Focus"})
+    wf = load_weekly_focus()
+    budget = iter([{"remaining": 5000, "used": 1, "resetAt": None},
+                   {"remaining": 10, "used": 1, "resetAt": None}])
+
+    def fake(*args, parse=True, **kw):
+        q = next((a for a in args if a.startswith("query=")), "")
+        if "rateLimit" in q:
+            return next(budget)
+        if args[:2] == ("project", "edit"):
+            raise wf.GhError("gh project edit failed (exit 1): HTTP 502: Bad Gateway")
+        raise AssertionError(f"unexpected gh call {args}")
+    wf.gh = fake
+    with pytest.raises(wf.GhError) as ei:
+        wf.main(["sync"])
+    assert "502" in str(ei.value), "the original failure was replaced by a budget skip (exit 3)"
+    assert "502" in capsys.readouterr().err          # printed before the refetch too

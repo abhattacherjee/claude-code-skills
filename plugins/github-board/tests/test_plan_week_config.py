@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from gbtest import TEST_CFG, WEEKLY_FOCUS, cfg_copy, load_weekly_focus
+from gbtest import TEST_CFG, WEEKLY_FOCUS, cfg_copy, load_lib, load_weekly_focus, write_config
 
 SEASON = {"season-repo"}
 TOOLING = {"tool-a", "tool-b"}
@@ -125,3 +125,46 @@ def test_week_start_across_calendar_boundaries(day, monday):
     import datetime
     wf = load_weekly_focus(TEST_CFG)
     assert wf.week_start(datetime.date.fromisoformat(day)).isoformat() == monday
+
+
+# ---- S2: a config lane missing from the board's Lane field fails loudly ----------------
+
+def test_a_config_lane_the_board_lacks_fails_naming_it(gb_config):
+    from gbtest import TEST_CFG as CFG
+    wf = load_weekly_focus(CFG)
+    fields = [{"id": "F_focus", "name": "Focus", "options": [{"id": f"o{i}", "name": n} for i, n in
+                                                            enumerate(["This week", "Next", "Later"])]},
+              {"id": "F_lane", "name": "Lane", "options": [{"id": "l1", "name": "Security"},
+                                                          {"id": "l2", "name": "Product"}]}]
+    calls = []
+
+    def fake(*args, parse=True, **kw):
+        calls.append(args)
+        return "\n".join(json.dumps(f) for f in fields)
+    wf.gh = fake
+    with pytest.raises(wf.BoardSetupError) as ei:
+        wf.ensure_fields(36)
+    msg = str(ei.value)
+    assert "Season" in msg and "Tooling" in msg and "Lane" in msg
+    assert not any("field-create" in a for c in calls for a in c)
+    assert load_lib().cache_get(("plan-week", "octo-user", "fields", "36")) is None
+
+
+# ---- R4: lane names cannot contain ',' (gh joins options with ',') ----------------------
+
+@pytest.mark.parametrize("where", ["lane", "default"])
+def test_a_comma_in_a_lane_name_is_rejected(tmp_path, where):
+    c = cfg_copy()
+    if where == "lane":
+        c["plan_week"]["lanes"][2]["name"] = "Tooling, misc"
+        c["plan_week"]["schedule"]["thu"] = ["Tooling, misc"]
+        key = "plan_week.lanes[2].name"
+    else:
+        c["plan_week"]["default_lane"] = "Product, other"
+        c["plan_week"]["schedule"] = None
+        key = "plan_week.default_lane"
+    write_config(tmp_path / "xdg-config", c)
+    gbc = load_lib()
+    with pytest.raises(gbc.ConfigError) as ei:
+        gbc.load()
+    assert ei.value.key == key and "," in str(ei.value)

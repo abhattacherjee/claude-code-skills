@@ -78,3 +78,28 @@ def test_init_with_an_unknown_argument_exits_2(tmp_path):
 def test_config_prints_the_config(tmp_path, gb_config):
     r, calls = run_wf(tmp_path, "config")
     assert r.returncode == 0 and json.loads(r.stdout) == TEST_CFG and calls == []
+
+
+def test_init_from_an_empty_path_exits_2_and_never_reads_stdin(tmp_path):
+    # R2: `--from "$UNSET"` used to fall back to stdin.
+    r, _ = run_wf(tmp_path, "init", "--from", "", stdin=payload())
+    assert r.returncode == 2 and "--from" in r.stderr
+    assert not (tmp_path / "xdg-config" / "github-board" / "config.json").exists()
+
+
+def test_lib_init_from_an_empty_path_exits_2(tmp_path):
+    from gbtest import LIB
+    r = subprocess.run([sys.executable, str(LIB / "config.py"), "init", "--from", ""],
+                       input=payload(), capture_output=True, text=True, timeout=30)
+    assert r.returncode == 2 and "--from" in r.stderr
+
+
+def test_a_config_from_create_board_init_only_exits_4_and_offers_plan_week_init(tmp_path):
+    # C1: create-board init ran first, so the file exists without plan_week.
+    from gbtest import write_config
+    c = cfg_copy(); del c["plan_week"]
+    write_config(tmp_path / "xdg-config", c)
+    r, calls = run_wf(tmp_path, "show", "--json")
+    assert r.returncode == 4 and "plan-week init" in r.stderr and calls == []
+    r, _ = run_wf(tmp_path, "init", stdin=payload())          # then init adds the section
+    assert r.returncode == 0, r.stderr

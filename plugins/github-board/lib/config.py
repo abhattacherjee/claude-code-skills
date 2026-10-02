@@ -116,6 +116,15 @@ def _str_list(v: Any, path: str, pattern=None) -> list:
     return v
 
 
+def _lane_name(v: Any, path: str) -> str:
+    """A lane name becomes a single-select option, and gh takes the options as one
+    comma-separated list, so a ',' would split one lane into two."""
+    name = _str(v, path)
+    if "," in name:
+        raise ConfigError(f"{path} {name!r} contains ',', which a board option name cannot", path)
+    return name
+
+
 def _validate_plan_week(pw: Any) -> None:
     p = "plan_week"
     if not isinstance(pw, dict):
@@ -127,7 +136,7 @@ def _validate_plan_week(pw: Any) -> None:
     names = []
     for i, lane in enumerate(lanes):
         lp = f"{p}.lanes[{i}]"
-        name = _str(_req(lane, "name", f"{lp}.name"), f"{lp}.name")
+        name = _lane_name(_req(lane, "name", f"{lp}.name"), f"{lp}.name")
         if name in names:
             raise ConfigError(f"{lp}.name: lane {name!r} is listed twice", f"{lp}.name")
         names.append(name)
@@ -137,7 +146,7 @@ def _validate_plan_week(pw: Any) -> None:
             _str_list(lane["labels_containing"], f"{lp}.labels_containing")
         if "repos" in lane:
             _str_list(lane["repos"], f"{lp}.repos")
-    default = _str(_req(pw, "default_lane", f"{p}.default_lane"), f"{p}.default_lane")
+    default = _lane_name(_req(pw, "default_lane", f"{p}.default_lane"), f"{p}.default_lane")
     if default in names:
         raise ConfigError(f"{p}.default_lane {default!r} is also a rule lane", f"{p}.default_lane")
     known = names + [default]
@@ -241,8 +250,12 @@ def get(cfg: dict, dotted: str) -> Any:
 
 
 def read_payload(from_file: Optional[str]) -> Any:
+    """The init payload from FILE, or from stdin when no --from was given at all. An empty
+    --from (an unset shell variable) is an error, never a silent switch to stdin."""
+    if from_file is not None and not from_file.strip():
+        raise ConfigError("--from was given an empty path", "--from")
     try:
-        text = Path(from_file).read_text() if from_file else sys.stdin.read()
+        text = Path(from_file).read_text() if from_file is not None else sys.stdin.read()
     except OSError as e:
         raise ConfigError(f"cannot read {from_file}: {e}", "--from")
     try:

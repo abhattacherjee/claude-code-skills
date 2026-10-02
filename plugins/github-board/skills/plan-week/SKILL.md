@@ -9,16 +9,14 @@ metadata:
 
 Board: the config owner's user project titled `plan_week.board_title`. All logic is in the script; this file only decides what to say.
 
-```bash
-WF="${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py"   # path only: zsh does not word-split $WF
-```
+Each Bash call starts a fresh shell, so no variable survives from one command to the next. Run every command exactly as written here, with the full `"${CLAUDE_SKILL_DIR}/scripts/..."` path; never put a path or file name in a shell variable for a later command.
 
-Exit 4 from any command means there is no config yet: run **Mode: init**, then carry on with what the user asked. Exit 2 that names a config key means the config is invalid: show the message and stop.
+Exit 4 from any command means plan-week is not set up yet (no config file, or a config without a `plan_week` section, e.g. one written by `create-board init`): offer **Mode: init**, run it, then carry on with what the user asked. Exit 2 that names a config key means the config is invalid: show the message and stop. Exit 1 that says the board has no Lane (or Focus) option: tell the user to add that option on the board, or to remove the lane from the config.
 
 ## Every mode except init
 
-1. `python3 "$WF" sync --json`, with a Bash timeout of 300000 ms (it scans every board). Report changes first, one short line each, only non-empty: started (name the unplanned ones), stopped (cards reset to Todo), `lane_changed` (lanes filled or lifted to a label lane), `stale_in_progress` (name each key and tell the user to move the card back on its `board`), new since Monday, `done_this_week`, and each `config_warnings` entry (a frozen repo or always issue that matches no open issue: suggest fixing the config). If sync fails, say so, show the error, and carry on from `show --json` (it reads the board as it is). Exit 3 means sync skipped itself because the GitHub GraphQL budget is low: say so, carry on from `show --json`. Never fail silently.
-2. `python3 "$WF" show --json`. It carries the config's `schedule`, `capacity`, `lanes` and `default_lane`. Use those; never a remembered weekday table.
+1. `python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" sync --json`, with a Bash timeout of 300000 ms (it scans every board). Report changes first, one short line each, only non-empty: started (name the unplanned ones), stopped (cards reset to Todo), `lane_changed` (lanes filled or lifted to a label lane), `stale_in_progress` (name each key and tell the user to move the card back on its `board`), new since Monday, `done_this_week`, and each `config_warnings` entry (a frozen repo or always issue that matches no open issue: suggest fixing the config). If sync fails, say so, show the error, and carry on from `show --json` (it reads the board as it is). Exit 3 means sync skipped itself because the GitHub GraphQL budget is low: say so, carry on from `show --json`. Never fail silently.
+2. `python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" show --json`. It carries the config's `schedule`, `capacity`, `lanes` and `default_lane`. Use those; never a remembered weekday table.
 
 ## Mode: next (default)
 
@@ -59,16 +57,16 @@ Draft from `show --json`:
 Show a compact table, then ONE AskUserQuestion: apply / edit / cancel. On apply:
 
 ```bash
-python3 "$WF" set "This week" repo#N ...     # the picks
-python3 "$WF" set Next repo#N ...            # This week items dropped from the plan
-python3 "$WF" show
+python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" set "This week" repo#N ...   # the picks
+python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" set Next repo#N ...          # This week items dropped from the plan
+python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" show
 ```
 
 ## Mode: init
 
 Use when the user asks to set up plan-week, or a command exited 4. Ask with AskUserQuestion, one question at a time. Fetch suggestions first so most answers are a confirmation.
 
-0. `python3 "$WF" config`. Exit 0 prints the current config: pre-fill every answer from it. Exit 4: first run. Then check `gh auth status` lists the `project` scope (sync creates the board and edits its fields). If not, tell the user to run `gh auth refresh -s read:project,project` and stop.
+0. `python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" config`. Exit 0 prints the current config: pre-fill every answer from it. Exit 4: first run. Then check `gh auth status` lists the `project` scope (sync creates the board and edits its fields). If not, tell the user to run `gh auth refresh -s read:project,project` and stop.
 1. **Q1 — account.** Suggest `gh api user --jq .login`. plan-week reads one user's projects, issues and PRs, so offer user accounts only; if the user names an organization, say it is not supported yet.
 2. **Q2 — active and frozen repos.** `gh repo list <owner> --no-archived --limit 300 --json name,pushedAt,issues --jq '.[] | [.name, .pushedAt, .issues.totalCount] | @tsv'`. Active = pushed in the last 90 days and has open issues; suggest the rest as `frozen`. Show the split as an editable list. Frozen repos are never synced unless listed in Q7. A repo created later is not frozen.
 3. **Q3 — lanes.** Presets: Security / Product / Tooling (default); a single lane; custom names. Security is not a question: it is always the first rule, `{"name": "Security", "labels_containing": ["security"]}`. The lane that gets no repos becomes `default_lane` (Product in the default preset; the user picks one for custom names). The single-lane preset is Security plus one `default_lane` that takes everything else.
@@ -80,11 +78,20 @@ Use when the user asks to set up plan-week, or a command exited 4. Ask with AskU
 
 Board title: ask only when `gh project list --owner <owner> --format json --jq '.projects[] | select(.closed == false) | .title'` already lists "Weekly Focus" — reuse that board, or pick another title. Otherwise use "Weekly Focus".
 
-Build `{"owner": …, "plan_week": {"board_title", "lanes", "default_lane", "schedule", "frozen", "always", "capacity", "launchd"}}`, show it, and ask once: "Write this to `~/.config/github-board/config.json`?" On yes, put the JSON in a temp file (`CFG_JSON=$(mktemp)`, then write it there) and run:
+Build `{"owner": …, "plan_week": {"board_title", "lanes", "default_lane", "schedule", "frozen", "always", "capacity", "launchd"}}`, show it, and ask once: "Write this to `~/.config/github-board/config.json`?" On yes, pass the JSON on stdin in ONE Bash call (no temp file, no variable), replacing the placeholder line with the JSON you showed. First run:
 
 ```bash
-python3 "$WF" init --from "$CFG_JSON"            # first run
-python3 "$WF" init --force --from "$CFG_JSON"    # a config exists and the user confirmed the change
+python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" init <<'JSON'
+{"owner": "<login>", "plan_week": {...}}
+JSON
+```
+
+A config exists and the user confirmed the change:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" init --force <<'JSON'
+{"owner": "<login>", "plan_week": {...}}
+JSON
 ```
 
 Exit 3: a different `plan_week` (or owner) is already there and `--force` was not passed. Exit 2 names the bad key: fix that answer and ask again.
@@ -100,4 +107,4 @@ When `launchd.enabled` is true, offer to run `"${CLAUDE_SKILL_DIR}/scripts/insta
 
 ## Scheduling
 
-launchd runs `sync` at `plan_week.launchd.times`; an hourly watchdog alerts if it goes stale. `"${CLAUDE_SKILL_DIR}/scripts/install-launchd.sh" --check` verifies the link, the plists and that both jobs are loaded. Logs: `~/Library/Logs/weekly-focus/`. See README.md.
+launchd runs `sync` at `plan_week.launchd.times`; an hourly watchdog alerts if it goes stale. `"${CLAUDE_SKILL_DIR}/scripts/install-launchd.sh" --check` verifies the link, the copy the jobs run from (`STALE COPY` after a plugin update: re-run `install-launchd.sh`), the plists and that both jobs are loaded. Logs: `~/Library/Logs/weekly-focus/`. See README.md.

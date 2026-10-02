@@ -104,8 +104,11 @@ Generate the task checklist before starting:
 
 ```bash
 "${CLAUDE_SKILL_DIR}/scripts/discover-boards.sh" <owner> <repo> --json > /tmp/release-board-list.json
-COUNT=$(jq '.boards | length' /tmp/release-board-list.json)
+jq '.boards | length' /tmp/release-board-list.json
 ```
+
+The second command prints the board count (`COUNT`). Each Bash call is a fresh shell, so
+nothing below reads a shell variable set by an earlier command.
 
 - `COUNT == 0` → exit cleanly with "no boards linked to this repo, nothing to
   promote". Mark all remaining tasks `deleted`. This is a valid steady state.
@@ -120,10 +123,12 @@ the cached list: re-run Phase 1 once.
 
 ### Phase 2 — Inventory
 
+Take the picked board's `id` from `/tmp/release-board-list.json` (`.boards[<picked-index>].id`)
+and write it literally in place of `<board-id>`:
+
 ```bash
-BOARD_ID=$(jq -r '.boards[<picked-index>].id' /tmp/release-board-list.json)
-"${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id "$BOARD_ID" > /tmp/release-board-inv.json
-"${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id "$BOARD_ID" --human   # also show summary
+"${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id <board-id> > /tmp/release-board-inv.json
+"${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id <board-id> --human   # also show summary
 ```
 
 The script auto-detects the Status field (single-select with a `done|released|shipped`
