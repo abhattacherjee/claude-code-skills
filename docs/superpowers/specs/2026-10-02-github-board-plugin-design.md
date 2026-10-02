@@ -124,8 +124,9 @@ write the same state. The plugin keeps unchanged:
 
 - `STATE_DIR` default `~/.local/state/weekly-focus`
 - `LOG_DIR` default `~/Library/Logs/weekly-focus`
-- launchd labels `com.abhattacherjee.weekly-focus-sync` and
-  `com.abhattacherjee.weekly-focus-watchdog`, and the plist file names
+- the launchd labels and plist file names, which come from the config's
+  `launchd_label_prefix` (`<prefix>-sync`, `<prefix>-watchdog`); on this machine the prefix
+  is `com.abhattacherjee.weekly-focus`, matching the bare copy
 - the GitHub board ("Weekly Focus") and its fields
 
 The launchd jobs must survive plugin upgrades. The installed plugin lives under a
@@ -152,6 +153,91 @@ The plist templates replace `__HOME__/.claude/skills/weekly-focus/scripts/` with
 
 This PR does not run `--takeover` on this machine. The bare `weekly-focus` keeps owning
 the jobs until the Phase 3 runbook step.
+
+## Per-user config and metadata cache
+
+The plugin ships with no user's values in it. Today two skills hardcode the author's:
+
+- `weekly-focus.py`: `OWNER`, `TITLE`, `FROZEN`, `ALWAYS`, `TOOLING`, `SEASON`, the four
+  `Lane` options and the rule in `lane_for()`; the weekday schedule in `SKILL.md` and in
+  the board README the script writes; the `com.abhattacherjee.*` launchd labels
+- `create-gh-board`: `TEMPLATE_OWNER`/`TEMPLATE_NUMBER` in `audit-board.sh` and
+  `--owner abhattacherjee` in `SKILL.md`
+
+`promote-shipped` and `move-card` already discover boards and Status columns at runtime;
+only their example lines name the author. `triage-issues`, `plan-milestones` and
+`prune-branches` act on the current repo and need no config.
+
+Per-user data lives outside the plugin, so plugin upgrades never touch it and launchd
+(which runs outside Claude Code) can read it. Claude Code's `userConfig` and
+`${CLAUDE_PLUGIN_DATA}` are not used for this: neither exists in the launchd job's
+environment.
+
+### Preferences: `${XDG_CONFIG_HOME:-~/.config}/github-board/config.json`
+
+What a person chooses. Hand-editable; the plugin only writes it from `init`.
+
+```json
+{
+  "version": 1,
+  "owner": "<login>",
+  "plan_week": {
+    "board_title": "Weekly Focus",
+    "lanes": [
+      {"name": "Security", "labels_containing": ["security"]},
+      {"name": "Season",   "repos": ["<repo>"]},
+      {"name": "Tooling",  "repos": ["<repo>", "<repo>"]}
+    ],
+    "default_lane": "Product",
+    "schedule": {"mon": ["Security"], "tue": ["Product"], "wed": ["Product"],
+                 "thu": ["Tooling"], "fri": ["Season"], "sat": [], "sun": []},
+    "frozen": ["<repo>"],
+    "always": ["<repo>#<n>"],
+    "launchd_label_prefix": "dev.github-board.plan-week"
+  },
+  "create_board": {"template_owner": "<login>", "template_number": 0}
+}
+```
+
+- Lanes are matched in order; the first rule that matches wins, else `default_lane`. This
+  reproduces today's `lane_for()` exactly when filled with today's values.
+- `schedule` replaces the weekday table in `SKILL.md`. `show --json` includes it, and the
+  skill reads it from there instead of from prose.
+- A missing config file makes every `plan-week` subcommand except `init` exit 4 with
+  "run `plan-week init`". Nothing falls back to built-in values. `create-board` without a
+  template asks for one (the existing `--template-owner`/`--template` flags still win).
+- An unparseable file, an unknown `version`, or a missing required key exits 2 with the
+  key named.
+
+`plan-week init` (and `create-board init` for the template) asks for the values, defaults
+`owner` to `gh api user --jq .login`, writes the file, and prints it. It refuses to
+overwrite an existing file without `--force`.
+
+### Discovered metadata: `${XDG_CACHE_HOME:-~/.cache}/github-board/`
+
+What the skills look up on every run today: the Weekly Focus board's project number and
+node ID, its field and option IDs, and (for `promote-shipped` and `move-card`) each
+repo's linked boards and their Status options. One JSON file per lookup, each with the
+time it was fetched.
+
+- Entries are reused for 7 days.
+- Any GraphQL error that names a stale ID, or a lookup that comes back empty, drops the
+  entry and refetches once.
+- Deleting the directory is always safe; it is only a cache.
+- `--no-cache` on the affected scripts skips it, for debugging.
+
+### Shared code
+
+`plugins/github-board/lib/config.py` and `lib/config.sh` load and validate the config
+and read and write cache entries. Scripts find `lib/` relative to their own location.
+
+### This machine
+
+`plan-week init --from <file>` writes the author's current values (today's constants,
+lanes, schedule and template) into the config file once, with
+`"launchd_label_prefix": "com.abhattacherjee.weekly-focus"` so the labels stay what the
+bare copy uses and the side-by-side plan still holds. Nothing changes in behaviour. The
+flag reads a JSON file passed to it, which is kept out of the plugin.
 
 ## Callers in this repo
 
@@ -184,6 +270,15 @@ New:
 - **launchd tests:** symlink written and re-pointed; takeover refused (exit 3) when an
   existing plist points at another copy, allowed with `--takeover`; `--check` fails on a
   missing and on a dangling symlink
+- **config tests:** missing file exits 4 for every subcommand but `init`; bad JSON, unknown
+  `version` and a missing key exit 2 naming the key; lane rules filled with the author's
+  values give the same lane as today's `lane_for()` for every repo/label case in the
+  current tests; `init` refuses to overwrite without `--force`
+- **cache tests:** a fresh entry is reused; one older than 7 days is refetched; a stale-ID
+  error drops the entry and refetches once; `--no-cache` never reads or writes it
+- **no personal values:** no file in the plugin contains the author's login, any of the
+  repo names in today's `FROZEN`/`ALWAYS`/`TOOLING`/`SEASON`, or `com.abhattacherjee`,
+  outside an allow-list of example lines and CHANGELOG history
 - **clean-HOME smoke test** (a script under `tests/`, run in CI and locally): with
   `HOME` set to an empty temp dir, so nothing can fall back to an installed copy, run
   `plan-milestones`'s `milestone-report.sh --help`, `plan-week`'s `weekly-focus.py
