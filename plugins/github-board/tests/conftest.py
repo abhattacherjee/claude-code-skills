@@ -8,6 +8,7 @@ def _isolated_xdg(tmp_path, monkeypatch):
     """No test reads or writes the real ~/.config, ~/.cache or ~/.local/share."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+    monkeypatch.setenv("GITHUB_BOARD_HOME", str(tmp_path / "share" / "github-board"))
     monkeypatch.setenv("GITHUB_BOARD_LINK", str(tmp_path / "share" / "github-board" / "current"))
 
 

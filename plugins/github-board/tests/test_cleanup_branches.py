@@ -3,7 +3,8 @@
 The old search treated any issue matching the free text "<package> dependabot" (or a fuzzy
 "PR #N" search hit) as a tracking issue and then ran `gh pr close`. A tracking issue now has
 to contain the exact token `PR #<n>` (or the PR's URL) and be written by the repo owner or a
-bot.
+login in the config's prune_branches.tracking_issue_authors (default: none). A bot is not
+trusted just for being a bot: any installed GitHub App could file such an issue.
 """
 import json
 import os
@@ -52,7 +53,7 @@ def _issue(number, title, body, login, is_bot=False):
             "author": {"login": login, "is_bot": is_bot}}
 
 
-def _run(tmp_path, pr_issues, pkg_issues=()):
+def _run(tmp_path, pr_issues, pkg_issues=(), allow=None):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
@@ -63,7 +64,13 @@ def _run(tmp_path, pr_issues, pkg_issues=()):
     (bindir / "gh").write_text(_STUB)
     (bindir / "gh").chmod(0o755)
     log = tmp_path / "gh.log"
+    cfg = tmp_path / "xdg-config"
+    if allow is not None:
+        (cfg / "github-board").mkdir(parents=True)
+        (cfg / "github-board" / "config.json").write_text(json.dumps(
+            {"version": 1, "owner": "octo", "prune_branches": {"tracking_issue_authors": allow}}))
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", GH_LOG=str(log), PRS=PR,
+               XDG_CONFIG_HOME=str(cfg),
                PR_ISSUES=json.dumps(list(pr_issues)), PKG_ISSUES=json.dumps(list(pkg_issues)))
     done = subprocess.run(["bash", str(SCRIPT), "--delete"], capture_output=True, text=True,
                           env=env, cwd=str(repo), timeout=60)
@@ -89,9 +96,27 @@ def test_the_full_pr_url_counts(tmp_path):
     assert closes, done.stdout
 
 
-def test_a_bot_authored_tracking_issue_counts(tmp_path):
+def test_a_bot_authored_tracking_issue_does_not_count_by_default(tmp_path):
     done, closes = _run(tmp_path, [_issue(80, "Dependabot: PR #12", "", "app/triage-bot", True)])
-    assert closes, done.stdout
+    assert closes == [], done.stdout
+
+
+def test_a_bot_authored_tracking_issue_counts_when_allowlisted(tmp_path):
+    done, closes = _run(tmp_path, [_issue(80, "Dependabot: PR #12", "", "app/triage-bot", True)],
+                        allow=["app/triage-bot"])
+    assert closes, done.stdout + done.stderr
+    assert "#80" in done.stdout
+
+
+def test_an_allowlist_for_another_login_does_not_admit_the_bot(tmp_path):
+    done, closes = _run(tmp_path, [_issue(80, "Dependabot: PR #12", "", "app/triage-bot", True)],
+                        allow=["someone-else"])
+    assert closes == [], done.stdout
+
+
+def test_an_invalid_config_stops_before_closing_anything(tmp_path):
+    done, closes = _run(tmp_path, [_issue(78, "t", "Tracks PR #12", "octo")], allow=["a b"])
+    assert done.returncode == 2 and closes == [], done.stdout + done.stderr
 
 
 @pytest.mark.parametrize("issue", [

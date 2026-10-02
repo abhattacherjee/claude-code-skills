@@ -55,24 +55,25 @@ Per-user values live outside the plugin, so upgrades never touch them and launch
 
 - Write it with `/github-board:plan-week init` and `/github-board:create-board init`. Both ask a few questions with suggestions fetched from GitHub, show the file, and write it only after you confirm.
 - Lane rules match in order; the first match wins, else `default_lane`. `schedule` is `null` (no fixed days) or `{"mon": [lanes], …}`.
-- No config: every `plan-week` command except `init` exits 4. An invalid file exits 2 and names the key.
+- No config: every `plan-week` command except `init` exits 4, and so does a config that has no `plan_week` section yet (for example one written by `create-board init`); the message names the init to run. An invalid file, or a config path that is a dangling symlink, exits 2 and names the key or the file.
+- Optional `"prune_branches": {"tracking_issue_authors": ["<login>", "app/<bot>"]}`: logins besides the repo owner whose issues `prune-branches` accepts as tracking issues for a Dependabot PR. Without it, only the owner counts; `prune-branches` needs no config.
 - To seed from an existing setup, write the same shape to a file outside the repo and run `python3 <plan-week>/scripts/weekly-focus.py init --from <file>`. Do not commit that file.
 
 ## Metadata cache
 
-Board numbers, node ids, field and option ids, and each repo's linked boards are cached in `${XDG_CACHE_HOME:-~/.cache}/github-board/` for 7 days. An empty lookup is never cached. When a `plan-week` or `move-card` command fails while cached ids are in use, it drops them and runs once more with fresh lookups (never for a rate-limit or missing-scope error). `promote-shipped` drops a cached board list whose board id no longer resolves. A board linked to a repo while its list is cached shows up when the entry ages out; pass `--no-cache` right after linking one. Deleting the directory is always safe.
+Board numbers, node ids, field and option ids, and each repo's linked boards are cached in `${XDG_CACHE_HOME:-~/.cache}/github-board/` for 7 days. An empty lookup is never cached. When a `plan-week` or `move-card` command fails while cached ids are in use (for `move-card` also: the card is not on the cached board, or the target column is not in the cached options), it drops them and runs once more with fresh lookups, never for a rate-limit or missing-scope error. A missing-scope error in `plan-week` also drops every entry that run wrote. Keys are tuples (`owner`, `repo`, …) hashed into the file name, so `a-b/c` and `a/b-c` never share an entry. `promote-shipped` drops a cached board list whose board id no longer resolves. A board linked to a repo while its list is cached shows up when the entry ages out; pass `--no-cache` right after linking one. Deleting the directory is always safe.
 
 ## Background sync (macOS)
 
-`plan-week` can run `sync` from launchd. The plists run the scripts through the stable link `~/.local/share/github-board/current`, which `install-launchd.sh` points at the plugin copy it runs from. **Re-run `install-launchd.sh` after every plugin update.**
+`plan-week` can run `sync` from launchd. `install-launchd.sh` copies the plan-week scripts and `lib/` into `~/.local/share/github-board/<version>/` (`$GITHUB_BOARD_HOME`) and points the stable link `~/.local/share/github-board/current` at that copy; the plists run the scripts through the link, never from the plugin cache. Upgrading or removing the plugin cannot break the jobs. **Re-run `install-launchd.sh` after a plugin update to move the jobs to the new code** (`--check` says `STALE COPY` until then).
 
 ```bash
 PW="$(ls -d ~/.claude/plugins/cache/*/github-board/*/skills/plan-week | sort -V | tail -1)"
-"$PW/scripts/install-launchd.sh"            # link + both jobs
-"$PW/scripts/install-launchd.sh" --check    # link, plists, loaded
+"$PW/scripts/install-launchd.sh"            # copy + link + both jobs
+"$PW/scripts/install-launchd.sh" --check    # link, copy up to date, plists, loaded
 ```
 
-If a plist with the same label already runs another copy's scripts, the install refuses with exit 3 and names that copy. `--takeover` hands the jobs to the plugin. `install-launchd.sh --check` exits 1 when the link, a plist or a loaded job is missing or wrong. If the config is missing or invalid, both jobs record it in `~/.local/state/weekly-focus/last-error` and send a "config error" notification at most once per 6 hours.
+If a plist with the same label already runs another copy's scripts, the install refuses with exit 3 and names that copy. `--takeover` hands the jobs to the plugin. `install-launchd.sh --check` exits 1 when the link, the copy, a plist or a loaded job is missing, wrong or out of date. With `plan_week.launchd.enabled` false the jobs never reinstall each other. If the config is missing or invalid, both jobs record it in `~/.local/state/weekly-focus/last-error` and send a "config error" notification at most once per 6 hours.
 
 ## Running next to the old bare skills
 

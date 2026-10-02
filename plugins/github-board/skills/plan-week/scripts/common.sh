@@ -15,8 +15,11 @@ export LA_DIR="${LA_DIR:-$HOME/Library/LaunchAgents}"
 export STATE_DIR="${STATE_DIR:-$HOME/.local/state/weekly-focus}"
 export LOG_DIR="${LOG_DIR:-$HOME/Library/Logs/weekly-focus}"
 export NOW="${NOW:-$(date +%s)}"
-# Stable path the plists run through, so they survive plugin upgrades (re-pointed by install).
-export GITHUB_BOARD_LINK="${GITHUB_BOARD_LINK:-$HOME/.local/share/github-board/current}"
+# install-launchd.sh copies the scripts it needs into $GITHUB_BOARD_HOME/<plugin version>/ and
+# points the stable link $GITHUB_BOARD_HOME/current at that copy. The plists run through the
+# link, so the jobs never depend on the plugin cache (which keeps only two versions).
+export GITHUB_BOARD_HOME="${GITHUB_BOARD_HOME:-$HOME/.local/share/github-board}"
+export GITHUB_BOARD_LINK="${GITHUB_BOARD_LINK:-$GITHUB_BOARD_HOME/current}"
 # The plugin root this copy runs from, symlinks resolved, so the link never points at itself.
 PLUGIN_ROOT="$(cd "$_WF_SCRIPTS/../../.." && pwd -P)"
 DOMAIN="gui/$(id -u)"
@@ -54,14 +57,15 @@ alert() {
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }  # GNU, then BSD
 
 # reinstall_or_alert <label> <log file> [install flags]: reinstall, and if that fails raise a
-# reinstall-failed alert. Returns the reinstall exit code.
+# reinstall-failed alert for that label (one stamp per label, so a failing sync job cannot hide
+# a failing watchdog). Returns the reinstall exit code.
 reinstall_or_alert() {
   local label="$1" logf="$2" rc; shift 2
   reinstall "$label" "$@" >> "$logf" 2>&1
   rc=$?
   if [ "$rc" -ne 0 ]; then
     log "reinstall FAILED for $label (exit $rc)" >> "$logf"
-    alert reinstall-failed "reinstall failed" "reinstall FAILED for $label (exit $rc). See $logf"
+    alert "reinstall-failed-$label" "reinstall failed" "reinstall FAILED for $label (exit $rc). See $logf"
   fi
   return "$rc"
 }
@@ -82,5 +86,8 @@ if [ "$_gb_rc" -ne 0 ]; then
 fi
 rm -f "$_gb_err"
 SYNC_LABEL="$LABEL_PREFIX-sync"
+# launchd_enabled: plan_week.launchd.enabled is true. When it is false the jobs must not
+# reinstall each other (that would fail with exit 2 and alert every 6h for nothing).
+launchd_enabled() { [ "$(gb_config_get plan_week.launchd.enabled 2>/dev/null)" = true ]; }
 WATCHDOG_LABEL="$LABEL_PREFIX-watchdog"
 LABELS="$SYNC_LABEL $WATCHDOG_LABEL"

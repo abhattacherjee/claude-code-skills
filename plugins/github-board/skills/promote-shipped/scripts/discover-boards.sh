@@ -72,8 +72,8 @@ elif ! echo "$SCOPES_LINE" | grep -Eq '(^|[^:[:alnum:]_-])(read:)?project([^:[:a
   exit 3
 fi
 
-CACHE_KEY="promote-boards-$OWNER-$REPO"
-if ! BOARDS=$(gb_cache_get "$CACHE_KEY"); then
+# The cache key is a tuple (lib/config.sh), never a joined string.
+if ! BOARDS=$(gb_cache_get promote-boards "$OWNER" "$REPO"); then
   QUERY='query($owner:String!, $name:String!) {
   repository(owner:$owner, name:$name) {
     projectsV2(first:50) {
@@ -91,9 +91,9 @@ if ! BOARDS=$(gb_cache_get "$CACHE_KEY"); then
   }
 
   # Filter out closed boards and project the shape we want.
-  BOARDS=$(echo "$RESPONSE" | jq '{
-  owner: "'"$OWNER"'",
-  repo: "'"$REPO"'",
+  BOARDS=$(echo "$RESPONSE" | jq --arg owner "$OWNER" --arg repo "$REPO" '{
+  owner: $owner,
+  repo: $repo,
   boards: [
     .data.repository.projectsV2.nodes[]
     | select(.closed == false)
@@ -102,7 +102,7 @@ if ! BOARDS=$(gb_cache_get "$CACHE_KEY"); then
 }')
   # An empty list is never cached, so a board linked later shows up at once.
   if [ "$(echo "$BOARDS" | jq '.boards | length')" -gt 0 ]; then
-    printf '%s' "$BOARDS" | gb_cache_put "$CACHE_KEY"
+    printf '%s' "$BOARDS" | gb_cache_put promote-boards "$OWNER" "$REPO"
   fi
 fi
 

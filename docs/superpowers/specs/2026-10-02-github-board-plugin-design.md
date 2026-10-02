@@ -133,12 +133,16 @@ The launchd jobs must survive plugin upgrades. The installed plugin lives under 
 versioned cache path (`~/.claude/plugins/cache/<marketplace>/github-board/<version>/`),
 so a plist that points there breaks on the next upgrade. Instead:
 
-- `install-launchd.sh` writes a stable symlink `~/.local/share/github-board/current` that
-  points at the plugin root it ran from, then renders the plists against
-  `~/.local/share/github-board/current/skills/plan-week/scripts/`. The symlink path can be
-  overridden (`GITHUB_BOARD_LINK`) for tests.
-- Re-running `install-launchd.sh` from a newer plugin version re-points the symlink. The
-  README says to do this after each plugin update.
+- `install-launchd.sh` copies `skills/plan-week/scripts/`, `skills/plan-week/launchd/`,
+  `lib/` and `plugin.json` into `${GITHUB_BOARD_HOME:-~/.local/share/github-board}/<version>/`,
+  writes a stable symlink `~/.local/share/github-board/current` that points at that copy
+  (never at the plugin cache, which keeps only two versions), then renders the plists against
+  `~/.local/share/github-board/current/skills/plan-week/scripts/`. The paths can be
+  overridden (`GITHUB_BOARD_HOME`, `GITHUB_BOARD_LINK`) for tests. (Round-1 review: the
+  first version linked the plugin cache directly, which dangles after two upgrades.)
+- Re-running `install-launchd.sh` from a newer plugin version makes a new copy and re-points
+  the symlink; older copies are pruned except the one previously in use. `--check` reports a
+  copy that differs from the running plugin. The README says to re-run it after each update.
 - **Takeover guard.** Before writing, `install-launchd.sh` reads any existing plist for
   each label. If its `ProgramArguments` point outside the stable symlink (for example at
   `~/.claude/skills/weekly-focus/scripts/`), it refuses with exit 3 and a message naming

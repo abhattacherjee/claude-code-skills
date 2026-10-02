@@ -135,8 +135,8 @@ class GhError(RuntimeError):
     pass
 
 
-RATE_RE = re.compile(r"rate limit|RATE_LIMIT", re.I)
-SCOPE_RE = re.compile(r"required scopes|INSUFFICIENT_SCOPES|missing required scopes?|lacks the project scope", re.I)
+RATE_RE = gbconfig.RATE_RE      # shared with move-card (lib/config.py)
+SCOPE_RE = gbconfig.SCOPE_RE
 CACHE_MODE = "use"      # "use" | "refresh" (skip reads, write fresh) | "off" (--no-cache)
 _CACHE_USED = False
 
@@ -215,24 +215,37 @@ def _cached(key, fn):
     return _CACHE[key]
 
 
-def _cache_key(name):
-    return f"plan-week-{OWNER}-{name}"
+def _cache_key(*parts):
+    """The one cache key shape for plan-week: ("plan-week", OWNER, kind, ...), via lib's
+    cache_key(), so owner `a` and owner `a-b` never share or drop each other's entries."""
+    return ("plan-week", OWNER, *(str(p) for p in parts))
 
 
-def _cache_read(name):
+_WRITTEN = []           # keys this run wrote, dropped again if the run ends on a scope error
+
+
+def _cache_read(*parts):
     """A cached board lookup, or None. Records that cached ids were used this run."""
     global _CACHE_USED
     if CACHE_MODE != "use":
         return None
-    value = gbconfig.cache_get(_cache_key(name))
+    value = gbconfig.cache_get(_cache_key(*parts))
     if value is not None:
         _CACHE_USED = True
     return value
 
 
-def _cache_write(name, value):
-    if CACHE_MODE != "off":
-        gbconfig.cache_put(_cache_key(name), value)
+def _cache_write(value, *parts):
+    if CACHE_MODE != "off" and gbconfig.cache_put(_cache_key(*parts), value):
+        _WRITTEN.append(_cache_key(*parts))
+
+
+def _drop_written():
+    """A missing-scope error means this token cannot be trusted to see the whole board, so
+    nothing it looked up this run is kept."""
+    for key in _WRITTEN:
+        gbconfig.cache_drop(key)
+    _WRITTEN.clear()
 
 
 def _run_with_refetch(fn):
@@ -241,21 +254,29 @@ def _run_with_refetch(fn):
 
     Any gh failure counts, not only "Could not resolve ...": a stale Lane or Focus option id
     fails with other text, and would otherwise fail every run until the entry ages out.
-    Rate-limit and missing-scope errors are never retried. Each command is idempotent
-    (sync adds only what is missing; set re-sets the same Focus), so a rerun is safe.
+    Rate-limit and missing-scope errors are never retried. A missing-scope error, on either
+    run, also drops every entry this run wrote. Each command is idempotent (sync adds only
+    what is missing; set re-sets the same Focus), so a rerun is safe.
     """
     global CACHE_MODE
     try:
+        try:
+            return fn()
+        except GhError as e:
+            msg = str(e)
+            if not (_CACHE_USED and CACHE_MODE == "use") or RATE_RE.search(msg) or SCOPE_RE.search(msg):
+                raise
+            first = e
+        print(f"weekly-focus: cached board ids look stale ({first}); refetching once",
+              file=sys.stderr)
+        gbconfig.cache_drop_scope(("plan-week", OWNER))
+        _CACHE.clear()
+        CACHE_MODE = "refresh"
         return fn()
     except GhError as e:
-        msg = str(e)
-        if not (_CACHE_USED and CACHE_MODE == "use") or RATE_RE.search(msg) or SCOPE_RE.search(msg):
-            raise
-    print("weekly-focus: cached board ids look stale; refetching once", file=sys.stderr)
-    gbconfig.cache_drop_prefix(f"plan-week-{OWNER}-")
-    _CACHE.clear()
-    CACHE_MODE = "refresh"
-    return fn()
+        if SCOPE_RE.search(str(e)):
+            _drop_written()
+        raise
 
 
 _PROJECTS_Q = (
@@ -308,13 +329,13 @@ def list_projects():
 
 def find_or_create_project():
     def find():
-        hit = _cache_read(f"project-{TITLE}")
+        hit = _cache_read("project", TITLE)
         if isinstance(hit, dict) and all(k in hit for k in ("id", "number", "url")):
             return hit
         p = next((q for q in list_projects() if q["title"] == TITLE), None)
         if p is None:
             p = gh("project", "create", "--owner", OWNER, "--title", TITLE, "--format", "json")
-        _cache_write(f"project-{TITLE}", {k: p.get(k) for k in ("id", "number", "url", "title")})
+        _cache_write({k: p.get(k) for k in ("id", "number", "url", "title")}, "project", TITLE)
         return p
     return _cached("project", find)
 
@@ -340,7 +361,7 @@ def _fields_complete(out):
 
 def ensure_fields(num):
     def read():
-        hit = _cache_read(f"fields-{num}")
+        hit = _cache_read("fields", num)
         if _fields_complete(hit):
             return hit
         have = field_map(num)
@@ -358,7 +379,7 @@ def ensure_fields(num):
         if "Status" in have:
             out["Status"] = {"id": have["Status"]["id"],
                              "opts": {o["name"]: o["id"] for o in have["Status"]["options"]}}
-        _cache_write(f"fields-{num}", out)
+        _cache_write(out, "fields", num)
         return out
     return _cached(("fields", num), read)
 

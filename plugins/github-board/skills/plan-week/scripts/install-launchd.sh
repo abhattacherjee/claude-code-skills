@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # Install (or check) the plan-week launchd agents.
-#   install-launchd.sh                  point the stable link at this plugin, render both plists
+#   install-launchd.sh                  copy the plan-week scripts and lib into
+#                                       $GITHUB_BOARD_HOME/<plugin version>/, point the stable link
+#                                       $GITHUB_BOARD_HOME/current at that copy, render both plists
 #                                       into ~/Library/LaunchAgents and load them
 #   install-launchd.sh --only <label>   just one label
-#   install-launchd.sh --no-reload      write the link and plist files; no bootout/bootstrap
+#   install-launchd.sh --no-reload      write the copy, link and plist files; no bootout/bootstrap
 #   install-launchd.sh --takeover       replace plists that another copy (an older bare skill) owns
-#   install-launchd.sh --check          write nothing; exit 1 if the link or a plist is missing or
-#                                       wrong, differs from its template, or is not loaded
+#   install-launchd.sh --check          write nothing; exit 1 if the link, the copy or a plist is
+#                                       missing or wrong, the copy is older than this plugin, a
+#                                       plist differs from its template, or a label is not loaded
 # Labels: <plan_week.launchd.label_prefix>-sync and -watchdog. Sync times: plan_week.launchd.times.
-# The plists run the scripts through $GITHUB_BOARD_LINK (~/.local/share/github-board/current).
-# Re-run this after every plugin update so the link points at the new version.
-# Exit codes: 0 ok; 1 a launchctl step or a check failed; 2 bad arguments, or launchd is disabled
-# in the config; 3 refused: another copy owns a plist (pass --takeover) or the link path is not a
-# symlink; 4 no config (run plan-week init).
-# Overrides for tests: LAUNCHCTL, LA_DIR, STATE_DIR, LOG_DIR, SKILL_DIR, GITHUB_BOARD_LINK, GB_PYTHON,
-# XDG_CONFIG_HOME, XDG_CACHE_HOME, BOOTSTRAP_RETRY_SLEEP.
+# GITHUB_BOARD_HOME defaults to ~/.local/share/github-board. The jobs run only from the copy, so
+# removing or upgrading the plugin never breaks them; re-run this after a plugin update to move
+# them to the new code. A re-install replaces the copy for this version and deletes older
+# version copies, except the one the link pointed at before (it may still be running).
+# Exit codes: 0 ok; 1 a copy, launchctl step or check failed; 2 bad arguments, or launchd is
+# disabled in the config; 3 refused: another copy owns a plist (pass --takeover) or the link path
+# is not a symlink; 4 no config (run plan-week init).
+# Overrides for tests: LAUNCHCTL, LA_DIR, STATE_DIR, LOG_DIR, SKILL_DIR, GITHUB_BOARD_HOME,
+# GITHUB_BOARD_LINK, GB_PYTHON, XDG_CONFIG_HOME, XDG_CACHE_HOME, BOOTSTRAP_RETRY_SLEEP.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -97,7 +102,61 @@ guard_owner() { # guard_owner <label>: 0 when we may write its plist, 3 when ano
   return 3
 }
 
+plugin_version() { # the version in this plugin's plugin.json; non-zero if unreadable or odd
+  "$GB_PYTHON" - "$PLUGIN_ROOT/.claude-plugin/plugin.json" <<'PY'
+import json, re, sys
+try:
+    v = json.load(open(sys.argv[1]))["version"]
+except Exception:
+    sys.exit(1)
+if not isinstance(v, str) or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]*", v):
+    sys.exit(1)
+print(v)
+PY
+}
+
+# The parts of the plugin the jobs need, relative to the plugin root. The copy keeps the same
+# layout, so the scripts' own relative paths (../../../lib) work unchanged.
+COPY_PARTS="skills/plan-week/scripts skills/plan-week/launchd lib .claude-plugin/plugin.json"
+
+copy_differs() { # copy_differs <copy dir>: 0 when any part differs from this plugin
+  local part
+  for part in $COPY_PARTS; do
+    diff -rq -x __pycache__ "$PLUGIN_ROOT/$part" "$1/$part" >/dev/null 2>&1 || return 0
+  done
+  return 1
+}
+
+install_copy() { # install_copy <copy dir>: (re)create it from this plugin; non-zero on failure
+  local dest="$1" new="$1.new.$$" old="$1.old.$$" part
+  # Running from the copy itself (through the link): it is already in place.
+  if [ -d "$dest" ] && [ "$(cd "$dest" && pwd -P)" = "$PLUGIN_ROOT" ]; then return 0; fi
+  rm -rf "$new"
+  for part in $COPY_PARTS; do
+    mkdir -p "$new/$(dirname "$part")" && cp -R "$PLUGIN_ROOT/$part" "$new/$part" \
+      || { echo "could not copy $PLUGIN_ROOT/$part to $new" >&2; rm -rf "$new"; return 1; }
+  done
+  find "$new" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null
+  if [ -e "$dest" ]; then mv "$dest" "$old" || { rm -rf "$new"; return 1; }; fi
+  mv "$new" "$dest" || { echo "could not move $new to $dest" >&2; return 1; }
+  rm -rf "$old"
+}
+
+prune_copies() { # prune_copies <keep> <keep>: delete other version copies under GITHUB_BOARD_HOME
+  local d name
+  for d in "$GITHUB_BOARD_HOME"/*; do
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    name="${d##*/}"
+    case "$name" in [0-9]*.[0-9]*) ;; *) continue ;; esac
+    case "$name" in *.new.*|*.old.*) continue ;; esac
+    [ "$name" = "$1" ] || [ "$name" = "$2" ] && continue
+    [ -d "$d/skills/plan-week" ] || continue          # only ever delete our own copies
+    rm -rf "$d"
+  done
+}
+
 check_link() {
+  local target home
   if [ ! -L "$GITHUB_BOARD_LINK" ]; then
     if [ -e "$GITHUB_BOARD_LINK" ]; then echo "NOT A LINK $GITHUB_BOARD_LINK"; else echo "MISSING LINK $GITHUB_BOARD_LINK"; fi
     return 1
@@ -105,6 +164,16 @@ check_link() {
   if [ ! -e "$GITHUB_BOARD_LINK" ]; then echo "DANGLING LINK $GITHUB_BOARD_LINK"; return 1; fi
   if [ ! -f "$GITHUB_BOARD_LINK/skills/plan-week/scripts/run-sync.sh" ]; then
     echo "BAD LINK $GITHUB_BOARD_LINK (no skills/plan-week/scripts/run-sync.sh)"; return 1
+  fi
+  target="$(cd "$GITHUB_BOARD_LINK" && pwd -P)"
+  home="$(cd "$GITHUB_BOARD_HOME" 2>/dev/null && pwd -P)"
+  if [ -z "$home" ] || [ "$(dirname "$target")" != "$home" ]; then
+    echo "NOT A COPY $GITHUB_BOARD_LINK -> $target (not under $GITHUB_BOARD_HOME; re-run install-launchd.sh)"
+    return 1
+  fi
+  if [ "$target" != "$PLUGIN_ROOT" ] && copy_differs "$target"; then
+    echo "STALE COPY $target differs from $PLUGIN_ROOT (re-run install-launchd.sh)"
+    return 1
   fi
   echo "ok $GITHUB_BOARD_LINK -> $(readlink "$GITHUB_BOARD_LINK")"
 }
@@ -134,8 +203,14 @@ if [ "$takeover" -eq 0 ]; then
   [ "$refused" -eq 0 ] || exit 3
 fi
 
-mkdir -p "$(dirname "$GITHUB_BOARD_LINK")" || exit 1
-ln -sfn "$PLUGIN_ROOT" "$GITHUB_BOARD_LINK" || { echo "could not write $GITHUB_BOARD_LINK" >&2; exit 1; }
+version="$(plugin_version)" || { echo "cannot read the version in $PLUGIN_ROOT/.claude-plugin/plugin.json" >&2; exit 1; }
+copy="$GITHUB_BOARD_HOME/$version"
+previous=""
+[ -L "$GITHUB_BOARD_LINK" ] && previous="$(basename "$(readlink "$GITHUB_BOARD_LINK")")"
+mkdir -p "$GITHUB_BOARD_HOME" "$(dirname "$GITHUB_BOARD_LINK")" || exit 1
+install_copy "$copy" || exit 1
+ln -sfn "$copy" "$GITHUB_BOARD_LINK" || { echo "could not write $GITHUB_BOARD_LINK" >&2; exit 1; }
+prune_copies "$version" "$previous"
 
 mkdir -p "$LA_DIR" "$LOG_DIR" "$STATE_DIR"
 rc=0

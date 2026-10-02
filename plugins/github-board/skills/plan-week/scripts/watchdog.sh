@@ -7,7 +7,9 @@
 #  3. last-success missing or > 26h old     -> alert "stale" (with the first line of last-error);
 #                                              no alert while the sync plist is under 26h old
 #  A failed reinstall alerts "reinstall FAILED" instead of claiming a restore.
-# Each alert kind is rate-limited to once per 6h (stamp files in $STATE_DIR). Always exits 0,
+# With plan_week.launchd.enabled false it logs that and exits 0 without touching anything.
+# Each alert kind (and each label's reinstall failure) is rate-limited to once per 6h (stamp
+# files in $STATE_DIR). Always exits 0,
 # except when the github-board config cannot be read: then it alerts "config error" and exits
 # with config.py's code (4 or 2), since it cannot know its own labels.
 # Overrides for tests: LAUNCHCTL, OSASCRIPT, LA_DIR, STATE_DIR, LOG_DIR, SKILL_DIR, NOW.
@@ -18,6 +20,11 @@ GB_ALERT_ON_CONFIG_ERROR=1
 STALE_HOURS=26
 mkdir -p "$STATE_DIR" "$LOG_DIR"
 WLOG="$LOG_DIR/watchdog.log"
+
+if ! launchd_enabled; then
+  log "watchdog: plan_week.launchd.enabled is false; nothing to watch"
+  exit 0
+fi
 
 summary=""
 

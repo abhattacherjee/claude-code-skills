@@ -5,25 +5,32 @@ Preferences: ${XDG_CONFIG_HOME:-~/.config}/github-board/config.json. Hand-editab
 only by `init`. Nothing falls back to built-in values when it is missing.
 
 Metadata cache: ${XDG_CACHE_HOME:-~/.cache}/github-board/<key>.json, one file per lookup with
-the time it was fetched. Entries are reused for 7 days. An empty lookup is never cached.
+the time it was fetched and the key tuple it was stored under (see cache_key()). Entries are reused for 7 days. An empty lookup is never cached.
 Deleting the directory is always safe.
 
 CLI (bash scripts call it through lib/config.sh):
   config.py path                         print the config file path
   config.py show                         print the config as JSON
-  config.py get KEY [--lines]            print one value (KEY is dotted: plan_week.launchd.times);
-                                         --lines prints a list one item per line
+  config.py get KEY [--lines] [--optional]
+                                         print one value (KEY is dotted: plan_week.launchd.times);
+                                         --lines prints a list one item per line; --optional
+                                         prints nothing (exit 0) when there is no config or key
   config.py init [--require SECTION] [--force] [--from FILE]
                                          merge a JSON payload (stdin, or FILE) into the config
-  config.py cache get KEY [--max-age-days N]   print a fresh entry (exit 1 on a miss)
-  config.py cache put KEY                      store stdin JSON (never fails its caller)
-  config.py cache drop KEY | drop-prefix PREFIX | drop-containing TEXT
+  config.py classify-error               read a gh error on stdin; print rate, scope or other
+  config.py cache get PART... [--max-age-days N]  print a fresh entry (exit 1 on a miss)
+  config.py cache put PART...                     store stdin JSON (never fails its caller)
+  config.py cache drop PART... | drop-scope PART... | drop-containing TEXT
+  config.py cache key PART...                     print the file name the key tuple maps to
+                                         A key is a tuple of PARTs, e.g. move-boards OWNER REPO.
 
-Exit codes: 0 ok; 1 cache miss; 2 invalid config, payload or usage (the key is named); 3 init refused
-because the config already holds a different value (pass --force); 4 no config file.
+Exit codes: 0 ok; 1 cache miss; 2 invalid config, payload or usage (the key is named), or the
+config path is a dangling symlink; 3 init refused because the config already holds a different
+value (pass --force); 4 no config file, or no section yet for the skill asking (run its init).
 Standard library only; Python 3.9+.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -35,11 +42,20 @@ from typing import Any, Iterable, Optional
 VERSION = 1
 CACHE_MAX_AGE_DAYS = 7
 SECTIONS = ("plan_week", "create_board")
+# The init command that writes each section; named when a required section is missing.
+SECTION_INIT = {"plan_week": "plan-week init", "create_board": "create-board init"}
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
 ISSUE_KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+#\d+$")
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 LABEL_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
+# A user login, a bot login (`name[bot]`), or gh's `app/name` form for a GitHub App.
+AUTHOR_RE = re.compile(r"^(?:app/)?[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?$")
+# gh errors that a refetch can never fix: an exhausted budget and a token without the scope.
+# One definition for every script (weekly-focus.py imports these; bash calls classify-error).
+RATE_RE = re.compile(r"rate limit|RATE_LIMIT", re.I)
+SCOPE_RE = re.compile(r"required scopes|INSUFFICIENT_SCOPES|missing required scopes?|"
+                      r"lacks the project scope", re.I)
 INIT_HINT = "run `plan-week init` (or `create-board init` for the board template)"
 
 
@@ -165,6 +181,14 @@ def _validate_create_board(cb: Any) -> None:
     _int(_req(cb, "template_number", f"{p}.template_number"), f"{p}.template_number", minimum=1)
 
 
+def _validate_prune_branches(pb: Any) -> None:
+    p = "prune_branches"
+    if not isinstance(pb, dict):
+        raise ConfigError(f"{p} must be an object", p)
+    if "tracking_issue_authors" in pb:
+        _str_list(pb["tracking_issue_authors"], f"{p}.tracking_issue_authors", AUTHOR_RE)
+
+
 def validate(cfg: Any, require: Iterable[str] = ()) -> dict:
     if not isinstance(cfg, dict):
         raise ConfigError("the config must be a JSON object", "<file>")
@@ -172,17 +196,30 @@ def validate(cfg: Any, require: Iterable[str] = ()) -> dict:
     if version != VERSION:
         raise ConfigError(f"unknown version {version!r}: this plugin reads version {VERSION}", "version")
     _str(_req(cfg, "owner", "owner"), "owner", LOGIN_RE)
-    for section in require:
-        _req(cfg, section, section)
     if "plan_week" in cfg:
         _validate_plan_week(cfg["plan_week"])
     if "create_board" in cfg:
         _validate_create_board(cfg["create_board"])
+    if "prune_branches" in cfg:
+        _validate_prune_branches(cfg["prune_branches"])
+    for section in require:
+        if section not in cfg:
+            # The file exists (another skill's init wrote it) but this skill is not set up yet:
+            # the same "run init" state as no file at all, so exit 4, not 2.
+            hint = SECTION_INIT.get(section, "init")
+            raise ConfigMissing(f"{config_path()} has no {section} section yet; run `{hint}`", section)
     return cfg
+
+
+def _refuse_dangling(path: Path) -> None:
+    if path.is_symlink() and not path.exists():
+        raise ConfigError(f"{path} is a dangling symlink (to {os.readlink(path)}); fix or remove "
+                          "the link", "<file>")
 
 
 def load(require: Iterable[str] = ()) -> dict:
     path = config_path()
+    _refuse_dangling(path)
     if not path.exists():
         raise ConfigMissing(f"no config at {path}; {INIT_HINT}")
     try:
@@ -222,6 +259,7 @@ def init_config(payload: Any, require: Optional[str] = None, force: bool = False
     if not isinstance(payload, dict):
         raise ConfigError("the init payload must be a JSON object", "<payload>")
     path = config_path()
+    _refuse_dangling(path)
     existing = {}
     if path.exists():
         try:
@@ -242,7 +280,10 @@ def init_config(payload: Any, require: Optional[str] = None, force: bool = False
             raise ConfigConflict(f"{path} already has a different {key}; pass --force to replace it", key)
         merged[key] = value
     merged["version"] = VERSION
-    validate(merged, (require,) if require else ())
+    if require and require not in merged:
+        # A payload without the section is a bad payload (2), not "not set up yet" (4).
+        raise ConfigError(f"missing required key {require} in the init payload", require)
+    validate(merged)
     tmp = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,30 +295,52 @@ def init_config(payload: Any, require: Optional[str] = None, force: bool = False
 
 
 # ---- metadata cache -------------------------------------------------------------
+#
+# A cache key is a tuple of strings, e.g. ("move-boards", owner, repo). cache_key() turns it
+# into a file name: a readable prefix plus a short hash of the JSON-encoded tuple, so no two
+# tuples share a file (joining with '-' made owner `a-b` + repo `c` equal owner `a` + repo
+# `b-c`). The entry stores the tuple too, and a read whose tuple differs is a miss.
+# Every caller (plan-week, move-card, promote-shipped) goes through cache_key().
 
 _cache_warned = False
+_drop_warned = False
 
 
 def _safe(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", key)
 
 
-def _cache_file(key: str) -> Path:
-    return cache_dir() / (_safe(key) + ".json")
+def _key_tuple(key: Any) -> list:
+    parts = [key] if isinstance(key, str) else list(key)
+    if not parts or not all(isinstance(p, str) for p in parts):
+        raise TypeError(f"a cache key is a non-empty tuple of strings, got {key!r}")
+    return parts
+
+
+def cache_key(key: Any) -> str:
+    """The file stem for a key tuple: readable prefix + 16 hex digits of sha256(JSON tuple)."""
+    parts = _key_tuple(key)
+    digest = hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()[:16]
+    return f"{_safe('-'.join(parts))[:80]}-{digest}"
+
+
+def _cache_file(key: Any) -> Path:
+    return cache_dir() / (cache_key(key) + ".json")
 
 
 def _empty(value: Any) -> bool:
     return value is None or value == [] or value == {} or value == ""
 
 
-def cache_get(key: str, max_age_days: float = CACHE_MAX_AGE_DAYS, now: Optional[float] = None) -> Any:
-    """The cached value; None when missing, unreadable, too old, from the future, or empty."""
+def cache_get(key: Any, max_age_days: float = CACHE_MAX_AGE_DAYS, now: Optional[float] = None) -> Any:
+    """The cached value; None when missing, unreadable, too old, from the future, empty, or
+    stored under a different key tuple."""
     try:
         entry = json.loads(_cache_file(key).read_text())
     except (OSError, ValueError):
         return None
-    if not isinstance(entry, dict) or entry.get("key") != key:
-        return None   # a different key that sanitizes to the same file name is a miss
+    if not isinstance(entry, dict) or entry.get("key") != _key_tuple(key):
+        return None
     fetched = entry.get("fetched_at")
     now = time.time() if now is None else now
     if isinstance(fetched, bool) or not isinstance(fetched, (int, float)):
@@ -288,7 +351,7 @@ def cache_get(key: str, max_age_days: float = CACHE_MAX_AGE_DAYS, now: Optional[
     return None if _empty(value) else value
 
 
-def cache_put(key: str, value: Any, now: Optional[float] = None) -> bool:
+def cache_put(key: Any, value: Any, now: Optional[float] = None) -> bool:
     """Store value. Never raises: an unwritable cache warns once on stderr and returns False."""
     global _cache_warned
     if _empty(value):
@@ -298,7 +361,8 @@ def cache_put(key: str, value: Any, now: Optional[float] = None) -> bool:
         d.mkdir(parents=True, exist_ok=True)
         f = _cache_file(key)
         tmp = f.with_name(f"{f.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"key": key, "fetched_at": time.time() if now is None else now,
+        tmp.write_text(json.dumps({"key": _key_tuple(key),
+                                   "fetched_at": time.time() if now is None else now,
                                    "value": value}))
         os.replace(tmp, f)
         return True
@@ -310,11 +374,26 @@ def cache_put(key: str, value: Any, now: Optional[float] = None) -> bool:
         return False
 
 
-def cache_drop(key: str) -> None:
+def _unlink(f: Path) -> bool:
+    """Delete one entry. A missing file is fine; any other failure warns once, because an entry
+    that cannot be deleted keeps being reused (a stale id would fail every run for 7 days)."""
+    global _drop_warned
     try:
-        _cache_file(key).unlink()
-    except OSError:
-        pass
+        f.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        if not _drop_warned:
+            print(f"github-board: warning: could not delete cache entry {f.name} ({e}); stale "
+                  f"board ids may be reused for up to {CACHE_MAX_AGE_DAYS} days. Delete "
+                  f"{cache_dir()} by hand to clear it.", file=sys.stderr)
+            _drop_warned = True
+        return False
+
+
+def cache_drop(key: Any) -> None:
+    _unlink(_cache_file(key))
 
 
 def _entries() -> list:
@@ -324,15 +403,18 @@ def _entries() -> list:
         return []
 
 
-def cache_drop_prefix(prefix: str) -> int:
+def cache_drop_scope(head: Any) -> int:
+    """Drop every entry whose stored key tuple starts with `head`, e.g. ("plan-week", owner).
+    Matching is on whole tuple items, so owner `a` never reaches owner `a-b`."""
+    head = _key_tuple(head)
     n = 0
     for f in _entries():
-        if f.name.startswith(_safe(prefix)):
-            try:
-                f.unlink()
-                n += 1
-            except OSError:
-                pass
+        try:
+            stored = json.loads(f.read_text()).get("key")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(stored, list) and stored[:len(head)] == head and _unlink(f):
+            n += 1
     return n
 
 
@@ -340,11 +422,11 @@ def cache_drop_containing(text: str) -> int:
     n = 0
     for f in _entries():
         try:
-            if text in f.read_text():
-                f.unlink()
-                n += 1
+            hit = text in f.read_text()
         except OSError:
-            pass
+            continue
+        if hit and _unlink(f):
+            n += 1
     return n
 
 
@@ -365,7 +447,9 @@ def _print_value(value: Any, lines: bool) -> None:
 
 
 def _cache_cli(args) -> int:
-    if args.op == "get":
+    if args.op == "key":
+        print(cache_key(args.key))
+    elif args.op == "get":
         value = cache_get(args.key, args.max_age_days)
         if value is None:
             return 1
@@ -378,11 +462,20 @@ def _cache_cli(args) -> int:
         cache_put(args.key, value)
     elif args.op == "drop":
         cache_drop(args.key)
-    elif args.op == "drop-prefix":
-        print(cache_drop_prefix(args.prefix))
+    elif args.op == "drop-scope":
+        print(cache_drop_scope(args.key))
     elif args.op == "drop-containing":
         print(cache_drop_containing(args.text))
     return 0
+
+
+def error_kind(text: str) -> str:
+    """"rate", "scope" or "other" for a gh error message."""
+    if RATE_RE.search(text):
+        return "rate"
+    if SCOPE_RE.search(text):
+        return "scope"
+    return "other"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -393,18 +486,20 @@ def _parser() -> argparse.ArgumentParser:
     g = sub.add_parser("get")
     g.add_argument("key")
     g.add_argument("--lines", action="store_true")
+    g.add_argument("--optional", action="store_true",
+                   help="no config, or no such key: print nothing and exit 0")
     i = sub.add_parser("init")
     i.add_argument("--require", choices=SECTIONS)
     i.add_argument("--force", action="store_true")
     i.add_argument("--from", dest="from_file")
+    sub.add_parser("classify-error", help="read a gh error on stdin; print rate, scope or other")
     c = sub.add_parser("cache")
     csub = c.add_subparsers(dest="op", required=True)
     cg = csub.add_parser("get")
-    cg.add_argument("key")
+    cg.add_argument("key", nargs="+")
     cg.add_argument("--max-age-days", type=float, default=CACHE_MAX_AGE_DAYS)
-    csub.add_parser("put").add_argument("key")
-    csub.add_parser("drop").add_argument("key")
-    csub.add_parser("drop-prefix").add_argument("prefix")
+    for op in ("key", "put", "drop", "drop-scope"):
+        csub.add_parser(op).add_argument("key", nargs="+")
     csub.add_parser("drop-containing").add_argument("text")
     return ap
 
@@ -418,12 +513,25 @@ def main(argv=None) -> int:
             print(json.dumps(load(), indent=2))
         elif args.cmd == "get":
             section = args.key.split(".")[0]
+            if args.optional:
+                try:
+                    cfg = load()
+                except ConfigMissing:
+                    return 0
+                try:
+                    value = get(cfg, args.key)
+                except ConfigError:
+                    return 0
+                _print_value(value, args.lines)
+                return 0
             cfg = load(require=(section,) if section in SECTIONS else ())
             _print_value(get(cfg, args.key), args.lines)
         elif args.cmd == "init":
             print(f"wrote {init_config(read_payload(args.from_file), args.require, args.force)}")
         elif args.cmd == "cache":
             return _cache_cli(args)
+        elif args.cmd == "classify-error":
+            print(error_kind(sys.stdin.read()))
     except ConfigError as e:
         print(f"github-board: error: {e}", file=sys.stderr)
         return e.exit_code

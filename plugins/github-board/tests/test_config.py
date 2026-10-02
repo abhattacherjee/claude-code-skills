@@ -108,11 +108,51 @@ def test_get_prints_scalars_raw_and_lists_one_per_line(gb_config):
     assert json.loads(run_cli("get", "plan_week.capacity").stdout) == TEST_CFG["plan_week"]["capacity"]
 
 
-def test_get_of_a_missing_section_exits_2(cfg_home):
-    c = cfg_copy(); del c["create_board"]
+@pytest.mark.parametrize("section, hint", [("create_board", "create-board init"),
+                                           ("plan_week", "plan-week init")])
+def test_get_of_a_missing_section_exits_4_naming_its_init(cfg_home, section, hint):
+    # C1: create-board init ran first, so the file exists but has no plan_week (or the other
+    # way round). That is "not set up yet" (exit 4, run init), not an invalid config (2).
+    c = cfg_copy(); del c[section]
     write_config(cfg_home, c)
-    r = run_cli("get", "create_board.template_owner")
-    assert r.returncode == 2 and "missing required key create_board" in r.stderr
+    r = run_cli("get", f"{section}.x")
+    assert r.returncode == 4, r.stderr
+    assert hint in r.stderr and section in r.stderr
+
+
+def test_get_optional_of_a_missing_key_prints_nothing_and_exits_0(cfg_home):
+    write_config(cfg_home, cfg_copy())
+    r = run_cli("get", "prune_branches.tracking_issue_authors", "--lines", "--optional")
+    assert (r.returncode, r.stdout) == (0, "")
+
+
+def test_get_optional_without_a_config_exits_0_but_an_invalid_one_still_exits_2(cfg_home):
+    assert run_cli("get", "prune_branches.tracking_issue_authors", "--optional").returncode == 0
+    write_config(cfg_home, "{nope")
+    assert run_cli("get", "prune_branches.tracking_issue_authors", "--optional").returncode == 2
+
+
+def test_prune_branches_tracking_issue_authors_is_validated(cfg_home):
+    c = cfg_copy(); c["prune_branches"] = {"tracking_issue_authors": ["triage-bot[bot]", "a b"]}
+    write_config(cfg_home, c)
+    r = run_cli("get", "owner")
+    assert r.returncode == 2 and "prune_branches.tracking_issue_authors[1]" in r.stderr
+    c["prune_branches"]["tracking_issue_authors"] = ["triage-bot[bot]", "app/triage", "octo-user"]
+    write_config(cfg_home, c)
+    assert run_cli("get", "prune_branches.tracking_issue_authors", "--lines").stdout.split() == \
+        ["triage-bot[bot]", "app/triage", "octo-user"]
+
+
+def test_a_dangling_config_symlink_exits_2_naming_it(cfg_home, tmp_path):
+    # S5: a symlink to a moved dotfiles checkout read as "no config, run init", and init then
+    # replaced the link with a plain file.
+    path = cfg_home / "github-board" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.symlink_to(tmp_path / "gone" / "config.json")
+    r = run_cli("get", "owner")
+    assert r.returncode == 2 and "dangling symlink" in r.stderr and str(path) in r.stderr
+    r = run_cli("init", "--require", "plan_week", stdin=_payload())
+    assert r.returncode == 2 and path.is_symlink()
 
 
 def test_bad_create_board_template_number_exits_2(cfg_home):

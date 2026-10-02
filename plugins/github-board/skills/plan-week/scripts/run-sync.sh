@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # launchd entry point: run `weekly-focus.py sync`, record success or failure, then make sure
-# the watchdog is still loaded (nothing else watches the watchdog).
+# the watchdog is still loaded (nothing else watches the watchdog), unless
+# plan_week.launchd.enabled is false.
 # State: $STATE_DIR/last-success (touched on success), $STATE_DIR/last-error (on failure).
 # Exit 3 from sync means "skipped: GraphQL budget low". That is logged only: last-success and
 # last-error stay as they are and nothing is notified. If skips keep happening, the watchdog's
@@ -34,7 +35,7 @@ else
   notify "sync failed" "Weekly Focus sync failed (exit $rc). See $STATE_DIR/last-error"
 fi
 
-if ! is_loaded "$WATCHDOG_LABEL"; then
+if launchd_enabled && ! is_loaded "$WATCHDOG_LABEL"; then
   log "watchdog not loaded, reinstalling" >> "$LOG_DIR/sync.log"
   if reinstall_or_alert "$WATCHDOG_LABEL" "$LOG_DIR/sync.log"; then
     notify "watchdog restored" "The weekly-focus watchdog was not loaded and was reinstalled."

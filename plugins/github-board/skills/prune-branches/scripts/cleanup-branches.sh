@@ -73,6 +73,16 @@ REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || {
   exit 1
 }
 REPO_OWNER="${REPO%%/*}"
+# Who may write a tracking issue: the repo owner, plus the logins in the optional config list
+# prune_branches.tracking_issue_authors (e.g. a triage bot). No config means owner only. A
+# bot is never trusted just for being a bot: any installed GitHub App can open issues.
+. "$SCRIPT_DIR/../../../lib/config.sh"
+if ! TRACKING_AUTHORS=$(gb_config_get prune_branches.tracking_issue_authors --lines --optional); then
+  echo "ERROR: the github-board config is invalid (see above); nothing was changed." >&2
+  exit 2
+fi
+AUTHORS_JSON=$(printf '%s\n%s\n' "$REPO_OWNER" "$TRACKING_AUTHORS" \
+  | jq -R 'select(length > 0) | ascii_downcase' | jq -s 'unique')
 CURRENT_BRANCH=$(git branch --show-current)
 
 echo "=== Git Branch Cleanup Audit ==="
@@ -214,7 +224,8 @@ echo ""
 # Open Dependabot PRs whose updates are tracked through GitHub issues
 # (created by dependabot-triage agent). The PR is stale because
 # the work is being tracked/resolved via the issue instead. Only an issue by
-# the repo owner or a bot that names the PR exactly (`PR #<n>` or its URL) counts.
+# the repo owner (or an allowlisted login) that names the PR exactly
+# (`PR #<n>` or its URL) counts.
 # ─────────────────────────────────────────────────────────
 echo "--- Category 5: Issue-tracked Dependabot PRs ---"
 
@@ -229,7 +240,7 @@ if [[ -f "$TMPDIR_CLEANUP/dependabot_prs.txt" ]]; then
 
     # A tracking issue must name this PR exactly: the token `PR #<n>` (case-sensitive, at a
     # word boundary on both sides) or the PR's full URL, in its title or body. And it must be
-    # written by the repo owner or a bot (the triage agent). GitHub's search is fuzzy, so its
+    # written by the repo owner or a login in prune_branches.tracking_issue_authors. GitHub's search is fuzzy, so its
     # hits are only candidates; the filter below decides. There is deliberately no search by
     # package name: an issue that merely mentions the package says nothing about this PR, and
     # closing a PR on that evidence was a real defect.
@@ -241,17 +252,13 @@ if [[ -f "$TMPDIR_CLEANUP/dependabot_prs.txt" ]]; then
         continue
       fi
       issue_refs=$(printf '%s' "$raw_issues" | jq -r \
-        --arg n "$number" --arg owner "$REPO_OWNER" --arg url "https://github.com/$REPO/pull/$number" '
+        --arg n "$number" --argjson authors "$AUTHORS_JSON" --arg url "https://github.com/$REPO/pull/$number" '
         .[]
         | select(((.title // "") + "\n" + (.body // ""))
                  | test("(^|[^A-Za-z0-9_])PR #" + $n + "([^0-9A-Za-z_]|$)")
                    or (index($url) as $i | $i != null
                        and ((.[($i + ($url | length)):] | test("^[0-9]")) | not)))
-        | select((.author.login // "") as $a
-                 | ($a | ascii_downcase) == ($owner | ascii_downcase)
-                   or (.author.is_bot // false)
-                   or ($a | startswith("app/"))
-                   or ($a | endswith("[bot]")))
+        | select(((.author.login // "") | ascii_downcase) as $a | $authors | index($a) != null)
         | "\(.number)|\(.title | gsub("[|\n\r]"; " "))|\(.state)"' 2>/dev/null) || {
         echo "  WARN: could not read the issue search for PR #$number; leaving it open"
         continue

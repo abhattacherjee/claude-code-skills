@@ -11,11 +11,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import json
+
 import pytest
 
 from gbtest import TEST_CFG, cfg_copy, write_config
 
 PLUGIN = Path(__file__).resolve().parent.parent
+VERSION = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
 SKILL = PLUGIN / "skills" / "plan-week"
 SCRIPTS = SKILL / "scripts"
 PREFIX = TEST_CFG["plan_week"]["launchd"]["label_prefix"]
@@ -34,7 +37,8 @@ class Env:
         self.bin = tmp / "bin"
         self.cfg_home = tmp / "launchd-config"
         self.cache_home = tmp / "launchd-cache"
-        self.link = tmp / "share" / "github-board" / "current"
+        self.gb_home = tmp / "share" / "github-board"
+        self.link = self.gb_home / "current"
         for d in (self.home, self.bin):
             d.mkdir()
         self.set_config(TEST_CFG)
@@ -66,7 +70,7 @@ class Env:
              "STATE_DIR": str(self.state), "LOG_DIR": str(self.logs), "NOW": str(T0),
              "BOOTSTRAP_RETRY_SLEEP": "0", "GB_PYTHON": sys.executable,
              "XDG_CONFIG_HOME": str(self.cfg_home), "XDG_CACHE_HOME": str(self.cache_home),
-             "GITHUB_BOARD_LINK": str(self.link)}
+             "GITHUB_BOARD_HOME": str(self.gb_home), "GITHUB_BOARD_LINK": str(self.link)}
         e.update(self.extra)
         e.update({k: str(v) for k, v in kw.items()})
         return e
@@ -481,9 +485,35 @@ def test_sync_times_come_from_the_config(e):
 
 # ---- stable link and takeover (#146) ----------------------------------------
 
-def test_install_points_the_link_at_this_plugin(e):
+def test_install_points_the_link_at_a_copy_it_owns_never_the_plugin_cache(e):
+    # S3: the plugin cache keeps only the current and previous version, so a link into it
+    # dangles after two upgrades and both jobs exit 127 with nothing left to raise an alert.
     assert e.run("install-launchd.sh").returncode == 0
-    assert e.link.is_symlink() and e.link.resolve() == PLUGIN.resolve()
+    copy = e.gb_home / VERSION
+    assert e.link.is_symlink() and e.link.resolve() == copy.resolve()
+    for rel in ("skills/plan-week/scripts/run-sync.sh", "skills/plan-week/launchd/sync.plist.template",
+                "lib/config.py", ".claude-plugin/plugin.json"):
+        assert (copy / rel).is_file(), rel
+    assert not str(e.link.resolve()).startswith(str(PLUGIN.resolve()))
+
+
+def test_the_jobs_still_run_after_the_source_plugin_dir_is_deleted(e, tmp_path):
+    src = tmp_path / "plugin-cache" / "github-board" / VERSION
+    shutil.copytree(PLUGIN, src, ignore=shutil.ignore_patterns("__pycache__", "tests"))
+    assert e.run_path(src / "skills" / "plan-week" / "scripts" / "install-launchd.sh").returncode == 0
+    shutil.rmtree(tmp_path / "plugin-cache")
+    scripts = e.link / "skills" / "plan-week" / "scripts"
+    e.reset_logs()
+    r = e.run_path(scripts / "run-sync.sh")
+    assert r.returncode == 0, r.stderr
+    assert e.log("python"), "sync never ran"
+    e.set_heartbeat(HOUR)
+    r = e.run_path(scripts / "watchdog.sh")
+    assert r.returncode == 0 and "ok=" in r.stdout, r.stdout + r.stderr
+    r = subprocess.run([sys.executable, str(scripts / "weekly-focus.py"), "--help"],
+                       capture_output=True, text=True, timeout=60, env=e.env())
+    assert r.returncode == 0, r.stderr
+    assert e.run_path(scripts / "install-launchd.sh", "--check").returncode == 0
 
 
 def test_install_re_points_an_old_link(e, tmp_path):
@@ -492,14 +522,47 @@ def test_install_re_points_an_old_link(e, tmp_path):
     e.link.parent.mkdir(parents=True)
     e.link.symlink_to(old)
     assert e.run("install-launchd.sh").returncode == 0
-    assert e.link.resolve() == PLUGIN.resolve()
+    assert e.link.resolve() == (e.gb_home / VERSION).resolve()
+    assert old.is_dir()                       # not ours: never pruned
+
+
+def test_reinstall_replaces_the_copy_for_this_version(e):
+    assert e.run("install-launchd.sh").returncode == 0
+    junk = e.gb_home / VERSION / "skills" / "plan-week" / "scripts" / "left-over.sh"
+    junk.write_text("old")
+    assert e.run("install-launchd.sh").returncode == 0
+    assert not junk.exists()
+
+
+def test_install_prunes_older_copies_but_keeps_the_one_in_use_and_unrelated_files(e):
+    for v in ("0.8.0", "0.9.0"):
+        (e.gb_home / v / "skills" / "plan-week").mkdir(parents=True)
+    (e.gb_home / "notes").mkdir()
+    e.link.symlink_to(e.gb_home / "0.9.0")    # the copy the jobs run today
+    assert e.run("install-launchd.sh").returncode == 0
+    names = sorted(p.name for p in e.gb_home.iterdir())
+    assert names == sorted(["0.9.0", VERSION, "current", "notes"]), names
 
 
 def test_install_run_through_the_link_never_points_the_link_at_itself(e):
     assert e.run("install-launchd.sh", "--no-reload").returncode == 0
     r = e.run_path(e.link / "skills" / "plan-week" / "scripts" / "install-launchd.sh", "--no-reload")
     assert r.returncode == 0, r.stderr
-    assert os.readlink(e.link) == str(PLUGIN.resolve())
+    assert os.readlink(e.link) == str(e.gb_home / VERSION)
+    assert (e.gb_home / VERSION / "skills" / "plan-week" / "scripts" / "run-sync.sh").is_file()
+
+
+def test_check_fails_when_the_link_points_into_the_plugin_cache(installed):
+    installed.link.unlink()
+    installed.link.symlink_to(PLUGIN)
+    r = installed.run("install-launchd.sh", "--check")
+    assert r.returncode == 1 and "NOT A COPY" in r.stdout
+
+
+def test_check_fails_when_the_copy_is_out_of_date(installed):
+    (installed.gb_home / VERSION / "skills" / "plan-week" / "scripts" / "watchdog.sh").write_text("old")
+    r = installed.run("install-launchd.sh", "--check")
+    assert r.returncode == 1 and "STALE COPY" in r.stdout
 
 
 def test_takeover_is_refused_when_another_copy_owns_a_plist(e):
@@ -519,6 +582,22 @@ def test_takeover_flag_hands_the_job_over(e):
     r = e.run("install-launchd.sh", "--takeover")
     assert r.returncode == 0, r.stderr
     assert e.plist(SYNC)["ProgramArguments"][1] == f"{e.link}/skills/plan-week/scripts/run-sync.sh"
+
+
+@pytest.mark.parametrize("kind", ["foreign", "unreadable"])
+def test_a_watchdog_only_plist_owned_elsewhere_blocks_everything(e, kind):
+    # T2: the guard must cover the watchdog label too, not just sync.
+    if kind == "foreign":
+        foreign_plist(e, WATCHDOG, "/Users/someone/old-skills/weekly-focus/scripts/watchdog.sh")
+    else:
+        e.la.mkdir(parents=True)
+        (e.la / f"{WATCHDOG}.plist").write_bytes(b"\x00not a plist")
+    before = (e.la / f"{WATCHDOG}.plist").read_bytes()
+    r = e.run("install-launchd.sh")
+    assert r.returncode == 3, r.stderr
+    assert (e.la / f"{WATCHDOG}.plist").read_bytes() == before
+    assert not (e.la / f"{SYNC}.plist").exists()
+    assert not e.link.exists() and not e.gb_home.exists() and e.log("launchctl") == []
 
 
 def test_an_unreadable_plist_blocks_too(e):
@@ -611,3 +690,40 @@ def test_install_without_a_config_does_not_notify(e):
     (e.cfg_home / "github-board" / "config.json").unlink()
     assert e.run("install-launchd.sh").returncode == 4
     assert e.log("osascript") == []
+
+
+# ---- launchd disabled; per-label reinstall alerts (S4) --------------------------------
+
+def _disable(e):
+    c = cfg_copy(); c["plan_week"]["launchd"]["enabled"] = False
+    e.set_config(c)
+
+
+def test_watchdog_with_launchd_disabled_exits_quietly(installed):
+    _disable(installed)
+    (installed.la / f"{SYNC}.plist").unlink()
+    r = installed.run("watchdog.sh", LAUNCHCTL_PRINT_RC=1)
+    assert r.returncode == 0, r.stderr
+    assert installed.log("osascript") == []
+    assert not any(c.startswith(("bootstrap", "bootout")) for c in installed.log("launchctl"))
+    assert "enabled is false" in r.stdout
+
+
+def test_run_sync_with_launchd_disabled_does_not_reinstall_the_watchdog(installed):
+    _disable(installed)
+    r = installed.run("run-sync.sh", LAUNCHCTL_PRINT_RC=1)
+    assert r.returncode == 0, r.stderr
+    assert not any(c.startswith("bootstrap") for c in installed.log("launchctl"))
+    assert installed.log("osascript") == []
+
+
+def test_a_failed_reinstall_of_one_label_does_not_silence_the_other(installed, tmp_path):
+    installed.set_heartbeat(HOUR)
+    # 1st run: the sync label fails to reinstall (unloaded + bootstrap fails).
+    installed.run("watchdog.sh", LAUNCHCTL_PRINT_RC=1, LAUNCHCTL_BOOTSTRAP_RC=5)
+    assert any("reinstall FAILED" in n and SYNC in n for n in installed.log("osascript"))
+    installed.reset_logs()
+    # 1h later run-sync finds the watchdog unloaded and cannot reinstall it either.
+    installed.run("run-sync.sh", LAUNCHCTL_PRINT_RC=1, LAUNCHCTL_BOOTSTRAP_RC=5, NOW=T0 + HOUR)
+    assert any("reinstall FAILED" in n and WATCHDOG in n for n in installed.log("osascript")), \
+        "the watchdog failure was hidden by the sync label's stamp"

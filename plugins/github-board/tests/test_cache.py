@@ -9,7 +9,7 @@ import pytest
 
 from gbtest import LIB, load_lib, load_weekly_focus
 
-PROJECT_KEY = "plan-week-octo-user-project-Weekly Focus"
+PROJECT_KEY = ("plan-week", "octo-user", "project", "Weekly Focus")
 
 
 @pytest.fixture
@@ -41,11 +41,11 @@ def test_a_corrupt_entry_is_a_miss(gbc):
     assert gbc.cache_get("bad") is None
 
 
-def test_drop_prefix_and_containing(gbc):
-    gbc.cache_put("plan-week-a", {"id": "PVT_1"})
-    gbc.cache_put("plan-week-b", {"id": "PVT_2"})
+def test_drop_scope_and_containing(gbc):
+    gbc.cache_put(("plan-week", "a"), {"id": "PVT_1"})
+    gbc.cache_put(("plan-week", "b"), {"id": "PVT_2"})
     gbc.cache_put("other", {"id": "PVT_1"})
-    assert gbc.cache_drop_prefix("plan-week-") == 2
+    assert gbc.cache_drop_scope(("plan-week",)) == 2
     assert gbc.cache_drop_containing("PVT_1") == 1
     assert gbc.cache_get("other") is None
 
@@ -266,3 +266,108 @@ def test_rate_limit_and_scope_errors_are_never_refetched(gb_config, gbc, message
         wf.main(["show", "--json"])
     assert _project_queries(calls) == []
     assert gbc.cache_get(PROJECT_KEY)["number"] == 99      # not dropped either
+
+
+# ---- round-1 fixes: one key helper, tuple stored and checked (item 4) -------------------
+
+def test_colliding_owner_repo_tuples_get_different_entries(gbc):
+    # Joined with '-', owner `a-b` + repo `c` and owner `a` + repo `b-c` were the same key.
+    gbc.cache_put(("move-boards", "a-b", "c"), [{"number": 1}])
+    assert gbc.cache_get(("move-boards", "a", "b-c")) is None
+    gbc.cache_put(("move-boards", "a", "b-c"), [{"number": 2}])
+    assert gbc.cache_get(("move-boards", "a-b", "c")) == [{"number": 1}]
+    assert gbc.cache_get(("move-boards", "a", "b-c")) == [{"number": 2}]
+    assert gbc.cache_key(("move-boards", "a-b", "c")) != gbc.cache_key(("move-boards", "a", "b-c"))
+
+
+def test_an_entry_whose_stored_tuple_was_changed_is_a_miss(gbc):
+    key = ("move-boards", "octo-user", "app")
+    gbc.cache_put(key, [{"number": 1}])
+    f = gbc.cache_dir() / (gbc.cache_key(key) + ".json")
+    entry = json.loads(f.read_text())
+    entry["key"] = ["move-boards", "someone-else", "app"]
+    f.write_text(json.dumps(entry))
+    assert gbc.cache_get(key) is None
+
+
+def test_the_key_keeps_a_readable_prefix(gbc):
+    k = gbc.cache_key(("plan-week", "octo-user", "project", "Weekly Focus"))
+    assert k.startswith("plan-week-octo-user-project-Weekly_Focus-") and len(k) < 120
+
+
+def test_drop_scope_never_reaches_another_owner(gbc):
+    gbc.cache_put(("plan-week", "a", "project", "T"), {"id": 1})
+    gbc.cache_put(("plan-week", "a-b", "project", "T"), {"id": 2})
+    gbc.cache_put(("plan-week", "a", "fields", "3"), {"id": 3})
+    assert gbc.cache_drop_scope(("plan-week", "a")) == 2
+    assert gbc.cache_get(("plan-week", "a-b", "project", "T")) == {"id": 2}
+
+
+def test_bash_helpers_take_the_tuple_as_separate_arguments():
+    assert _bash("echo '[1]' | gb_cache_put move-boards a-b c && gb_cache_get move-boards a-b c").stdout.strip() == "[1]"
+    assert _bash("gb_cache_get move-boards a b-c").returncode != 0
+    assert _bash("gb_cache_key move-boards a-b c").stdout.strip() == load_lib().cache_key(("move-boards", "a-b", "c"))
+
+
+def test_plan_week_refetch_does_not_drop_another_owners_entries(gb_config, gbc, capsys):
+    other = ("plan-week", "octo-user-2", "project", "Weekly Focus")
+    gbc.cache_put(other, {"id": "PVT_x", "number": 5, "url": "U5", "title": "Weekly Focus"})
+    gbc.cache_put(PROJECT_KEY, {"id": "PVT_old", "number": 99, "url": "U99", "title": "Weekly Focus"})
+    wf = load_weekly_focus()
+    _fake_gh(wf, [])
+    wf.main(["show", "--json"])
+    assert "refetching once" in capsys.readouterr().err
+    assert gbc.cache_get(other)["number"] == 5
+
+
+# ---- S6: a cache entry that cannot be deleted is reported ------------------------------
+
+def test_an_undeletable_entry_warns_once(gbc, tmp_path, monkeypatch, capsys):
+    gbc.cache_put(("k",), {"a": 1})
+    gbc.cache_put(("k2",), {"a": 1})
+    real_unlink = type(tmp_path).unlink
+
+    def refuse(self, *a, **k):
+        raise PermissionError(13, "Permission denied", str(self))
+    monkeypatch.setattr(type(tmp_path), "unlink", refuse)
+    gbc.cache_drop(("k",))
+    gbc.cache_drop_scope(("k2",))
+    monkeypatch.setattr(type(tmp_path), "unlink", real_unlink)
+    err = capsys.readouterr().err
+    assert err.count("could not delete") == 1 and str(gbc.cache_dir()) in err
+
+
+def test_dropping_a_missing_entry_is_silent(gbc, capsys):
+    gbc.cache_drop(("never-written",))
+    assert capsys.readouterr().err == ""
+
+
+# ---- T1: a scope error mid-run leaves no entry written by that run ---------------------
+
+def test_scope_error_after_a_successful_lookup_leaves_no_entry_from_this_run(gb_config, gbc):
+    # One lookup succeeds (and is cached), then a later call hits a missing scope.
+    wf = load_weekly_focus()
+
+    def fake(*args, parse=True, **kw):
+        q = next((a for a in args if a.startswith("query=")), "")
+        if "projectsV2" in q:
+            return json.dumps({"id": "PVT_new", "number": 36, "title": "Weekly Focus",
+                               "url": "U36", "closed": False})
+        raise wf.GhError("GitHub token lacks the project scope; run "
+                         "`gh auth refresh -s read:project,project` (gh api graphql: ...)")
+    wf.gh = fake
+    with pytest.raises(wf.GhError):
+        wf.main(["show", "--json"])
+    assert not gbc.cache_dir().exists() or list(gbc.cache_dir().iterdir()) == []
+
+
+def test_scope_error_keeps_entries_written_by_earlier_runs(gb_config, gbc):
+    gbc.cache_put(PROJECT_KEY, {"id": "PVT_new", "number": 36, "url": "U36", "title": "Weekly Focus"})
+    wf = load_weekly_focus()
+
+    def fake(*args, parse=True, **kw):
+        raise wf.GhError("GitHub token lacks the project scope; run `gh auth refresh`")
+    wf.gh = fake
+    with pytest.raises(wf.GhError):
+        wf.main(["show", "--json"])
+    assert gbc.cache_get(PROJECT_KEY)["number"] == 36
