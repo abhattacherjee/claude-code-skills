@@ -3,9 +3,10 @@
 The forbidden tokens are stored as SHA-256 hashes so this file does not carry them either:
 the author's GitHub login and every repo name in the pre-#146 FROZEN, ALWAYS, TOOLING and
 SEASON constants of weekly-focus.py (19 tokens; one of them, git-flow, is allowed as a
-generic word, see GENERIC). Text is split into tokens on anything but
-letters, digits and '-', lowercased, and hashed. `com.<login>.weekly-focus-sync` splits into
-com / <login> / weekly-focus-sync, so the login hash catches the old launchd label too.
+generic word, see GENERIC). Text is split into tokens of letters, digits, '-', '.' and '_';
+each token is split again on '.' and '_', and every run of consecutive '-'-separated parts
+is lowercased and hashed. So `com.<login>.weekly-focus-sync`, `<login>-notes.txt` and
+`<login>_dev` all yield <login>, and `<repo-name>-v2` still yields <repo-name>.
 To check a candidate token: printf '%s' TOKEN | shasum -a 256
 """
 import hashlib
@@ -49,7 +50,7 @@ README_ALLOWED = {
 GENERIC = {
     "d5a28a15bc08bd019e4cca2a597e98384d6eecf3fc2f06dc3865c4afed8b1bff",
 }
-TOKEN = re.compile(r"[A-Za-z0-9-]+")
+TOKEN = re.compile(r"[A-Za-z0-9._-]+")
 SKIP_PARTS = {"__pycache__", ".pytest_cache"}
 
 
@@ -57,11 +58,21 @@ def _h(token: str) -> str:
     return hashlib.sha256(token.lower().encode()).hexdigest()
 
 
+def candidates(token: str):
+    """Every run of consecutive '-'-parts of each '.'/'_'-separated chunk of token."""
+    for chunk in re.split(r"[._]+", token):
+        parts = [p for p in chunk.split("-") if p]
+        for i in range(len(parts)):
+            for j in range(i + 1, len(parts) + 1):
+                yield "-".join(parts[i:j])
+
+
 def hits_in(text: str, forbidden: set, allowed: set = frozenset()) -> list:
     """Line numbers (1-based) of lines carrying a forbidden, non-allowed token."""
     out = []
     for i, line in enumerate(text.splitlines(), 1):
-        if any(_h(t) in forbidden and _h(t) not in allowed for t in TOKEN.findall(line)):
+        if any(_h(c) in forbidden and _h(c) not in allowed
+               for t in TOKEN.findall(line) for c in candidates(t)):
             out.append(i)
     return out
 
@@ -83,8 +94,12 @@ def test_the_scan_catches_a_planted_token_and_respects_the_allow_list():
     planted = {_h("planted-value")}
     assert hits_in("a\nx planted-value y\n", planted) == [2]
     assert hits_in("x Planted-Value.git\n", planted) == [1]
-    assert hits_in("x planted-value-longer\n", planted) == []
+    assert hits_in("x planted-value-longer\n", planted) == [1]      # T3: was a miss
     assert hits_in("x planted-value\n", planted, planted) == []
+    login = {_h("someone")}
+    for line in ("someone-notes.txt", "someone-dev", "someone_dev", "a.someone.b", "x-someone-y"):
+        assert hits_in(line, login) == [1], line
+    assert hits_in("someoneelse-dev", login) == []                   # whole parts only
 
 
 def test_no_personal_values_in_file_contents():

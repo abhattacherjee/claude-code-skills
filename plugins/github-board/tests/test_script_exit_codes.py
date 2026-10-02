@@ -1,8 +1,9 @@
 """The exit-code headers must match what the scripts actually do.
 
-A wrong exit-code header is worse than none: a caller branches on it. These
-headers were derived by reading each script's exits, so this pins that reading
-and catches the next person who adds an exit without updating the header.
+A wrong exit-code header is worse than none: a caller branches on it. The headers
+were written by reading each script's exits; this file runs each documented exit
+path and checks the code it returns. It does not parse the header text, so a new
+exit added without a header line, or a header edit, is not caught here.
 
 Only paths reachable without network or auth are exercised here; the auth exit
 (apply-promotions 3) is covered by test_apply_promotions_release_lookup.py.
