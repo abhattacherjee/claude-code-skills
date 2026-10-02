@@ -2,12 +2,6 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
-## [Unreleased]
-
-### Changed
-
-- README: the Phase 3 rollback through the bare `weekly-focus` installer works only before Phase 4; after that, re-run the plugin's `install-launchd.sh`. Phase 4 now says to move the callers of the old names first (#147).
-
 ## [1.0.0] - 2026-10-02
 
 ### Added
@@ -16,6 +10,10 @@ All notable changes to the **github-board** plugin are documented here.
 - Per-user config at `${XDG_CONFIG_HOME:-~/.config}/github-board/config.json` (`plan_week`, `create_board`, optional `prune_branches.tracking_issue_authors`). A command whose section is missing exits 4 and names the init to run; a dangling config symlink exits 2.
 - 7-day metadata cache at `${XDG_CACHE_HOME:-~/.cache}/github-board/`. Keys are tuples hashed into the file name; each entry stores its tuple and a mismatch is a miss.
 - `plan-week` launchd jobs run from a copy in `~/.local/share/github-board/<version>/` reached through the link `current`, never from the plugin cache, so plugin upgrades cannot break them.
+
+### Changed
+
+- README: the Phase 3 rollback through the bare `weekly-focus` installer works only before Phase 4; after that, re-run the plugin's `install-launchd.sh`. Phase 4 now says to move the callers of the old names first (#147).
 
 ### Security
 
