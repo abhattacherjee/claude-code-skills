@@ -72,7 +72,18 @@ if [ -n "$BAD" ]; then
   exit 1
 fi
 
-EXISTING=$(gh api "repos/$REPO/milestones?state=all&per_page=100" --paginate --jq '[.[].title]' 2>/dev/null || echo '[]')
+# No --jq here: gh applies --jq to each page, so past 100 milestones it printed one array per
+# page and `jq --argjson` below failed. `jq -s add` joins the pages whether gh merged them into
+# one array or printed them back to back. A failed read stops the script: an empty list would
+# report real milestones as unknown, or try to create them again.
+if ! MS_RAW=$(gh api "repos/$REPO/milestones?state=all&per_page=100" --paginate); then
+  echo "ERROR: could not list milestones for $REPO (see above); nothing was changed." >&2
+  exit 1
+fi
+EXISTING=$(printf '%s' "$MS_RAW" | jq -cs 'add // [] | [.[].title]') || {
+  echo "ERROR: could not read the milestone list for $REPO; nothing was changed." >&2
+  exit 1
+}
 UNKNOWN=$(jq -r --argjson have "$EXISTING" '
   ([.create_milestones // [] | .[].title]) as $new |
   [.moves // [] | .[].to] | unique

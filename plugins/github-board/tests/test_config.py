@@ -252,3 +252,48 @@ def test_config_sh_get(gb_config):
 
 def test_config_sh_get_passes_exit_4_through():
     assert _bash("gb_config_get owner").returncode == 4
+
+
+# C-003: Python's `$` matches before a final newline, so re.match(...$) accepted "me\n".
+@pytest.mark.parametrize("mutate,key", [
+    (lambda c: c.__setitem__("owner", "me\n"), "owner"),
+    (lambda c: c["create_board"].__setitem__("template_owner", "t\n"), "create_board.template_owner"),
+    (lambda c: c["plan_week"].__setitem__("always", ["frozen-repo#951\n"]), "plan_week.always"),
+    (lambda c: c["plan_week"]["launchd"].__setitem__("times", ["07:00\n"]), "plan_week.launchd.times"),
+    (lambda c: c["plan_week"]["launchd"].__setitem__("label_prefix", "dev.x\n"),
+     "plan_week.launchd.label_prefix"),
+    (lambda c: c.__setitem__("prune_branches", {"tracking_issue_authors": ["bot\n"]}),
+     "prune_branches.tracking_issue_authors"),
+])
+def test_a_trailing_newline_is_rejected_naming_the_key(cfg_home, mutate, key):
+    c = cfg_copy()
+    mutate(c)
+    write_config(cfg_home, c)
+    r = run_cli("get", "owner")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert key in r.stderr
+
+
+def test_init_rejects_an_owner_with_a_trailing_newline():
+    r = run_cli("init", "--require", "plan_week", stdin=_payload(owner="me\n"))
+    assert r.returncode == 2 and "owner" in r.stderr
+    assert not load_lib().config_path().exists()
+
+
+# C-004: init writes through a symlinked config (a dotfiles link) and keeps the link.
+def test_init_writes_through_a_config_symlink(cfg_home, tmp_path):
+    target = tmp_path / "dotfiles" / "config.json"
+    target.parent.mkdir()
+    c = cfg_copy(); del c["create_board"]
+    target.write_text(json.dumps(c))
+    path = cfg_home / "github-board" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.symlink_to(target)
+    r = run_cli("init", "--require", "create_board",
+                stdin=json.dumps({"create_board": {"template_owner": "octo-org", "template_number": 4}}))
+    assert r.returncode == 0, r.stderr
+    assert path.is_symlink() and os.readlink(path) == str(target)
+    written = json.loads(target.read_text())
+    assert written["create_board"]["template_number"] == 4
+    assert written["plan_week"] == TEST_CFG["plan_week"]
+    assert not list(path.parent.glob("*.tmp")) and not list(target.parent.glob("*.tmp"))

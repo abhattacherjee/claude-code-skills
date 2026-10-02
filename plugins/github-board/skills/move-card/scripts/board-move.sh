@@ -138,9 +138,14 @@ if CACHED=$(gb_cache_get move-status "$OWNER" "$NAME" "$PROJECT"); then
   FIELD_JSON=$(echo "$CACHED" | jq -c '.field // empty')
 fi
 if [[ -z "${PID:-}" || -z "${FIELD_JSON:-}" ]]; then
-  PID=$(gql 'query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){projectV2(number:$p){id}}}' \
-    -f o="$OWNER" -f n="$NAME" -F p="$PROJECT" --jq '.data.repository.projectV2.id // empty')
-  [[ -n "$PID" ]] || die "board #$PROJECT not found on $REPO."
+  # The board number itself may come from a stale cached list (the board was deleted), so a
+  # failed or empty lookup refetches once before dying.
+  if ! PID=$(gql 'query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){projectV2(number:$p){id}}}' \
+      -f o="$OWNER" -f n="$NAME" -F p="$PROJECT" --jq '.data.repository.projectV2.id // empty' 2>&1); then
+    refetch_once "$PID"
+    die "board #$PROJECT lookup failed on $REPO: $PID"
+  fi
+  [[ -n "$PID" ]] || { refetch_once; die "board #$PROJECT not found on $REPO."; }
   # Status field + options (exact 'Status', else first single-select named like status)
   FIELD_JSON=$(gql 'query($id:ID!){node(id:$id){... on ProjectV2{fields(first:50){nodes{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}' \
     -f id="$PID" --jq '.data.node.fields.nodes | map(select(.id!=null)) | (map(select((.name//"")|ascii_downcase=="status"))[0]) // empty')

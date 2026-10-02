@@ -63,8 +63,10 @@
 #      issue has no merged linked PR (the normal case for PRs merged to `develop`,
 #      where GitHub never records the closing link), discover merged PRs from the
 #      issue timeline. A cross-referenced PR is kept ONLY if its body has a closing
-#      keyword for THIS issue (Closes/Fixes/Resolves #N or owner/repo#N of this repo);
-#      connected/closer PRs are kept directly. Only PRs in the issue's own repo are
+#      keyword for THIS issue (Closes/Fixes/Resolves, optional colon, then #N,
+#      owner/repo#N of this repo, or this repo's issue URL); connected/closer PRs are
+#      kept directly. An unmerged PR found this way adds to .linkedPRCount, so the
+#      issue is held as hold-unmerged-pr instead of promoted as "nopr". Only PRs in the issue's own repo are
 #      kept (formal links included); a foreign one that claims the issue holds it as
 #      hold-foreign-pr. Every discovered PR still passes through the same main-
 #      reachability guard, so the fallback can only add genuinely-shipped items.
@@ -247,15 +249,20 @@ discover_prs_for_issue() {
   # Regex-escape the dots; the other allowed characters are literal in a regex.
   repo_re=$(printf '%s' "$repo" | sed 's/[.]/\\\\./g')
   local jq_filter
+  # The closing forms GitHub accepts: a keyword, an optional colon, then #N, owner/repo#N or
+  # the issue's full URL (https://github.com/owner/repo/issues/N). Only THIS repo's
+  # owner/repo#N or URL counts; a URL for another repo's issue closes that issue, not ours.
+  # Unmerged PRs are kept too (merged:false): an open or abandoned closing PR is stalled
+  # work, so it must count as a linked PR and hold the card, never vanish into "nopr".
   jq_filter='[ .data.repository.issue.timelineItems.nodes[]
     | {t:.__typename, pr:(.closer // .subject // .source)}
-    | select(.pr != null and (.pr|type)=="object" and .pr.__typename=="PullRequest" and .pr.merged==true)
+    | select(.pr != null and (.pr|type)=="object" and .pr.__typename=="PullRequest")
     | select( (.t=="ClosedEvent" or .t=="ConnectedEvent")
-              or ( (.pr.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+('"${repo_re}"')?#'"${num}"'\\b") ) )
+              or ( (.pr.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?):?\\s+(('"${repo_re}"')?#|https?://github\\.com/'"${repo_re}"'/issues/)'"${num}"'\\b") ) )
     | ((.pr.repository.nameWithOwner // "") | ascii_downcase) as $prRepo
     | {number:.pr.number, baseRefName:.pr.baseRefName, mergedAt:.pr.mergedAt, mergeCommitOid:.pr.mergeCommit.oid,
        repo:"'"${repo}"'", foreign:($prRepo != "'"${repo_lc}"'"), prRepo:.pr.repository.nameWithOwner,
-       discovered:true}
+       merged:(.pr.merged==true), discovered:true}
   ] | unique_by([.prRepo, .number])'
   # stdout and rc are captured SEPARATELY so an API/jq failure is distinguishable
   # from a genuine empty result. owner/repo are String! (-f, no type inference);
@@ -295,8 +302,9 @@ if [ "$FALLBACK" = "true" ]; then
         CAND=$(echo "$CAND" | jq '. + {discoveryFailed: true}')
       else
         CAND=$(echo "$CAND" | jq --argjson f "$FOUND" \
-          '.mergedPRs = [$f[] | select(.foreign | not) | del(.foreign, .prRepo)]
-           | .foreignPRs = ((.foreignPRs // []) + [$f[] | select(.foreign) | {number, repo: .prRepo}])')
+          '.mergedPRs = [$f[] | select(.merged and (.foreign | not)) | del(.foreign, .prRepo, .merged)]
+           | .foreignPRs = ((.foreignPRs // []) + [$f[] | select(.merged and .foreign) | {number, repo: .prRepo}])
+           | .linkedPRCount = ((.linkedPRCount // 0) + ([$f[] | select((.merged | not) and (.foreign | not))] | length))')
       fi
     fi
     DISCOVERED_CANDS=$(jq -n --argjson a "$DISCOVERED_CANDS" --argjson b "$CAND" '$a + [$b]')

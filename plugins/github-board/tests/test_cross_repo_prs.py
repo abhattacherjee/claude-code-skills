@@ -37,8 +37,8 @@ def _inventory():
     }
 
 
-def _pr(repo, body, number=7, sha="f00d"):
-    return {"__typename": "PullRequest", "number": number, "merged": True,
+def _pr(repo, body, number=7, sha="f00d", merged=True):
+    return {"__typename": "PullRequest", "number": number, "merged": merged,
             "baseRefName": "main", "mergedAt": "2026-01-01T00:00:00Z", "body": body,
             "mergeCommit": {"oid": sha}, "repository": {"nameWithOwner": repo}}
 
@@ -57,13 +57,13 @@ case "$1 $2" in
   "api graphql") jq -c "$jqf" "$TIMELINE"; exit $? ;;
 esac
 case "$2" in
-  */compare/*) echo ahead; exit 0 ;;
+  */compare/*) echo "${COMPARE:-ahead}"; exit 0 ;;
 esac
 exit 1
 '''
 
 
-def _find(tmp_path, timeline):
+def _find(tmp_path, timeline, compare="ahead"):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "gh").write_text(_STUB)
@@ -73,7 +73,7 @@ def _find(tmp_path, timeline):
     inv.write_text(json.dumps(_inventory()))
     log = tmp_path / "gh.log"
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", GH_LOG=str(log),
-               TIMELINE=str(tmp_path / "timeline.json"))
+               TIMELINE=str(tmp_path / "timeline.json"), COMPARE=compare)
     done = subprocess.run(["bash", str(FIND), str(inv)], capture_output=True, text=True,
                           env=env, timeout=60)
     assert done.returncode == 0, done.stderr
@@ -111,6 +111,54 @@ def test_a_same_repo_pr_wins_over_a_foreign_one(tmp_path):
     assert [c["promoteClass"] for c in out["candidates"]] == ["merged"]
     assert [p["repo"] for p in out["candidates"][0]["mergedPRs"]] == ["o/r"]
     assert not [c for c in calls if "evil/fork" in c or "bad...main" in c]
+
+
+# C-002 / X-003: every closing form GitHub accepts must credit the PR, so a develop-only merge
+# is held as hold-unreleased (compare says "behind") and never falls through to "nopr".
+@pytest.mark.parametrize("body", [
+    "Fixes: #42",
+    "closes #42",
+    "Resolved: o/r#42",
+    "Closes https://github.com/o/r/issues/42",
+    "fixes: https://github.com/O/R/issues/42.",
+])
+def test_each_closing_form_credits_the_pr_and_keeps_the_release_guard(tmp_path, body):
+    out, calls = _find(tmp_path, _timeline(_pr("o/r", body)), compare="behind")
+    assert out["candidates"] == [], f"{body!r}: promoted before release"
+    assert [c["promoteClass"] for c in out["held"]] == ["hold-unreleased"], body
+    assert [c for c in calls if "/repos/o/r/compare/f00d...main" in c]
+
+
+@pytest.mark.parametrize("body", [
+    "Fixes https://github.com/x/y/issues/42",
+    "Fixes https://github.com/o/r/issues/421",
+    "Fixes https://github.com/o/r/pull/42",
+])
+def test_an_issue_url_for_another_repo_or_number_does_not_credit_the_pr(tmp_path, body):
+    out, calls = _find(tmp_path, _timeline(_pr("o/r", body)), compare="behind")
+    assert [c["promoteClass"] for c in out["candidates"]] == ["nopr"], body
+    assert not [c for c in calls if "compare" in c]
+
+
+def test_a_foreign_pr_using_our_issue_url_is_held_as_foreign(tmp_path):
+    out, calls = _find(tmp_path, _timeline(_pr("evil/fork", "Fixes https://github.com/o/r/issues/42")))
+    assert out["candidates"] == []
+    assert [c["promoteClass"] for c in out["held"]] == ["hold-foreign-pr"]
+    assert not [c for c in calls if "evil/fork" in c]
+
+
+# X-002: an unmerged PR that claims the issue is stalled work. It must hold the card, not
+# vanish from the evidence and let the issue promote as "nopr".
+def test_an_unmerged_closing_pr_in_the_timeline_holds_the_issue(tmp_path):
+    out, calls = _find(tmp_path, _timeline(_pr("o/r", "Closes #42", merged=False)))
+    assert out["candidates"] == [], "an issue with an open closing PR was promoted"
+    assert [c["promoteClass"] for c in out["held"]] == ["hold-unmerged-pr"]
+    assert not [c for c in calls if "compare" in c]
+
+
+def test_an_unmerged_pr_that_only_mentions_the_issue_does_not_hold_it(tmp_path):
+    out, _ = _find(tmp_path, _timeline(_pr("o/r", "related to #42", merged=False)))
+    assert [c["promoteClass"] for c in out["candidates"]] == ["nopr"]
 
 
 # ---- apply-promotions.sh: defence in depth on a hand-edited or old candidates file -------

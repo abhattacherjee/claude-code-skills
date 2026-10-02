@@ -18,6 +18,16 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   comment) a `merged` candidate whose merged PRs are all from another repo.
 
 ### Fixed
+- **Every closing form GitHub accepts now credits the PR, so the release guard applies.**
+  Timeline discovery accepted only `Fixes #N` and `Fixes owner/repo#N`. A develop-merged
+  PR that said `Fixes: #N` or `Closes https://github.com/owner/repo/issues/N` was not
+  credited, and the closed issue was promoted as `nopr` before release. Both forms now
+  count (the URL only for the issue's own repo), so the card is held as
+  `hold-unreleased` until the base branch contains the merge.
+- **An unmerged closing PR in the timeline holds the issue.** Discovery dropped every
+  unmerged PR, so an issue closed by hand while its `Closes #N` PR was still open was
+  promoted as `nopr`. Such a PR now adds to `linkedPRCount` and the card is held as
+  `hold-unmerged-pr`.
 - **`find-promotable.sh` no longer fails OPEN when timeline PR discovery errors.**
   The fallback query's result was `|| echo "[]"`, so an auth expiry, rate limit,
   missing scope, network error or jq failure produced an empty PR set — which the

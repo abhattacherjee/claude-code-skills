@@ -5,7 +5,7 @@ All notable changes to the **move-card** skill (was `github-board-move`) are doc
 ## [2.0.0] - 2026-10-02
 
 ### Added
-- `board-move.sh` caches the board list and Status options for 7 days. A failed move, a `--to` column missing from the cached options, or a card not found on the cached board (checked before `--add` adds it anywhere) triggers one refetch; a rate-limit or missing-scope error never does. `--no-cache` skips the cache. Cache keys are `(owner, repo[, board])` tuples, so `a-b/c` and `a/b-c` never share an entry. (#146)
+- `board-move.sh` caches the board list and Status options for 7 days. A failed move, a `--to` column missing from the cached options, or a card not found on the cached board (checked before `--add` adds it anywhere), or a cached board number that no longer resolves (the board was deleted) triggers one refetch; a rate-limit or missing-scope error never does. `--no-cache` skips the cache. Cache keys are `(owner, repo[, board])` tuples, so `a-b/c` and `a/b-c` never share an entry. (#146)
 
 ### Fixed
 - Owner, repo and node ids go to GraphQL with `-f` (string), not `-F`, which sent an all-numeric owner or repo as an Int. (#146)

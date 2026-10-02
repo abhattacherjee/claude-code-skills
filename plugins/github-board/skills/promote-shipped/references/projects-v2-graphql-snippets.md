@@ -140,7 +140,10 @@ query($owner:String!,$repo:String!,$num:Int!){
 ```
 
 A cross-referenced PR is kept only when its `body` carries a closing keyword for
-that exact issue; connected/closer PRs are kept directly. If this query FAILS, the
+that exact issue (`Fixes #N`, `Fixes: #N`, `owner/repo#N` of the issue's repo, or the
+issue's own URL `https://github.com/owner/repo/issues/N`); connected/closer PRs are
+kept directly. An unmerged PR kept this way counts as a linked PR, so the issue is held
+as `hold-unmerged-pr`, not promoted as `nopr`. If this query FAILS, the
 result is `hold-discovery-failed` — never an empty PR list, which would be read as
 positive evidence of a no-PR closure and promote the item.
 

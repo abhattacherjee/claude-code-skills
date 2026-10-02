@@ -97,7 +97,9 @@ def _req(obj: Any, key: str, path: str) -> Any:
 def _str(v: Any, path: str, pattern=None) -> str:
     if not isinstance(v, str) or not v.strip():
         raise ConfigError(f"{path} must be a non-empty string", path)
-    if pattern is not None and not pattern.match(v):
+    # fullmatch, not match: `$` also matches before a final newline, so match() let "me\n"
+    # through and it broke every GraphQL query that used it.
+    if pattern is not None and not pattern.fullmatch(v):
         raise ConfigError(f"{path} has an invalid value {v!r}", path)
     return v
 
@@ -297,11 +299,15 @@ def init_config(payload: Any, require: Optional[str] = None, force: bool = False
         # A payload without the section is a bad payload (2), not "not set up yet" (4).
         raise ConfigError(f"missing required key {require} in the init payload", require)
     validate(merged)
-    tmp = path.with_name(path.name + ".tmp")
+    # A symlinked config (a dotfiles link) is written through: the temp file goes next to the
+    # link's target and replaces the target, so the link survives. Replacing the link path
+    # itself would turn it into a plain file and leave the dotfile stale.
+    target = path.resolve() if path.is_symlink() else path
+    tmp = target.with_name(target.name + ".tmp")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(merged, indent=2) + "\n")
-        os.replace(tmp, path)
+        os.replace(tmp, target)
     except OSError as e:
         raise ConfigError(f"cannot write {path}: {e}", "<file>")
     return path

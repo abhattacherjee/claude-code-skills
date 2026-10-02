@@ -21,7 +21,7 @@ Optional:
 
 Exit codes:
   0  All items added successfully (or nothing to add)
-  1  One or more items failed to add
+  1  One or more items failed to add, or the issue/PR list could not be read
 EOF
 }
 
@@ -57,27 +57,36 @@ fi
 echo "Fetching issues from ${REPO} (state=${STATE}, limit=${LIMIT})..."
 URLS=()
 
-# Fetch issues
-while IFS= read -r url; do
-  [[ -n "$url" ]] && URLS+=("$url")
-done < <(gh issue list \
+# Fetch issues. The list is captured first, never read through `< <(...)`: set -e cannot see
+# a failure inside process substitution, so a 401 used to look like an empty repo.
+if ! LIST=$(gh issue list \
   --repo "$REPO" \
   --state "$STATE" \
   --limit "$LIMIT" \
   --json url \
-  --jq '.[].url')
+  --jq '.[].url'); then
+  echo "Error: could not list issues from ${REPO} (see above); nothing was added." >&2
+  exit 1
+fi
+while IFS= read -r url; do
+  [[ -n "$url" ]] && URLS+=("$url")
+done <<<"$LIST"
 
 # Optionally fetch PRs
 if [[ "$INCLUDE_PRS" == true ]]; then
   echo "Fetching PRs from ${REPO} (state=${STATE}, limit=${LIMIT})..."
-  while IFS= read -r url; do
-    [[ -n "$url" ]] && URLS+=("$url")
-  done < <(gh pr list \
+  if ! LIST=$(gh pr list \
     --repo "$REPO" \
     --state "$STATE" \
     --limit "$LIMIT" \
     --json url \
-    --jq '.[].url')
+    --jq '.[].url'); then
+    echo "Error: could not list PRs from ${REPO} (see above); nothing was added." >&2
+    exit 1
+  fi
+  while IFS= read -r url; do
+    [[ -n "$url" ]] && URLS+=("$url")
+  done <<<"$LIST"
 fi
 
 TOTAL=${#URLS[@]}

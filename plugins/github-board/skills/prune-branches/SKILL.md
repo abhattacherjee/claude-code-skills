@@ -30,7 +30,7 @@ Git Flow workflows and Dependabot generate many branches. After squash-merges, h
 |----------|-----------------|-------------------|
 | Local branches with remote `[gone]` | `git branch -vv \| grep gone` | `git branch -d`, falls back to `-D` after verifying PR merged via `gh pr list` |
 | Finished hotfix/release branches | `git merge-base --is-ancestor` against main | `gh api` DELETE on remote ref |
-| Orphan temp branches | Pattern `temp-*` or `feature/temp-*` with no open PR | `gh api` DELETE on remote ref |
+| Orphan temp branches | Pattern `temp-*` or `feature/temp-*` with no open PR. If the PR lookup fails, the branch is reported as `UNKNOWN`, left alone, and the script exits 3 | `gh api` DELETE on remote ref |
 | Superseded Dependabot PRs | Same dep_key with older PR number | Close PR with comment + delete branch |
 | Issue-tracked Dependabot PRs | Cross-reference PR with GitHub issues (from triage) | Close PR with issue reference comment |
 | Stale local tracking refs | N/A | `git fetch --prune` (always runs) |

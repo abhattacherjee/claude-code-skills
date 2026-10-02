@@ -264,3 +264,31 @@ def test_board_move_sends_owner_and_repo_as_strings(tmp_path):
         for i, a in enumerate(c):
             if a.startswith(("o=", "n=")):
                 assert c[i - 1] == "-f", c
+
+
+# C-005: a board number from the cached board list that no longer resolves (the board was
+# deleted; inventory-board.sh dropped the move-status entry but not move-boards) refetches the
+# list once instead of dying on every run until the entry ages out.
+@pytest.mark.parametrize("gone", [
+    pytest.param({"stdout": ""}, id="empty-id"),
+    pytest.param({"stderr": "GraphQL: Could not resolve to a ProjectV2 with the number 9.\n", "rc": 1},
+                 id="graphql-error"),
+])
+def test_a_cached_board_number_that_no_longer_resolves_refetches_once(tmp_path, gone):
+    gbc = load_lib()
+    gbc.cache_put(BOARDS_KEY, [{"number": 9, "title": "Deleted", "closed": False}])
+    routes = move_routes()
+    routes.insert(1, {"match": ["projectV2(number:$p){id}", "p=9"], **gone})
+    r, calls = run(tmp_path, MOVE, routes, *ARGS)
+    assert r.returncode == 0, r.stderr
+    assert 'Moved issue #5 -> "In Progress" on octo-user/app board #7' in r.stdout
+    assert len(graphql_calls(calls, "projectsV2(first:100)")) == 1
+    assert gbc.cache_get(BOARDS_KEY)[0]["number"] == 7
+
+
+def test_an_explicit_board_number_that_does_not_resolve_still_dies(tmp_path):
+    routes = move_routes()
+    routes.insert(1, {"match": ["projectV2(number:$p){id}", "p=9"], "stdout": ""})
+    r, calls = run(tmp_path, MOVE, routes, *ARGS, "--project", "9")
+    assert r.returncode != 0 and "board #9 not found" in r.stderr
+    assert not graphql_calls(calls, "projectsV2(first:100)")

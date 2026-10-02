@@ -35,6 +35,7 @@ case "$1 $2" in
   "repo view") out '{"nameWithOwner":"octo/app"}'; exit 0 ;;
   "pr list")
     case "$*" in *app/dependabot*) printf '%s\n' "$PRS"; exit 0 ;; esac
+    case "$*" in *--head*) if [ -n "${HEAD_LOOKUP_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi ;; esac
     out '[]'; exit 0 ;;
   "issue list")
     case "$search" in
@@ -53,12 +54,19 @@ def _issue(number, title, body, login, is_bot=False):
             "author": {"login": login, "is_bot": is_bot}}
 
 
-def _run(tmp_path, pr_issues, pkg_issues=(), allow=None):
+def _run(tmp_path, pr_issues, pkg_issues=(), allow=None, prs=PR, temp_branch=None,
+         head_lookup_fail=False):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@e", "-c", "user.name=t",
                     "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    if temp_branch:
+        origin = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+        subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(origin)], check=True)
+        subprocess.run(["git", "-C", str(repo), "push", "-q", "origin",
+                        f"main:refs/heads/{temp_branch}", "main"], check=True)
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "gh").write_text(_STUB)
@@ -69,12 +77,16 @@ def _run(tmp_path, pr_issues, pkg_issues=(), allow=None):
         (cfg / "github-board").mkdir(parents=True)
         (cfg / "github-board" / "config.json").write_text(json.dumps(
             {"version": 1, "owner": "octo", "prune_branches": {"tracking_issue_authors": allow}}))
-    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", GH_LOG=str(log), PRS=PR,
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", GH_LOG=str(log), PRS=prs,
                XDG_CONFIG_HOME=str(cfg),
                PR_ISSUES=json.dumps(list(pr_issues)), PKG_ISSUES=json.dumps(list(pkg_issues)))
+    if head_lookup_fail:
+        env["HEAD_LOOKUP_FAIL"] = "1"
     done = subprocess.run(["bash", str(SCRIPT), "--delete"], capture_output=True, text=True,
                           env=env, cwd=str(repo), timeout=60)
     calls = log.read_text().splitlines() if log.exists() else []
+    if temp_branch:
+        return done, calls
     return done, [c for c in calls if c.startswith("pr close")]
 
 
@@ -129,3 +141,49 @@ def test_an_invalid_config_stops_before_closing_anything(tmp_path):
 def test_near_misses_do_not_close_the_pr(tmp_path, issue):
     done, closes = _run(tmp_path, [issue])
     assert closes == [], done.stdout
+
+
+# C-001: jq index() gives a byte offset, but string slicing counts codepoints. A multi-byte
+# character before the URL used to shift the digit check, so pull/123 counted as PR #12.
+def test_a_longer_pr_url_after_a_multibyte_char_does_not_count(tmp_path):
+    issue = _issue(7, "Bump lodash \u2014 tracking", "Tracks \u2014 https://github.com/octo/app/pull/123", "octo")
+    done, closes = _run(tmp_path, [issue])
+    assert closes == [], done.stdout
+
+
+def test_the_exact_pr_url_after_a_multibyte_char_counts(tmp_path):
+    issue = _issue(7, "Bump lodash \u2014 tracking", "Tracks \u2014 https://github.com/octo/app/pull/12", "octo")
+    done, closes = _run(tmp_path, [issue])
+    assert closes and closes[0].startswith("pr close 12"), done.stdout
+
+
+# X-001: a failed PR lookup must never authorize deleting a temp branch.
+def test_a_failed_pr_lookup_does_not_delete_a_temp_branch(tmp_path):
+    done, calls = _run(tmp_path, [], prs="", temp_branch="temp-finish-1", head_lookup_fail=True)
+    deletes = [c for c in calls if c.startswith("api") and "DELETE" in c]
+    assert deletes == [], calls
+    assert "temp-finish-1" in done.stdout and "ORPHAN" not in done.stdout, done.stdout
+    assert done.returncode != 0, done.stdout
+
+
+def test_a_temp_branch_with_no_open_pr_is_still_deleted(tmp_path):
+    done, calls = _run(tmp_path, [], prs="", temp_branch="temp-finish-1")
+    deletes = [c for c in calls if c.startswith("api") and "DELETE" in c]
+    assert deletes and "temp-finish-1" in deletes[0], done.stdout
+    assert "ORPHAN (no open PR): temp-finish-1" in done.stdout
+
+
+# X-006: an unscoped root package (no slash after the ecosystem prefix) must get a stable key.
+def test_root_package_versions_supersede_each_other(tmp_path):
+    prs = ("12|dependabot/npm_and_yarn/lodash-4.17.21|Bump lodash\n"
+           "13|dependabot/npm_and_yarn/lodash-4.17.22|Bump lodash")
+    done, closes = _run(tmp_path, [], prs=prs)
+    assert "SUPERSEDED: PR #12" in done.stdout, done.stdout
+    assert any(c.startswith("pr close 12") for c in closes), closes
+
+
+def test_different_root_packages_do_not_supersede(tmp_path):
+    prs = ("12|dependabot/npm_and_yarn/lodash-4.17.21|Bump lodash\n"
+           "13|dependabot/npm_and_yarn/express-4.17.22|Bump express")
+    done, _ = _run(tmp_path, [], prs=prs)
+    assert "SUPERSEDED" not in done.stdout, done.stdout

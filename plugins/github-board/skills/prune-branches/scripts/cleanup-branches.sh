@@ -94,6 +94,7 @@ echo ""
 DELETE_LOCAL=()
 DELETE_REMOTE=()
 CLOSE_PRS=()
+LOOKUP_FAILED=()
 
 # ─────────────────────────────────────────────────────────
 # Category 1: Local branches with remote tracking [gone]
@@ -135,8 +136,13 @@ echo ""
 echo "--- Category 3: Orphan temp branches ---"
 for branch_ref in $(git branch -r 2>/dev/null | grep -E 'origin/(temp-|feature/temp-)' | sed 's/^[ ]*//'); do
   branch="${branch_ref#origin/}"
-  open_prs=$(gh pr list --state open --head "$branch" --json number --jq 'length' 2>/dev/null || echo "0")
-  if [[ "$open_prs" == "0" ]]; then
+  # A failed lookup (auth, network, rate limit) is "unknown", never "no open PR": skip the
+  # branch, report it, and exit non-zero at the end.
+  if ! open_prs=$(gh pr list --state open --head "$branch" --json number --jq 'length' 2>/dev/null) \
+      || ! [[ "$open_prs" =~ ^[0-9]+$ ]]; then
+    echo "  UNKNOWN (PR lookup failed; left alone): $branch"
+    LOOKUP_FAILED+=("$branch")
+  elif [[ "$open_prs" == "0" ]]; then
     echo "  ORPHAN (no open PR): $branch"
     DELETE_REMOTE+=("$branch")
   else
@@ -180,7 +186,13 @@ while IFS='|' read -r number head_ref title; do
   # Match name-X.Y.Z pattern
   if [[ "$last_segment" =~ ^(.+)-([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
     dep_name="${BASH_REMATCH[1]}"
-    dep_key="${dep_path%/*}/$dep_name"
+    # A root package (dependabot/npm_and_yarn/lodash-4.17.21) has no directory part, and
+    # ${dep_path%/*} would keep the whole versioned name, so each version got its own key.
+    if [[ "$dep_path" == */* ]]; then
+      dep_key="${dep_path%/*}/$dep_name"
+    else
+      dep_key="$dep_name"
+    fi
     echo "${dep_key}|${number}|${head_ref}" >> "$TMPDIR_CLEANUP/versioned_prs.txt"
   fi
 done < "$TMPDIR_CLEANUP/dependabot_prs.txt"
@@ -239,7 +251,10 @@ if [[ -f "$TMPDIR_CLEANUP/dependabot_prs.txt" ]]; then
     title=$(echo "$title" | xargs)
 
     # A tracking issue must name this PR exactly: the token `PR #<n>` (case-sensitive, at a
-    # word boundary on both sides) or the PR's full URL, in its title or body. And it must be
+    # word boundary on both sides) or the PR's full URL, in its title or body. The URL check
+    # splits on the exact URL and needs one occurrence not followed by a digit, letter or `_`,
+    # so pull/123 never counts as PR #12. (jq's index() returns a byte offset but slices by
+    # codepoint, so an index()+slice check broke after any multi-byte character.) And it must be
     # written by the repo owner or a login in prune_branches.tracking_issue_authors. GitHub's search is fuzzy, so its
     # hits are only candidates; the filter below decides. There is deliberately no search by
     # package name: an issue that merely mentions the package says nothing about this PR, and
@@ -256,8 +271,7 @@ if [[ -f "$TMPDIR_CLEANUP/dependabot_prs.txt" ]]; then
         .[]
         | select(((.title // "") + "\n" + (.body // ""))
                  | test("(^|[^A-Za-z0-9_])PR #" + $n + "([^0-9A-Za-z_]|$)")
-                   or (index($url) as $i | $i != null
-                       and ((.[($i + ($url | length)):] | test("^[0-9]")) | not)))
+                   or (split($url) | .[1:] | any(test("^[0-9A-Za-z_]") | not)))
         | select(((.author.login // "") | ascii_downcase) as $a | $authors | index($a) != null)
         | "\(.number)|\(.title | gsub("[|\n\r]"; " "))|\(.state)"' 2>/dev/null) || {
         echo "  WARN: could not read the issue search for PR #$number; leaving it open"
@@ -298,17 +312,25 @@ echo "  Local branches to delete:     ${#DELETE_LOCAL[@]}"
 echo "  Remote branches to delete:    ${#DELETE_REMOTE[@]}"
 echo "  Superseded Dependabot PRs:    ${#CLOSE_PRS[@]}"
 echo "  Issue-tracked Dependabot PRs: ${#ISSUE_TRACKED_PRS[@]}"
+echo "  Temp branches not checked:    ${#LOOKUP_FAILED[@]}"
 echo ""
+
+# Exit status: 3 when any temp-branch PR lookup failed (those branches were left alone).
+FINAL_RC=0
+if [[ ${#LOOKUP_FAILED[@]} -gt 0 ]]; then
+  echo "WARN: the open-PR lookup failed for ${#LOOKUP_FAILED[@]} temp branch(es); they were not deleted: ${LOOKUP_FAILED[*]}" >&2
+  FINAL_RC=3
+fi
 
 total=$((${#DELETE_LOCAL[@]} + ${#DELETE_REMOTE[@]} + ${#CLOSE_PRS[@]} + ${#ISSUE_TRACKED_PRS[@]}))
 if [[ $total -eq 0 ]]; then
   echo "Nothing to clean up!"
-  exit 0
+  exit "$FINAL_RC"
 fi
 
 if $DRY_RUN; then
   echo "Run with --delete to apply these changes."
-  exit 0
+  exit "$FINAL_RC"
 fi
 
 # ─────────────────────────────────────────────────────────
@@ -388,3 +410,4 @@ git fetch --prune origin 2>&1 | grep -E '^\s*-\s*\[deleted\]' || echo "  (no sta
 
 echo ""
 echo "=== Cleanup complete ==="
+exit "$FINAL_RC"

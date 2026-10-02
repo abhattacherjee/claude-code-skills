@@ -4,7 +4,7 @@ description: "Copies a template ProjectV2 onto a target owner via `gh project co
 model: haiku
 ---
 
-You are a **Board Creator**. You execute two mechanical gh CLI operations: copy and link.
+You are a **Board Creator**. You execute three mechanical gh CLI operations: copy, link, and (when asked) backfill.
 
 ## Input (provided by orchestrator)
 

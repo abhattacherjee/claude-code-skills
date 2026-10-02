@@ -168,3 +168,64 @@ def test_a_comma_in_a_lane_name_is_rejected(tmp_path, where):
     with pytest.raises(gbc.ConfigError) as ei:
         gbc.load()
     assert ei.value.key == key and "," in str(ei.value)
+
+
+# ---- C-006: a Focus or Lane field that is not single-select fails with a BoardSetupError ----
+
+@pytest.mark.parametrize("bad", ["Lane", "Focus"])
+def test_a_field_that_is_not_single_select_fails_naming_it(gb_config, bad):
+    from gbtest import TEST_CFG as CFG
+    wf = load_weekly_focus(CFG)
+    opts = {"Focus": ["This week", "Next", "Later"],
+            "Lane": ["Security", "Season", "Tooling", "Product"]}
+    fields = [{"id": f"F_{n}", "name": n, "options": [{"id": f"{n}{i}", "name": o}
+                                                      for i, o in enumerate(opts[n])]}
+              for n in ("Focus", "Lane")]
+    fields = [f if f["name"] != bad else {"id": f["id"], "name": bad} for f in fields]
+    calls = []
+
+    def fake(*args, parse=True, **kw):
+        calls.append(args)
+        return "\n".join(json.dumps(f) for f in fields)
+    wf.gh = fake
+    with pytest.raises(wf.BoardSetupError) as ei:
+        wf.ensure_fields(36)
+    msg = str(ei.value)
+    assert bad in msg and "single-select" in msg
+    assert not any("field-create" in a for c in calls for a in c)
+
+
+# ---- X-007: lane refresh applies the configured rule order (first match wins) -----------
+
+def _repo_first_cfg():
+    from gbtest import cfg_copy
+    c = cfg_copy()
+    c["plan_week"]["lanes"] = [{"name": "Infra", "repos": ["infra-repo"]},
+                               {"name": "Security", "labels_containing": ["security"]}]
+    c["plan_week"]["schedule"] = {d: [] for d in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")}
+    return c
+
+
+def _refresh(wf, lane, repo, labels):
+    sets = []
+    wf.set_opt = lambda pid, item, field, opt: sets.append((item, opt))
+    fields = {"Lane": {"id": "L", "opts": {n: n for n in ("Infra", "Security", "Product")}}}
+    have = {f"{repo}#1": {"id": "i1", "lane": lane}}
+    issues = {f"{repo}#1": {"repo": repo, "labels": labels}}
+    return wf.refresh_lanes("P", fields, have, issues), sets
+
+
+def test_a_repo_rule_before_a_label_rule_wins_in_lane_refresh():
+    wf = load_weekly_focus(_repo_first_cfg())
+    assert wf.lane_for("infra-repo", ["security"]) == "Infra"
+    changed, sets = _refresh(wf, "Infra", "infra-repo", ["security"])
+    assert changed == [] and sets == []
+    changed, sets = _refresh(wf, "", "infra-repo", ["security"])
+    assert sets == [("i1", "Infra")]
+
+
+def test_a_label_rule_still_lifts_a_repo_that_no_earlier_rule_matches():
+    wf = load_weekly_focus(_repo_first_cfg())
+    changed, sets = _refresh(wf, "Product", "other-repo", ["security"])
+    assert sets == [("i1", "Security")]
+    assert changed == [{"key": "other-repo#1", "from": "Product", "to": "Security"}]

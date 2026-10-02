@@ -387,6 +387,19 @@ def ensure_fields(num):
                 created = True
         if created:
             have = field_map(num)
+        # FIELDS_Q also returns plain fields (text, number, date) without options. A Focus or
+        # Lane field of that kind would otherwise crash below with KeyError 'options'.
+        absent = [n for n in FIELDS if n not in have]
+        if absent:
+            raise BoardSetupError(
+                f"board #{num}: the {', '.join(absent)} field(s) are still missing after "
+                "field-create. Add them on the board as single-select fields, then re-run sync.")
+        wrong = [n for n in FIELDS if not isinstance(have[n].get("options"), list)]
+        if wrong:
+            raise BoardSetupError(
+                f"board #{num}: the {', '.join(wrong)} field(s) exist but are not single-select. "
+                "Delete or rename them on the board, then re-run sync; plan-week creates them "
+                "as single-select fields.")
         out = {n: {"id": have[n]["id"], "opts": {o["name"]: o["id"] for o in have[n]["options"]}}
                for n in FIELDS}
         missing = {n: [o for o in opts if o not in out[n]["opts"]] for n, opts in FIELDS.items()}
@@ -400,7 +413,7 @@ def ensure_fields(num):
             raise BoardSetupError(
                 f"board #{num}: {what}. Add them on the board (field menu > Edit options), or "
                 "remove them from plan_week.lanes / default_lane in the config.")
-        if "Status" in have:
+        if isinstance(have.get("Status", {}).get("options"), list):
             out["Status"] = {"id": have["Status"]["id"],
                              "opts": {o["name"]: o["id"] for o in have["Status"]["options"]}}
         _cache_write(out, "fields", num)
@@ -451,14 +464,20 @@ def label_lane(labels):
     return None
 
 
-def lane_for(repo, labels):
-    """First matching lane rule (a label rule or a repo list), else DEFAULT_LANE."""
+def _first_rule(repo, labels):
+    """(lane, matched_by_label) for the first matching lane rule, else (DEFAULT_LANE, False)."""
     low = [l.lower() for l in labels]
     for lane in LANES:
         subs = [s.lower() for s in lane.get("labels_containing", [])]
-        if any(s in l for l in low for s in subs) or repo in lane.get("repos", []):
-            return lane["name"]
-    return DEFAULT_LANE
+        by_label = any(s in l for l in low for s in subs)
+        if by_label or repo in lane.get("repos", []):
+            return lane["name"], by_label
+    return DEFAULT_LANE, False
+
+
+def lane_for(repo, labels):
+    """First matching lane rule (a label rule or a repo list), else DEFAULT_LANE."""
+    return _first_rule(repo, labels)[0]
 
 
 def add(num, pid, fields, key, labels, focus):
@@ -709,7 +728,10 @@ def refresh_lanes(pid, fields, have, issues):
             continue
         cur = it.get("lane") or ""
         labels = issues[key]["labels"]
-        lifted = label_lane(labels)
+        # Lift only when the FIRST matching rule (the order lane_for uses) is a label rule. A
+        # repo rule listed before the label rule wins, so it must not be overridden here.
+        first, by_label = _first_rule(issues[key]["repo"], labels)
+        lifted = first if by_label else None
         if not cur:
             new = lane_for(issues[key]["repo"], labels)
         elif lifted and cur != lifted:
