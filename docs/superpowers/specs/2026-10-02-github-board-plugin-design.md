@@ -125,7 +125,7 @@ write the same state. The plugin keeps unchanged:
 - `STATE_DIR` default `~/.local/state/weekly-focus`
 - `LOG_DIR` default `~/Library/Logs/weekly-focus`
 - the launchd labels and plist file names, which come from the config's
-  `launchd_label_prefix` (`<prefix>-sync`, `<prefix>-watchdog`); on this machine the prefix
+  `launchd.label_prefix` (`<prefix>-sync`, `<prefix>-watchdog`); on this machine the prefix
   is `com.abhattacherjee.weekly-focus`, matching the bare copy
 - the GitHub board ("Weekly Focus") and its fields
 
@@ -193,7 +193,9 @@ What a person chooses. Hand-editable; the plugin only writes it from `init`.
                  "thu": ["Tooling"], "fri": ["Season"], "sat": [], "sun": []},
     "frozen": ["<repo>"],
     "always": ["<repo>#<n>"],
-    "launchd_label_prefix": "dev.github-board.plan-week"
+    "capacity": {"max_repos_besides_security": 3, "hours": [10, 20]},
+    "launchd": {"enabled": true, "times": ["07:00", "18:00"],
+                "label_prefix": "dev.github-board.plan-week"}
   },
   "create_board": {"template_owner": "<login>", "template_number": 0}
 }
@@ -201,7 +203,9 @@ What a person chooses. Hand-editable; the plugin only writes it from `init`.
 
 - Lanes are matched in order; the first rule that matches wins, else `default_lane`. This
   reproduces today's `lane_for()` exactly when filled with today's values.
-- `schedule` replaces the weekday table in `SKILL.md`. `show --json` includes it, and the
+- `schedule` replaces the weekday table in `SKILL.md`; `null` means no fixed days (Security
+  first, then priority order). `capacity` replaces the "at most 3 repos besides Security,
+  sized for 10-20h" line in `SKILL.md`'s plan mode. `show --json` includes both, and the
   skill reads it from there instead of from prose.
 - A missing config file makes every `plan-week` subcommand except `init` exit 4 with
   "run `plan-week init`". Nothing falls back to built-in values. `create-board` without a
@@ -209,9 +213,41 @@ What a person chooses. Hand-editable; the plugin only writes it from `init`.
 - An unparseable file, an unknown `version`, or a missing required key exits 2 with the
   key named.
 
-`plan-week init` (and `create-board init` for the template) asks for the values, defaults
-`owner` to `gh api user --jq .login`, writes the file, and prints it. It refuses to
-overwrite an existing file without `--force`.
+### Init flow
+
+The skill asks the questions in chat (AskUserQuestion), with suggestions fetched from
+GitHub first, so most answers are a confirmation. It then calls the `init` script with the
+answers as JSON on stdin. The script never prompts, so it stays testable and safe to run
+from launchd's environment.
+
+`plan-week init`, up to eight questions:
+
+| # | Question | Suggested from | Default |
+|---|---|---|---|
+| 1 | Which GitHub account's repos and boards should this plan? | `gh api user`, `gh api user/orgs` | the logged-in user |
+| 2 | Which repos are active, and which stay frozen (never synced unless listed in Q7)? | the owner's non-archived repos; active = pushed in the last 90 days and has open issues; shown as an editable list | the 90-day split |
+| 3 | How do you want to group work into lanes? | presets | Security / Product / Tooling; or a single lane; or custom names |
+| 4 | Which active repos belong to Tooling (or to each custom lane)? Unassigned repos go to the default lane. | active repos from Q2 | none |
+| 5 | Do you work lanes on fixed days? | presets | no fixed days (`schedule: null`); or Mon Security, Tue-Wed Product, Thu Tooling, Fri releases; or custom |
+| 6 | How much fits in a week? | — | 3 repos besides Security, 10-20 hours |
+| 7 | Any issues to always include, even from frozen repos? | — | none |
+| 8 | Run the sync in the background? | asked on macOS only; elsewhere `launchd.enabled` is `false` | yes, 07:00 and 18:00, prefix `dev.github-board.plan-week` |
+
+- The board title is asked only when the owner already has a project with the default
+  title "Weekly Focus": reuse it, or pick another title.
+- The Security preset matches issues labelled `security` in any repo; it is not a
+  question.
+- No Season lane preset: that lane is the author's own, and `--from` carries it over.
+- A repo created after `init` is not frozen, so it is synced (as today).
+
+`create-board init`, one question: which existing board should new boards copy? Suggested
+from `gh project list --owner <login>` and the owner's orgs' projects. Default: none, in
+which case `create-board` asks the first time it creates a board.
+
+Before writing, the skill shows the finished file and asks once: "Write this to
+`~/.config/github-board/config.json`?" The `init` script refuses to overwrite an existing
+file without `--force`. Re-running `init` with a config present pre-fills every answer
+from it, and the skill passes `--force` only after that confirmation.
 
 ### Discovered metadata: `${XDG_CACHE_HOME:-~/.cache}/github-board/`
 
@@ -235,7 +271,7 @@ and read and write cache entries. Scripts find `lib/` relative to their own loca
 
 `plan-week init --from <file>` writes the author's current values (today's constants,
 lanes, schedule and template) into the config file once, with
-`"launchd_label_prefix": "com.abhattacherjee.weekly-focus"` so the labels stay what the
+`launchd.label_prefix` `com.abhattacherjee.weekly-focus` so the labels stay what the
 bare copy uses and the side-by-side plan still holds. Nothing changes in behaviour. The
 flag reads a JSON file passed to it, which is kept out of the plugin.
 
