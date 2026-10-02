@@ -1,6 +1,11 @@
-# Changelog — github-board-move
+# Changelog — move-card
 
-All notable changes to the **github-board-move** skill are documented here.
+All notable changes to the **move-card** skill (was `github-board-move`) are documented here.
+
+## [2.0.0] - 2026-10-02
+
+### Changed
+- **Renamed to `move-card`** and moved into the `github-board` plugin (#146). Invoke it as `/github-board:move-card`. The old name still matches as a trigger phrase.
 
 ## [1.0.0] - 2026-06-03
 

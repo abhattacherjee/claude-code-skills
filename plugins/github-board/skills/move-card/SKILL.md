@@ -1,14 +1,14 @@
 ---
-name: github-board-move
-description: "Moves a GitHub issue or PR's Project (v2) board card to a target Status column via a deterministic script (scripts/board-move.sh). Use when: (1) moving an issue to 'In Progress' when work starts, (2) moving a card to 'Development Complete'/'In Review'/'Done in develop' when its PR merges, (3) any mid-lifecycle Project v2 status change that github-release-board-promote (release->Done only) does not cover, (4) listing a board's available Status columns. Covers: projectsV2 board discovery, Status field/option lookup, updateProjectV2ItemFieldValue, fuzzy column matching, --add for items not yet on the board, project auth-scope checks."
+name: move-card
+description: "Moves a GitHub issue or PR's Project (v2) board card to a target Status column via a deterministic script (scripts/board-move.sh). Use when: (1) moving an issue to 'In Progress' when work starts, (2) moving a card to 'Development Complete'/'In Review'/'Done in develop' when its PR merges, (3) any mid-lifecycle Project v2 status change that promote-shipped (release->Done only) does not cover, (4) listing a board's available Status columns, (5) 'board move' or /github-board-move (the old name of this skill). Covers: projectsV2 board discovery, Status field/option lookup, updateProjectV2ItemFieldValue, fuzzy column matching, --add for items not yet on the board, project auth-scope checks."
 metadata:
-  version: 1.0.0
+  version: 2.0.0
 ---
 
 # GitHub Board Move
 
 ## Problem
-Moving a Project (v2) card between Status columns mid-lifecycle (e.g. -> **In Progress** at work start, -> **Development Complete** when a PR merges) has no dedicated tool: `github-release-board-promote` only does release -> **Done**, and `create-gh-board` only builds boards. Otherwise the move means hand-writing `updateProjectV2ItemFieldValue` GraphQL each time.
+Moving a Project (v2) card between Status columns mid-lifecycle (e.g. -> **In Progress** at work start, -> **Development Complete** when a PR merges) has no dedicated tool: `promote-shipped` only does release -> **Done**, and `create-board` only builds boards. Otherwise the move means hand-writing `updateProjectV2ItemFieldValue` GraphQL each time.
 
 ## Quick Check
 ```bash
@@ -31,8 +31,8 @@ Defaults to the current repo and its single linked board; pass `--repo` / `--pro
 | Need | Skill |
 |------|-------|
 | Move a card to any Status mid-lifecycle (In Progress, Dev Complete, In Review...) | **this skill** |
-| Promote shipped issues to **Done** after a release (validated, main-reachability guarded) | `github-release-board-promote` |
-| Create or replicate a board | `create-gh-board` |
+| Promote shipped issues to **Done** after a release (validated, main-reachability guarded) | `promote-shipped` |
+| Create or replicate a board | `create-board` |
 
 This is the tooling for steps 3 (-> In Progress) and 6 (-> post-merge column) of the standing GitHub project workflow.
 
@@ -45,6 +45,6 @@ This is the tooling for steps 3 (-> In Progress) and 6 (-> post-merge column) of
 - Idempotent — re-running for the same option is a no-op.
 
 ## See Also
-- `github-release-board-promote` — release -> Done promotion (validated; main-reachability guarded)
-- `create-gh-board` — board creation / replication
-- `github-issue-triage` — issue audit, labeling, prioritization
+- `promote-shipped` — release -> Done promotion (validated; main-reachability guarded)
+- `create-board` — board creation / replication
+- `triage-issues` — issue audit, labeling, prioritization

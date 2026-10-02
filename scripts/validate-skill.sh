@@ -265,7 +265,7 @@ NON_STANDARD=""
 
 for key in $FRONTMATTER_KEYS; do
   case "$key" in
-    name|description|metadata|model) ;; # allowed (model is valid for sub-agent skills)
+    name|description|metadata|model|disable-model-invocation) ;; # allowed (model: sub-agent skills; disable-model-invocation: slash-command-only skills)
     *) NON_STANDARD="$NON_STANDARD $key" ;;
   esac
 done
@@ -273,7 +273,7 @@ done
 if [[ -z "$NON_STANDARD" ]]; then
   pass "no non-standard frontmatter fields"
 else
-  fail "non-standard frontmatter fields:$NON_STANDARD (allowed: name, description, metadata, model)"
+  fail "non-standard frontmatter fields:$NON_STANDARD (allowed: name, description, metadata, model, disable-model-invocation)"
 fi
 
 # ============================================================

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.5.0] - 2026-10-02
+
+### Changed
+
+- `validate-skill.sh` accepts the `disable-model-invocation` frontmatter field, which Claude Code uses for slash-command-only skills (#146). The repo-root copy and this copy stay byte-identical. The live authoring copy at `~/.claude/skills/skill-publishing/scripts/validate-skill.sh` is outside the repo and is not changed here.
+
 ## [4.4.0] - 2026-08-05
 
 ### Fixed

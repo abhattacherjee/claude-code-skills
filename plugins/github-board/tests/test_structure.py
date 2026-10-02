@@ -1,0 +1,106 @@
+"""Structure of the github-board plugin (#146): seven skills, four agents, new names only."""
+import re
+from pathlib import Path
+
+import pytest
+
+PLUGIN = Path(__file__).resolve().parent.parent
+SKILLS = {"create-board", "triage-issues", "plan-milestones", "plan-week", "move-card",
+          "promote-shipped", "prune-branches"}
+AGENTS = {"template-inspector", "board-creator", "workflow-syncer", "board-verifier"}
+OLD_SKILLS = ["create-gh-board", "github-issue-triage", "github-milestone-planning",
+              "weekly-focus", "github-board-move", "github-release-board-promote",
+              "git-branch-cleanup"]
+OLD_AGENTS = ["gh-board-template-inspector", "gh-board-creator", "gh-board-workflow-syncer",
+              "gh-board-verifier"]
+OLD = OLD_SKILLS + OLD_AGENTS
+# A bare mention (`create-gh-board`, "spawned by create-gh-board skill") and a slash command
+# (/create-gh-board). Path pieces stay out of scope: "/state/weekly-focus", "weekly-focus.py",
+# "com.example.weekly-focus-sync" keep the tool's own name on purpose.
+BARE = {n: re.compile(r"(?<![\w/.-])" + re.escape(n) + r"(?![\w.-])") for n in OLD}
+SLASH = {n: re.compile(r"(?:^|[\s(`'\"])/" + re.escape(n) + r"(?![\w/.-])") for n in OLD}
+
+
+def _frontmatter(path: Path) -> str:
+    m = re.match(r"---\n(.*?)\n---\n", path.read_text(), re.S)
+    assert m, f"{path}: no frontmatter"
+    return m.group(1)
+
+
+def _field(path: Path, field: str):
+    m = re.search(rf"^{field}:\s*(.+?)\s*$", _frontmatter(path), re.M)
+    return m.group(1).strip('"') if m else None
+
+
+def test_exactly_the_seven_skills():
+    assert {p.name for p in (PLUGIN / "skills").iterdir() if p.is_dir()} == SKILLS
+
+
+def test_exactly_the_four_agents():
+    assert {p.stem for p in (PLUGIN / "agents").glob("*.md")} == AGENTS
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_name_matches_directory(skill):
+    assert _field(PLUGIN / "skills" / skill / "SKILL.md", "name") == skill
+
+
+@pytest.mark.parametrize("agent", sorted(AGENTS))
+def test_agent_name_matches_file_and_names_create_board(agent):
+    path = PLUGIN / "agents" / f"{agent}.md"
+    assert _field(path, "name") == agent
+    assert "spawned by create-board skill" in _field(path, "description")
+
+
+def test_create_board_dispatches_all_four_agents_by_plugin_name():
+    text = (PLUGIN / "skills" / "create-board" / "SKILL.md").read_text()
+    dispatched = set(re.findall(r"github-board:([a-z][a-z0-9-]*)", text)) - SKILLS
+    assert dispatched == AGENTS
+
+
+def test_every_github_board_name_in_the_plugin_exists():
+    for md in list((PLUGIN / "skills").rglob("*.md")) + list((PLUGIN / "agents").glob("*.md")):
+        for name in re.findall(r"github-board:([a-z][a-z0-9-]*)", md.read_text()):
+            assert name in SKILLS | AGENTS, f"{md}: github-board:{name} does not exist"
+
+
+def _allowed(line: str) -> bool:
+    # Trigger phrases live in description:; "was …" notes name the old name on purpose.
+    return line.startswith(("description:", "name:")) or re.search(r"\bwas\b", line) is not None
+
+
+def _hits(paths, names):
+    out = []
+    for p in paths:
+        for i, line in enumerate(p.read_text().splitlines(), 1):
+            if _allowed(line):
+                continue
+            for n in names:
+                if BARE[n].search(line) or SLASH[n].search(line):
+                    out.append(f"{p.relative_to(PLUGIN)}:{i}: {n}")
+    return out
+
+
+def test_no_old_name_in_skill_or_agent_docs():
+    docs = [p for p in (PLUGIN / "skills").rglob("*.md") if p.name != "CHANGELOG.md"]
+    docs += list((PLUGIN / "agents").glob("*.md"))
+    assert _hits(sorted(docs), OLD) == []
+
+
+def test_no_old_name_in_scripts():
+    # weekly-focus stays the name of the script, its state and log dirs and its labels.
+    scripts = sorted(p for p in (PLUGIN / "skills").rglob("scripts/*") if p.suffix in (".sh", ".py"))
+    assert _hits(scripts, [n for n in OLD if n != "weekly-focus"]) == []
+
+
+def test_no_plugin_manifest_json_inside_skills():
+    assert list((PLUGIN / "skills").rglob("plugin-manifest.json")) == []
+
+
+def test_marketplace_lists_the_plugin():
+    import json
+    rows = json.loads((PLUGIN.parent.parent / ".claude-plugin" / "marketplace.json").read_text())["plugins"]
+    row = next(r for r in rows if r["name"] == "github-board")
+    assert row["source"] == "./plugins/github-board"
+    plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    assert row["version"] == plugin["version"] == "1.0.0"

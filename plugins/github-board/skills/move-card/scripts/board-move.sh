@@ -2,7 +2,7 @@
 #
 # board-move.sh — move a GitHub issue/PR's Project (v2) card to a target Status column.
 #
-# Mid-lifecycle companion to github-release-board-promote (which only does release -> Done).
+# Mid-lifecycle companion to promote-shipped (which only does release -> Done).
 # Reuses the proven projectsV2 discovery + Status-field + updateProjectV2ItemFieldValue
 # pattern. Requires the gh CLI authenticated with the 'project' scope to apply a move.
 #
