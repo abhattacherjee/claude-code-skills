@@ -224,7 +224,7 @@ from launchd's environment.
 
 | # | Question | Suggested from | Default |
 |---|---|---|---|
-| 1 | Which GitHub account's repos and boards should this plan? | `gh api user`, `gh api user/orgs` | the logged-in user |
+| 1 | Which GitHub account's repos and boards should this plan? | `gh api user` (user accounts only: `weekly-focus.py` queries `user(login:)` and `author:<owner>`, so an organization owner is not supported yet) | the logged-in user |
 | 2 | Which repos are active, and which stay frozen (never synced unless listed in Q7)? | the owner's non-archived repos; active = pushed in the last 90 days and has open issues; shown as an editable list | the 90-day split |
 | 3 | How do you want to group work into lanes? | presets | Security / Product / Tooling; or a single lane; or custom names |
 | 4 | Which active repos belong to Tooling (or to each custom lane)? Unassigned repos go to the default lane. | active repos from Q2 | none |
