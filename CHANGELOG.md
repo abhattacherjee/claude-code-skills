@@ -15,6 +15,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 ### Changed
 
 - `validate-skill.sh` (repo root and skill-publishing 4.5.0) accepts the `disable-model-invocation` frontmatter field (#146).
+- `github-board` README: the Phase 3 rollback through the bare `weekly-focus` installer works only before Phase 4; after that, re-run the plugin's `install-launchd.sh`. Phase 4 now says to move the callers of the old names before deleting anything (#147).
 
 ## [3.19.0] - 2026-09-25
 
