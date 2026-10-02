@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hourly watchdog for the weekly-focus sync (launchd StartInterval 3600 + RunAtLoad, no KeepAlive).
+# Hourly watchdog for the plan-week sync (launchd StartInterval 3600 + RunAtLoad, no KeepAlive).
 #  1. a plist is missing from $LA_DIR       -> reinstall it, alert "restored". The watchdog's own
 #                                              plist is only rewritten (--no-reload): launchd has it
 #                                              loaded, and a bootout would kill this very run.
@@ -7,9 +7,12 @@
 #  3. last-success missing or > 26h old     -> alert "stale" (with the first line of last-error);
 #                                              no alert while the sync plist is under 26h old
 #  A failed reinstall alerts "reinstall FAILED" instead of claiming a restore.
-# Each alert kind is rate-limited to once per 6h (stamp files in $STATE_DIR). Always exits 0.
+# Each alert kind is rate-limited to once per 6h (stamp files in $STATE_DIR). Always exits 0,
+# except when the github-board config cannot be read: then it alerts "config error" and exits
+# with config.py's code (4 or 2), since it cannot know its own labels.
 # Overrides for tests: LAUNCHCTL, OSASCRIPT, LA_DIR, STATE_DIR, LOG_DIR, SKILL_DIR, NOW.
 set -uo pipefail
+GB_ALERT_ON_CONFIG_ERROR=1
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 STALE_HOURS=26

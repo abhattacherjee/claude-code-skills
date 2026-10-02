@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.abhattacherjee.weekly-focus-watchdog</string>
+	<string>__LABEL__</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
@@ -17,6 +17,10 @@
 	<dict>
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>XDG_CONFIG_HOME</key>
+		<string>__XDG_CONFIG_HOME__</string>
+		<key>XDG_CACHE_HOME</key>
+		<string>__XDG_CACHE_HOME__</string>
 	</dict>
 	<key>ProcessType</key>
 	<string>Background</string>

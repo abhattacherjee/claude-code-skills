@@ -1,20 +1,26 @@
-"""Tests for the weekly-focus launchd scripts and SKILL.md (#214).
+"""Tests for the plan-week launchd scripts (#214, #146).
 
 Every external command is a stub executable in a tmp dir that appends its argv to a log file,
-so nothing here touches the real launchctl, osascript, gh or ~/Library.
+so nothing here touches the real launchctl, osascript, gh, ~/Library or ~/.local/share.
 """
 import os
+import plistlib
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-SKILL = Path(__file__).resolve().parent.parent / "skills" / "plan-week"
+from gbtest import TEST_CFG, cfg_copy, write_config
+
+PLUGIN = Path(__file__).resolve().parent.parent
+SKILL = PLUGIN / "skills" / "plan-week"
 SCRIPTS = SKILL / "scripts"
-SYNC = "com.abhattacherjee.weekly-focus-sync"
-WATCHDOG = "com.abhattacherjee.weekly-focus-watchdog"
+PREFIX = TEST_CFG["plan_week"]["launchd"]["label_prefix"]
+SYNC = f"{PREFIX}-sync"
+WATCHDOG = f"{PREFIX}-watchdog"
 T0 = 1_800_000_000          # arbitrary fixed "now"
 HOUR = 3600
 
@@ -26,8 +32,12 @@ class Env:
         self.state = tmp / "state"
         self.logs = tmp / "logs"
         self.bin = tmp / "bin"
+        self.cfg_home = tmp / "launchd-config"
+        self.cache_home = tmp / "launchd-cache"
+        self.link = tmp / "share" / "github-board" / "current"
         for d in (self.home, self.bin):
             d.mkdir()
+        self.set_config(TEST_CFG)
         self.calls = {n: tmp / f"{n}.calls" for n in ("launchctl", "osascript", "python")}
         cnt = tmp / "bootstrap.count"
         self._stub("launchctl", 'if [ "$1" = print ]; then exit "${LAUNCHCTL_PRINT_RC:-0}"; fi\n'
@@ -41,6 +51,9 @@ class Env:
                              'exit "${PY_RC:-0}"\n')
         self.extra = {}
 
+    def set_config(self, cfg):
+        write_config(self.cfg_home, cfg)
+
     def _stub(self, name, body):
         path = self.bin / name
         path.write_text(f'#!/bin/bash\necho "$@" >> "{self.calls[name]}"\n{body}')
@@ -51,14 +64,23 @@ class Env:
              "LAUNCHCTL": str(self.bin / "launchctl"), "OSASCRIPT": str(self.bin / "osascript"),
              "PYTHON": str(self.bin / "python"), "LA_DIR": str(self.la),
              "STATE_DIR": str(self.state), "LOG_DIR": str(self.logs), "NOW": str(T0),
-             "BOOTSTRAP_RETRY_SLEEP": "0"}
+             "BOOTSTRAP_RETRY_SLEEP": "0", "GB_PYTHON": sys.executable,
+             "XDG_CONFIG_HOME": str(self.cfg_home), "XDG_CACHE_HOME": str(self.cache_home),
+             "GITHUB_BOARD_LINK": str(self.link)}
         e.update(self.extra)
         e.update({k: str(v) for k, v in kw.items()})
         return e
 
     def run(self, script, *args, **kw):
-        return subprocess.run(["bash", str(SCRIPTS / script), *args], env=self.env(**kw),
+        return self.run_path(SCRIPTS / script, *args, **kw)
+
+    def run_path(self, path, *args, **kw):
+        return subprocess.run(["bash", str(path), *args], env=self.env(**kw),
                               capture_output=True, text=True, timeout=60)
+
+    def plist(self, label):
+        with open(self.la / f"{label}.plist", "rb") as f:
+            return plistlib.load(f)
 
     def log(self, name):
         p = self.calls[name]
@@ -73,6 +95,12 @@ class Env:
         hb = self.state / "last-success"
         hb.touch()
         os.utime(hb, (T0 - age_seconds, T0 - age_seconds))
+
+
+def foreign_plist(e, label, program):
+    e.la.mkdir(parents=True, exist_ok=True)
+    with open(e.la / f"{label}.plist", "wb") as f:
+        plistlib.dump({"Label": label, "ProgramArguments": ["/bin/bash", program]}, f)
 
 
 @pytest.fixture
@@ -410,24 +438,176 @@ def test_watchdog_always_exits_zero_even_when_notify_and_install_fail(installed)
 
 # ---- static checks --------------------------------------------------------
 
-@pytest.mark.parametrize("label", [SYNC, WATCHDOG])
-@pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil not available")
-def test_plist_templates_lint(label):
-    tpl = SKILL / "launchd" / f"{label}.plist.template"
-    r = subprocess.run(["plutil", "-lint", str(tpl)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-
-
-@pytest.mark.parametrize("label", [SYNC, WATCHDOG])
-def test_plist_templates_have_no_keepalive_and_use_home_placeholder(label):
-    text = (SKILL / "launchd" / f"{label}.plist.template").read_text()
-    assert "KeepAlive" not in text
-    assert f"<string>{label}</string>" in text
-    assert "__SCRIPTS__/" in text and ".claude" not in text
-    assert ("RunAtLoad" in text) == (label == WATCHDOG)
-
-
 def test_skill_frontmatter_name_matches_directory():
     text = (SKILL / "SKILL.md").read_text()
     m = re.match(r"---\nname: (.+)\n", text)
     assert m and m.group(1).strip() == SKILL.name == "plan-week"
+
+
+@pytest.mark.parametrize("kind", ["sync", "watchdog"])
+def test_plist_templates_have_no_keepalive_and_use_placeholders(kind):
+    text = (SKILL / "launchd" / f"{kind}.plist.template").read_text()
+    script = "run-sync.sh" if kind == "sync" else "watchdog.sh"
+    assert "KeepAlive" not in text and ".claude" not in text
+    assert "<string>__LABEL__</string>" in text and f"__SCRIPTS__/{script}" in text
+    assert ("RunAtLoad" in text) == (kind == "watchdog")
+    assert ("__CALENDAR__" in text) == (kind == "sync")
+
+
+def test_only_the_two_generic_templates_exist():
+    assert sorted(p.name for p in (SKILL / "launchd").iterdir()) == [
+        "sync.plist.template", "watchdog.plist.template"]
+
+
+@pytest.mark.parametrize("label", [SYNC, WATCHDOG])
+def test_rendered_plists_parse_and_run_through_the_link(e, label):
+    assert e.run("install-launchd.sh", "--no-reload").returncode == 0
+    d = e.plist(label)
+    assert d["Label"] == label
+    assert d["ProgramArguments"][1].startswith(f"{e.link}/skills/plan-week/scripts/")
+    assert d["EnvironmentVariables"]["XDG_CONFIG_HOME"] == str(e.cfg_home)
+    assert d["EnvironmentVariables"]["XDG_CACHE_HOME"] == str(e.cache_home)
+    if shutil.which("plutil"):
+        r = subprocess.run(["plutil", "-lint", str(e.la / f"{label}.plist")], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_sync_times_come_from_the_config(e):
+    c = cfg_copy(); c["plan_week"]["launchd"]["times"] = ["06:30", "21:05"]
+    e.set_config(c)
+    assert e.run("install-launchd.sh", "--no-reload").returncode == 0
+    assert e.plist(SYNC)["StartCalendarInterval"] == [{"Hour": 6, "Minute": 30}, {"Hour": 21, "Minute": 5}]
+
+
+# ---- stable link and takeover (#146) ----------------------------------------
+
+def test_install_points_the_link_at_this_plugin(e):
+    assert e.run("install-launchd.sh").returncode == 0
+    assert e.link.is_symlink() and e.link.resolve() == PLUGIN.resolve()
+
+
+def test_install_re_points_an_old_link(e, tmp_path):
+    old = tmp_path / "old-version"
+    old.mkdir()
+    e.link.parent.mkdir(parents=True)
+    e.link.symlink_to(old)
+    assert e.run("install-launchd.sh").returncode == 0
+    assert e.link.resolve() == PLUGIN.resolve()
+
+
+def test_install_run_through_the_link_never_points_the_link_at_itself(e):
+    assert e.run("install-launchd.sh", "--no-reload").returncode == 0
+    r = e.run_path(e.link / "skills" / "plan-week" / "scripts" / "install-launchd.sh", "--no-reload")
+    assert r.returncode == 0, r.stderr
+    assert os.readlink(e.link) == str(PLUGIN.resolve())
+
+
+def test_takeover_is_refused_when_another_copy_owns_a_plist(e):
+    other = "/Users/someone/old-skills/weekly-focus/scripts/run-sync.sh"
+    foreign_plist(e, SYNC, other)
+    before = (e.la / f"{SYNC}.plist").read_bytes()
+    r = e.run("install-launchd.sh")
+    assert r.returncode == 3
+    assert other in r.stderr and "--takeover" in r.stderr
+    assert (e.la / f"{SYNC}.plist").read_bytes() == before
+    assert not (e.la / f"{WATCHDOG}.plist").exists()
+    assert not e.link.exists() and e.log("launchctl") == []
+
+
+def test_takeover_flag_hands_the_job_over(e):
+    foreign_plist(e, SYNC, "/Users/someone/old-skills/weekly-focus/scripts/run-sync.sh")
+    r = e.run("install-launchd.sh", "--takeover")
+    assert r.returncode == 0, r.stderr
+    assert e.plist(SYNC)["ProgramArguments"][1] == f"{e.link}/skills/plan-week/scripts/run-sync.sh"
+
+
+def test_an_unreadable_plist_blocks_too(e):
+    e.la.mkdir(parents=True)
+    (e.la / f"{SYNC}.plist").write_bytes(b"\x00not a plist")
+    r = e.run("install-launchd.sh")
+    assert r.returncode == 3 and "cannot read" in r.stderr
+
+
+def test_our_own_plist_is_not_a_foreign_owner(e):
+    assert e.run("install-launchd.sh").returncode == 0
+    assert e.run("install-launchd.sh").returncode == 0
+
+
+def test_link_path_that_is_a_real_directory_is_refused(e):
+    e.link.mkdir(parents=True)
+    (e.link / "keep.txt").write_text("mine")
+    r = e.run("install-launchd.sh")
+    assert r.returncode == 3 and "not a symlink" in r.stderr
+    assert (e.link / "keep.txt").read_text() == "mine" and sorted(p.name for p in e.link.iterdir()) == ["keep.txt"]
+    assert not e.la.exists() or list(e.la.iterdir()) == []
+
+
+def test_launchd_disabled_in_config_installs_nothing(e):
+    c = cfg_copy(); c["plan_week"]["launchd"]["enabled"] = False
+    e.set_config(c)
+    r = e.run("install-launchd.sh")
+    assert r.returncode == 2 and "enabled is false" in r.stderr
+    assert not e.la.exists() and not e.link.exists()
+
+
+def test_missing_config_exits_4(e):
+    (e.cfg_home / "github-board" / "config.json").unlink()
+    r = e.run("install-launchd.sh")
+    assert r.returncode == 4 and "plan-week init" in r.stderr
+
+
+def test_check_fails_on_a_missing_link(installed):
+    installed.link.unlink()
+    r = installed.run("install-launchd.sh", "--check")
+    assert r.returncode == 1 and "MISSING LINK" in r.stdout
+
+
+def test_check_fails_on_a_dangling_link(installed, tmp_path):
+    installed.link.unlink()
+    installed.link.symlink_to(tmp_path / "gone")
+    r = installed.run("install-launchd.sh", "--check")
+    assert r.returncode == 1 and "DANGLING LINK" in r.stdout
+
+
+def test_check_fails_on_a_link_without_plan_week(installed, tmp_path):
+    empty = tmp_path / "empty-plugin"
+    empty.mkdir()
+    installed.link.unlink()
+    installed.link.symlink_to(empty)
+    r = installed.run("install-launchd.sh", "--check")
+    assert r.returncode == 1 and "BAD LINK" in r.stdout
+
+
+def test_check_reports_a_real_directory_at_the_link_path(installed):
+    installed.link.unlink()
+    installed.link.mkdir()
+    r = installed.run("install-launchd.sh", "--check")
+    assert r.returncode == 1 and "NOT A LINK" in r.stdout
+
+
+# ---- a missing or broken config under launchd (#146) --------------------------
+
+def test_run_sync_without_a_config_notifies_and_records_the_error(installed):
+    (installed.cfg_home / "github-board" / "config.json").unlink()
+    r = installed.run("run-sync.sh")
+    assert r.returncode == 4
+    assert installed.log("python") == []                     # sync never ran
+    assert any("config" in c for c in installed.log("osascript"))
+    assert "plan-week init" in (installed.state / "last-error").read_text()
+
+
+def test_watchdog_with_a_broken_config_alerts_once_per_six_hours(installed):
+    installed.set_config("{not json")
+    r = installed.run("watchdog.sh")
+    assert r.returncode == 2
+    assert len([c for c in installed.log("osascript") if "config" in c]) == 1
+    installed.run("watchdog.sh", NOW=T0 + HOUR)
+    assert len([c for c in installed.log("osascript") if "config" in c]) == 1
+    installed.run("watchdog.sh", NOW=T0 + 7 * HOUR)
+    assert len([c for c in installed.log("osascript") if "config" in c]) == 2
+
+
+def test_install_without_a_config_does_not_notify(e):
+    (e.cfg_home / "github-board" / "config.json").unlink()
+    assert e.run("install-launchd.sh").returncode == 4
+    assert e.log("osascript") == []

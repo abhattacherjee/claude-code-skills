@@ -5,8 +5,11 @@
 # Exit 3 from sync means "skipped: GraphQL budget low". That is logged only: last-success and
 # last-error stay as they are and nothing is notified. If skips keep happening, the watchdog's
 # 26h staleness alert fires. Any other non-zero exit is a failure.
+# A missing or invalid github-board config exits 4 or 2 before sync runs; common.sh records it
+# in last-error and notifies (at most once per 6h).
 # Overrides for tests: PYTHON, LAUNCHCTL, OSASCRIPT, LA_DIR, STATE_DIR, LOG_DIR, SKILL_DIR.
 set -uo pipefail
+GB_ALERT_ON_CONFIG_ERROR=1
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 mkdir -p "$STATE_DIR" "$LOG_DIR"

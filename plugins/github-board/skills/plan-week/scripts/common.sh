@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Shared settings for the weekly-focus launchd scripts. Sourced, not run.
+# Shared settings for the plan-week launchd scripts. Sourced, not run.
 # Every external command and path can be overridden from the environment (tests do).
+# Labels come from the github-board config (plan_week.launchd.label_prefix); a missing or
+# invalid config exits here with config.py's code (4 or 2). A script that launchd runs sets
+# GB_ALERT_ON_CONFIG_ERROR=1 before sourcing this, so that failure is also recorded in
+# $STATE_DIR/last-error and raised as a notification (at most once per 6h) instead of
+# vanishing into launchd's error log.
 _WF_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export SKILL_DIR="${SKILL_DIR:-$(cd "$_WF_SCRIPTS/.." && pwd)}"
 export LAUNCHCTL="${LAUNCHCTL:-launchctl}"
@@ -10,10 +15,10 @@ export LA_DIR="${LA_DIR:-$HOME/Library/LaunchAgents}"
 export STATE_DIR="${STATE_DIR:-$HOME/.local/state/weekly-focus}"
 export LOG_DIR="${LOG_DIR:-$HOME/Library/Logs/weekly-focus}"
 export NOW="${NOW:-$(date +%s)}"
-
-SYNC_LABEL="com.abhattacherjee.weekly-focus-sync"
-WATCHDOG_LABEL="com.abhattacherjee.weekly-focus-watchdog"
-LABELS="$SYNC_LABEL $WATCHDOG_LABEL"
+# Stable path the plists run through, so they survive plugin upgrades (re-pointed by install).
+export GITHUB_BOARD_LINK="${GITHUB_BOARD_LINK:-$HOME/.local/share/github-board/current}"
+# The plugin root this copy runs from, symlinks resolved, so the link never points at itself.
+PLUGIN_ROOT="$(cd "$_WF_SCRIPTS/../../.." && pwd -P)"
 DOMAIN="gui/$(id -u)"
 
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
@@ -60,3 +65,22 @@ reinstall_or_alert() {
   fi
   return "$rc"
 }
+
+. "$_WF_SCRIPTS/../../../lib/config.sh"
+_gb_err="$(mktemp)"
+_gb_rc=0
+LABEL_PREFIX="$(gb_config_get plan_week.launchd.label_prefix 2>"$_gb_err")" || _gb_rc=$?
+if [ "$_gb_rc" -ne 0 ]; then
+  cat "$_gb_err" >&2
+  if [ "${GB_ALERT_ON_CONFIG_ERROR:-0}" = 1 ]; then
+    mkdir -p "$STATE_DIR"
+    { echo "$(date -u +%FT%TZ) plan-week config unreadable (exit $_gb_rc)"; cat "$_gb_err"; } > "$STATE_DIR/last-error"
+    alert config "config error" "plan-week cannot read its config (exit $_gb_rc): run plan-week init or fix the file. See $STATE_DIR/last-error"
+  fi
+  rm -f "$_gb_err"
+  exit "$_gb_rc"
+fi
+rm -f "$_gb_err"
+SYNC_LABEL="$LABEL_PREFIX-sync"
+WATCHDOG_LABEL="$LABEL_PREFIX-watchdog"
+LABELS="$SYNC_LABEL $WATCHDOG_LABEL"

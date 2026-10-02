@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.abhattacherjee.weekly-focus-sync</string>
+	<string>__LABEL__</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
@@ -11,23 +11,16 @@
 	</array>
 	<key>StartCalendarInterval</key>
 	<array>
-		<dict>
-			<key>Hour</key>
-			<integer>7</integer>
-			<key>Minute</key>
-			<integer>0</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>18</integer>
-			<key>Minute</key>
-			<integer>0</integer>
-		</dict>
+__CALENDAR__
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>XDG_CONFIG_HOME</key>
+		<string>__XDG_CONFIG_HOME__</string>
+		<key>XDG_CACHE_HOME</key>
+		<string>__XDG_CACHE_HOME__</string>
 	</dict>
 	<key>ProcessType</key>
 	<string>Background</string>
