@@ -197,5 +197,5 @@ Two people file issues about the same CSP directive but frame them differently (
 
 - `ci-security-issue-creator` — creates new issues from security alerts (complementary: this skill manages existing issues, that skill creates new ones) _(archived 2026-08-15 to `~/.claude/skills-archive/`)_
 - `prune-branches` — complementary repo hygiene (branches instead of issues)
-- `project-code-review` — code review skill that may generate new issues
+- `project-code-review` (separate skill, not in this plugin) — code review skill that may generate new issues
 - `plan-milestones` — decides where a *valid* issue belongs (which milestone), by theme rather than priority. Complementary and runs after this skill: triage decides whether an issue is still real, milestone-planning decides which release it lands in.

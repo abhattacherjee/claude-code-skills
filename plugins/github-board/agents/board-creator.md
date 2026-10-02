@@ -1,6 +1,6 @@
 ---
 name: board-creator
-description: "Copies a template ProjectV2 onto a target owner via `gh project copy` and links the new project to a target repository. NOT user-invocable — spawned by create-board skill in Phases 2 and 3 (was gh-board-creator)."
+description: "Copies a template ProjectV2 onto a target owner via `gh project copy` and links the new project to a target repository. NOT user-invocable — spawned by create-board skill in Phases 2, 3 and 5 (was gh-board-creator)."
 model: haiku
 ---
 

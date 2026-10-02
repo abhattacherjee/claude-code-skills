@@ -86,7 +86,7 @@ The script avoids `declare -A` (associative arrays, bash 4+) and `=~` with captu
 
 ## See Also
 
-- `release-and-git-flow` — the git-flow-finish.sh script that creates temp branches
-- `worktree` — worktree management (creates branches that should NOT be cleaned while in use)
-- `dependabot-triage` agent — creates GitHub issues for Category B PRs (upstream of Category 5)
-- `dependabot-pr-reviewer` agent — batches safe Dependabot PRs into hotfix releases
+- `release-and-git-flow` (separate skill, not in this plugin) — the git-flow-finish.sh script that creates temp branches
+- `worktree` (separate skill, not in this plugin) — worktree management (creates branches that should NOT be cleaned while in use)
+- `dependabot-triage` agent (separate, not in this plugin) — creates GitHub issues for Category B PRs (upstream of Category 5)
+- `dependabot-pr-reviewer` agent (separate, not in this plugin) — batches safe Dependabot PRs into hotfix releases

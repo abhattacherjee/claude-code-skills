@@ -1,4 +1,4 @@
-"""Tests for skills/weekly-focus/scripts/weekly-focus.py (#213, #214).
+"""Tests for skills/plan-week/scripts/weekly-focus.py (#213, #214).
 
 The module is loaded by path. Its `gh` function (and, for `show`, the
 functions built on it) is replaced with fakes, so no test ever runs the real

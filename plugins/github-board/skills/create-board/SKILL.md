@@ -143,7 +143,7 @@ swimlanes; nothing later can add them.
 
 ### Phase 3 — Link (`github-board:board-creator`, continued)
 
-Runs `scripts/link-repo.sh <project-id> <repo>` → `linkProjectV2ToRepository`.
+Runs `scripts/link-repo.sh --project-id <project-id> --repo <owner/name>` → `linkProjectV2ToRepository`.
 
 ### Phase 4 — Check `Auto-add to project` (`github-board:workflow-syncer`, `sonnet`)
 

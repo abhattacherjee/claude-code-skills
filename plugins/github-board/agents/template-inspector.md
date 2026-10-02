@@ -18,7 +18,7 @@ Return a single JSON object:
 
 ```json
 {
-  "snapshot_path": "/tmp/gh-board-template-<owner>-<num>.json",
+  "snapshot_path": "<the path inspect-template.sh printed, e.g. $TMPDIR/gh-board-template.XXXXXX>",
   "title": "<template title>",
   "field_count": <int>,
   "view_count": <int>,

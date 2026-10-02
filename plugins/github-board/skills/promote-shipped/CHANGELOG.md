@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to the `github-release-board-promote` skill are documented here.
+All notable changes to the `promote-shipped` skill (named `github-release-board-promote`
+before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [2.0.0] — 2026-10-02
@@ -52,17 +53,6 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `GH_TOKEN`) it warns and proceeds rather than hard-failing a token that may well
   be write-capable, and the remediation now covers PATs, which `gh auth refresh`
   cannot change.
-- **A `cd` in `prove-guard.sh`'s `--test` no longer redirects the revert.** `eval`
-  is a builtin, so a cwd change inside the test command persisted; every later
-  relative use of the target then resolved against it. Reproduced: the user's file
-  left mutated AND an unrelated file at the same relative path under the new cwd
-  overwritten with the backup. Fixed on both sides — the target is absolutised up
-  front, and both eval sites run in a subshell (which also stops a test command
-  altering `set -e` or the script's own variables).
-- **`prove-guard.sh` arms its restore at the backup, not after the mutation.**
-  python truncates the target at `open(path,'w')` and only then writes, so a signal
-  in that window reached cleanup with `MUTATED=0` and deleted the backup of a file
-  that was already empty.
 - **A failed release compare no longer reads as "this release does not contain the
   commit".** It fell through to the next, newer release, so one transient 5xx on
   the true container stamped the issue with a too-new tag — the wrong-tag outcome
@@ -83,9 +73,6 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The dry-run preview names the target column**, not just its option id. The
   resolver's last tier is a substring match on `done|released|shipped`, on boards
   whose real columns include "Done in develop".
-- **A discovered PR keeps its own repository.** Timeline discovery stamped every
-  PR with the ISSUE's repo, which is wrong for a cross-referenced PR from another
-  repository and fed both the ancestry compare and the release lookup.
 - **`inventory-board.sh` warns when an issue has more than 10 linked PRs**, since
   that cap can change a classification (`linkedPRCount` separates `nopr` from
   `hold-unmerged-pr`). The other two unpaginated caps are left silent on purpose.
@@ -111,61 +98,8 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The read scripts also gain the write path's three-way verdict: unreadable scopes
   (fine-grained PAT, bare `GH_TOKEN`) warn and proceed rather than hard-failing a
   token that can very likely read, with remediation that names PATs.
-- **`prove-guard.sh`'s build caveat no longer cries wolf.** A real test failure
-  often quotes the words the build patterns look for: a test named
-  `test_reports_build_failed`, an assertion comparing against `"build failed"`, a
-  go test echoing `undefined: x`. The caveat is now suppressed when the log shows a
-  NAMED test reporting failure (`FAILED <id>`, `--- FAIL:`, a reporter symbol),
-  which means tests ran and one failed. Keyed on a named test rather than a
-  pass/fail tally, because a tally is also printed by runs that failed before any
-  test executed. Line-start anchoring was measured first and rejected: it loses 4
-  of 5 real build failures, since go, vitest, pytest and an echoed `SyntaxError`
-  all print the build text mid-line. The reporter symbols are not
-  interchangeable: `✕` (jest) and `×` (vitest) mark a failing test, but `✘`
-  (U+2718) leads every esbuild ERROR line and marks a BUILD error, so including it
-  suppressed the caveat on a genuine esbuild break. It is out of BOTH patterns:
-  left in the "did a test fail?" one, it also suppressed the caveat on an esbuild
-  error whose text missed every build pattern. Accepted cost, recorded in the
-  script: a reporter that marks a failing test with `✘` and no other marker word
-  now draws a caveat it does not need. AVA is the known case and is unaffected —
-  its line reads `✘ [fail]: <title>`, so the literal `[fail]` rescues it, and on a
-  terminal without unicode `figures.cross` degrades to `×` U+00D7, which is in both
-  patterns — rescued twice over (verified from avajs/ava and sindresorhus/figures;
-  note some write-ups render the glyph as `✖` U+2716, a different codepoint in
-  neither pattern). `✗` U+2717 was dropped from BOTH patterns for a related but
-  distinct reason: not that it marks a build error, but that no reporter could be
-  attributed to it at all (mocha delegates to `log-symbols` and defines no
-  literal), so it cannot answer "did a test fail?" for any known runner. The
-  invariant now held is that both patterns carry only owner-attributed glyphs.
-  Three alternations were also added for parser/bundler errors phrased "Expected X
-  but found/got Y" (swc, rollup, esbuild), which matched the `expect` arm and no
-  build pattern, and so reached no caveat at all. That clause requires QUOTED
-  PUNCTUATION after "expected": a looser `expected <anything> but got` is chai's
-  standard assertion message, so it caveated every mocha/chai failure of that
-  shape. TAP's `not ok <n> - <name>` was added to the named-test set at the same
-  time — TAP has no reporter symbol, so nothing else could rescue a TAP run.
-  Known residual, accepted: `pytest -q --tb=no` output quoting `unexpected token`
-  in an assertion still caveats, since quiet mode omits the FAILED line. A false caveat is noise; a false
-  suppression hides a broken build.
-- **Preserved backups say which file they came from.** `prove-guard.sh` puts the
-  source file's basename in the temp templates
-  (`prove-guard.<basename>.XXXXXXXX`), so several preserved backups from failed
-  runs are tellable apart. The FATAL message was the only pointer before, and it
-  scrolls away. The basename is sanitised to `[A-Za-z0-9._-]` and capped at 40
-  characters.
-- **`prove-guard.sh` detects a broken build positively** instead of inferring it
-  from the absence of a test-failure marker. Build errors routinely contain the
-  marker words — go prints `FAIL\tpkg [build failed]`, vitest/esbuild print
-  `Transform failed`/`Build failed`, and a syntax error echoes the offending source
-  line, which in guard code is the line containing `assert`/`expect` — so the
-  caveat was suppressed on exactly the cases it exists for. Also added `×`
-  (U+00D7), vitest's default reporter symbol, to the marker set.
-- **Trailing value-taking flags** (`--release-tag`, `--base`, and all five of
-  `prove-guard.sh`'s) reported nothing and exited 1: `shift 2` with one argument
+- **Trailing value-taking flags** (`--release-tag`, `--base`) reported nothing and exited 1: `shift 2` with one argument
   left returns non-zero under `set -e`. Each now names itself and exits 2.
-- **`prove-guard.sh`'s post-revert verification** captures git's exit status, so a
-  failed `git status` no longer reads as "no differences, revert verified". Same
-  hazard fixed inside the cleanup trap, where it gated deleting the backup.
 - **A comment-only failure is no longer readable as a clean run**: `apply-promotions.sh`
   prints an explicit `ACTION NEEDED: N release comment(s) failed` line. The exit
   code is deliberately unchanged — comment failures remain non-fatal by contract.
@@ -181,12 +115,13 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   linked-PR nodes and the PullRequest fragment — all three are load-bearing for the
   classifier. The timeline fallback query is now documented too.
 
+
 ### Changed
 - **Renamed to `promote-shipped`** and moved into the `github-board` plugin (#146). Invoke it as `/github-board:promote-shipped`. The old name still matches as a trigger phrase.
 - `SKILL.md` is the version that documents what the scripts in this release do (the `hold-discovery-failed` class, the three scope cases, the trimmed description below). The installed copy the plugin was first built from was an older snapshot of it. (#146)
 - Held-item output no longer asserts "merged but not in main" for a reachability
   check that errored; an errored check reads "could not verify".
-- Frontmatter `description` trimmed (811 → 475 chars) — implementation detail and
+- Frontmatter `description` trimmed (811 → 566 chars) — implementation detail and
   the `Covers:` clause removed, trigger conditions and the no-boards no-op contract
   kept. The stale `/finalize-release` trigger is now `/finish` (git-flow plugin).
 
