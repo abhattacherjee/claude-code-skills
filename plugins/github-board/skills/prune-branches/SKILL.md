@@ -65,7 +65,7 @@ done
 git push origin --delete <branch>
 ```
 
-Verified 2026-06-03 on obsidian-brain: script reported "Nothing to clean up" while 3 squash-merged remote feature branches (PRs #40, #83, #97) still existed; manual PR-state check + `git push origin --delete` removed them.
+Verified 2026-06-03 on a real repo: script reported "Nothing to clean up" while 3 squash-merged remote feature branches (PRs #40, #83, #97) still existed; manual PR-state check + `git push origin --delete` removed them.
 
 ### Issue-tracked Dependabot PRs need cross-referencing
 

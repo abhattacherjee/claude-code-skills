@@ -174,3 +174,25 @@ jobs:
       # ran only by hand.
       - name: Run adversarial-review test suite
         run: bash plugins/adversarial-review/skills/adversarial-review/scripts/run-tests.sh
+
+  github-board-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 is the oldest Python the plugin supports (standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      # Unconditional, like the jobs above: lib/ and tests/ are outside the skill
+      # filters, and a change anywhere in the plugin can break a moved test.
+      - name: Run github-board test suite
+        run: python -m pytest plugins/github-board/tests -q -p no:cacheprovider
+
+      - name: Clean-HOME smoke test
+        run: bash plugins/github-board/tests/smoke-clean-home.sh

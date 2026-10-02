@@ -5,7 +5,7 @@
 - [Writing a milestone theme](#writing-a-milestone-theme)
 - [The four buckets](#the-four-buckets)
 - [Effort check before "keep"](#effort-check-before-keep)
-- [Worked example: obsidian-brain v3.6 → v3.7](#worked-example-obsidian-brain-v36--v37)
+- [Worked example: an app's v3.6 → v3.7](#worked-example-an-apps-v36--v37)
 - [gh mechanics that bite](#gh-mechanics-that-bite)
 
 ## The criterion: theme, not priority
@@ -69,7 +69,7 @@ still not a quick win. Keep it only if the milestone's horizon can absorb it; ot
 say so explicitly and let the user decide. Surfacing the tension is the job — silently
 keeping it is how a milestone slips.
 
-## Worked example: obsidian-brain v3.6 → v3.7
+## Worked example: an app's v3.6 → v3.7
 
 **Situation.** v3.6 had 15 closed and 7 open. Every one of the 7 had been filed that same
 day as a follow-up from two shipped issues. `milestone-report.sh` flagged all 7 as
