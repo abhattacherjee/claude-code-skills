@@ -33,13 +33,13 @@ Exit codes for both: 0 done; 1 failed (a write failed, `jq` is missing, or `sett
 
 ## Security: what a repo can make git run
 
-The statuslines run git on every prompt, in whatever repo the session is in. A repo you cloned or unpacked can carry config and attributes that make git run its own programs. Every git call the shipped statuslines (`install`'s script, `create`'s generated scripts and the recipes in `item-recipes.md`) make goes through `_git`, which is `GIT_NO_LAZY_FETCH=1 git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks`. "Probed" means a test or probe set the vector up, saw plain git run it, and saw the statusline not run it.
+The statuslines run git on every prompt, in whatever repo the session is in. A repo you cloned or unpacked can carry config and attributes that make git run its own programs. Every git call the shipped statuslines (`install`'s script, `create`'s generated scripts and the recipes in `item-recipes.md`) make goes through `_git`, which is `GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false -c protocol.allow=never --no-optional-locks`. "Probed" means a test or probe set the vector up, saw plain git run it, and saw the statusline not run it.
 
 | git call | What a repo could make it run | How it is closed |
 |---|---|---|
 | every call | `core.fsmonitor` hook | `-c core.fsmonitor=false` |
 | every call | `core.pager`, `pager.<cmd>` | `--no-pager`; the output is never a terminal anyway |
-| every call | lazy fetch of missing objects in a partial clone, through the remote's transport (`ext::`, `core.sshCommand`, remote helpers) | `GIT_NO_LAZY_FETCH=1` (git 2.44+), and `unsafe_repo` skips status and diff in any partial clone (`remote.*.promisor`, `extensions.partialClone`), for older git. Probed. |
+| every call | lazy fetch of missing objects in a partial clone, through the remote's transport (`ext::`, `core.sshCommand`, remote helpers) | No transport can start on any git version: `GIT_ALLOW_PROTOCOL=none` allows no protocol and overrides the repo's own `protocol.<name>.allow` (which beats `-c protocol.allow=never`, also set). On top: `GIT_NO_LAZY_FETCH=1` (git 2.44+), and `unsafe_repo` skips status and diff in any partial clone. Probed with `ext::` and with `ssh` plus `core.sshCommand`, without the other two guards. |
 | `status --porcelain --ignore-submodules=all` (install) | `filter.<name>.clean` / `.process` | `unsafe_repo` skips the call when a filter is defined in any scope but global or system, including `include.path` and worktree config, or when the config lookup fails. Probed. |
 | same | the `post-index-change` hook (an index refresh write) | `--no-optional-locks`: no index write. Probed. |
 | same | a submodule's own fsmonitor or filters, which `unsafe_repo` never sees | `--ignore-submodules=all`. Probed. |

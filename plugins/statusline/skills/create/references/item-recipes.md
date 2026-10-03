@@ -16,7 +16,9 @@ num() { local v=${1%%.*}; v=${v//[!0-9]/}; v=${v:0:15}; printf '%s' "${v:-0}"; }
 # git without the repo-config hooks (core.fsmonitor) that can run a program.
 # --no-optional-locks: no index write, so no post-index-change hook; GIT_NO_LAZY_FETCH:
 # no transport for missing objects (git 2.44+; unsafe_repo covers older git).
-_git() { GIT_NO_LAZY_FETCH=1 git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
+# GIT_ALLOW_PROTOCOL: no transport at all, on any git version; it overrides the repo's own
+# protocol.<name>.allow, which beats -c protocol.allow=never (kept to state the intent).
+_git() { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false -c protocol.allow=never --no-optional-locks "$@"; }
 # 0 (true) when git status/diff could run code the repo controls, or the config lookup
 # fails: a filter driver (filter.<name>.clean runs on status and diff) in any scope other
 # than global or system (local, worktree, command, and files they include), or a partial

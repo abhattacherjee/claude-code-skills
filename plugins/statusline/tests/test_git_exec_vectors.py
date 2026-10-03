@@ -149,7 +149,7 @@ def test_every_status_and_diff_call_carries_the_sweep_flags(tmp_path, home, bash
     shim = tmp_path / "shim"
     shim.mkdir()
     real = subprocess.run(["sh", "-c", "command -v git"], capture_output=True, text=True).stdout.strip()
-    (shim / "git").write_text(f'#!/bin/sh\necho "$GIT_NO_LAZY_FETCH $*" >> "{log}"\nexec "{real}" "$@"\n')
+    (shim / "git").write_text(f'#!/bin/sh\necho "$GIT_NO_LAZY_FETCH $GIT_ALLOW_PROTOCOL $*" >> "{log}"\nexec "{real}" "$@"\n')
     (shim / "git").chmod(0o755)
     env = git_env(home)
     repo = tmp_path / "r"
@@ -161,9 +161,46 @@ def test_every_status_and_diff_call_carries_the_sweep_flags(tmp_path, home, bash
     calls = log.read_text().splitlines()
     assert any(" status " in c for c in calls) and any(" diff " in c for c in calls)
     for c in calls:
-        assert c.startswith("1 --no-pager -c core.fsmonitor=false"), c
+        assert c.startswith("1 none --no-pager -c core.fsmonitor=false"), c
+        assert "-c protocol.allow=never" in c, c
         if " status " in c:
             assert "--ignore-submodules=all" in c, c
         if " diff " in c:
             for flag in ("--ignore-submodules=all", "--no-textconv", "--no-ext-diff"):
                 assert flag in c, c
+
+
+def old_git_copy(script: Path, dest: Path) -> Path:
+    """The script as git < 2.44 would run it, with unsafe_repo bypassed: no
+    GIT_NO_LAZY_FETCH, and unsafe_repo always says "safe"."""
+    text = script.read_text()
+    assert text.count("GIT_NO_LAZY_FETCH=1 ") == 1
+    text = text.replace("GIT_NO_LAZY_FETCH=1 ", "")
+    text = text.replace("\n_git() {", "\nunsafe_repo() { return 1; }\n_git() {", 1)
+    # unsafe_repo is defined after _git; redefine it again after its own definition.
+    i = text.index("unsafe_repo() {\n")
+    j = text.index("\n}\n", i) + 3
+    text = text[:j] + "unsafe_repo() { return 1; }\n" + text[j:]
+    dest.write_text(text)
+    return dest
+
+
+@pytest.mark.parametrize("transport", ["ext", "ssh"])
+def test_no_transport_starts_even_on_old_git_without_unsafe_repo(tmp_path, home, bash, transport):
+    env = git_env(home)
+    env.pop("GIT_NO_LAZY_FETCH", None)
+    pc, marker = partial_clone(tmp_path, env)
+    if transport == "ssh":
+        # protocol.<name>.allow in the repo's config beats -c protocol.allow=never.
+        git(pc, "config", "protocol.ssh.allow", "always", env=env)
+        git(pc, "config", "core.sshCommand", f"sh -c 'touch {marker}' --", env=env)
+        git(pc, "remote", "set-url", "origin", "ssh://host/x", env=env)
+    probe = subprocess.run(["git", "-c", "protocol.allow=never", "diff", "--numstat"], cwd=str(pc),
+                           env=env, capture_output=True)
+    assert marker.exists(), "repro is not real: protocol.allow=never alone should not stop it"
+    marker.unlink()
+    gen = generated(tmp_path, home, "git", bash)
+    for s in (old_git_copy(REFERENCE, tmp_path / "ref-old.sh"), old_git_copy(gen, tmp_path / "gen-old.sh")):
+        r = run_script(s, payload(), pc, env, 200, bash)
+        assert r.returncode == 0 and "main" in r.stdout, r.stderr
+        assert not marker.exists(), s.name

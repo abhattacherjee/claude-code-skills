@@ -210,7 +210,7 @@ def test_every_git_call_is_hardened(tmp_path, home, repos, bash):
     assert len(calls) >= 10
     for c in calls:
         assert c.startswith("--no-pager -c core.fsmonitor=false -c core.untrackedCache=false "
-                            "--no-optional-locks "), c
+                            "-c protocol.allow=never --no-optional-locks "), c
 
 
 # ── 1: the git cache ────────────────────────────────────────────────────────
