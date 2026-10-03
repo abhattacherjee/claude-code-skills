@@ -325,12 +325,14 @@ def test_recipes_wrap_jq_values():
     import re
     doc = (SKILLS / "create" / "references" / "item-recipes.md").read_text()
     code = "\n".join(re.findall(r"```bash\n(.*?)```", doc, re.S))
-    # Floats and jq-computed or boolean values never reach $(( )).
-    exempt = ("COST=", "EXCEEDS=")
+    gen = GENERATE.read_text()
+    # Every value from the session JSON is wrapped in num or clean, or is the generator's
+    # own line, character for character (cost, tokens, the 200K flag).
     for line in code.splitlines():
-        if 'jq -r' in line and "$(echo \"$input\"" in line and not line.lstrip().startswith(exempt):
-            assert re.search(r'=\$\((num|clean) "\$\(echo', line), line
+        if 'jq -r' in line and "$(echo \"$input\"" in line:
+            assert re.search(r'=\$\((num|clean) "\$\(echo', line) or line.strip() in gen, line
     assert 'elif [ -n "$BRANCH" ]' in doc
+    assert '[ "$PCT" -gt 100 ] && PCT=100' in doc
 
 
 def test_create_doc_does_not_overclaim_the_helpers():
@@ -375,11 +377,55 @@ def test_a_cache_file_in_the_old_one_line_format_is_not_read(tmp_path, home, rep
     assert "develop" in r.stdout and "stale" not in r.stdout
 
 
-def test_statusline_that_is_not_an_object_fails_cleanly(env, bash):
+@pytest.mark.parametrize("value", ['"bash old.sh"', "3", "[]", "true"])
+@pytest.mark.parametrize("script,args", [(INSTALL, []), (GENERATE, ["--items", ITEMS, "--install"])])
+def test_statusline_that_is_not_an_object_is_bad_input_before_any_write(env, bash, value, script, args):
     env.claude.mkdir()
-    env.settings.write_text('{"statusLine": "bash old.sh"}')
+    env.settings.write_text('{"statusLine": ' + value + '}')
     before = snapshot(env.settings)
-    r = env.run(bash, INSTALL)
-    assert r.returncode == 1
+    r = env.run(bash, script, *args)
+    assert r.returncode == 2, (r.returncode, r.stderr)
     assert snapshot(env.settings) == before
-    assert "statusline script written; settings.json unchanged" in r.stderr
+    assert not env.script.exists()
+    assert "statusLine" in r.stderr
+
+
+def test_null_statusline_is_replaced(env, bash):
+    env.claude.mkdir()
+    env.settings.write_text('{"statusLine": null}')
+    assert env.run(bash, INSTALL).returncode == 0
+    assert json.loads(env.settings.read_text())["statusLine"]["command"] == DEFAULT_CMD
+
+
+@pytest.mark.parametrize("url", ["https://user:SECRET-TOKEN@github.com/octo/repo.git",
+                                 "https://SECRET-TOKEN@github.com/octo/repo",
+                                 "http://user:SECRET-TOKEN@host/octo/repo"])
+def test_git_link_never_shows_remote_credentials(tmp_path, home, repos, bash, url):
+    env = git_env(home)
+    repo = repos["develop-clean"]
+    git(repo, "remote", "add", "origin", url, env=env)
+    script = generated(tmp_path, home, "git-link", bash)
+    r = run_script(script, payload(), repo, env, bash=bash)
+    assert r.returncode == 0
+    assert "SECRET" not in r.stdout and "user:" not in r.stdout and "@" not in r.stdout, r.stdout
+    assert "\x1b]8;;http" in r.stdout and "/octo/repo\x07repo" in r.stdout, repr(r.stdout)
+
+
+def test_recipe_git_link_strips_credentials():
+    doc = (SKILLS / "create" / "references" / "item-recipes.md").read_text()
+    assert "s#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\\1#" in doc
+
+
+def test_lib_header_lists_each_functions_returns_under_it():
+    lib = (SKILLS.parent / "lib" / "write-statusline.sh").read_text()
+    head = lib.split("STATUSLINE_MARKER=")[0]
+    upd = head.index("update_settings <settings.json>")
+    quote = head.index("sl_shell_quote <path>")
+    ret = head.index("Returns 0, 1 (write failed")
+    assert upd < ret < quote
+
+
+def test_changelog_percentage_claim_matches_the_ultra_narrow_tier():
+    text = (SKILLS.parent / "CHANGELOG.md").read_text()
+    assert "the printed percentage is shown as received" not in text
+    assert "below 40 columns" in text

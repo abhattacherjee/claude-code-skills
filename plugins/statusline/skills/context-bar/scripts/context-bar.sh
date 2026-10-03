@@ -6,8 +6,11 @@
 # The transcript lives in ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<slug>/, where <slug> is
 # the session's working directory with every character that is not an ASCII letter or digit
 # replaced by '-' (counted in UTF-16 code units, as Claude Code's JavaScript does). A slug
-# longer than 200 characters is cut to 200 and gets '-<hash>' appended, so that case is
-# matched by prefix. The logical $PWD is tried first, then the physical path.
+# longer than 200 characters is cut to 200 and gets '-<hash>' appended: Math.abs of a
+# Java-style 32-bit hash of the path's UTF-16 code units, in base 36, the same function as
+# in the Claude Code 2.1.x binary. The exact name is computed, never matched by prefix, so
+# another project sharing the first 200 characters is never read. The logical $PWD is
+# tried first, then the physical path.
 # In that directory, $CLAUDE_CODE_SESSION_ID.jsonl is used when it exists, else the newest
 # *.jsonl.
 #
@@ -33,26 +36,35 @@ esac
 
 PROJECTS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 
+# The projects/ directory name Claude Code uses for working directory $1.
 slug() {
   python3 -c '
 import sys
 p = sys.argv[1]
-print("".join(c if (c.isascii() and c.isalnum())
-              else "-" * (len(c.encode("utf-16-le", "surrogatepass")) // 2) for c in p))
+units = p.encode("utf-16-le", "surrogatepass")
+s = "".join(c if (c.isascii() and c.isalnum())
+            else "-" * (len(c.encode("utf-16-le", "surrogatepass")) // 2) for c in p)
+if len(s) > 200:
+    h = 0
+    for i in range(0, len(units), 2):
+        h = (h * 31 + int.from_bytes(units[i:i + 2], "little")) & 0xFFFFFFFF
+    h = abs(h - (1 << 32) if h >= 1 << 31 else h)
+    d = ""
+    while True:
+        h, r = divmod(h, 36)
+        d = "0123456789abcdefghijklmnopqrstuvwxyz"[r] + d
+        if h == 0:
+            break
+    s = s[:200] + "-" + d
+print(s)
 ' "$1"
 }
 
 # Print the project dir for working directory $1, if it exists.
 project_dir() {
-  local s d
+  local s
   s=$(slug "$1") || return 1
-  if [ "${#s}" -le 200 ]; then
-    [ -d "$PROJECTS/$s" ] && printf '%s\n' "$PROJECTS/$s"
-  else
-    for d in "$PROJECTS/${s:0:200}-"*; do
-      [ -d "$d" ] && { printf '%s\n' "$d"; return 0; }
-    done
-  fi
+  [ -d "$PROJECTS/$s" ] && printf '%s\n' "$PROJECTS/$s"
   return 0
 }
 

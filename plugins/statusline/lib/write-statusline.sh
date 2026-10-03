@@ -13,9 +13,9 @@
 #     written by this plugin; nothing changed).
 #
 #   check_settings <settings.json>
-#     Returns 0 if the file is absent, blank, or holds exactly one JSON object;
-#     2 otherwise (and says why); 1 if jq is missing, the file cannot be read, or it is
-#     a symlink to a path that does not exist.
+#     Returns 0 if the file is absent, blank, or holds exactly one JSON object whose
+#     statusLine is absent, null or an object; 2 otherwise (and says why); 1 if jq is
+#     missing, the file cannot be read, or it is a symlink to a path that does not exist.
 #
 #   update_settings <settings.json> <command>
 #     Sets .statusLine.type to "command" and .statusLine.command to <command>, keeping any
@@ -23,12 +23,12 @@
 #     temp-file (next to the file) + mv write and the same backup as above, the file's mode
 #     is kept, a symlinked file is updated through its link, and an already-correct file is
 #     not touched.
+#     Returns 0, 1 (write failed or jq missing; file unchanged) or 2 (what check_settings
+#     rejects; file byte-identical).
 #
 #   sl_shell_quote <path>
 #     Prints <path> as a shell word: as is when it holds only [A-Za-z0-9_./-], else
 #     single-quoted.
-#     Returns 0, 1 (write failed or jq missing; file unchanged) or 2 (not one JSON object;
-#     file byte-identical).
 
 STATUSLINE_MARKER='# managed-by: statusline-plugin'
 
@@ -174,6 +174,12 @@ check_settings() {
   _sl_blank "$real" && return 0
   if ! jq -e -s 'length == 1 and (.[0] | type) == "object"' "$real" >/dev/null 2>&1; then
     _sl_err "$file is not a single JSON object. Fix it by hand; it was not changed."
+    return 2
+  fi
+  # update_settings merges into statusLine, so anything but an object (or absent/null)
+  # would fail only after the script was written.
+  if ! jq -e '(.statusLine | type) as $t | $t == "object" or $t == "null"' "$real" >/dev/null 2>&1; then
+    _sl_err "statusLine in $file is not an object. Fix it by hand; it was not changed."
     return 2
   fi
 }

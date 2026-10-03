@@ -53,6 +53,7 @@ MODEL_TAG="$MODEL"
 
 ```bash
 PCT=$(num "$(echo "$input" | jq -r '.context_window.used_percentage // 0')")
+[ "$PCT" -gt 100 ] && PCT=100
 BAR_WIDTH=20
 filled=$(( PCT * BAR_WIDTH / 100 ))
 [ $filled -gt $BAR_WIDTH ] && filled=$BAR_WIDTH
@@ -217,9 +218,9 @@ IN_TOKENS=$(num "$(echo "$input" | jq -r '.context_window.current_usage.input_to
 OUT_TOKENS=$(num "$(echo "$input" | jq -r '.context_window.current_usage.output_tokens // 0')")
 CACHE_CREATE=$(num "$(echo "$input" | jq -r '.context_window.current_usage.cache_creation_input_tokens // 0')")
 CACHE_READ=$(num "$(echo "$input" | jq -r '.context_window.current_usage.cache_read_input_tokens // 0')")
-# Format as K
-IN_K=$(echo "$IN_TOKENS" | awk '{printf "%.0fK", $1/1000}')
-OUT_K=$(echo "$OUT_TOKENS" | awk '{printf "%.0fK", $1/1000}')
+# Format as K (floored), as the generator does
+IN_K=$(echo "$input" | jq -r '(.context_window.current_usage.input_tokens // 0) / 1000 | floor | tostring + "K"')
+OUT_K=$(echo "$input" | jq -r '(.context_window.current_usage.output_tokens // 0) / 1000 | floor | tostring + "K"')
 ```
 
 ## 200K Warning
@@ -235,7 +236,8 @@ WARN=""
 Only http(s) remotes become links; anything else prints as plain text. Uses `clean` and `_git` from the safety helpers.
 
 ```bash
-REMOTE=$(clean "$(_git remote get-url origin 2>/dev/null | sed 's/git@github.com:/https:\/\/github.com\//' | sed 's/\.git$//')")
+REMOTE=$(clean "$(_git remote get-url origin 2>/dev/null | sed 's/git@github.com:/https:\/\/github.com\//' | sed 's/\.git$//' |
+  sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#')")  # drop user:token@ so no secret is shown
 if [ -n "$REMOTE" ]; then
   REPO_NAME=$(basename "$REMOTE")
   case "$REMOTE" in

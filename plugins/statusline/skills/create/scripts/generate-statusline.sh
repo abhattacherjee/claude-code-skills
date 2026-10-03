@@ -328,14 +328,14 @@ BLOCK
     cost)
       cat >> "$GEN" <<'BLOCK'
 # ─── Cost ───
-COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0 | if type == "number" then . else 0 end')
 COST_FMT=$(printf '$%.2f' "$COST")
 BLOCK
       ;;
     cost-color)
       cat >> "$GEN" <<'BLOCK'
 # ─── Cost (color-coded) ───
-COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0 | if type == "number" then . else 0 end')
 COST_FMT=$(printf '$%.2f' "$COST")
 COST_CENTS=$(echo "$COST" | awk '{printf "%d", $1 * 100}')
 if [ "$COST_CENTS" -lt 100 ]; then COST_C="$GREEN"
@@ -390,7 +390,8 @@ BLOCK
     git-link)
       cat >> "$GEN" <<'BLOCK'
 # ─── Git Link (OSC 8, http(s) remotes only) ───
-REMOTE=$(clean "$(_git remote get-url origin 2>/dev/null | sed 's/git@github.com:/https:\/\/github.com\//' | sed 's/\.git$//')")
+REMOTE=$(clean "$(_git remote get-url origin 2>/dev/null | sed 's/git@github.com:/https:\/\/github.com\//' | sed 's/\.git$//' |
+  sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#')")  # drop user:token@ so no secret is shown
 GIT_LINK=""
 if [ -n "$REMOTE" ]; then
   REPO_NAME=$(basename "$REMOTE")

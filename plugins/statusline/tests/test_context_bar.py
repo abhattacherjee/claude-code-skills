@@ -75,14 +75,61 @@ def test_colors_match_the_docs_green_amber_red_at_50_and_80(env, bash, size, col
     assert r.returncode == 0 and r.stdout.startswith(color), repr(r.stdout)
 
 
-def test_long_path_matches_the_hashed_dir(env, bash):
-    work = env.tmp / ("d" * 60) / ("e" * 60) / ("f" * 60) / ("g" * 60)
+def _cc_hash(path) -> str:
+    """Claude Code's suffix for a slug over 200 characters: Math.abs of a Java-style
+    32-bit string hash over UTF-16 code units, in base 36 (read from the 2.1.x binary)."""
+    h = 0
+    data = str(path).encode("utf-16-le", "surrogatepass")
+    for i in range(0, len(data), 2):
+        h = (h * 31 + int.from_bytes(data[i:i + 2], "little")) & 0xFFFFFFFF
+    h = abs(h - (1 << 32) if h >= 1 << 31 else h)
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = ""
+    while True:
+        h, r = divmod(h, 36)
+        out = digits[r] + out
+        if h == 0:
+            return out
+
+
+def test_cc_hash_known_values():
+    # Values of Math.abs(Nee(s)).toString(36), computed with node from the function in the
+    # Claude Code binary: function Nee(t){let e=0;for(...)e=(e<<5)-e+t.charCodeAt(n)|0;return e}
+    assert _cc_hash("") == "0"
+    assert _cc_hash("a") == "2p"
+    assert _cc_hash("ab") == "2e9"
+    assert _cc_hash("/private/var/x/café/😀/" + "d" * 60) == "a835co"
+
+
+LONG = ("d" * 60, "e" * 60, "f" * 60, "g" * 60)
+
+
+def test_long_path_matches_the_exact_hashed_dir(env, bash):
+    work = env.tmp.joinpath(*LONG)
     slug = _slug(work)
     assert len(slug) > 200
-    _setup(env, work, slug[:200] + "-1x2y3z")
+    _setup(env, work, slug[:200] + "-" + _cc_hash(work), files=(("s.jsonl", 400_000),))
     r = _run(env, bash, work)
     assert r.returncode == 0, r.stderr
-    assert FULL in r.stdout
+    assert "10%" in r.stdout
+
+
+def test_long_path_never_reads_another_project_sharing_the_prefix(env, bash):
+    # Two projects whose slugs share the first 200 characters: only the exact hash counts.
+    work = env.tmp.joinpath(*LONG)
+    slug = _slug(work)
+    _setup(env, work, slug[:200] + "-" + _cc_hash(work), files=(("mine.jsonl", 400_000),))
+    _setup(env, work, slug[:200] + "-000other", files=(("other.jsonl", 2_800_000),))
+    r = _run(env, bash, work)
+    assert r.returncode == 0 and "10%" in r.stdout, r.stdout
+
+
+def test_long_path_with_only_a_foreign_prefix_match_exits_1(env, bash):
+    work = env.tmp.joinpath(*LONG)
+    slug = _slug(work)
+    _setup(env, work, slug[:200] + "-000other", files=(("other.jsonl", 400_000),))
+    r = _run(env, bash, work)
+    assert r.returncode == 1 and FULL not in r.stdout
 
 
 def test_prefers_this_sessions_transcript_over_the_newest(env, bash):
