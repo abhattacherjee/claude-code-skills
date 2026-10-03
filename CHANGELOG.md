@@ -7,6 +7,15 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ## [Unreleased]
 
+### Added
+
+- Plugin consolidation design (`docs/superpowers/specs/2026-10-03-plugin-consolidation-design.md`, epic #156): one plugin per workflow, no bare skill copies, and the four standalone skill repos archived.
+- `claudeception/examples/` and `claudeception/resources/`, brought in from the standalone repo ahead of archiving it (#157).
+
+### Changed
+
+- `worktree` 1.0.1: added the note on Python virtualenvs from the live copy, written without private repo names, ahead of archiving the standalone repo (#157).
+
 ## [3.20.0] - 2026-10-02
 
 ### Added
