@@ -1,4 +1,5 @@
 #!/bin/bash
+# managed-by: statusline-plugin
 # Claude Code statusline - 3-tier adaptive: ultra-narrow / narrow / wide
 input=$(cat)
 

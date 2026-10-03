@@ -20,6 +20,17 @@ Invoke as `/statusline:<skill>`. The old names still match as trigger phrases.
 
 The three old plugins all wrote `~/.claude/statusline-command.sh` or read the session transcript; they were one feature split three ways. `context-bar` stays its own skill because it is a one-off check, not a statusline. Its old `statusline-command.sh` variant is gone: `create` builds the same bar with its `context-bar` item.
 
+## Your own statusline is safe
+
+`install` and `create` write `~/.claude/statusline-command.sh` (or `create --output PATH`). Every script they write carries `# managed-by: statusline-plugin` on line 2.
+
+- An existing script without that line is yours: they leave it untouched and exit 3. Pass `--force` to replace it.
+- Any file they replace, script or `settings.json`, is first copied to `<file>.bak-<UTC time>`.
+- Writes go to a temp file in the same directory, then `mv`, so a failed write (disk full, no permission) leaves the old file in place.
+- A `settings.json` that is not one JSON object stops the install before anything is written (exit 2). A symlinked `settings.json` is updated through its link.
+
+Exit codes for both: 0 done, 1 a write failed, 2 bad input, 3 refused. The guard lives in `lib/write-statusline.sh`.
+
 ## Install preview
 
 ```

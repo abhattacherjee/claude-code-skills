@@ -1,52 +1,51 @@
 #!/usr/bin/env bash
-# Install the custom statusline for Claude Code
-# Copies the script and updates settings.json
+# Install the 3-tier adaptive statusline for Claude Code.
+# Copies references/statusline-command.sh to ~/.claude/statusline-command.sh and points
+# statusLine in ~/.claude/settings.json at it.
+#
+# Exit codes: 0 installed, 1 a write failed (nothing half-done is left), 2 bad input
+# (unknown flag, or settings.json is not one JSON object), 3 refused: the existing
+# statusline script was not written by this plugin (re-run with --force to replace it
+# after a backup).
 
-set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../lib/write-statusline.sh
+. "$SCRIPT_DIR/../../../lib/write-statusline.sh"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE_SRC="$SCRIPT_DIR/../references/statusline-command.sh"
 STATUSLINE_DEST="$HOME/.claude/statusline-command.sh"
 SETTINGS_FILE="$HOME/.claude/settings.json"
+COMMAND='bash ~/.claude/statusline-command.sh'
 
-# Ensure ~/.claude exists
-mkdir -p "$HOME/.claude"
+usage() {
+  cat <<'USAGE'
+Usage: install.sh [--force]
 
-# Copy the statusline script
-cp "$STATUSLINE_SRC" "$STATUSLINE_DEST"
-chmod +x "$STATUSLINE_DEST"
-echo "Copied statusline script to $STATUSLINE_DEST"
+Installs the 3-tier adaptive statusline to ~/.claude/statusline-command.sh and sets
+statusLine in ~/.claude/settings.json.
 
-# Update settings.json to add/update the statusLine entry
-if [ -f "$SETTINGS_FILE" ]; then
-  # Check if statusLine already exists
-  if jq -e '.statusLine' "$SETTINGS_FILE" >/dev/null 2>&1; then
-    # Update existing
-    jq '.statusLine = {"type": "command", "command": "bash ~/.claude/statusline-command.sh"}' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-    echo "Updated statusLine in $SETTINGS_FILE"
-  else
-    # Add new
-    jq '. + {"statusLine": {"type": "command", "command": "bash ~/.claude/statusline-command.sh"}}' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-    echo "Added statusLine to $SETTINGS_FILE"
-  fi
-else
-  # Create minimal settings.json
-  cat > "$SETTINGS_FILE" <<'SETTINGS'
-{
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/statusline-command.sh"
-  }
+  --force   Replace an existing statusline script that this plugin did not write.
+            It is backed up to statusline-command.sh.bak-<UTC time> first.
+  --help    Show this help.
+
+Exit codes: 0 installed, 1 write failed, 2 bad input, 3 refused (use --force).
+USAGE
 }
-SETTINGS
-  echo "Created $SETTINGS_FILE with statusLine"
-fi
+
+FORCE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) FORCE=1; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+# Check settings.json before touching anything, so a bad file never leaves a half install.
+check_settings "$SETTINGS_FILE" || exit $?
+
+write_statusline "$STATUSLINE_SRC" "$STATUSLINE_DEST" "$FORCE" || exit $?
+update_settings "$SETTINGS_FILE" "$COMMAND" || exit $?
 
 echo ""
-echo "Custom statusline installed! Restart Claude Code to see it."
-echo ""
-echo "Features:"
-echo "  📁 Project directory"
-echo "  🌿 Git branch with sync status"
-echo "  🧠 Context usage with color-coded progress bar"
-echo "  4-tier adaptive layout (ultra-narrow → wide)"
+echo "Statusline installed. Restart Claude Code to see it."

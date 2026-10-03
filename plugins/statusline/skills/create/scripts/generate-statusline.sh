@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Generate a Claude Code statusline script from selected items
-# Usage: generate-statusline.sh [--items ITEMS] [--output PATH] [--lines N] [--install] [--help]
+# Usage: generate-statusline.sh --items ITEMS [--output PATH] [--lines N] [--install] [--force]
+#
+# Exit codes: 0 written, 1 a write failed (the old script and settings.json are unchanged),
+# 2 bad input (flags, items, or settings.json that is not one JSON object), 3 refused: the
+# output file exists and was not written by this plugin (re-run with --force).
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_DIR="$(dirname "$SCRIPT_DIR")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../lib/write-statusline.sh
+. "$SCRIPT_DIR/../../../lib/write-statusline.sh"
 
 usage() {
   cat <<'USAGE'
@@ -18,6 +23,7 @@ Options:
   --output PATH     Output script path (default: ~/.claude/statusline-command.sh)
   --lines N         Number of statusline rows: 1, 2, or 3 (default: 2)
   --install         Also update ~/.claude/settings.json with statusLine config
+  --force           Replace an output file this plugin did not write (backed up first)
   --list            List all available items with descriptions
   --help            Show this help
 
@@ -55,8 +61,9 @@ Examples:
 
   # Install directly
   generate-statusline.sh --items "model,dir,git,context-bar,cost" --install
+
+Exit codes: 0 written, 1 write failed, 2 bad input, 3 refused (use --force).
 USAGE
-  exit 0
 }
 
 list_items() {
@@ -98,32 +105,77 @@ LIST
   exit 0
 }
 
+bad_input() {
+  echo "Error: $*" >&2
+  echo "Run generate-statusline.sh --help for usage." >&2
+  exit 2
+}
+
 # Defaults
 ITEMS=""
-OUTPUT="$HOME/.claude/statusline-command.sh"
+DEFAULT_OUTPUT="$HOME/.claude/statusline-command.sh"
+OUTPUT="$DEFAULT_OUTPUT"
 LINES=2
 INSTALL=false
+FORCE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --items) ITEMS="$2"; shift 2 ;;
-    --output) OUTPUT="$2"; shift 2 ;;
-    --lines) LINES="$2"; shift 2 ;;
+    --items|--output|--lines)
+      [ $# -ge 2 ] || bad_input "$1 needs a value"
+      case "$1" in
+        --items) ITEMS="$2" ;;
+        --output) OUTPUT="$2" ;;
+        --lines) LINES="$2" ;;
+      esac
+      shift 2 ;;
     --install) INSTALL=true; shift ;;
+    --force) FORCE=1; shift ;;
     --list) list_items ;;
-    --help|-h) usage ;;
-    *) echo "Unknown option: $1"; usage ;;
+    --help|-h) usage; exit 0 ;;
+    *) bad_input "unknown option: $1" ;;
   esac
 done
 
-if [ -z "$ITEMS" ]; then
-  echo "Error: --items is required. Use --list to see available items."
-  echo "Example: generate-statusline.sh --items 'model,dir,git,context-bar,cost'"
-  exit 1
+[ -n "$ITEMS" ] || bad_input "--items is required. Use --list to see available items."
+case "$LINES" in 1|2|3) ;; *) bad_input "--lines must be 1, 2 or 3 (got: $LINES)" ;; esac
+[ -n "$OUTPUT" ] || bad_input "--output needs a value"
+case "$OUTPUT" in /*) ;; *) OUTPUT="$PWD/$OUTPUT" ;; esac
+
+# Parse items into array, dropping spaces ("model, dir" works)
+ITEMS=$(printf '%s' "$ITEMS" | tr -d ' ')
+IFS=',' read -ra ITEM_LIST <<< "$ITEMS"
+[ "${#ITEM_LIST[@]}" -gt 0 ] || bad_input "--items lists no items"
+for item in "${ITEM_LIST[@]}"; do
+  case "$item" in
+    model|model-full|dir|context-bar|context-pct|cost|cost-color|duration|api-duration|\
+    lines-changed|git|git-sync|git-link|worktree|vim-mode|agent|session-id|tokens|\
+    warn-200k|style) ;;
+    *) bad_input "unknown item '$item'. Use --list to see available items." ;;
+  esac
+done
+
+# The command settings.json runs. The default output keeps the literal ~ form; any other
+# path is single-quoted when it holds characters the shell would split or expand.
+if [ "$OUTPUT" = "$DEFAULT_OUTPUT" ]; then
+  COMMAND='bash ~/.claude/statusline-command.sh'
+else
+  case "$OUTPUT" in
+    *[!A-Za-z0-9_./-]*) COMMAND="bash '$(printf '%s' "$OUTPUT" | sed "s/'/'\\\\''/g")'" ;;
+    *) COMMAND="bash $OUTPUT" ;;
+  esac
 fi
 
-# Parse items into array
-IFS=',' read -ra ITEM_LIST <<< "$ITEMS"
+# Check settings.json before writing anything, so a bad file never leaves a half install.
+if $INSTALL; then
+  SETTINGS="$HOME/.claude/settings.json"
+  rc=0; check_settings "$SETTINGS" || rc=$?
+  [ $rc -eq 0 ] || exit $rc
+fi
+
+# Build the script in a temp file; write_statusline moves it into place.
+GEN=$(mktemp "${TMPDIR:-/tmp}/statusline-gen.XXXXXX")
+trap 'rm -f "$GEN"' EXIT
 
 # Check which item categories are needed
 needs_git=false
@@ -132,7 +184,6 @@ needs_cost=false
 needs_context=false
 
 for item in "${ITEM_LIST[@]}"; do
-  item=$(echo "$item" | tr -d ' ')
   case "$item" in
     git|git-sync|git-link) needs_git=true; needs_git_cache=true ;;
     cost|cost-color|duration|api-duration|lines-changed) needs_cost=true ;;
@@ -141,8 +192,9 @@ for item in "${ITEM_LIST[@]}"; do
 done
 
 # Generate script
-cat > "$OUTPUT" <<'HEADER'
+cat > "$GEN" <<'HEADER'
 #!/bin/bash
+# managed-by: statusline-plugin
 # Claude Code statusline — generated by the statusline plugin (/statusline:create)
 input=$(cat)
 
@@ -161,16 +213,15 @@ HEADER
 
 # Add extraction blocks based on items needed
 for item in "${ITEM_LIST[@]}"; do
-  item=$(echo "$item" | tr -d ' ')
   case "$item" in
     model)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Model ───
 MODEL=$(echo "$input" | jq -r '.model.display_name')
 BLOCK
       ;;
     model-full)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Model (with 1M indicator) ───
 MODEL=$(echo "$input" | jq -r '.model.display_name')
 CTX_SIZE=$(echo "$input" | jq -r '.context_window.context_window_size // 200000')
@@ -178,14 +229,14 @@ CTX_SIZE=$(echo "$input" | jq -r '.context_window.context_window_size // 200000'
 BLOCK
       ;;
     dir)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Directory ───
 DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
 DIR_SHORT="${DIR##*/}"
 BLOCK
       ;;
     context-bar)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Context Bar ───
 PCT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d. -f1)
 BAR_W=20; filled=$(( PCT * BAR_W / 100 ))
@@ -200,20 +251,20 @@ else CTX_C="$RED"; fi
 BLOCK
       ;;
     context-pct)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Context Percentage ───
 PCT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d. -f1)
 BLOCK
       ;;
     cost)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Cost ───
 COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 COST_FMT=$(printf '$%.2f' "$COST")
 BLOCK
       ;;
     cost-color)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Cost (color-coded) ───
 COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 COST_FMT=$(printf '$%.2f' "$COST")
@@ -224,28 +275,28 @@ else COST_C="$RED"; fi
 BLOCK
       ;;
     duration)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Duration ───
 DUR_MS=$(echo "$input" | jq -r '.cost.total_duration_ms // 0')
 DUR_M=$((DUR_MS / 60000)); DUR_S=$(((DUR_MS % 60000) / 1000))
 BLOCK
       ;;
     api-duration)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── API Duration ───
 API_MS=$(echo "$input" | jq -r '.cost.total_api_duration_ms // 0')
 API_M=$((API_MS / 60000)); API_S=$(((API_MS % 60000) / 1000))
 BLOCK
       ;;
     lines-changed)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Lines Changed ───
 ADDED=$(echo "$input" | jq -r '.cost.total_lines_added // 0')
 REMOVED=$(echo "$input" | jq -r '.cost.total_lines_removed // 0')
 BLOCK
       ;;
     git)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Git (cached) ───
 GIT_CACHE="/tmp/statusline-git-cache"
 GIT_MAX_AGE=5
@@ -273,7 +324,7 @@ BLOCK
       ;;
     git-sync)
       # Only add if git wasn't already added (it includes AHEAD/BEHIND)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Git Sync ───
 SYNC=""
 if [ -n "${GIT_AHEAD:-}" ] && [ "${GIT_AHEAD:-0}" -gt 0 ] && [ "${GIT_BEHIND:-0}" -gt 0 ]; then
@@ -288,7 +339,7 @@ fi
 BLOCK
       ;;
     git-link)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Git Link (OSC 8) ───
 REMOTE=$(git remote get-url origin 2>/dev/null | sed 's/git@github.com:/https:\/\/github.com\//' | sed 's/\.git$//')
 GIT_LINK=""
@@ -299,7 +350,7 @@ fi
 BLOCK
       ;;
     worktree)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Worktree ───
 WT_NAME=$(echo "$input" | jq -r '.worktree.name // empty')
 WORKTREE=""
@@ -307,7 +358,7 @@ WORKTREE=""
 BLOCK
       ;;
     vim-mode)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Vim Mode ───
 VIM_MODE=$(echo "$input" | jq -r '.vim.mode // empty')
 VIM=""
@@ -317,7 +368,7 @@ fi
 BLOCK
       ;;
     agent)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Agent ───
 AGENT_NAME=$(echo "$input" | jq -r '.agent.name // empty')
 AGENT=""
@@ -325,20 +376,20 @@ AGENT=""
 BLOCK
       ;;
     session-id)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Session ID ───
 SID=$(echo "$input" | jq -r '.session_id // ""' | cut -c1-8)
 BLOCK
       ;;
     tokens)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Token Counts ───
 IN_K=$(echo "$input" | jq -r '(.context_window.current_usage.input_tokens // 0) / 1000 | floor | tostring + "K"')
 OUT_K=$(echo "$input" | jq -r '(.context_window.current_usage.output_tokens // 0) / 1000 | floor | tostring + "K"')
 BLOCK
       ;;
     warn-200k)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── 200K Warning ───
 EXCEEDS=$(echo "$input" | jq -r '.exceeds_200k_tokens // false')
 WARN=""
@@ -346,44 +397,27 @@ WARN=""
 BLOCK
       ;;
     style)
-      cat >> "$OUTPUT" <<'BLOCK'
+      cat >> "$GEN" <<'BLOCK'
 # ─── Output Style ───
 STYLE=$(echo "$input" | jq -r '.output_style.name // "default"')
 BLOCK
-      ;;
-    *)
-      echo "Warning: Unknown item '$item' — skipping" >&2
       ;;
   esac
 done
 
 # Add output section
-echo "" >> "$OUTPUT"
-echo '# ─── Output ───' >> "$OUTPUT"
-python3 "$SCRIPT_DIR/generate-output.py" "$ITEMS" "$LINES" >> "$OUTPUT"
+echo "" >> "$GEN"
+echo '# ─── Output ───' >> "$GEN"
+python3 "$SCRIPT_DIR/generate-output.py" "$ITEMS" "$LINES" >> "$GEN"
 
-chmod +x "$OUTPUT"
-echo "Generated: $OUTPUT"
+rc=0; write_statusline "$GEN" "$OUTPUT" "$FORCE" || rc=$?
+[ $rc -eq 0 ] || exit $rc
 
-# Install if requested
 if $INSTALL; then
-  SETTINGS="$HOME/.claude/settings.json"
-  if [ -f "$SETTINGS" ]; then
-    # Use jq to update statusLine in settings
-    if command -v jq >/dev/null 2>&1; then
-      TMP=$(mktemp)
-      jq --arg cmd "bash $OUTPUT" '.statusLine = {"type": "command", "command": $cmd}' "$SETTINGS" > "$TMP"
-      mv "$TMP" "$SETTINGS"
-      echo "Updated: $SETTINGS (statusLine → bash $OUTPUT)"
-    else
-      echo "Warning: jq not found — add this to $SETTINGS manually:"
-      echo "  \"statusLine\": { \"type\": \"command\", \"command\": \"bash $OUTPUT\" }"
-    fi
-  else
-    echo "Warning: $SETTINGS not found"
-  fi
+  rc=0; update_settings "$SETTINGS" "$COMMAND" || rc=$?
+  [ $rc -eq 0 ] || exit $rc
 fi
 
 echo ""
 echo "Test with:"
-echo "  echo '{\"model\":{\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"/tmp/test\"},\"context_window\":{\"used_percentage\":42,\"context_window_size\":200000},\"cost\":{\"total_cost_usd\":0.05,\"total_duration_ms\":120000,\"total_api_duration_ms\":5000,\"total_lines_added\":50,\"total_lines_removed\":10}}' | bash $OUTPUT"
+echo "  echo '{\"model\":{\"display_name\":\"Opus\"},\"workspace\":{\"current_dir\":\"/tmp/test\"},\"context_window\":{\"used_percentage\":42,\"context_window_size\":200000},\"cost\":{\"total_cost_usd\":0.05,\"total_duration_ms\":120000,\"total_api_duration_ms\":5000,\"total_lines_added\":50,\"total_lines_removed\":10}}' | $COMMAND"

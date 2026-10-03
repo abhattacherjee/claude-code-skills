@@ -23,6 +23,8 @@ Generate a 2-line statusline with common items and point settings.json at it:
 bash "${CLAUDE_SKILL_DIR}/scripts/generate-statusline.sh" --items "model,dir,git,git-sync,context-bar,cost,duration" --lines 2 --install
 ```
 
+The script writes `~/.claude/statusline-command.sh` (or `--output PATH`). If that file exists and this plugin did not write it, the script leaves it alone and exits 3: ask the user before re-running with `--force`, which backs the old file up to `<file>.bak-<UTC time>` first. Exit codes: 0 written, 1 write failed (nothing changed), 2 bad input (unknown flag or item, `--lines` not 1-3, `settings.json` not one JSON object), 3 refused.
+
 Test it with mock data:
 
 ```bash
