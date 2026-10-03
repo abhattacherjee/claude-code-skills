@@ -1,0 +1,5 @@
+{
+  "name": "statusline",
+  "version": "1.0.0",
+  "description": "Claude Code statusline in one install: install the 3-tier adaptive statusline, create your own from 20 composable items, or check context usage with context-bar."
+}
