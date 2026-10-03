@@ -19,6 +19,8 @@ All notable changes to the **statusline** plugin are documented here.
 - `create --output` with a relative path is made absolute, and a path with spaces or quotes is quoted in the `statusLine` command. `--items "model, cost"` renders every item; the Python half used to drop items after a space.
 - `create --install` with the default output keeps the command `bash ~/.claude/statusline-command.sh` instead of writing the expanded home path.
 - A missing `jq` stops both installers with exit 1 before anything is written. Before, `create --install` printed a warning and exited 0.
+- `context-bar` finds the current session's transcript directory from the working directory, using Claude Code's own naming rule: every character that is not an ASCII letter or digit becomes `-`, and a name over 200 characters is matched by its 200-character prefix. It reads `$CLAUDE_CODE_SESSION_ID.jsonl` when that exists, else the newest transcript, and honours `CLAUDE_CONFIG_DIR`. Before, it read one hardcoded project's directory, whatever the session. With no matching directory or transcript it says so and exits 1 instead of printing a bar.
+- `context-bar` turns red at 80%, as documented. It used to turn red at 75%.
 
 ### Removed
 
