@@ -2,7 +2,7 @@
 name: worktree
 description: "Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. Use when: (1) /worktree command, (2) user wants to work on multiple branches simultaneously, (3) user has multiple Claude Code sessions conflicting on the same branch, (4) user asks to set up parallel development."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Git Worktree for Parallel Sessions
@@ -44,6 +44,9 @@ Run the appropriate script command. The script handles:
 ### Step 4: Tell the user what to do next
 The script outputs the exact `cd` + `claude` command. Relay this clearly.
 
+The script does not set up Python virtualenvs. See Notes below before
+dispatching any work in a Python project.
+
 ## Naming Convention
 
 Worktree directories are created as siblings of the repo root:
@@ -60,6 +63,13 @@ parent-dir/
 - A branch checked out in one worktree CANNOT be checked out in another (git enforces this)
 - Worktrees share the same `.git` history — commits are visible across all worktrees
 - Use `git worktree remove` (or the script's `remove` command) to clean up when done
+- **Python projects get no virtualenv.** `.venv` is untracked, so a new worktree
+  starts without one. Run the project's own venv setup script, if it has one,
+  before anything else. If a worktree has no `.venv`, an editable install in the
+  parent checkout's venv silently resolves imports to the PARENT's source. A test
+  can then look like it runs against the worktree while it imports another tree.
+  Check with `python -c "import <pkg>; print(<pkg>.__file__)"` before dispatching
+  any work. The path should be inside the worktree, not the main checkout.
 
 ## See Also
 
