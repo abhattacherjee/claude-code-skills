@@ -10,6 +10,8 @@ All notable changes to the **statusline** plugin are documented here.
 - `lib/write-statusline.sh`, shared by `install` and `create`. Every script the plugin writes carries `# managed-by: statusline-plugin` on line 2. An existing script without it is left untouched (exit 3) unless `--force` is passed. Every replaced file is first backed up to `<file>.bak-<UTC time>` (a `-N` suffix keeps two backups made in the same second). Writes go to a temp file in the same directory, are compared byte for byte, then moved into place.
 - `install.sh --force` and `--help`; `generate-statusline.sh --force`.
 - Exit codes for both installers: 0 done, 1 write failed, 2 bad input, 3 refused.
+- A pytest suite under `tests/`, run by the `statusline-tests` CI job on Ubuntu (bash 5) and macOS (bash 3.2). Every test uses a temporary `HOME`.
+- Marketplace entry `statusline`. The `context-bar`, `custom-statusline` and `statusline-creator` entries stay one release, marked deprecated.
 
 ### Fixed
 

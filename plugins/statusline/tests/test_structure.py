@@ -125,3 +125,65 @@ def test_context_bar_ships_no_statusline_script_of_its_own():
 def test_install_ships_the_three_tier_statusline():
     ref = PLUGIN / "skills" / "install" / "references" / "statusline-command.sh"
     assert "3-tier adaptive" in ref.read_text()
+
+
+REPO = PLUGIN.parent.parent
+OLD_PLUGINS = ["context-bar", "custom-statusline", "statusline-creator"]
+DEPRECATED = ("Deprecated: use the statusline plugin "
+              "(statusline:install / statusline:create / statusline:context-bar).")
+
+
+def _market():
+    return {r["name"]: r for r in json.loads(
+        (REPO / ".claude-plugin" / "marketplace.json").read_text())["plugins"]}
+
+
+def test_marketplace_lists_the_plugin():
+    row = _market()["statusline"]
+    plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    assert row["source"] == "./plugins/statusline"
+    assert row["version"] == plugin["version"] == "1.0.0"
+    assert row["description"] == plugin["description"]
+
+
+@pytest.mark.parametrize("old", OLD_PLUGINS)
+def test_old_marketplace_entries_are_deprecated_but_still_installable(old):
+    row = _market()[old]
+    assert row["description"].startswith(DEPRECATED + " ")
+    assert row["source"] == f"./plugins/{old}"
+    assert (REPO / "plugins" / old / ".claude-plugin" / "plugin.json").is_file()
+
+
+def _readme_row(name):
+    rows = [line for line in (REPO / "README.md").read_text().splitlines()
+            if line.startswith(f"| [{name}](./plugins/{name}/)")]
+    assert len(rows) == 1, name
+    return [c.strip() for c in rows[0].strip("|").split("|")]
+
+
+def test_readme_catalogue_row_counts_match_the_plugin():
+    cells = _readme_row("statusline")
+    skills = [p for p in (PLUGIN / "skills").iterdir() if (p / "SKILL.md").is_file()]
+    assert cells[1:4] == ["1.0.0", str(len(skills)), "0"]
+
+
+@pytest.mark.parametrize("old", OLD_PLUGINS)
+def test_readme_marks_old_rows_deprecated(old):
+    assert _readme_row(old)[4].startswith("Deprecated")
+
+
+def test_plugin_readme_counts_match():
+    text = (PLUGIN / "README.md").read_text()
+    n = len([p for p in (PLUGIN / "skills").iterdir() if (p / "SKILL.md").is_file()])
+    assert f"**{n}** skills" in text
+
+
+def test_create_doc_item_count_matches_the_generator():
+    text = (PLUGIN / "skills" / "create" / "SKILL.md").read_text()
+    rows = re.findall(r"^\| `([a-z0-9-]+)` \| (?:Display|Context|Metrics|Git) \|", text, re.M)
+    gen = (PLUGIN / "skills" / "create" / "scripts" / "generate-statusline.sh").read_text()
+    m = re.search(r"\n    (model\|model-full\|.*?)\) ;;", gen, re.S)
+    valid = set(re.split(r"[|\\\s]+", m.group(1))) - {""}
+    assert len(rows) == len(valid) == 20 and set(rows) == valid
+    assert "## Available Items (20 composable blocks)" in text
+    assert "20 composable items" in json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["description"]
