@@ -77,9 +77,11 @@ For the complete JSON schema with all available fields, see **[references/json-s
 ### Key patterns:
 - Always handle null: `jq -r '.field // 0'` or `jq -r '.field // empty'`
 - ANSI colors: `\033[32m` green, `\033[33m` yellow, `\033[31m` red, `\033[0m` reset
-- OSC 8 links: `\033]8;;URL\aText\033]8;;\a` (iTerm2, Kitty, WezTerm only)
-- Cache expensive ops: git commands in `/tmp/statusline-*` with 5s TTL
-- Use `printf '%b'` over `echo -e` for reliable escape handling
+- OSC 8 links: `\033]8;;URL\aText\033]8;;\a` (iTerm2, Kitty, WezTerm only), for http(s) URLs only
+- Cache expensive ops: git results in `${XDG_CACHE_HOME:-~/.cache}/claude-statusline/` (mode 700, one file per directory, never through a symlink) with a 5s TTL, not in a shared temp dir
+- Treat names as untrusted: strip control characters and backslashes before `echo -e` or `printf '%b'`, keep values out of printf format strings (`printf '%s'`), and pass numbers through a digits-only filter before `$(( ))`
+- Run git as `git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks ...` so a repo's config cannot run a program on every prompt
+- The recipes file starts with `clean`, `num` and `_git` helpers that do all of this
 
 ## Presets
 

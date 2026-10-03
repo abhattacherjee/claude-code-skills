@@ -2,6 +2,23 @@
 
 Reusable jq snippets and bash fragments for common statusline items. Each recipe is a self-contained block that can be composed into a full statusline script.
 
+## Safety helpers (put these first)
+
+The statusline runs on every prompt, in whatever directory the session is in. Names come from the session JSON and from the repo, so treat them as untrusted:
+
+```bash
+# Drop control characters and backslashes, so a name cannot carry terminal escapes
+# into echo -e / printf '%b'. Wrap every string field: MODEL=$(clean "$(... jq ...)").
+clean() { printf '%s' "$1" | tr -d '\000-\037\177\\'; }
+# Digits only (at most 15), for anything that reaches $(( ... )): bash evaluates a
+# variable's text as an expression there, so "a[$(cmd)]" would run cmd.
+num() { local v=${1%%.*}; v=${v//[!0-9]/}; v=${v:0:15}; printf '%s' "${v:-0}"; }
+# git without the repo-config hooks (core.fsmonitor) that can run a program.
+_git() { git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
+```
+
+Keep values out of printf format strings: `printf '%s\n' "$LINE"`, not `printf "$LINE\n"`.
+
 ## Model Display
 
 ```bash
@@ -69,26 +86,38 @@ LINES="\033[32m+${ADDED}\033[0m \033[31m-${REMOVED}\033[0m"
 
 ## Git Branch + Status (with cache)
 
+A private cache dir (not a shared temp file other users could pre-create), one file per working directory, never used through a symlink. The file holds its own timestamp, so no `stat` (whose flags differ between macOS and Linux) is needed. Uses `clean` and `_git` from the safety helpers.
+
 ```bash
-CACHE_FILE="/tmp/statusline-git-cache"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-statusline"
 CACHE_MAX_AGE=5
-cache_stale() {
-  [ ! -f "$CACHE_FILE" ] || \
-  [ $(($(date +%s) - $(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -gt $CACHE_MAX_AGE ]
-}
-if cache_stale; then
-  if git rev-parse --git-dir >/dev/null 2>&1; then
-    BRANCH=$(git branch --show-current 2>/dev/null)
-    STAGED=$(git diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
-    MODIFIED=$(git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
-    AHEAD=$(git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
-    BEHIND=$(git rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
-    echo "$BRANCH|$STAGED|$MODIFIED|$AHEAD|$BEHIND" > "$CACHE_FILE"
+NOW=$(date +%s)
+CACHE_FILE=""
+if [ ! -L "$CACHE_DIR" ] && mkdir -p "$CACHE_DIR" 2>/dev/null && [ ! -L "$CACHE_DIR" ] && chmod 700 "$CACHE_DIR"; then
+  CACHE_FILE="$CACHE_DIR/git-$(pwd -P | cksum | cut -d' ' -f1)"
+  [ -L "$CACHE_FILE" ] && CACHE_FILE=""
+fi
+FRESH=0; DATA=""
+if [ -n "$CACHE_FILE" ] && [ -f "$CACHE_FILE" ]; then
+  { read -r TS; read -r DATA; } < "$CACHE_FILE"
+  case "$TS" in ''|*[!0-9]*) ;; *) [ $(( NOW - TS )) -le $CACHE_MAX_AGE ] && FRESH=1 ;; esac
+fi
+if [ "$FRESH" != 1 ]; then
+  if _git rev-parse --git-dir >/dev/null 2>&1; then
+    BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
+    STAGED=$(_git diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
+    MODIFIED=$(_git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
+    AHEAD=$(_git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
+    BEHIND=$(_git rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
+    DATA="$BRANCH|$STAGED|$MODIFIED|$AHEAD|$BEHIND"
   else
-    echo "||||" > "$CACHE_FILE"
+    DATA="||||"
+  fi
+  if [ -n "$CACHE_FILE" ] && TMP=$(mktemp "$CACHE_DIR/.git.XXXXXX" 2>/dev/null); then
+    printf '%s\n%s\n' "$NOW" "$DATA" > "$TMP" && mv -f "$TMP" "$CACHE_FILE" || rm -f "$TMP"
   fi
 fi
-IFS='|' read -r BRANCH STAGED MODIFIED AHEAD BEHIND < "$CACHE_FILE"
+IFS='|' read -r BRANCH STAGED MODIFIED AHEAD BEHIND <<< "$DATA"
 ```
 
 ## Git Sync Indicator
@@ -182,11 +211,16 @@ WARN=""
 
 ## Clickable Repo Link (OSC 8)
 
+Only http(s) remotes become links; anything else prints as plain text. Uses `clean` and `_git` from the safety helpers.
+
 ```bash
-REMOTE=$(git remote get-url origin 2>/dev/null | sed 's/git@github.com:/https:\/\/github.com\//' | sed 's/\.git$//')
+REMOTE=$(clean "$(_git remote get-url origin 2>/dev/null | sed 's/git@github.com:/https:\/\/github.com\//' | sed 's/\.git$//')")
 if [ -n "$REMOTE" ]; then
   REPO_NAME=$(basename "$REMOTE")
-  # OSC 8 link — clickable in iTerm2, Kitty, WezTerm
-  printf '%b' "\033]8;;${REMOTE}\a${REPO_NAME}\033]8;;\a"
+  case "$REMOTE" in
+    # OSC 8 link — clickable in iTerm2, Kitty, WezTerm
+    http://*|https://*) printf '\033]8;;%s\a%s\033]8;;\a' "$REMOTE" "$REPO_NAME" ;;
+    *) printf '%s' "$REPO_NAME" ;;
+  esac
 fi
 ```

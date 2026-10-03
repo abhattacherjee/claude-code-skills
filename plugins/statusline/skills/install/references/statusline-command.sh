@@ -3,32 +3,39 @@
 # Claude Code statusline - 3-tier adaptive: ultra-narrow / narrow / wide
 input=$(cat)
 
-DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty' | xargs basename 2>/dev/null)
-MODEL=$(echo "$input" | jq -r '.model.display_name // empty')
-PCT=$(echo "$input" | jq -r '.context_window.used_percentage // 0')
+# Drop control characters and backslashes from anything the session or the repo controls,
+# so a name cannot carry terminal escape sequences into the status bar.
+clean() { printf '%s' "$1" | tr -d '\000-\037\177\\'; }
+# git without the repo-config hooks that can run a program on every prompt.
+_git() { git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
 
-# Colors
-R="\033[0m"
-CYAN="\033[36m"
-MAGENTA="\033[35m"
-YELLOW="\033[33m"
-GREEN="\033[32m"
-RED="\033[31m"
-BOLD="\033[1m"
-DIM="\033[2m"
+DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
+DIR="${DIR%/}"; DIR=$(clean "${DIR##*/}")
+MODEL=$(clean "$(echo "$input" | jq -r '.model.display_name // empty')")
+PCT=$(clean "$(echo "$input" | jq -r '.context_window.used_percentage // 0')")
+
+# Colors (real escape bytes; every printf below uses a constant format)
+R=$'\033[0m'
+CYAN=$'\033[36m'
+MAGENTA=$'\033[35m'
+YELLOW=$'\033[33m'
+GREEN=$'\033[32m'
+RED=$'\033[31m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
 
 # Git branch + changes + upstream sync
 BRANCH=""
 CHANGES=""
 SYNC=""
-if [ -d ".git" ] || git rev-parse --git-dir >/dev/null 2>&1; then
-  BRANCH=$(git branch --show-current 2>/dev/null)
-  CHG=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+if [ -d ".git" ] || _git rev-parse --git-dir >/dev/null 2>&1; then
+  BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
+  CHG=$(_git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
   [ "$CHG" -gt 0 ] && CHANGES="${YELLOW}~${CHG}${R}"
-  UPSTREAM=$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)
+  UPSTREAM=$(_git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)
   if [ -n "$UPSTREAM" ]; then
-    AHEAD=$(git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
-    BEHIND=$(git rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
+    AHEAD=$(_git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
+    BEHIND=$(_git rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
     if [ "$AHEAD" -gt 0 ] && [ "$BEHIND" -gt 0 ]; then
       SYNC="${RED}⇡${AHEAD}⇣${BEHIND}${R}"
     elif [ "$AHEAD" -gt 0 ]; then
@@ -70,7 +77,10 @@ fi
 
 # Context color
 ctx_int=${PCT%.*}
+ctx_int=${ctx_int//[!0-9]/}   # digits only, 0-100: it reaches shell arithmetic
 ctx_int=${ctx_int:-0}
+[ ${#ctx_int} -gt 3 ] && ctx_int=100
+[ "$ctx_int" -gt 100 ] && ctx_int=100
 if [ "$ctx_int" -lt 50 ]; then
   C="${GREEN}"
 elif [ "$ctx_int" -lt 80 ]; then
@@ -146,18 +156,18 @@ branch_fits_with_bar() {
 if [ "$COLS" -lt 40 ]; then
   # ── ULTRA-NARROW (iPhone portrait ~30-39 cols) ──────────────
   # Always 3 lines: model, branch, context bar
-  printf "${BOLD}${MAGENTA}$(trunc "$DISPLAY_MODEL" $((COLS-2)))${R}\n"
+  printf '%s\n' "${BOLD}${MAGENTA}$(trunc "$DISPLAY_MODEL" $((COLS-2)))${R}"
   max_b=$(( COLS - 3 ))  # "🌿 " prefix
   [ $max_b -lt 6 ] && max_b=6
   git_trunc=$(build_git_info $max_b)
-  printf "🌿 ${git_trunc}\n"
+  printf '%s\n' "🌿 ${git_trunc}"
   bar=$(build_bar 8)
-  printf "🧠 ${C}${bar}${R} ${C}${BOLD}${ctx_int}%%${R}\n"
+  printf '%s\n' "🧠 ${C}${bar}${R} ${C}${BOLD}${ctx_int}%${R}"
 
 elif [ "$COLS" -lt 60 ]; then
   # ── NARROW (iPhone landscape / small tablet ~40-59 cols) ────
   # Line 1: model | dir (always)
-  printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
+  printf '%s\n' "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}"
   # Check if branch + bar fit on one line
   # overhead: "🌿 "(3) + "(detail)"(~8) + " | "(3) + "🧠 "(3) + " PCT%"(~5) = ~22
   if branch_fits_with_bar 22 10; then
@@ -166,18 +176,18 @@ elif [ "$COLS" -lt 60 ]; then
     [ $max_b -lt 8 ] && max_b=8
     git_trunc=$(build_git_info $max_b)
     bar=$(build_bar 10)
-    printf "🌿 ${git_trunc} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+    printf '%s\n' "🌿 ${git_trunc} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%${R}"
   else
     # 3 lines: branch alone, then bar alone
     max_b=$(( COLS - 3 ))
     [ $max_b -lt 8 ] && max_b=8
     git_trunc=$(build_git_info $max_b)
-    printf "🌿 ${git_trunc}\n"
+    printf '%s\n' "🌿 ${git_trunc}"
     bar_w=$(( COLS - 8 ))  # "🧠 "(3) + " PCT%"(~5)
     [ $bar_w -gt 20 ] && bar_w=20
     [ $bar_w -lt 8 ] && bar_w=8
     bar=$(build_bar $bar_w)
-    printf "🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+    printf '%s\n' "🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%${R}"
   fi
 
 else
@@ -193,7 +203,7 @@ else
     [ $bar_width -gt 25 ] && bar_width=25
     [ $bar_width -lt 8 ] && bar_width=8
     bar=$(build_bar $bar_width)
-    printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R} ${DIM}|${R} ${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+    printf '%s\n' "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R} ${DIM}|${R} ${GIT_INFO_ICON} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%${R}"
   else
     # 2-line attempt: line1=model|dir, line2=branch+bar
     # overhead for line2: "🌿 "(3) + "(detail)"(~8) + " | "(3) + "🧠 "(3) + " PCT%"(~5) = ~22
@@ -205,21 +215,21 @@ else
     if [ "$line2_branch_budget" -ge 12 ]; then
       # 2 lines: branch fits with bar
       git_trunc=$(build_git_info $line2_branch_budget)
-      printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
+      printf '%s\n' "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}"
       bar=$(build_bar $line2_bar)
-      printf "🌿 ${git_trunc} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+      printf '%s\n' "🌿 ${git_trunc} ${DIM}|${R} 🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%${R}"
     else
       # 3 lines: branch and bar each get their own line
-      printf "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}\n"
+      printf '%s\n' "${BOLD}${MAGENTA}${DISPLAY_MODEL}${R} ${DIM}|${R} 📁 ${CYAN}${DIR}${R}"
       max_b=$(( COLS - 3 ))
       [ $max_b -lt 10 ] && max_b=10
       git_trunc=$(build_git_info $max_b)
-      printf "🌿 ${git_trunc}\n"
+      printf '%s\n' "🌿 ${git_trunc}"
       bar_w=$(( COLS - 8 ))
       [ $bar_w -gt 25 ] && bar_w=25
       [ $bar_w -lt 8 ] && bar_w=8
       bar=$(build_bar $bar_w)
-      printf "🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%%${R}\n"
+      printf '%s\n' "🧠 ${C}${bar}${R} ${C}${BOLD}${PCT}%${R}"
     fi
   fi
 fi

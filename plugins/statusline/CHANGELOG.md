@@ -23,6 +23,15 @@ All notable changes to the **statusline** plugin are documented here.
 - A missing `jq` stops both installers with exit 1 before anything is written. Before, `create --install` printed a warning and exited 0.
 - `context-bar` finds the current session's transcript directory from the working directory, using Claude Code's own naming rule: every character that is not an ASCII letter or digit becomes `-`, and a name over 200 characters is matched by its 200-character prefix. It reads `$CLAUDE_CODE_SESSION_ID.jsonl` when that exists, else the newest transcript, and honours `CLAUDE_CONFIG_DIR`. Before, it read one hardcoded project's directory, whatever the session. With no matching directory or transcript it says so and exits 1 instead of printing a bar.
 - `context-bar` turns red at 80%, as documented. It used to turn red at 75%.
+- `install`'s statusline shows a directory whose name has spaces or quotes in full. It used to pass the path through `xargs basename`, which showed `my` for `my project` and nothing for `it's`.
+
+### Security
+
+- `create`'s git cache moved from the shared, predictable `/tmp/statusline-git-cache` (another user could pre-create it as a symlink, or read your branch names) to `${XDG_CACHE_HOME:-~/.cache}/claude-statusline/` with mode 700. It holds one file per working directory, keyed by a hash of the path, written through a temp file and `mv`, and a cache path that is a symlink is never read or written. Two sessions in different repos no longer show each other's branch. The file stores its own timestamp, so the macOS/Linux `stat` split is gone.
+- Terminal escape injection: model, directory, branch, remote, worktree, agent, style and session names are stripped of control characters and backslashes before `echo -e` prints them, and `git-link` emits an OSC 8 hyperlink only for `http(s)` remotes; other remotes print as plain text.
+- `install`'s 3-tier statusline no longer puts values in printf format strings. Colors are real escape bytes and every `printf` uses a constant format, so a `%` in a directory name prints as `%`. Directory, branch, model and percentage are stripped of control characters. Output for ordinary input is byte-identical to before (48 recorded cases, bash 3.2 and 5).
+- Both statuslines run git as `git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks`, so a repo's `core.fsmonitor` cannot run a program on every prompt. (`git diff` runs only with `--numstat`, which never calls `diff.external`.)
+- Numbers from the session JSON reach shell arithmetic only as digits: a crafted `used_percentage` such as `a[$(cmd)]` no longer runs `cmd`, and a value whose product with the bar width overflows 64 bits no longer hangs the bar loop. `install`'s percentage is clamped to 0-100.
 
 ### Removed
 
