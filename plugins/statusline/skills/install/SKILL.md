@@ -19,7 +19,7 @@ Installs a Claude Code statusline with:
 bash "${CLAUDE_SKILL_DIR}/scripts/install.sh"
 ```
 
-It copies `references/statusline-command.sh` to `~/.claude/statusline-command.sh` and sets `statusLine` in `~/.claude/settings.json`. Then restart Claude Code.
+It copies `references/statusline-command.sh` to `~/.claude/statusline-command.sh` and sets `statusLine` in `~/.claude/settings.json` (both in `$CLAUDE_CONFIG_DIR` when that is set). Re-running it with nothing changed writes nothing. Then restart Claude Code.
 
 If `~/.claude/statusline-command.sh` already exists and this plugin did not write it (its line 2 is not `# managed-by: statusline-plugin`), the script leaves it alone and exits 3. Tell the user, and re-run with `--force` only if they want it replaced. `--force` backs the old file up to `statusline-command.sh.bak-<UTC time>` first:
 

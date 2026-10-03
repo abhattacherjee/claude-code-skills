@@ -23,11 +23,11 @@ Keep values out of printf format strings: `printf '%s\n' "$LINE"`, not `printf "
 
 ```bash
 # Short: "Opus"
-MODEL=$(echo "$input" | jq -r '.model.display_name')
+MODEL=$(clean "$(echo "$input" | jq -r '.model.display_name // empty')")
 # Full: "claude-opus-4-6"
-MODEL_ID=$(echo "$input" | jq -r '.model.id')
+MODEL_ID=$(clean "$(echo "$input" | jq -r '.model.id // empty')")
 # With 1M indicator
-CTX_SIZE=$(echo "$input" | jq -r '.context_window.context_window_size // 200000')
+CTX_SIZE=$(num "$(echo "$input" | jq -r '.context_window.context_window_size // 200000')")
 MODEL_TAG="$MODEL"
 [ "$CTX_SIZE" -ge 1000000 ] && MODEL_TAG="${MODEL} (1M)"
 ```
@@ -35,7 +35,7 @@ MODEL_TAG="$MODEL"
 ## Context Bar (progress bar)
 
 ```bash
-PCT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d. -f1)
+PCT=$(num "$(echo "$input" | jq -r '.context_window.used_percentage // 0')")
 BAR_WIDTH=20
 filled=$(( PCT * BAR_WIDTH / 100 ))
 [ $filled -gt $BAR_WIDTH ] && filled=$BAR_WIDTH
@@ -54,7 +54,8 @@ R="\033[0m"
 ## Cost Tracking
 
 ```bash
-COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+# A float, so not num: jq turns anything that is not a number into 0 here.
+COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0 | if type == "number" then . else 0 end')
 COST_FMT=$(printf '$%.2f' "$COST")
 # With color (green <$1, yellow <$5, red $5+)
 COST_CENTS=$(echo "$COST" | awk '{printf "%d", $1 * 100}')
@@ -66,12 +67,12 @@ else CC="\033[31m"; fi
 ## Duration
 
 ```bash
-DURATION_MS=$(echo "$input" | jq -r '.cost.total_duration_ms // 0')
+DURATION_MS=$(num "$(echo "$input" | jq -r '.cost.total_duration_ms // 0')")
 MINS=$((DURATION_MS / 60000))
 SECS=$(((DURATION_MS % 60000) / 1000))
 DURATION_FMT="${MINS}m ${SECS}s"
 # API time only (excludes user think time)
-API_MS=$(echo "$input" | jq -r '.cost.total_api_duration_ms // 0')
+API_MS=$(num "$(echo "$input" | jq -r '.cost.total_api_duration_ms // 0')")
 API_MINS=$((API_MS / 60000))
 API_SECS=$(((API_MS % 60000) / 1000))
 ```
@@ -79,8 +80,8 @@ API_SECS=$(((API_MS % 60000) / 1000))
 ## Lines Changed
 
 ```bash
-ADDED=$(echo "$input" | jq -r '.cost.total_lines_added // 0')
-REMOVED=$(echo "$input" | jq -r '.cost.total_lines_removed // 0')
+ADDED=$(num "$(echo "$input" | jq -r '.cost.total_lines_added // 0')")
+REMOVED=$(num "$(echo "$input" | jq -r '.cost.total_lines_removed // 0')")
 LINES="\033[32m+${ADDED}\033[0m \033[31m-${REMOVED}\033[0m"
 ```
 
@@ -94,37 +95,39 @@ CACHE_MAX_AGE=5
 NOW=$(date +%s)
 CACHE_FILE=""
 if [ ! -L "$CACHE_DIR" ] && mkdir -p "$CACHE_DIR" 2>/dev/null && [ ! -L "$CACHE_DIR" ] && chmod 700 "$CACHE_DIR"; then
-  CACHE_FILE="$CACHE_DIR/git-$(pwd -P | cksum | cut -d' ' -f1)"
+  CACHE_FILE="$CACHE_DIR/v2-git-$(pwd -P | cksum | cut -d' ' -f1)"
   [ -L "$CACHE_FILE" ] && CACHE_FILE=""
 fi
-FRESH=0; DATA=""
+FRESH=0
 if [ -n "$CACHE_FILE" ] && [ -f "$CACHE_FILE" ]; then
-  { read -r TS; read -r DATA; } < "$CACHE_FILE"
+  # One value per line, so a '|' in a branch name cannot shift the fields.
+  { read -r TS; read -r BRANCH; read -r STAGED; read -r MODIFIED; read -r AHEAD; read -r BEHIND; } < "$CACHE_FILE"
   # Fresh only if 0-5 s old: a timestamp from the future (clock set back) is not trusted.
   case "$TS" in ''|*[!0-9]*) ;; *) AGE=$(( NOW - TS )); [ "$AGE" -ge 0 ] && [ "$AGE" -le $CACHE_MAX_AGE ] && FRESH=1 ;; esac
 fi
 if [ "$FRESH" != 1 ]; then
+  BRANCH=""; STAGED=""; MODIFIED=""; AHEAD=""; BEHIND=""
   if _git rev-parse --git-dir >/dev/null 2>&1; then
     BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
-    STAGED=$(_git diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
-    MODIFIED=$(_git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
+    # A repo-local filter driver (filter.<name>.clean) runs on diff and status: skip counts.
+    if [ -z "$(_git config --local --get-regexp '^filter\.' 2>/dev/null)" ]; then
+      STAGED=$(_git diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
+      MODIFIED=$(_git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
+    fi
     AHEAD=$(_git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
     BEHIND=$(_git rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
-    DATA="$BRANCH|$STAGED|$MODIFIED|$AHEAD|$BEHIND"
-  else
-    DATA="||||"
   fi
   if [ -n "$CACHE_FILE" ] && TMP=$(mktemp "$CACHE_DIR/.git.XXXXXX" 2>/dev/null); then
-    printf '%s\n%s\n' "$NOW" "$DATA" > "$TMP" && mv -f "$TMP" "$CACHE_FILE" || rm -f "$TMP"
+    printf '%s\n' "$NOW" "$BRANCH" "$STAGED" "$MODIFIED" "$AHEAD" "$BEHIND" > "$TMP" &&
+      mv -f "$TMP" "$CACHE_FILE" || rm -f "$TMP"
   fi
 fi
-IFS='|' read -r BRANCH STAGED MODIFIED AHEAD BEHIND <<< "$DATA"
 ```
 
 ## Git Sync Indicator
 
 ```bash
-# Requires AHEAD/BEHIND from git recipe above
+# Requires BRANCH/AHEAD/BEHIND from the git recipe above; outside a repo it shows nothing
 SYNC=""
 if [ -n "$AHEAD" ] && [ "$AHEAD" -gt 0 ] && [ "$BEHIND" -gt 0 ]; then
   SYNC="\033[31m↑${AHEAD}↓${BEHIND}\033[0m"
@@ -132,7 +135,7 @@ elif [ -n "$AHEAD" ] && [ "$AHEAD" -gt 0 ]; then
   SYNC="\033[32m↑${AHEAD}\033[0m"
 elif [ -n "$BEHIND" ] && [ "$BEHIND" -gt 0 ]; then
   SYNC="\033[31m↓${BEHIND}\033[0m"
-else
+elif [ -n "$BRANCH" ]; then
   SYNC="\033[2m✓\033[0m"
 fi
 ```
@@ -140,15 +143,15 @@ fi
 ## Directory (short)
 
 ```bash
-DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
-DIR_SHORT="${DIR##*/}"  # basename only
+DIR=$(clean "$(echo "$input" | jq -r '.workspace.current_dir // empty')")
+DIR_SHORT="${DIR##*/}"  # basename only (DIR is already clean)
 ```
 
 ## Worktree Indicator
 
 ```bash
 WORKTREE=""
-WT_NAME=$(echo "$input" | jq -r '.worktree.name // empty')
+WT_NAME=$(clean "$(echo "$input" | jq -r '.worktree.name // empty')")
 if [ -n "$WT_NAME" ]; then
   WORKTREE=" \033[35m⎇ ${WT_NAME}\033[0m"
 fi
@@ -157,7 +160,7 @@ fi
 ## Vim Mode
 
 ```bash
-VIM_MODE=$(echo "$input" | jq -r '.vim.mode // empty')
+VIM_MODE=$(clean "$(echo "$input" | jq -r '.vim.mode // empty')")
 VIM_INDICATOR=""
 if [ -n "$VIM_MODE" ]; then
   if [ "$VIM_MODE" = "NORMAL" ]; then
@@ -171,7 +174,7 @@ fi
 ## Agent Name
 
 ```bash
-AGENT=$(echo "$input" | jq -r '.agent.name // empty')
+AGENT=$(clean "$(echo "$input" | jq -r '.agent.name // empty')")
 AGENT_INDICATOR=""
 if [ -n "$AGENT" ]; then
   AGENT_INDICATOR=" \033[36m🤖 ${AGENT}\033[0m"
@@ -181,22 +184,22 @@ fi
 ## Output Style
 
 ```bash
-STYLE=$(echo "$input" | jq -r '.output_style.name // "default"')
+STYLE=$(clean "$(echo "$input" | jq -r '.output_style.name // "default"')")
 ```
 
 ## Session ID (short)
 
 ```bash
-SID=$(echo "$input" | jq -r '.session_id // ""' | cut -c1-8)
+SID=$(clean "$(echo "$input" | jq -r '.session_id // ""')" | cut -c1-8)
 ```
 
 ## Token Counts (detailed)
 
 ```bash
-IN_TOKENS=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // 0')
-OUT_TOKENS=$(echo "$input" | jq -r '.context_window.current_usage.output_tokens // 0')
-CACHE_CREATE=$(echo "$input" | jq -r '.context_window.current_usage.cache_creation_input_tokens // 0')
-CACHE_READ=$(echo "$input" | jq -r '.context_window.current_usage.cache_read_input_tokens // 0')
+IN_TOKENS=$(num "$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // 0')")
+OUT_TOKENS=$(num "$(echo "$input" | jq -r '.context_window.current_usage.output_tokens // 0')")
+CACHE_CREATE=$(num "$(echo "$input" | jq -r '.context_window.current_usage.cache_creation_input_tokens // 0')")
+CACHE_READ=$(num "$(echo "$input" | jq -r '.context_window.current_usage.cache_read_input_tokens // 0')")
 # Format as K
 IN_K=$(echo "$IN_TOKENS" | awk '{printf "%.0fK", $1/1000}')
 OUT_K=$(echo "$OUT_TOKENS" | awk '{printf "%.0fK", $1/1000}')

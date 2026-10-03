@@ -5,13 +5,13 @@ metadata:
   version: 1.0.0
 ---
 
-Run this command. The Bash output IS the result — do NOT echo or repeat it in your response. Say nothing after the command runs.
+Run this command. On exit 0 the Bash output IS the result: do not echo or repeat it, and say nothing after it.
 
 ```bash
 bash "${CLAUDE_SKILL_DIR}/scripts/context-bar.sh"
 ```
 
-The bar is an estimate from the size of this session's transcript in `~/.claude/projects/<working dir with non-alphanumerics as ->/`. If the script exits 1, it found no transcript for the current directory (for example after a `cd`); say that in one line instead of guessing a number.
+The bar is an estimate from the size of this session's transcript in `~/.claude/projects/<working dir with non-alphanumerics as ->/` (under `$CLAUDE_CONFIG_DIR` instead of `~/.claude` when that is set), measured against a fixed 1M-token window, so on a 200K-context model it reads low. If the script exits 1, it found no transcript for the current directory (for example after a `cd`); say that in one line instead of guessing a number.
 
 ## Always-on context bar
 

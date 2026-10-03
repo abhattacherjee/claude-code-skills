@@ -7,23 +7,39 @@
 #     line 2, or force is 1. An existing <target> is backed up to
 #     <target>.bak-<UTC stamp> first. Writes go to a temp file in the target's own
 #     directory, then mv, so a failed write leaves the old file in place.
-#     Returns 0 written, 1 backup or write failed (target unchanged), 2 bad input,
-#     3 refused (target not written by this plugin; nothing changed).
+#     A target that already has the same bytes and mode 755 is left alone (no backup).
+#     Returns 0 written (or already identical), 1 backup or write failed, the target is
+#     unreadable or a directory (target unchanged), 2 bad input, 3 refused (target not
+#     written by this plugin; nothing changed).
 #
 #   check_settings <settings.json>
 #     Returns 0 if the file is absent, blank, or holds exactly one JSON object;
-#     2 otherwise (and says why); 1 if jq is missing or the file cannot be read.
+#     2 otherwise (and says why); 1 if jq is missing, the file cannot be read, or it is
+#     a symlink to a path that does not exist.
 #
 #   update_settings <settings.json> <command>
-#     Sets .statusLine = {"type":"command","command":<command>}. Same temp-file + mv
-#     write and the same backup as above, the file's mode is kept, a symlinked file is
-#     updated through its link, and an already-correct file is not touched.
+#     Sets .statusLine.type to "command" and .statusLine.command to <command>, keeping any
+#     other statusLine keys (padding, ...); prints the old command when it differs. Same
+#     temp-file (next to the file) + mv write and the same backup as above, the file's mode
+#     is kept, a symlinked file is updated through its link, and an already-correct file is
+#     not touched.
+#
+#   sl_shell_quote <path>
+#     Prints <path> as a shell word: as is when it holds only [A-Za-z0-9_./-], else
+#     single-quoted.
 #     Returns 0, 1 (write failed or jq missing; file unchanged) or 2 (not one JSON object;
 #     file byte-identical).
 
 STATUSLINE_MARKER='# managed-by: statusline-plugin'
 
 _sl_err() { printf '%s\n' "$*" >&2; }
+
+sl_shell_quote() {
+  case "$1" in
+    *[!A-Za-z0-9_./-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 
 # Follow a chain of symlinks to the path that holds the bytes.
 _sl_resolve() {
@@ -95,6 +111,15 @@ write_statusline() {
     return 1
   fi
 
+  if [ -e "$real" ] && [ ! -r "$real" ]; then
+    _sl_err "Cannot read $target. Nothing written."
+    return 1
+  fi
+  if [ -f "$real" ] && cmp -s "$src" "$real" && [ -n "$(find "$real" -prune -perm 755 2>/dev/null)" ]; then
+    echo "$target is already up to date."
+    return 0
+  fi
+
   if [ -e "$real" ] || [ -L "$target" ]; then
     if [ "$force" != 1 ] && { [ ! -e "$real" ] || [ "$(sed -n 2p "$real" 2>/dev/null)" != "$STATUSLINE_MARKER" ]; }; then
       if [ -e "$real" ]; then
@@ -138,6 +163,10 @@ check_settings() {
     _sl_err "$file is a directory."
     return 2
   fi
+  if [ -L "$file" ] && [ ! -e "$real" ]; then
+    _sl_err "$file is a symlink to $real, which does not exist. Nothing was written."
+    return 1
+  fi
   if [ -e "$real" ] && [ ! -r "$real" ]; then
     _sl_err "Cannot read $file. Nothing was written."
     return 1
@@ -150,20 +179,28 @@ check_settings() {
 }
 
 update_settings() {
-  local file=$1 cmd=$2 real tmp b rc
+  local file=$1 cmd=$2 real tmp b rc old=""
   check_settings "$file" || return $?
   real=$(_sl_resolve "$file") || return 1
-  if ! _sl_blank "$real" &&
-     jq -e --arg cmd "$cmd" '.statusLine == {"type": "command", "command": $cmd}' "$real" >/dev/null 2>&1; then
-    echo "$file already points statusLine at: $cmd"
-    return 0
+  if ! _sl_blank "$real"; then
+    if jq -e --arg cmd "$cmd" '.statusLine.type == "command" and .statusLine.command == $cmd' \
+         "$real" >/dev/null 2>&1; then
+      echo "$file already points statusLine at: $cmd"
+      return 0
+    fi
+    old=$(jq -r '.statusLine.command // empty | tostring' "$real" 2>/dev/null)
   fi
   mkdir -p "$(dirname "$real")" 2>/dev/null || { _sl_err "Cannot create $(dirname "$real")."; return 1; }
-  tmp=$(mktemp "${TMPDIR:-/tmp}/statusline-settings.XXXXXX") || return 1
+  # The temp file lives next to settings.json, so the write needs no other writable dir.
+  tmp=$(mktemp "$(dirname "$real")/.settings-new.XXXXXX" 2>/dev/null) || {
+    _sl_err "Cannot create a temp file in $(dirname "$real"). $file is unchanged."
+    return 1
+  }
   if _sl_blank "$real"; then
     jq -n --arg cmd "$cmd" '{"statusLine": {"type": "command", "command": $cmd}}' > "$tmp"
   else
-    jq --arg cmd "$cmd" '.statusLine = {"type": "command", "command": $cmd}' "$real" > "$tmp"
+    jq --arg cmd "$cmd" '.statusLine = ((.statusLine // {}) + {"type": "command", "command": $cmd})' \
+      "$real" > "$tmp"
   fi
   rc=$?
   if [ $rc -ne 0 ] || ! jq -e --arg cmd "$cmd" '.statusLine.command == $cmd' "$tmp" >/dev/null 2>&1; then
@@ -181,5 +218,6 @@ update_settings() {
     return 1
   fi
   rm -f "$tmp"
+  [ -n "$old" ] && [ "$old" != "$cmd" ] && echo "Replaced the old statusLine command: $old"
   echo "Set statusLine in $file to: $cmd"
 }

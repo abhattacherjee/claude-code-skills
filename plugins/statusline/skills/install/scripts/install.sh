@@ -14,16 +14,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../../../lib/write-statusline.sh"
 
 STATUSLINE_SRC="$SCRIPT_DIR/../references/statusline-command.sh"
-STATUSLINE_DEST="$HOME/.claude/statusline-command.sh"
-SETTINGS_FILE="$HOME/.claude/settings.json"
-COMMAND='bash ~/.claude/statusline-command.sh'
+# Claude Code reads its settings from $CLAUDE_CONFIG_DIR when that is set.
+CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CFG="${CFG%/}"
+STATUSLINE_DEST="$CFG/statusline-command.sh"
+SETTINGS_FILE="$CFG/settings.json"
+if [ "$CFG" = "$HOME/.claude" ]; then
+  COMMAND='bash ~/.claude/statusline-command.sh'
+else
+  COMMAND="bash $(sl_shell_quote "$STATUSLINE_DEST")"
+fi
 
 usage() {
   cat <<'USAGE'
 Usage: install.sh [--force]
 
 Installs the 3-tier adaptive statusline to ~/.claude/statusline-command.sh and sets
-statusLine in ~/.claude/settings.json.
+statusLine in ~/.claude/settings.json (both in $CLAUDE_CONFIG_DIR when that is set).
 
   --force   Replace an existing statusline script that this plugin did not write.
             It is backed up to statusline-command.sh.bak-<UTC time> first.
@@ -46,7 +53,11 @@ done
 check_settings "$SETTINGS_FILE" || exit $?
 
 write_statusline "$STATUSLINE_SRC" "$STATUSLINE_DEST" "$FORCE" || exit $?
-update_settings "$SETTINGS_FILE" "$COMMAND" || exit $?
+rc=0; update_settings "$SETTINGS_FILE" "$COMMAND" || rc=$?
+if [ $rc -ne 0 ]; then
+  echo "Result: statusline script written; settings.json unchanged. Fix the error above and re-run." >&2
+  exit $rc
+fi
 
 echo ""
 echo "Statusline installed. Restart Claude Code to see it."

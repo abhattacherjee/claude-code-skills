@@ -22,7 +22,7 @@ The three old plugins all wrote `~/.claude/statusline-command.sh` or read the se
 
 ## Your own statusline is safe
 
-`install` and `create` write `~/.claude/statusline-command.sh` (or `create --output PATH`). Every script they write carries `# managed-by: statusline-plugin` on line 2.
+`install` and `create` write `~/.claude/statusline-command.sh` (or `$CLAUDE_CONFIG_DIR/statusline-command.sh`, or `create --output PATH`). Every script they write carries `# managed-by: statusline-plugin` on line 2.
 
 - An existing script without that line is yours: they leave it untouched and exit 3. Pass `--force` to replace it.
 - Any file they replace, script or `settings.json`, is first copied to `<file>.bak-<UTC time>`.

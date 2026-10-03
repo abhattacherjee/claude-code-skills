@@ -2,6 +2,8 @@
 # managed-by: statusline-plugin
 # Claude Code statusline - 3-tier adaptive: ultra-narrow / narrow / wide
 input=$(cat)
+command -v jq >/dev/null 2>&1 || { printf 'statusline: jq not on PATH\n'; exit 0; }
+printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || { printf 'statusline: no session data\n'; exit 0; }
 
 # Drop control characters and backslashes from anything the session or the repo controls,
 # so a name cannot carry terminal escape sequences into the status bar.
@@ -30,8 +32,12 @@ CHANGES=""
 SYNC=""
 if [ -d ".git" ] || _git rev-parse --git-dir >/dev/null 2>&1; then
   BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
-  CHG=$(_git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-  [ "$CHG" -gt 0 ] && CHANGES="${YELLOW}~${CHG}${R}"
+  # A repo-local filter driver (filter.<name>.clean) runs on git status, so in such a repo
+  # skip the change count. A global filter (git-lfs) is the user's own and is kept.
+  if [ -z "$(_git config --local --get-regexp '^filter\.' 2>/dev/null)" ]; then
+    CHG=$(_git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    [ "$CHG" -gt 0 ] && CHANGES="${YELLOW}~${CHG}${R}"
+  fi
   UPSTREAM=$(_git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)
   if [ -n "$UPSTREAM" ]; then
     AHEAD=$(_git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
@@ -51,7 +57,7 @@ if [ -d ".git" ] || _git rev-parse --git-dir >/dev/null 2>&1; then
 fi
 
 # Build compact git info: branch(changes|sync)
-# e.g. "develop(ok)" or "feat/foo(~2|+1)"
+# e.g. "develop(⇡⇣)" or "feat/foo(~2|⇡1)"
 # $1 = max chars for branch name (0 = no limit)
 build_git_info() {
   local max_branch="${1:-0}"
@@ -142,7 +148,7 @@ COLS="${COLS:-40}"
 [ "$COLS" -eq 0 ] 2>/dev/null && COLS=40
 
 # Helper: check if branch + context bar fit on one line
-# Args: $1=branch_budget_min, $2=bar_width, $3=overhead (icons, separators, pct)
+# Args: $1=overhead (icons, separators, pct), $2=bar_width
 # Returns 0 if branch fits alongside bar, 1 if needs separate lines
 branch_fits_with_bar() {
   local overhead=$1 bar_w=$2

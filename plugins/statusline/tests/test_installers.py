@@ -5,6 +5,7 @@ that is not one JSON object), 3 refused (target script not written by this plugi
 """
 import json
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -65,11 +66,27 @@ def test_install_force_replaces_the_users_script_after_a_backup(env, bash):
     assert b.read_text() == USER_SCRIPT
 
 
-def test_reinstall_over_its_own_script_backs_up_and_succeeds(env, bash):
+def test_reinstall_of_identical_script_makes_no_backup(env, bash):
     assert install(env, bash).returncode == 0
+    before = snapshot(env.script)
     r = install(env, bash)
     assert r.returncode == 0, r.stderr
-    assert len(backups(env.script)) == 1
+    assert backups(env.script) == [] and snapshot(env.script) == before
+
+
+def test_reinstall_over_a_changed_managed_script_backs_up(env, bash):
+    assert install(env, bash).returncode == 0
+    env.script.write_text(env.script.read_text() + "# local edit\n")
+    assert install(env, bash).returncode == 0
+    [b] = backups(env.script)
+    assert b.read_text().endswith("# local edit\n")
+
+
+def test_reinstall_with_a_different_mode_rewrites(env, bash):
+    assert install(env, bash).returncode == 0
+    env.script.chmod(0o600)
+    assert install(env, bash).returncode == 0
+    assert env.script.stat().st_mode & 0o777 == 0o755
 
 
 @pytest.mark.parametrize("args", [["--bogus"], ["--force", "extra"]])
@@ -268,8 +285,15 @@ def test_generate_output_path_with_spaces_is_quoted_in_settings(env, bash):
     r = generate(env, bash, "--items", ITEMS, "--output", target, "--install")
     assert r.returncode == 0, r.stderr
     cmd = statusline(env.settings)["command"]
-    out = subprocess.run(["sh", "-c", cmd], input=MOCK_JSON, capture_output=True, text=True,
-                         env=env.env(), timeout=30)
+    # Run the settings command with this arm's bash as "bash" on PATH.
+    shim = env.tmp / "bashbin"
+    shim.mkdir()
+    (shim / "bash").symlink_to(shutil.which(bash) if os.sep not in bash else bash)
+    env.path_prefix = [shim]
+    out = subprocess.run(["sh", "-c", 'bash -c "echo \\$BASH_VERSION" >&2; ' + cmd], input=MOCK_JSON,
+                         capture_output=True, text=True, env=env.env(), timeout=30)
+    if bash != "bash":
+        assert out.stderr.startswith("3.2"), out.stderr
     assert out.returncode == 0 and "Opus" in out.stdout, (cmd, out.stderr)
 
 

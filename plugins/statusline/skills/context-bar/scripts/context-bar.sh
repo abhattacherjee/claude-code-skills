@@ -70,6 +70,8 @@ LATEST=""
 if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && [ -f "$PROJ_DIR/$CLAUDE_CODE_SESSION_ID.jsonl" ]; then
   LATEST="$PROJ_DIR/$CLAUDE_CODE_SESSION_ID.jsonl"
 else
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] &&
+    echo "No $CLAUDE_CODE_SESSION_ID.jsonl in $PROJ_DIR; using the newest transcript there." >&2
   LATEST=$(ls -t "$PROJ_DIR"/*.jsonl 2>/dev/null | head -1)
 fi
 if [ -z "$LATEST" ]; then

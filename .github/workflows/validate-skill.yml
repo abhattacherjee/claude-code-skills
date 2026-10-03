@@ -231,6 +231,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Show the bash versions under test
+        run: |
+          bash --version | head -1
+          /bin/bash --version | head -1
+
       # Unconditional, like the jobs above: lib/ and tests/ are outside the skill filters.
       # The only skip allowed is the bash 3.2 one on Ubuntu, which has no bash 3.2; any
       # other skip fails the job, so a skip can never pass as green.
