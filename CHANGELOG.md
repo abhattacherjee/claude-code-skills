@@ -11,10 +11,15 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 - Plugin consolidation design (`docs/superpowers/specs/2026-10-03-plugin-consolidation-design.md`, epic #156): one plugin per workflow, no bare skill copies, and the four standalone skill repos archived.
 - `claudeception/examples/` and `claudeception/resources/`, brought in from the standalone repo ahead of archiving it (#157).
+- **`statusline` plugin 1.0.0 (#158).** One install replaces `context-bar`, `custom-statusline` and `statusline-creator`, with three skills: `install` (was `install-statusline`), `create` (was `statusline-creator`) and `context-bar`. `install` and `create` no longer overwrite a statusline script they did not write: each script they write carries `# managed-by: statusline-plugin` on line 2, anything else is left alone (exit 3) unless `--force`, and every replaced file is backed up first. A `settings.json` that is not one JSON object stops the install before anything is written. `context-bar` finds the current session's transcript instead of one hardcoded project's. Security fixes in the shipped statuslines: a private per-directory git cache instead of a shared `/tmp` file, control characters stripped from printed names, constant printf formats, and git run with `core.fsmonitor` off. New CI job `statusline-tests` runs the suite on Ubuntu (bash 5) and macOS (bash 3.2).
 
 ### Changed
 
 - `worktree` 1.0.1: added the note on Python virtualenvs from the live copy, written without private repo names, ahead of archiving the standalone repo (#157).
+
+### Deprecated
+
+- The `context-bar`, `custom-statusline` and `statusline-creator` plugins. Their marketplace entries stay one release, marked deprecated, and point at `statusline:install`, `statusline:create` and `statusline:context-bar`. They are removed in the next release (#158).
 
 ## [3.20.0] - 2026-10-02
 

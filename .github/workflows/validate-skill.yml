@@ -207,3 +207,47 @@ jobs:
 
       - name: Clean-HOME smoke test
         run: bash plugins/github-board/tests/smoke-clean-home.sh
+
+  statusline-tests:
+    # macOS runs the bash 3.2 cases (/bin/bash there is 3.2); Ubuntu runs bash 5.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 is the oldest Python the plugin supports (standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Install jq (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Show the bash versions under test
+        run: |
+          bash --version | head -1
+          /bin/bash --version | head -1
+
+      # Unconditional, like the jobs above: lib/ and tests/ are outside the skill filters.
+      # The only skip allowed is the bash 3.2 one on Ubuntu, which has no bash 3.2; any
+      # other skip fails the job, so a skip can never pass as green.
+      - name: Run statusline test suite
+        shell: bash
+        run: |
+          python -m pytest plugins/statusline/tests -q -p no:cacheprovider -rs | tee pytest.out
+          if grep '^SKIPPED' pytest.out | grep -v 'bash 3.2 not on this host' | grep -q .; then
+            echo "::error::statusline tests were skipped (see the SKIPPED lines above)"
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = macOS ] && grep -q '^SKIPPED' pytest.out; then
+            echo "::error::macOS must run the bash 3.2 cases"
+            exit 1
+          fi
