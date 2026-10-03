@@ -206,6 +206,16 @@ clean() { printf '%s' "$1" | tr -d '\000-\037\177\\'; }
 num() { local v=${1%%.*}; v=${v//[!0-9]/}; v=${v:0:15}; printf '%s' "${v:-0}"; }
 # git without the repo-config hooks that can run a program on every prompt.
 _git() { git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
+# 0 (true) when the repo controls a filter driver, or git config fails: filter.<name>.clean
+# runs on status and diff. Every filter.* key is read with includes, and any scope other
+# than global or system (local, worktree, command, and files they include) counts.
+repo_filter() {
+  local out rc=0
+  out=$(_git config --includes --show-scope --get-regexp '^filter\.' 2>/dev/null) || rc=$?
+  [ "$rc" -eq 1 ] && return 1          # no filter.* key at all
+  [ "$rc" -ne 0 ] && return 0          # the config lookup failed: fail closed
+  printf '%s\n' "$out" | grep -qvE '^(global|system)[[:space:]]'
+}
 
 # ─── Colors ───
 R="\033[0m"
@@ -245,9 +255,9 @@ if [ "$_fresh" != 1 ]; then
   BRANCH=""; STAGED=""; MODIFIED=""; GIT_AHEAD=""; GIT_BEHIND=""
   if _git rev-parse --git-dir >/dev/null 2>&1; then
     BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
-    # A repo-local filter driver (filter.<name>.clean) runs on status and diff, so in such
-    # a repo show the branch only. A global filter (git-lfs) is the user's own and is kept.
-    if [ -z "$(_git config --local --get-regexp '^filter\.' 2>/dev/null)" ]; then
+    # In a repo that controls a filter driver, skip the counts (git diff would run it).
+    # A global filter (git-lfs) is the user's own, so counts stay there.
+    if ! repo_filter; then
       STAGED=$(_git diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
       MODIFIED=$(_git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
     fi

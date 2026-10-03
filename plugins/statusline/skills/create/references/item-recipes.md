@@ -15,6 +15,16 @@ clean() { printf '%s' "$1" | tr -d '\000-\037\177\\'; }
 num() { local v=${1%%.*}; v=${v//[!0-9]/}; v=${v:0:15}; printf '%s' "${v:-0}"; }
 # git without the repo-config hooks (core.fsmonitor) that can run a program.
 _git() { git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
+# 0 (true) when the repo controls a filter driver, or git config fails: filter.<name>.clean
+# runs on status and diff. Every filter.* key is read with includes, and any scope other
+# than global or system (local, worktree, command, and files they include) counts.
+repo_filter() {
+  local out rc=0
+  out=$(_git config --includes --show-scope --get-regexp '^filter\.' 2>/dev/null) || rc=$?
+  [ "$rc" -eq 1 ] && return 1          # no filter.* key at all
+  [ "$rc" -ne 0 ] && return 0          # the config lookup failed: fail closed
+  printf '%s\n' "$out" | grep -qvE '^(global|system)[[:space:]]'
+}
 ```
 
 Keep values out of printf format strings: `printf '%s\n' "$LINE"`, not `printf "$LINE\n"`.
@@ -109,8 +119,8 @@ if [ "$FRESH" != 1 ]; then
   BRANCH=""; STAGED=""; MODIFIED=""; AHEAD=""; BEHIND=""
   if _git rev-parse --git-dir >/dev/null 2>&1; then
     BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
-    # A repo-local filter driver (filter.<name>.clean) runs on diff and status: skip counts.
-    if [ -z "$(_git config --local --get-regexp '^filter\.' 2>/dev/null)" ]; then
+    # A filter driver the repo controls runs on diff and status: skip counts (see repo_filter).
+    if ! repo_filter; then
       STAGED=$(_git diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
       MODIFIED=$(_git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
     fi
