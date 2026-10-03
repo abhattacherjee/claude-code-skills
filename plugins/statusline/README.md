@@ -29,7 +29,7 @@ The three old plugins all wrote `~/.claude/statusline-command.sh` or read the se
 - Writes go to a temp file in the same directory, then `mv`, so a failed write (disk full, no permission) leaves the old file in place.
 - A `settings.json` that is not one JSON object stops the install before anything is written (exit 2). A symlinked `settings.json` is updated through its link.
 
-Exit codes for both: 0 done, 1 a write failed, 2 bad input, 3 refused. The guard lives in `lib/write-statusline.sh`.
+Exit codes for both: 0 done; 1 failed (a write failed, `jq` is missing, or `settings.json` cannot be read; a file that was not written is unchanged); 2 bad input; 3 refused. The guard lives in `lib/write-statusline.sh`.
 
 ## Install preview
 

@@ -343,3 +343,16 @@ def test_recipes_doc_teaches_the_safe_patterns():
             continue
         assert not re.search(r"(?<![\w-])git\s", line), line
         assert "printf '%b' \"" not in line or "${" not in line, line
+
+
+def test_git_cache_from_the_future_is_not_trusted(tmp_path, home, repos, bash):
+    # A timestamp ahead of the clock (the clock was set back) must not count as fresh, or
+    # the cached branch would be shown until the clock caught up.
+    env = git_env(home)
+    script = generated(tmp_path, home, "git", bash)
+    run_script(script, payload(), repos["develop-clean"], env, bash=bash)
+    [entry] = list((home / ".cache" / "claude-statusline").iterdir())
+    import time
+    entry.write_text(f"{int(time.time()) + 3600}\nstale-branch|0|0|0|0\n")
+    r = run_script(script, payload(), repos["develop-clean"], env, bash=bash)
+    assert "develop" in r.stdout and "stale-branch" not in r.stdout

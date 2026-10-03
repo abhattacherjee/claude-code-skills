@@ -4,6 +4,7 @@ Exit codes for both: 0 success, 1 write failed, 2 bad input (flags, items, setti
 that is not one JSON object), 3 refused (target script not written by this plugin).
 """
 import json
+import os
 import subprocess
 
 import pytest
@@ -319,3 +320,21 @@ def test_settings_build_that_yields_bad_json_exits_1_settings_unchanged(env, bas
     assert r.returncode == 1
     assert snapshot(env.settings) == before
     assert backups(env.settings) == [] and leftovers(env.claude) == []
+
+
+def test_unreadable_settings_stops_before_anything_is_written(env, bash):
+    # An unreadable settings.json is not "blank": treating it so wrote the script and then
+    # failed on settings, leaving half an install.
+    if os.geteuid() == 0:
+        pytest.fail("run the suite as a normal user; root can read a mode-000 file")
+    env.claude.mkdir()
+    env.settings.write_text('{"theme": "dark"}')
+    env.settings.chmod(0o000)
+    try:
+        r = install(env, bash)
+        assert r.returncode == 1, (r.returncode, r.stderr)
+        assert not env.script.exists()
+        assert "read" in r.stderr
+    finally:
+        env.settings.chmod(0o644)
+    assert env.settings.read_text() == '{"theme": "dark"}'

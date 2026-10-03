@@ -2,7 +2,8 @@
 # Generate a Claude Code statusline script from selected items
 # Usage: generate-statusline.sh --items ITEMS [--output PATH] [--lines N] [--install] [--force]
 #
-# Exit codes: 0 written, 1 a write failed (the old script and settings.json are unchanged),
+# Exit codes: 0 written, 1 failed (a write failed, jq is missing, or settings.json cannot be
+# read; a file that was not written is unchanged),
 # 2 bad input (flags, items, or settings.json that is not one JSON object), 3 refused: the
 # output file exists and was not written by this plugin (re-run with --force).
 set -eu
@@ -62,7 +63,7 @@ Examples:
   # Install directly
   generate-statusline.sh --items "model,dir,git,context-bar,cost" --install
 
-Exit codes: 0 written, 1 write failed, 2 bad input, 3 refused (use --force).
+Exit codes: 0 written, 1 failed, 2 bad input, 3 refused (use --force).
 USAGE
 }
 
@@ -321,7 +322,8 @@ fi
 _fresh=0; _GIT_DATA=""
 if [ -n "$GIT_CACHE" ] && [ -f "$GIT_CACHE" ]; then
   { read -r _ts; read -r _GIT_DATA; } < "$GIT_CACHE"
-  case "$_ts" in ''|*[!0-9]*) ;; *) [ $(( _now - _ts )) -le $GIT_MAX_AGE ] && _fresh=1 ;; esac
+  # Fresh only if 0-5 s old: a timestamp from the future (clock set back) is not trusted.
+  case "$_ts" in ''|*[!0-9]*) ;; *) _age=$(( _now - _ts )); [ "$_age" -ge 0 ] && [ "$_age" -le $GIT_MAX_AGE ] && _fresh=1 ;; esac
 fi
 if [ "$_fresh" != 1 ]; then
   if _git rev-parse --git-dir >/dev/null 2>&1; then

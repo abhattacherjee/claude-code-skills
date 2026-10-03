@@ -3,7 +3,8 @@
 # Copies references/statusline-command.sh to ~/.claude/statusline-command.sh and points
 # statusLine in ~/.claude/settings.json at it.
 #
-# Exit codes: 0 installed, 1 a write failed (nothing half-done is left), 2 bad input
+# Exit codes: 0 installed, 1 failed (a write failed, jq is missing, or settings.json cannot
+# be read; a file that was not written is unchanged), 2 bad input
 # (unknown flag, or settings.json is not one JSON object), 3 refused: the existing
 # statusline script was not written by this plugin (re-run with --force to replace it
 # after a backup).
@@ -28,7 +29,7 @@ statusLine in ~/.claude/settings.json.
             It is backed up to statusline-command.sh.bak-<UTC time> first.
   --help    Show this help.
 
-Exit codes: 0 installed, 1 write failed, 2 bad input, 3 refused (use --force).
+Exit codes: 0 installed, 1 failed, 2 bad input, 3 refused (use --force).
 USAGE
 }
 

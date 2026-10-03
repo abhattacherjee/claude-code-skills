@@ -100,7 +100,8 @@ fi
 FRESH=0; DATA=""
 if [ -n "$CACHE_FILE" ] && [ -f "$CACHE_FILE" ]; then
   { read -r TS; read -r DATA; } < "$CACHE_FILE"
-  case "$TS" in ''|*[!0-9]*) ;; *) [ $(( NOW - TS )) -le $CACHE_MAX_AGE ] && FRESH=1 ;; esac
+  # Fresh only if 0-5 s old: a timestamp from the future (clock set back) is not trusted.
+  case "$TS" in ''|*[!0-9]*) ;; *) AGE=$(( NOW - TS )); [ "$AGE" -ge 0 ] && [ "$AGE" -le $CACHE_MAX_AGE ] && FRESH=1 ;; esac
 fi
 if [ "$FRESH" != 1 ]; then
   if _git rev-parse --git-dir >/dev/null 2>&1; then

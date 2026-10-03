@@ -12,7 +12,7 @@
 #
 #   check_settings <settings.json>
 #     Returns 0 if the file is absent, blank, or holds exactly one JSON object;
-#     2 otherwise (and says why); 1 if jq is missing.
+#     2 otherwise (and says why); 1 if jq is missing or the file cannot be read.
 #
 #   update_settings <settings.json> <command>
 #     Sets .statusLine = {"type":"command","command":<command>}. Same temp-file + mv
@@ -137,6 +137,10 @@ check_settings() {
   if [ -d "$real" ]; then
     _sl_err "$file is a directory."
     return 2
+  fi
+  if [ -e "$real" ] && [ ! -r "$real" ]; then
+    _sl_err "Cannot read $file. Nothing was written."
+    return 1
   fi
   _sl_blank "$real" && return 0
   if ! jq -e -s 'length == 1 and (.[0] | type) == "object"' "$real" >/dev/null 2>&1; then

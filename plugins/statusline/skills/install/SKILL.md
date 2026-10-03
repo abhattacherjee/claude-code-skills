@@ -27,7 +27,7 @@ If `~/.claude/statusline-command.sh` already exists and this plugin did not writ
 bash "${CLAUDE_SKILL_DIR}/scripts/install.sh" --force
 ```
 
-Exit codes: 0 installed; 1 a write failed (old files unchanged); 2 bad input, such as a `settings.json` that is not one JSON object (fix it by hand; it was not changed); 3 refused, as above. Any file it replaces is backed up next to it first.
+Exit codes: 0 installed; 1 failed (a write failed, `jq` is missing, or `settings.json` cannot be read; a file that was not written is unchanged); 2 bad input, such as a `settings.json` that is not one JSON object (fix it by hand; it was not changed); 3 refused, as above. Any file it replaces is backed up next to it first.
 
 ## Layout tiers
 
