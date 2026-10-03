@@ -31,6 +31,27 @@ The three old plugins all wrote `~/.claude/statusline-command.sh` or read the se
 
 Exit codes for both: 0 done; 1 failed (a write failed, `jq` is missing, or `settings.json` cannot be read; a file that was not written is unchanged); 2 bad input; 3 refused. The guard lives in `lib/write-statusline.sh`.
 
+## Security: what a repo can make git run
+
+The statuslines run git on every prompt, in whatever repo the session is in. A repo you cloned or unpacked can carry config and attributes that make git run its own programs. Every git call the shipped statuslines (`install`'s script, `create`'s generated scripts and the recipes in `item-recipes.md`) make goes through `_git`, which is `GIT_NO_LAZY_FETCH=1 git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks`. "Probed" means a test or probe set the vector up, saw plain git run it, and saw the statusline not run it.
+
+| git call | What a repo could make it run | How it is closed |
+|---|---|---|
+| every call | `core.fsmonitor` hook | `-c core.fsmonitor=false` |
+| every call | `core.pager`, `pager.<cmd>` | `--no-pager`; the output is never a terminal anyway |
+| every call | lazy fetch of missing objects in a partial clone, through the remote's transport (`ext::`, `core.sshCommand`, remote helpers) | `GIT_NO_LAZY_FETCH=1` (git 2.44+), and `unsafe_repo` skips status and diff in any partial clone (`remote.*.promisor`, `extensions.partialClone`), for older git. Probed. |
+| `status --porcelain --ignore-submodules=all` (install) | `filter.<name>.clean` / `.process` | `unsafe_repo` skips the call when a filter is defined in any scope but global or system, including `include.path` and worktree config, or when the config lookup fails. Probed. |
+| same | the `post-index-change` hook (an index refresh write) | `--no-optional-locks`: no index write. Probed. |
+| same | a submodule's own fsmonitor or filters, which `unsafe_repo` never sees | `--ignore-submodules=all`. Probed. |
+| `diff [--cached] --numstat --ignore-submodules=all --no-textconv --no-ext-diff` (create, recipes) | filters, submodules, lazy fetch | as above. Probed. |
+| same | `diff.external`, `diff.<driver>.textconv` / `.command` | `--no-ext-diff --no-textconv`. `--numstat` never called them in the probe; the flags make that explicit. |
+| `config --includes --show-scope --get-regexp` | none: includes and `includeIf` only read files | a failed lookup skips the counts |
+| `rev-parse --git-dir`, `rev-parse --abbrev-ref @{upstream}`, `branch --show-current` | none: they read `HEAD` and refs | Probed with hooks, filters, a pager and an `ext::` remote set up: nothing ran. |
+| `rev-list --count` | none: walks commits, which a partial clone always has | Probed. |
+| `remote get-url origin` (create's `git-link`) | none: prints config and never connects | Probed with an `ext::` URL. |
+
+None of these commands runs hooks other than `post-index-change`, uses credentials or `askpass`, or starts `gc --auto` / maintenance.
+
 ## Install preview
 
 ```

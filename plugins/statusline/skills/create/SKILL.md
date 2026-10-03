@@ -81,7 +81,7 @@ For the complete JSON schema with all available fields, see **[references/json-s
 - Cache expensive ops: git results in `${XDG_CACHE_HOME:-~/.cache}/claude-statusline/` (mode 700, one file per directory, never through a symlink) with a 5s TTL, not in a shared temp dir
 - Treat names as untrusted: strip control characters and backslashes before `echo -e` or `printf '%b'`, keep values out of printf format strings (`printf '%s'`), and pass numbers through a digits-only filter before `$(( ))`
 - Run git as `git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks ...` so a repo's config cannot run a program on every prompt
-- The recipes file starts with `clean`, `num`, `_git` and `repo_filter` helpers; every recipe below uses them, and a recipe you write yourself must too
+- The recipes file starts with `clean`, `num`, `_git` and `unsafe_repo` helpers; every recipe below uses them, and a recipe you write yourself must too
 
 ## Presets
 

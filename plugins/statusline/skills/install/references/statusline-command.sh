@@ -9,16 +9,21 @@ printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || { printf 'sta
 # so a name cannot carry terminal escape sequences into the status bar.
 clean() { printf '%s' "$1" | tr -d '\000-\037\177\\'; }
 # git without the repo-config hooks that can run a program on every prompt.
-_git() { git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
-# 0 (true) when the repo controls a filter driver, or git config fails: filter.<name>.clean
-# runs on status and diff. Every filter.* key is read with includes, and any scope other
-# than global or system (local, worktree, command, and files they include) counts.
-repo_filter() {
+# --no-optional-locks: no index write, so no post-index-change hook; GIT_NO_LAZY_FETCH:
+# no transport for missing objects (git 2.44+; unsafe_repo covers older git).
+_git() { GIT_NO_LAZY_FETCH=1 git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
+# 0 (true) when git status/diff could run code the repo controls, or the config lookup
+# fails: a filter driver (filter.<name>.clean runs on status and diff) in any scope other
+# than global or system (local, worktree, command, and files they include), or a partial
+# clone (diff would lazy-fetch missing blobs through the remote's transport).
+unsafe_repo() {
   local out rc=0
   out=$(_git config --includes --show-scope --get-regexp '^filter\.' 2>/dev/null) || rc=$?
-  [ "$rc" -eq 1 ] && return 1          # no filter.* key at all
-  [ "$rc" -ne 0 ] && return 0          # the config lookup failed: fail closed
-  printf '%s\n' "$out" | grep -qvE '^(global|system)[[:space:]]'
+  [ "$rc" -gt 1 ] && return 0          # the config lookup failed: fail closed
+  [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qvE '^(global|system)[[:space:]]' && return 0
+  rc=0
+  _git config --get-regexp '^(extensions\.partialclone|remote\..*\.promisor)$' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 1 ]                      # 0 = partial clone, >1 = lookup failed; 1 = neither
 }
 
 DIR=$(echo "$input" | jq -r '.workspace.current_dir // empty')
@@ -42,10 +47,10 @@ CHANGES=""
 SYNC=""
 if [ -d ".git" ] || _git rev-parse --git-dir >/dev/null 2>&1; then
   BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
-  # In a repo that controls a filter driver, skip the change count (git status would run
-  # it). A global filter (git-lfs) is the user's own, so counts stay there.
-  if ! repo_filter; then
-    CHG=$(_git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  # Where git status could run repo-controlled code (see unsafe_repo), skip the change
+  # count. A global filter (git-lfs) is the user's own, so counts stay there.
+  if ! unsafe_repo; then
+    CHG=$(_git status --porcelain --ignore-submodules=all 2>/dev/null | wc -l | tr -d ' ')
     [ "$CHG" -gt 0 ] && CHANGES="${YELLOW}~${CHG}${R}"
   fi
   UPSTREAM=$(_git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)

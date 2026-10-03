@@ -205,16 +205,21 @@ clean() { printf '%s' "$1" | tr -d '\000-\037\177\\'; }
 # arithmetic.
 num() { local v=${1%%.*}; v=${v//[!0-9]/}; v=${v:0:15}; printf '%s' "${v:-0}"; }
 # git without the repo-config hooks that can run a program on every prompt.
-_git() { git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
-# 0 (true) when the repo controls a filter driver, or git config fails: filter.<name>.clean
-# runs on status and diff. Every filter.* key is read with includes, and any scope other
-# than global or system (local, worktree, command, and files they include) counts.
-repo_filter() {
+# --no-optional-locks: no index write, so no post-index-change hook; GIT_NO_LAZY_FETCH:
+# no transport for missing objects (git 2.44+; unsafe_repo covers older git).
+_git() { GIT_NO_LAZY_FETCH=1 git --no-pager -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "$@"; }
+# 0 (true) when git status/diff could run code the repo controls, or the config lookup
+# fails: a filter driver (filter.<name>.clean runs on status and diff) in any scope other
+# than global or system (local, worktree, command, and files they include), or a partial
+# clone (diff would lazy-fetch missing blobs through the remote's transport).
+unsafe_repo() {
   local out rc=0
   out=$(_git config --includes --show-scope --get-regexp '^filter\.' 2>/dev/null) || rc=$?
-  [ "$rc" -eq 1 ] && return 1          # no filter.* key at all
-  [ "$rc" -ne 0 ] && return 0          # the config lookup failed: fail closed
-  printf '%s\n' "$out" | grep -qvE '^(global|system)[[:space:]]'
+  [ "$rc" -gt 1 ] && return 0          # the config lookup failed: fail closed
+  [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qvE '^(global|system)[[:space:]]' && return 0
+  rc=0
+  _git config --get-regexp '^(extensions\.partialclone|remote\..*\.promisor)$' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 1 ]                      # 0 = partial clone, >1 = lookup failed; 1 = neither
 }
 
 # ─── Colors ───
@@ -255,11 +260,11 @@ if [ "$_fresh" != 1 ]; then
   BRANCH=""; STAGED=""; MODIFIED=""; GIT_AHEAD=""; GIT_BEHIND=""
   if _git rev-parse --git-dir >/dev/null 2>&1; then
     BRANCH=$(clean "$(_git branch --show-current 2>/dev/null)")
-    # In a repo that controls a filter driver, skip the counts (git diff would run it).
+    # Where git diff could run repo-controlled code (see unsafe_repo), skip the counts.
     # A global filter (git-lfs) is the user's own, so counts stay there.
-    if ! repo_filter; then
-      STAGED=$(_git diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
-      MODIFIED=$(_git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
+    if ! unsafe_repo; then
+      STAGED=$(_git diff --cached --numstat --ignore-submodules=all --no-textconv --no-ext-diff 2>/dev/null | wc -l | tr -d ' ')
+      MODIFIED=$(_git diff --numstat --ignore-submodules=all --no-textconv --no-ext-diff 2>/dev/null | wc -l | tr -d ' ')
     fi
     GIT_AHEAD=$(_git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
     GIT_BEHIND=$(_git rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)

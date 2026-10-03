@@ -209,7 +209,8 @@ def test_every_git_call_is_hardened(tmp_path, home, repos, bash):
     calls = log.read_text().splitlines()
     assert len(calls) >= 10
     for c in calls:
-        assert c.startswith("-c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks "), c
+        assert c.startswith("--no-pager -c core.fsmonitor=false -c core.untrackedCache=false "
+                            "--no-optional-locks "), c
 
 
 # ── 1: the git cache ────────────────────────────────────────────────────────
