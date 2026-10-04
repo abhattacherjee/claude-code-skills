@@ -11,6 +11,14 @@ All notable changes to the **search** skill (was `conversation-search`) are docu
 - The summarizer agent now ships in the plugin and is started as `context:conversation-summarizer`. It used to live only in `~/.claude/agents/` and was not in any repo (#163).
 - `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh` (the old copy was older).
 
+### Fixed
+
+- `--deep` with no match, and a bare `--no-color`, stopped with `unbound variable` on bash 3.2 (macOS).
+- `--deep` matched the topic as a regular expression; it is now literal text.
+- A backslash in `--topic`, `--branch`, `--project`, `--after` or `--before` broke the jq filter, and `\(...)` ran as jq code. Values are escaped now.
+- `--before <date>` no longer keeps a conversation created exactly at that midnight.
+- The "last Tuesday" example named a Monday (`--after 2025-02-17 --before 2025-02-18`). It now uses 2025-02-18 and 2025-02-19.
+
 ## History before 1.0.0 (as `conversation-search`)
 
 ### conversation-search 1.1.0 - 2026-02-22

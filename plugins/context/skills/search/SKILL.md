@@ -44,7 +44,7 @@ Map natural language to script flags:
 | User says | Script flags |
 |---|---|
 | "Find conversations about catalog maintenance" | `search --topic "catalog maintenance"` |
-| "What did I discuss last Tuesday?" | `search --after 2025-02-17 --before 2025-02-18` |
+| "What did I discuss last Tuesday?" | `search --after 2025-02-18 --before 2025-02-19` |
 | "Show my work on the feature/story-6.5 branch" | `search --branch "story-6.5"` |
 | "Find where I debugged CSRF errors" | `search --topic "CSRF" --deep` |
 | "Recent conversations in my-app project" | `list --project "my-app" --limit 10` |

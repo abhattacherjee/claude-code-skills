@@ -192,6 +192,11 @@ gather_entries() {
   } | jq -s 'sort_by(.modified // .created) | reverse'
 }
 
+# Escape a value for use inside a double-quoted jq string literal: backslash first, then quote.
+jq_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
 # Build jq filter from search criteria
 build_filter() {
   local topic="${1:-}" after="${2:-}" before="${3:-}" branch="${4:-}" project="${5:-}"
@@ -200,31 +205,31 @@ build_filter() {
   if [[ -n "$topic" ]]; then
     # Use ascii_downcase + contains for case-insensitive literal substring match
     local lower_topic
-    lower_topic=$(printf '%s' "$topic" | tr '[:upper:]' '[:lower:]' | sed 's/"/\\"/g')
+    lower_topic=$(jq_escape "$(printf '%s' "$topic" | tr '[:upper:]' '[:lower:]')")
     filters+=("((.firstPrompt // \"\" | ascii_downcase | contains(\"${lower_topic}\")) or (.summary // \"\" | ascii_downcase | contains(\"${lower_topic}\")))")
   fi
 
   if [[ -n "$after" ]]; then
     local norm_after
-    norm_after=$(normalize_date "$after")
+    norm_after=$(jq_escape "$(normalize_date "$after")")
     filters+=("(.created // .modified // \"\" | . >= \"${norm_after}\")")
   fi
 
   if [[ -n "$before" ]]; then
     local norm_before
-    norm_before=$(normalize_date "$before")
-    filters+=("(.created // .modified // \"\" | . <= \"${norm_before}\")")
+    norm_before=$(jq_escape "$(normalize_date "$before")")
+    filters+=("(.created // .modified // \"\" | . < \"${norm_before}\")")
   fi
 
   if [[ -n "$branch" ]]; then
     local lower_branch
-    lower_branch=$(printf '%s' "$branch" | tr '[:upper:]' '[:lower:]' | sed 's/"/\\"/g')
+    lower_branch=$(jq_escape "$(printf '%s' "$branch" | tr '[:upper:]' '[:lower:]')")
     filters+=("(.gitBranch // \"\" | ascii_downcase | contains(\"${lower_branch}\"))")
   fi
 
   if [[ -n "$project" ]]; then
     local lower_project
-    lower_project=$(printf '%s' "$project" | tr '[:upper:]' '[:lower:]' | sed 's/"/\\"/g')
+    lower_project=$(jq_escape "$(printf '%s' "$project" | tr '[:upper:]' '[:lower:]')")
     filters+=("(.projectPath // \"\" | ascii_downcase | contains(\"${lower_project}\"))")
   fi
 
@@ -248,14 +253,17 @@ deep_search_sessions() {
   for jsonl in "${PROJECTS_DIR}"/*/*.jsonl; do
     [[ -f "$jsonl" ]] || continue
     # Only grep in user/assistant message content, skip huge tool results
-    if grep -q -i "$topic" "$jsonl" 2>/dev/null; then
+    if grep -qiF -- "$topic" "$jsonl" 2>/dev/null; then
       local sid
       sid=$(basename "$jsonl" .jsonl)
       matching_ids+=("$sid")
     fi
   done
 
-  printf '%s\n' "${matching_ids[@]}"
+  # Under set -u, bash 3.2 (macOS) treats "${arr[@]}" on an empty array as unbound.
+  if [[ ${#matching_ids[@]} -gt 0 ]]; then
+    printf '%s\n' "${matching_ids[@]}"
+  fi
 }
 
 # Find JSONL file for a session ID (supports prefix matching)
@@ -642,11 +650,11 @@ main() {
       *) args+=("$arg") ;;
     esac
   done
-  set -- "${args[@]}"
-
-  if [[ $# -eq 0 ]]; then
+  # Only global flags were given (for example --no-color): show the usage.
+  if [[ ${#args[@]} -eq 0 ]]; then
     usage 0
   fi
+  set -- "${args[@]}"
 
   local cmd="$1"; shift
 
