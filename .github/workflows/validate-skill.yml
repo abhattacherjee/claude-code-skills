@@ -275,3 +275,23 @@ jobs:
             echo "::error::macOS must run the bash 3.2 cases"
             exit 1
           fi
+
+  skill-commands:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 is the oldest Python the scripts support (standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      # Unconditional, like the other harness jobs: the checker reads plugin text and
+      # the review plugin's analyzer, and neither is matched by the path filters above.
+      # Only `spec` and `review` opt in so far. Other plugins are tracked in #151.
+      - name: Test the skill-command checker
+        run: bash scripts/test-check-skill-commands.sh
+
+      - name: Check that every skill command runs as written
+        run: python3 scripts/check-skill-commands.py plugins/spec plugins/review

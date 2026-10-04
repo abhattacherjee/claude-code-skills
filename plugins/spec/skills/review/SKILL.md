@@ -7,7 +7,7 @@ metadata:
 
 # Spec Review
 
-> **Path convention:** `./scripts/…` and `./references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command runs from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
 
 Comprehensive spec review combining codebase verification and implementation planning.
 Discovers project architecture at runtime — works with any codebase structure.
@@ -100,20 +100,20 @@ After applying the checklist, the spec should have:
 
 ```bash
 # Discover project architecture (layers, services, test tools)
-./scripts/discover-project-architecture.sh "$(git rev-parse --show-toplevel)"
-./scripts/discover-project-architecture.sh "$(git rev-parse --show-toplevel)" --json
+"${CLAUDE_SKILL_DIR}/scripts/discover-project-architecture.sh" "$(git rev-parse --show-toplevel)"
+"${CLAUDE_SKILL_DIR}/scripts/discover-project-architecture.sh" "$(git rev-parse --show-toplevel)" --json
 
 # Extract spec sections for analysis
-./scripts/extract-spec-sections.sh <spec-file>
-./scripts/extract-spec-sections.sh <spec-file> --json
+"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" <SPEC_FILE>
+"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" <SPEC_FILE> --json
 
 # Task checklist for full review
-./scripts/task-manifest.sh full-review
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full-review
 ```
 
 ### Progress Tracking (MANDATORY)
 
-Before starting a full review, create the task checklist from `./scripts/task-manifest.sh full-review`:
+Before starting a full review, create the task checklist from `"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full-review`:
 
 | # | subject | activeForm |
 |---|---------|------------|
@@ -134,20 +134,19 @@ Before starting a full review, create the task checklist from `./scripts/task-ma
 
 **1.1 Discover project architecture:**
 ```bash
-PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-ARCH=$(./scripts/discover-project-architecture.sh "$PROJECT_ROOT" --json)
+"${CLAUDE_SKILL_DIR}/scripts/discover-project-architecture.sh" "$(git rev-parse --show-toplevel)" --json
 ```
 
-This returns: packages with layer classification (frontend/backend/mcp/tooling),
+The JSON it prints has: packages with layer classification (frontend/backend/mcp/tooling),
 frameworks per package, test frameworks, API test tools, Bruno folders (if any),
 E2E framework, data flow patterns, i18n approach, and security patterns.
 
-**1.2 Extract spec sections:**
+**1.2 Extract spec sections** (write the spec's path in place of `<SPEC_FILE>`):
 ```bash
-SPEC_DATA=$(./scripts/extract-spec-sections.sh "$SPEC_FILE" --json)
+"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" <SPEC_FILE> --json
 ```
 
-This returns: title, acceptance criteria counts, referenced files and endpoints,
+The JSON it prints has: title, acceptance criteria counts, referenced files and endpoints,
 sub-task count, and gap detection (missing codebase state, missing test plan).
 
 **1.3 Read CLAUDE.md and architecture docs** from the project root. Look for:
@@ -208,7 +207,7 @@ SOLUTION OVERVIEW: [paste solution section]
 SUB-TASKS: [paste sub-task list]
 
 PROJECT ARCHITECTURE (discovered at runtime):
-[Paste the ARCH JSON from Phase 1 — layers, services, frameworks]
+[Paste the architecture JSON from step 1.1 — layers, services, frameworks]
 
 PROJECT RULES (from CLAUDE.md):
 [Paste relevant architecture rules from CLAUDE.md]

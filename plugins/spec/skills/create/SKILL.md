@@ -7,7 +7,7 @@ metadata:
 
 # Spec Create
 
-> **Path convention:** `./scripts/…` and `./references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command runs from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
 
 ## Problem
 
@@ -19,8 +19,8 @@ formatting. Each project has its own spec conventions that must be discovered an
 
 ```bash
 # Discover project spec conventions
-./scripts/discover-conventions.sh .           # Report
-./scripts/discover-conventions.sh . --json    # JSON
+"${CLAUDE_SKILL_DIR}/scripts/discover-conventions.sh" .           # Report
+"${CLAUDE_SKILL_DIR}/scripts/discover-conventions.sh" . --json    # JSON
 ```
 
 ## Progress Tracking (MANDATORY)
@@ -28,8 +28,8 @@ formatting. Each project has its own spec conventions that must be discovered an
 Before starting, determine the workflow and create the task checklist:
 
 ```bash
-./scripts/task-manifest.sh single-story    # Default
-./scripts/task-manifest.sh vertical-split   # If splitting
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" single-story    # Default
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" vertical-split   # If splitting
 ```
 
 **Single-story workflow (default):**
@@ -79,10 +79,10 @@ Before starting, determine the workflow and create the task checklist:
 **1.2 Discover project conventions** by running the discovery script:
 
 ```bash
-CONVENTIONS=$(./scripts/discover-conventions.sh "$(git rev-parse --show-toplevel)" --json)
+"${CLAUDE_SKILL_DIR}/scripts/discover-conventions.sh" "$(git rev-parse --show-toplevel)" --json
 ```
 
-This returns: spec directory, naming pattern, epic structure, next available story
+The JSON it prints has: spec directory, naming pattern, epic structure, next available story
 numbers, tracking files, and common sections across existing specs.
 
 **1.3 Read a recent spec** from the project as a style reference. Use the `sampleSpec`

@@ -7,7 +7,7 @@ metadata:
 
 # Spec Implement
 
-> **Path convention:** `./scripts/…` and `./references/…` below are relative to this skill's own base directory — announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working directory is the user's project, not the skill directory, so prefix these with that base directory when running them. Paths written without the leading `./` (for example `scripts/` or `tests/` inside a search over the codebase) refer to the **target project** being worked on, not to this skill.
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command runs from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
 
 Implements a reviewed story spec end-to-end — from branch creation to PR.
 
@@ -23,8 +23,8 @@ Implements a reviewed story spec end-to-end — from branch creation to PR.
 Before starting, determine workflow and create the task checklist:
 
 ```bash
-./scripts/task-manifest.sh standard    # Default
-./scripts/task-manifest.sh ui-heavy    # If spec adds new DS components or pages
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" standard    # Default
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" ui-heavy    # If spec adds new DS components or pages
 ```
 
 **Standard workflow (7 tasks):**
