@@ -7,7 +7,7 @@ metadata:
 
 # Changelog Keeper
 
-Generates and maintains CHANGELOG.md entries from git commit history. Categorizes changes automatically using conventional commit prefixes and file path patterns.
+Generates and maintains CHANGELOG.md entries from git commit history. Categorizes changes by conventional commit prefix, with a file-path fallback when no commit has a prefix. Writing only adds lines: it never removes or rewrites what is already in CHANGELOG.md.
 
 ## Quick Reference
 
@@ -15,13 +15,13 @@ Generates and maintains CHANGELOG.md entries from git commit history. Categorize
 # Preview changelog entry (dry run)
 "${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --dry-run
 
-# Update [Unreleased] section
+# Add the new bullets to the [Unreleased] section
 "${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh"
 
-# Create a versioned entry
+# Promote [Unreleased] and the new bullets to a versioned entry
 "${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --version 2.0.0
 
-# Changes since a specific tag/commit
+# Changes since a specific tag/commit (HEAD~2 and v1.0.0^ work too)
 "${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --since v1.0.0
 
 # For a different repo
@@ -47,11 +47,13 @@ Run the changelog update script in these situations:
 ```
 
 The script:
-- Auto-detects the last version tag or changelog entry as the starting point
+- Picks the starting point, in this order: `--since <ref>`; the newest release tag (`v1.2.3` or `1.2.3`, so not `v1.2.3-rc1` or `20261001-snap`) reachable from HEAD, by version order; the first versioned heading of CHANGELOG.md (`[Unreleased]` skipped), if `v<heading>` or `<heading>` is a ref; else the whole history, first commit included. It prints which one it used.
 - Reads all commits since that point
 - Categorizes by conventional commit prefix (`feat:` → Added, `fix:` → Fixed, etc.)
-- Falls back to file-path categorization for non-conventional commits
+- Puts commits with no prefix under Other (see File-Path Fallback for the one exception)
 - Outputs a Keep-a-Changelog formatted entry
+
+A ref (from `--since` or the CHANGELOG.md heading) may use letters, digits and `.` `_` `/` `~` `^` `-`, and must not start with `-`.
 
 ### Step 2: Review and Refine
 
@@ -64,12 +66,19 @@ After the script generates the raw entry:
 ### Step 3: Write to CHANGELOG.md
 
 ```bash
-# Update the [Unreleased] section
+# Add the new bullets to the [Unreleased] section
 "${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh"
 
-# Or create a versioned entry for a release
+# Or promote [Unreleased] to a versioned entry for a release
 "${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --version 1.2.0
 ```
+
+What a write does:
+- Each new bullet goes under the matching `### <Category>` of the `[Unreleased]` block, after the bullets already there. A missing `### <Category>` is added at the end of the block. A bullet that is already in the block is skipped, so running it twice adds nothing.
+- The block ends at the next `## ` heading or link reference line (`[Unreleased]: https://...`). Hand-written bullets, other sections (`## v1.0.0 (2024-01-01)` too) and footer links are kept.
+- With no `[Unreleased]` section, one is added before the first `## ` heading or link reference, or at the end of the file.
+- `--version X.Y.Z` adds `## [X.Y.Z] - <today>` right under `## [Unreleased]`, so the old `[Unreleased]` body and the new bullets become the release section, and `[Unreleased]` is left empty. It is refused (exit 1) if `## [X.Y.Z]` already exists.
+- Before it replaces the file, the script checks that every line of the old file is still there, in order. If not, it exits 1 and leaves the file alone. A `CHANGELOG.md` that is a symlink, a directory or anything else that is not a regular file is refused (exit 1).
 
 ### Step 4: Include in Commit
 
@@ -92,14 +101,13 @@ The script categorizes commits using conventional commit prefixes:
 | `test` | **Testing** | `test: add unit tests for auth` |
 | `refactor`, `perf`, `style`, `chore`, `build`, `ci` | **Changed** | `refactor: simplify auth flow` |
 | `revert` | **Removed** | `revert: remove experimental flag` |
-| (no prefix) | File-path fallback | Categorized by which files changed |
+| (no prefix, or any other prefix) | **Other** | `Update README` |
 
 ### File-Path Fallback
 
-When commits don't use conventional prefixes, the script examines changed files:
-- `src/`, `lib/`, `scripts/` → Changed
-- `*.test.*`, `tests/`, `__tests__/` → Testing
-- `*.md`, `docs/`, `README*` → Documentation
+Only when **no** commit in the range has a prefix from the table, the script looks at the files the range changed. If any is under `src/`, `lib/` or `scripts/`, the commits go to **Changed** instead of **Other**. Otherwise they stay in **Other**.
+
+In a range that mixes prefixed and unprefixed commits, the unprefixed ones always go to **Other**.
 
 ## Format
 
@@ -192,8 +200,11 @@ ${NEW_ENTRY}"  # Blank line guaranteed
 # Wrong — picks up non-semver tags
 git describe --tags --abbrev=0
 
-# Right — only semver v* tags, newest first
-git tag -l 'v[0-9]*' --sort=-v:refname | head -1
+# Right — only final release tags (v1.2.3 or 1.2.3) reachable from HEAD, newest by version.
+# `--sort=-v:refname` alone would rank v1.2.3-rc1 above v1.2.3.
+git tag -l --merged HEAD | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+  | awk '{ v = $0; sub(/^v/, "", v); split(v, p, "."); print p[1], p[2], p[3], $0 }' \
+  | sort -k1,1n -k2,2n -k3,3n | tail -1 | cut -d' ' -f4
 ```
 
 ## Key Decisions

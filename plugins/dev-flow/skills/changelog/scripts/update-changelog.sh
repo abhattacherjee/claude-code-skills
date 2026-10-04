@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # update-changelog.sh — Generate or update CHANGELOG.md entries from git commits
-# Reads commit history since last changelog entry and categorizes changes.
+# Reads the commits since a starting point and sorts them into Keep-a-Changelog categories.
+# Write mode only ever adds lines to CHANGELOG.md; it checks that before it replaces the file.
 set -eu
 
 TODAY=$(date +%Y-%m-%d)
@@ -17,15 +18,28 @@ usage() {
 Usage: update-changelog.sh [options] [repo-directory]
 
 Generates CHANGELOG.md entries from git commit history.
-Categorizes changes into Added/Changed/Fixed/Removed/Testing/Documentation.
+Categorizes changes into Added/Changed/Fixed/Removed/Testing/Documentation/Other
+by conventional commit prefix. An unprefixed commit goes to Other. Only when no
+commit in the range has a prefix, and the range changed a file under src/, lib/
+or scripts/, do they go to Changed instead.
 
 Options:
   --dry-run              Preview changelog entry without writing
-  --since <ref>          Git ref to start from (tag, branch or commit)
-                         Default: auto-detect from last changelog version tag
-  --version <ver>        Create a versioned entry (e.g., "1.2.0")
-                         Default: update [Unreleased] section
+  --since <ref>          Git ref to start from: a tag, branch or commit, also
+                         HEAD~2 or v1.0.0^. Letters, digits and . _ / ~ ^ - only,
+                         not starting with -.
+                         Default, in this order: the newest release tag
+                         (v1.2.3 or 1.2.3) reachable from HEAD; else the first
+                         versioned heading of CHANGELOG.md, if it names a tag or
+                         ref; else the whole history.
+  --version <ver>        Move [Unreleased] and the new bullets into a
+                         "## [<ver>] - <today>" section; [Unreleased] stays,
+                         empty. Refused if "## [<ver>]" already exists.
+                         Default: add the new bullets to [Unreleased]
   -h, --help             Show this help
+
+Writing never removes a line: new bullets are added to the matching ### section,
+and bullets already there are skipped.
 
 Examples:
   update-changelog.sh                          # Update [Unreleased] in current dir
@@ -66,36 +80,63 @@ fi
 
 cd "$REPO_DIR"
 
-# --- Resolve --since to a commit ---
-# resolve_ref <name>: print the commit SHA for <name>, or fail. The name must look like a
-# tag, branch or SHA and must not start with "-", so it can never act as a git option.
-# Names come from the command line and from CHANGELOG.md, which is untrusted input.
+# A CHANGELOG.md that is there but is not a regular file (a directory, a fifo) cannot be
+# read or replaced. A symlink is refused at write time, and read through in --dry-run.
+if [[ -e "$CHANGELOG" && ! -f "$CHANGELOG" ]]; then
+  echo "Error: $CHANGELOG exists but is not a regular file" >&2
+  exit 1
+fi
+
+# --version X refuses when "## [X]" is already a heading, before any work is done.
+if [[ "$MODE" == "version" && -f "$CHANGELOG" ]]; then
+  if V="$VERSION" awk 'index($0, "## [" ENVIRON["V"] "]") == 1 { found = 1 } END { exit !found }' "$CHANGELOG"; then
+    echo "Error: CHANGELOG.md already has a '## [$VERSION]' section; refusing to add another" >&2
+    exit 1
+  fi
+fi
+
+# --- Resolve the starting point to a commit ---
+# A ref name may hold only these characters, and must not start with "-", so it can never
+# act as a git option. The same rule covers --since and the CHANGELOG.md heading, which is
+# untrusted input: letters, digits and . _ / ~ ^ -
+REF_CHARS='^[0-9A-Za-z._/~^-]+$'
+# resolve_ref <name>: print the commit SHA for <name>, or fail.
 resolve_ref() {
   local name="$1"
-  [[ "$name" =~ ^[0-9A-Za-z._/-]+$ && "$name" != -* ]] || return 1
+  [[ "$name" =~ $REF_CHARS && "$name" != -* ]] || return 1
   git rev-parse --verify --quiet "${name}^{commit}"
 }
 
 SINCE_LABEL="$SINCE"
+WHOLE_HISTORY=false
 if [[ -n "$SINCE" ]]; then
   if ! SINCE=$(resolve_ref "$SINCE"); then
     echo "Error: --since '$SINCE_LABEL' is not a tag, branch or commit in this repository" >&2
+    echo "  (a ref may use letters, digits and . _ / ~ ^ -, and must not start with -)" >&2
     exit 1
   fi
 else
-  # Try: last semver tag reachable from HEAD (v1.2.3 or 1.2.3; not sync-2026-02-24 and the like)
-  LAST_TAG=$(git tag -l 'v[0-9]*' '[0-9]*' --merged HEAD --sort=-v:refname 2>/dev/null | head -1 || true)
+  # 1. The newest final-release tag reachable from HEAD: v1.2.3 or 1.2.3 exactly. Not
+  #    v1.2.3-rc1, 20261001-snap or release-2.0.0. Sorted by version, so v1.10.0 > v1.9.0.
+  ALL_TAGS=$(git tag -l --merged HEAD 2>/dev/null || true)
+  LAST_TAG=$(printf '%s\n' "$ALL_TAGS" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+    | awk '{ v = $0; sub(/^v/, "", v); split(v, p, "."); printf "%d %d %d %s\n", p[1], p[2], p[3], $0 }' \
+    | sort -k1,1n -k2,2n -k3,3n | tail -1 | cut -d' ' -f4 || true)
+  SINCE=""
   if [[ -n "$LAST_TAG" ]] && SINCE=$(resolve_ref "$LAST_TAG"); then
     SINCE_LABEL="$LAST_TAG"
     echo "Auto-detected: changes since tag $SINCE_LABEL"
   else
     SINCE=""
-    # Try: extract version from CHANGELOG.md
+    if [[ -z "$ALL_TAGS" ]]; then
+      echo "No tags found."
+    else
+      echo "Found $(printf '%s\n' "$ALL_TAGS" | wc -l | tr -d ' ') tag(s) reachable from HEAD, but none is a release version (v1.2.3 or 1.2.3)."
+    fi
+    # 2. The first versioned heading of CHANGELOG.md ([Unreleased] skipped), as vX or X.
     if [[ -f "$CHANGELOG" ]]; then
-      LAST_VERSION=$(grep -m1 '^## \[' "$CHANGELOG" | sed 's/## \[\(.*\)\].*/\1/' || echo "")
-      # Only a plain name is tried. Anything else (spaces, a leading "-") is skipped.
-      if [[ -n "$LAST_VERSION" && "$LAST_VERSION" != "Unreleased" && "$LAST_VERSION" =~ ^[0-9A-Za-z._-]+$ && "$LAST_VERSION" != -* ]]; then
-        # Look for a matching tag
+      LAST_VERSION=$(grep '^## \[' "$CHANGELOG" | grep -v '^## \[Unreleased\]' | head -1 | sed 's/^## \[\([^]]*\)\].*/\1/' || true)
+      if [[ -n "$LAST_VERSION" ]]; then
         for prefix in "v" ""; do
           if SINCE=$(resolve_ref "${prefix}${LAST_VERSION}"); then
             SINCE_LABEL="${prefix}${LAST_VERSION}"
@@ -106,11 +147,11 @@ else
         done
       fi
     fi
-    # Fallback: all commits
+    # 3. The whole history. An empty SINCE means every commit reachable from HEAD, the
+    #    first one included ("root..HEAD" would skip it).
     if [[ -z "$SINCE" ]]; then
-      # An empty SINCE means the whole history, root commit included ("root..HEAD" skips it).
-      SINCE_LABEL="$(git rev-list --max-parents=0 HEAD 2>/dev/null | head -1)"
-      echo "No tags found, using all commits since initial"
+      WHOLE_HISTORY=true
+      echo "Using the whole history (every commit reachable from HEAD, the first one included)."
     fi
   fi
 fi
@@ -123,14 +164,19 @@ else
   RANGE="HEAD"
   DIFF_FROM="$(git hash-object -t tree /dev/null)"  # the empty tree
 fi
+if $WHOLE_HISTORY; then
+  SPAN="in the whole history"
+else
+  SPAN="since $SINCE_LABEL"
+fi
 COMMITS=$(git log "$RANGE" --pretty=format:"%s" --no-merges)
 if [[ -z "$COMMITS" ]]; then
-  echo "No new commits since $SINCE_LABEL"
+  echo "No new commits $SPAN"
   exit 0
 fi
 
-COMMIT_COUNT=$(echo "$COMMITS" | wc -l | tr -d ' ')
-echo "Found $COMMIT_COUNT commits since $SINCE_LABEL"
+COMMIT_COUNT=$(printf '%s\n' "$COMMITS" | wc -l | tr -d ' ')
+echo "Found $COMMIT_COUNT commits $SPAN"
 echo ""
 
 # --- Gather changed files for categorization ---
@@ -171,23 +217,16 @@ while IFS= read -r msg; do
   esac
 done <<< "$COMMITS"
 
-# If no conventional commits found, fall back to file-based categorization
+# File-path fallback: only when NO commit in the range has a prefix. If the range changed a
+# file under src/, lib/ or scripts/, the unprefixed commits go to Changed; otherwise they
+# stay in Other. In a mixed range, unprefixed commits always stay in Other.
 if [[ -z "$ADDED" && -z "$CHANGED" && -z "$FIXED" && -z "$REMOVED" && -z "$TESTING" && -z "$DOCS" && -n "$OTHER" ]]; then
-  # Re-categorize by looking at changed files
   has_src=false
-  has_test=false
-  has_docs=false
-
   while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
     case "$f" in
-      *.test.*|*.spec.*|tests/*|test/*|__tests__/*) has_test=true ;;
-      *.md|docs/*|README*|CHANGELOG*) has_docs=true ;;
       src/*|lib/*|scripts/*) has_src=true ;;
     esac
   done <<< "$CHANGED_FILES"
-
-  # Move OTHER to most appropriate category
   if $has_src; then
     CHANGED="$OTHER"
     OTHER=""
@@ -282,72 +321,149 @@ fi
 TMPFILE=$(mktemp "$REPO_DIR/.CHANGELOG.XXXXXX")
 trap 'rm -f "$TMPFILE"' EXIT
 
-if [[ ! -f "$CHANGELOG" ]]; then
+if [[ ! -e "$CHANGELOG" ]]; then
   # Create new changelog
   chmod 644 "$TMPFILE"
   printf '# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n%s\n' "$ENTRY" > "$TMPFILE"
   mv "$TMPFILE" "$CHANGELOG"
   echo ""
   echo "Created $CHANGELOG"
-else
-  # Insert entry into existing changelog. The entry goes to awk through the
-  # environment: `awk -v` would turn a backslash in a commit subject into an escape.
-  cp -p "$CHANGELOG" "$TMPFILE"
-  export ENTRY
-
-  if [[ "$MODE" == "unreleased" ]]; then
-    # Replace existing [Unreleased] section or insert after header
-    if grep -q '^\## \[Unreleased\]' "$CHANGELOG"; then
-      # Replace the [Unreleased] block (up to next ## [)
-      awk '
-        /^## \[Unreleased\]/ {
-          print ENVIRON["ENTRY"]
-          skip=1
-          next
-        }
-        /^## \[/ && skip {
-          skip=0
-          print ""
-          print $0
-          next
-        }
-        !skip { print }
-      ' "$CHANGELOG" > "$TMPFILE"
-    else
-      # Insert after the header lines (first blank line after title)
-      awk '
-        !inserted && /^$/ && NR > 1 {
-          print ""
-          print ENVIRON["ENTRY"]
-          inserted=1
-        }
-        { print }
-      ' "$CHANGELOG" > "$TMPFILE"
-    fi
-  else
-    # Version mode: insert after header, before first ## [
-    awk '
-      /^## \[Unreleased\]/ {
-        print $0
-        # Skip empty unreleased section
-        next
-      }
-      /^## \[/ && !inserted {
-        print ENVIRON["ENTRY"]
-        print ""
-        inserted=1
-      }
-      { print }
-      END {
-        if (!inserted) {
-          print ""
-          print ENVIRON["ENTRY"]
-        }
-      }
-    ' "$CHANGELOG" > "$TMPFILE"
-  fi
-
-  mv "$TMPFILE" "$CHANGELOG"
-  echo ""
-  echo "Updated $CHANGELOG"
+  exit 0
 fi
+
+# Merge into the existing file. Every line of the old file is kept; lines are only added.
+#   - The [Unreleased] block runs from "## [Unreleased]" to the next line that starts with
+#     "## " or is a link reference ("[x]: url"), or to the end of the file.
+#   - Each generated bullet that is not already a line of that block goes under the block's
+#     "### <Category>" heading (after its last line), or under a new heading at the end
+#     of the block.
+#   - With no [Unreleased] block, a new section goes before the first "## " heading or
+#     link reference, or at the end of the file.
+#   - --version: the "## [X] - DATE" heading goes right under "## [Unreleased]", so the old
+#     body and the new bullets become the X section and [Unreleased] is left empty.
+# The bullets reach awk through the environment ("Category<TAB>- bullet" per line): `awk -v`
+# would turn a backslash in a commit subject into an escape.
+GEN=""
+add_gen() {
+  local cat="$1" list="$2" line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && GEN="${GEN}${cat}"$'\t'"${line}"$'\n'
+  done <<< "$list"
+  return 0
+}
+add_gen Added "$ADDED"
+add_gen Changed "$CHANGED"
+add_gen Fixed "$FIXED"
+add_gen Removed "$REMOVED"
+add_gen Testing "$TESTING"
+add_gen Documentation "$DOCS"
+add_gen Other "$OTHER"
+if [[ "$MODE" == "version" ]]; then
+  VHEAD="$ENTRY_HEADER"
+else
+  VHEAD=""
+fi
+export GEN VHEAD
+
+cp -p "$CHANGELOG" "$TMPFILE"
+ADDED_COUNT=$(awk -v out="$TMPFILE" '
+  function blank(s) { return s ~ /^[ \t]*$/ }
+  function emit(s) { print s > out }
+  BEGIN {
+    ng = split(ENVIRON["GEN"], g, "\n")
+    ncat = 0
+    for (i = 1; i <= ng; i++) {
+      if (g[i] == "") continue
+      t = index(g[i], "\t")
+      c = substr(g[i], 1, t - 1)
+      if (!(c in nb)) { order[++ncat] = c; nb[c] = 0 }
+      nb[c]++
+      bl[c, nb[c]] = substr(g[i], t + 1)
+    }
+    vhead = ENVIRON["VHEAD"]
+  }
+  { L[++n] = $0 }
+  END {
+    u = 0
+    for (i = 1; i <= n; i++) if (L[i] ~ /^## \[Unreleased\]/) { u = i; break }
+    added = 0
+    if (u == 0) {
+      # No [Unreleased]: build a new section and put it before the first "## " heading or
+      # link reference, or at the end.
+      at = n + 1
+      for (i = 1; i <= n; i++) if (L[i] ~ /^## / || L[i] ~ /^\[[^]]+\]: /) { at = i; break }
+      sec = (vhead != "" ? vhead : "## [Unreleased]")
+      for (k = 1; k <= ncat; k++) {
+        c = order[k]; s = ""
+        for (j = 1; j <= nb[c]; j++) if (!((c, bl[c, j]) in dup)) { dup[c, bl[c, j]] = 1; s = s "\n" bl[c, j]; added++ }
+        if (s != "") sec = sec "\n\n### " c "\n" s
+      }
+      for (i = 1; i < at; i++) emit(L[i])
+      if (at > 1 && !blank(L[at - 1])) emit("")
+      emit(sec)
+      if (at <= n) emit("")
+      for (i = at; i <= n; i++) emit(L[i])
+      print added
+      exit 0
+    }
+    e = n + 1
+    for (i = u + 1; i <= n; i++) if (L[i] ~ /^## / || L[i] ~ /^\[[^]]+\]: /) { e = i; break }
+    # Lines already in the block, the first heading of each category, and the last
+    # non-blank line of the sub-section under that heading.
+    hidx = 0; blast = u
+    for (i = u + 1; i < e; i++) {
+      have[L[i]] = 1
+      if (!blank(L[i])) blast = i
+      if (L[i] ~ /^### /) {
+        name = substr(L[i], 5); sub(/[ \t]+$/, "", name)
+        hidx = i
+        if (!(name in h)) { h[name] = i; last[i] = i }
+        continue
+      }
+      if (hidx && !blank(L[i])) last[hidx] = i
+    }
+    tail = ""
+    for (k = 1; k <= ncat; k++) {
+      c = order[k]; s = ""
+      for (j = 1; j <= nb[c]; j++) {
+        b = bl[c, j]
+        if (b in have) continue
+        have[b] = 1; s = s "\n" b; added++
+      }
+      if (s == "") continue
+      if (c in h) { at = last[h[c]]; after[at] = after[at] s }
+      else tail = tail "\n\n### " c "\n" s
+    }
+    if (tail != "") after[blast] = after[blast] tail
+    for (i = 1; i <= n; i++) {
+      emit(L[i])
+      if (i == u && vhead != "") { emit(""); emit(vhead); added++ }
+      if (i in after) {
+        emit(substr(after[i], 2))
+        if (i < n && !blank(L[i + 1])) emit("")
+      }
+    }
+    print added
+  }
+' "$CHANGELOG")
+
+if [[ "$ADDED_COUNT" == 0 ]]; then
+  echo ""
+  echo "CHANGELOG.md already has every generated bullet; nothing written."
+  exit 0
+fi
+
+# Safety net: every line of the old file must still be in the new one, in the same order.
+# If not, leave CHANGELOG.md alone (the trap removes the temp file) and fail.
+if ! awk '
+  FILENAME == ARGV[1] { old[++n] = $0; next }
+  i < n && ($0 "") == (old[i + 1] "") { i++ }
+  END { exit (i == n) ? 0 : 1 }
+' "$CHANGELOG" "$TMPFILE"; then
+  echo "Error: the new CHANGELOG.md would lose or reorder lines of the old one; nothing written" >&2
+  exit 1
+fi
+
+mv "$TMPFILE" "$CHANGELOG"
+echo ""
+echo "Updated $CHANGELOG"

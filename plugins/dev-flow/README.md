@@ -15,7 +15,7 @@ Invoke as `/dev-flow:<skill>`. The old names still match as trigger phrases.
 | Skill | Was | What it does |
 |---|---|---|
 | `worktree` | `worktree` | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. Worktrees are siblings of the repo (`../repo-name--branch-suffix/`). Lists, creates and removes them, and prints the `cd` + `claude` command to start a session there. |
-| `changelog` | `changelog-keeper` | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Conventional commit prefixes (`feat:` to Added, `fix:` to Fixed and so on) first, then file paths for commits with no prefix. Outputs Keep-a-Changelog format. |
+| `changelog` | `changelog-keeper` | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Conventional commit prefixes (`feat:` to Added, `fix:` to Fixed and so on); a commit with no prefix goes to Other. Only when no commit in the range has a prefix and the range changed `src/`, `lib/` or `scripts/` do they go to Changed. Outputs Keep-a-Changelog format. |
 
 ### Use `worktree` when
 
@@ -33,7 +33,7 @@ A branch checked out in one worktree cannot be checked out in another (git enfor
 - you are preparing a release and need entries,
 - you ask what changed since the last release.
 
-`changelog` always previews first (`--dry-run`), then writes the `[Unreleased]` section or a versioned entry (`--version X.Y.Z`). It also covers keeping several scripts that write the same CHANGELOG from overwriting each other.
+`changelog` always previews first (`--dry-run`), then adds the new bullets to the `[Unreleased]` section, or promotes `[Unreleased]` to a versioned entry (`--version X.Y.Z`). A write only adds lines: hand-written bullets, other sections and footer links stay, and the script checks that before it replaces the file. It also covers keeping several scripts that write the same CHANGELOG from overwriting each other.
 
 ```shell
 /dev-flow:worktree create a new branch story-10.12 and a worktree for it
