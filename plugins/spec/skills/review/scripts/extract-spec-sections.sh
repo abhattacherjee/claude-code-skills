@@ -145,10 +145,12 @@ extract_referenced_files() {
 extract_referenced_endpoints() {
     # Find API endpoints and tool paths
     # A bare path that also appears with a method ("POST /api/x" and "/api/x") is one endpoint.
+    # Each grep ends with `|| true`: under `set -e` a grep that finds nothing would
+    # otherwise end this group and drop the endpoints of the greps after it.
     {
-        grep -oE '(GET|POST|PUT|PATCH|DELETE)\s+/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE"
-        grep -oE '/tools/[a-zA-Z0-9_-]+' "$SPEC_FILE"
-        grep -oE '/api/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE"
+        grep -oE '(GET|POST|PUT|PATCH|DELETE)\s+/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE" || true
+        grep -oE '/tools/[a-zA-Z0-9_-]+' "$SPEC_FILE" || true
+        grep -oE '/api/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE" || true
     } | sort -u | awk '
         { line[NR] = $0; if ($0 ~ /^(GET|POST|PUT|PATCH|DELETE)[ \t]+\//) { p = $0; sub(/^[A-Z]+[ \t]+/, "", p); covered[p] = 1 } }
         END { for (i = 1; i <= NR; i++) if (!(line[i] in covered)) print line[i] }'

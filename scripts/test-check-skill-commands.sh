@@ -244,6 +244,54 @@ expect "a non-executable .py outside scripts/ started directly exits 1" 1 'tools
 printf '# S\n\n```bash\n"${CLAUDE_SKILL_DIR}/scripts/t.py" --x\n```\n' > "$P/skills/s/SKILL.md"
 expect "a non-executable .py script started directly exits 1" 1 'not executable' "$P"
 
+# --- survivors from the cross-model pass (PR #173) ---
+# Data and code fences are never read as commands.
+fence_case "json fence with \"\$schema\" exits 0" 0 '^OK: ' '```json' '{"$schema": "https://example.com/x.json", "a": "$HOME"}'
+fence_case "ts fence with a \${price} template literal exits 0" 0 '^OK: ' '```ts' 'const s = `cost ${price} for ${n}`;'
+fence_case "python fence with an f-string and \$ exits 0" 0 '^OK: ' '```python' 'print(f"cost: ${price} {n}")'
+fence_case "yaml fence with \$GITHUB_OUTPUT exits 0" 0 '^OK: ' '```yaml' '  run: echo "x=1" >> $GITHUB_OUTPUT'
+fence_case "markdown fence with \$HOME exits 0" 0 '^OK: ' '```markdown' 'Your home is $HOME.'
+fence_case "~~~yaml fence with \$GITHUB_OUTPUT exits 0" 0 '^OK: ' '~~~yaml' '  run: echo "x=1" >> $GITHUB_OUTPUT'
+fence_case "unlabeled fence reading \$RUN_DIR still exits 1" 1 'unlabeled fence reads a shell variable' '```' 'cat $RUN_DIR/x.json'
+fence_case "~~~console fence reading \$RUN_DIR still exits 1" 1 'reads a shell variable' '~~~console' 'cat $RUN_DIR/x.json'
+
+# A wrapper does not hide a non-executable script.
+wrap_case() { # <label> <want> <regex> <command line>
+  local d; d="$(new_plugin "wr-$RANDOM$RANDOM")"
+  [[ "$2" == 1 ]] && chmod -x "$d/skills/s/scripts/run.sh"
+  printf '# S\n\n```bash\n%s\n```\n' "$4" > "$d/skills/s/SKILL.md"
+  expect "$1" "$2" "$3" "$d"
+}
+S='"${CLAUDE_SKILL_DIR}/scripts/run.sh"'
+wrap_case "timeout wrapper, non-executable script, exits 1" 1 'not executable' "timeout 60 $S --x"
+wrap_case "timeout with options, non-executable script, exits 1" 1 'not executable' "timeout -s KILL -k 5 60 $S"
+wrap_case "env with NAME=value, non-executable script, exits 1" 1 'not executable' "env FOO=1 BAR=2 $S"
+wrap_case "env -u NAME, non-executable script, exits 1" 1 'not executable' "env -u FOO $S"
+wrap_case "nice -n, non-executable script, exits 1" 1 'not executable' "nice -n 5 $S"
+wrap_case "command, non-executable script, exits 1" 1 'not executable' "command $S"
+wrap_case "exec, non-executable script, exits 1" 1 'not executable' "exec $S"
+wrap_case "chained wrappers, non-executable script, exits 1" 1 'not executable' "env FOO=1 timeout 5 nice $S"
+wrap_case "a wrapper after && still checks the script" 1 'not executable' "true && timeout 5 $S"
+wrap_case "timeout wrapper, executable script, exits 0" 0 '^OK: ' "timeout 60 $S --x"
+wrap_case "env wrapper, executable script, exits 0" 0 '^OK: ' "env FOO=1 $S"
+wrap_case "nice wrapper, executable script, exits 0" 0 '^OK: ' "nice -n 5 $S"
+P="$(new_plugin wrapspan)"
+chmod -x "$P/skills/s/scripts/run.sh"
+printf '# S\n\nRun `timeout 60 "${CLAUDE_SKILL_DIR}/scripts/run.sh"` first.\n' > "$P/skills/s/SKILL.md"
+expect "timeout wrapper in an inline span, non-executable script, exits 1" 1 'SKILL.md:3: .*not executable' "$P"
+
+# <SCRIPTS_DIR>/x.sh that starts a command must be executable too.
+P="$(new_plugin sdexec)"
+printf '# S\n\nIn the references, <SCRIPTS_DIR> means "${CLAUDE_SKILL_DIR}/scripts".\n' > "$P/skills/s/SKILL.md"
+printf '# ref\n\n```bash\n"<SCRIPTS_DIR>/run.sh" --x\n```\n' > "$P/skills/s/references/r.md"
+expect "<SCRIPTS_DIR> script, executable, started directly exits 0" 0 '^OK: ' "$P"
+chmod -x "$P/skills/s/scripts/run.sh"
+expect "<SCRIPTS_DIR> script, non-executable, started directly exits 1" 1 'references/r.md:4: <SCRIPTS_DIR>/run\.sh starts a command but is not executable' "$P"
+printf '# ref\n\n```bash\nbash "<SCRIPTS_DIR>/run.sh" --x\n```\n' > "$P/skills/s/references/r.md"
+expect "<SCRIPTS_DIR> script run through bash needs no exec bit" 0 '^OK: ' "$P"
+printf '# ref\n\n```bash\ntimeout 5 "<SCRIPTS_DIR>/run.sh"\n```\n' > "$P/skills/s/references/r.md"
+expect "<SCRIPTS_DIR> script behind a wrapper, non-executable, exits 1" 1 'not executable' "$P"
+
 # --- references are checked too ---
 P="$(new_plugin ref)"
 cat > "$P/skills/s/references/r.md" <<'EOF'

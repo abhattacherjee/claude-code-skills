@@ -46,7 +46,11 @@ ANALYZER = REPO / "plugins" / "review" / "skills" / "adversarial" / "scripts" / 
 
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*([^\s`]*)")
 PROMPT = re.compile(r"^\s*\$\s+(.*)$")
-# Fence languages whose content can be a command. A json or yaml fence is data.
+# Fence languages whose content can be a command. Both the `$VAR` rule and the script
+# path rule apply only to these (bash, sh, shell and zsh fences get the full analyzer).
+# Every other language is data or code (json, yaml, ts, js, python, toml, markdown,
+# diff, ...) and is never checked, so a `"$schema"`, a `${price}` template literal or
+# `$GITHUB_OUTPUT` in a yaml file is not a finding.
 COMMAND_LANGS = {"", "text", "txt", "console", "terminal", "shell-session", "sh-session", "plain", "plaintext"}
 INTERPRETER_BEFORE = re.compile(r"\b(?:bash|sh|zsh|python3?|source)\s+(?:-\S+\s+)*$")
 CD_ENV = re.compile(r"^(?:cd|pushd)\b.*\$\{CLAUDE_(?:SKILL_DIR|PLUGIN_ROOT)\}")
@@ -111,7 +115,57 @@ def prose_only(text, fences):
     return "\n".join(lines)
 
 
-def env_exec_problem(a, word, line, skill_dir, plugin_dir):
+ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def real_command(tokens):
+    """The command word after wrappers (timeout, env, nice, command, exec, nohup, time) and their args."""
+    i, n = 0, len(tokens)
+    while i < n:
+        w = tokens[i].strip("\"'")
+        if w == "env":
+            i += 1
+            while i < n and (tokens[i].startswith("-") or ASSIGN.match(tokens[i])):
+                i += 2 if tokens[i] in ("-u", "-C", "-S") else 1
+        elif w == "timeout":
+            i += 1
+            while i < n and tokens[i].startswith("-"):
+                i += 2 if tokens[i] in ("-s", "-k") else 1
+            i += 1  # the duration
+        elif w == "nice":
+            i += 1
+            if i < n and tokens[i] == "-n":
+                i += 2
+            elif i < n and (re.match(r"^-\d+$", tokens[i]) or tokens[i].startswith("--adjustment")):
+                i += 1
+        elif w in ("command", "exec", "nohup", "time"):
+            i += 1
+            while i < n and tokens[i].startswith("-"):
+                i += 2 if (w == "exec" and tokens[i] == "-a") else 1
+        else:
+            break
+    return tokens[i].strip("\"'") if i < n else ""
+
+
+def command_words(a, line):
+    """The command word of each command on a line, after wrappers, quotes removed."""
+    words = []
+    for seg in a.SEG_SPLIT.split(a.strip_line(line)):
+        _, rest = a.command_parts(seg)
+        if rest:
+            w = real_command(rest.split())
+            if w:
+                words.append(w)
+    return words
+
+
+def env_exec_problem(a, word, line, skill_dir, plugin_dir, scripts_dir=None):
+    sm = SCRIPTS_DIR_USE.match(word)
+    if sm and scripts_dir is not None:
+        target = scripts_dir / sm.group(1)
+        if target.is_file() and not os.access(str(target), os.X_OK):
+            return [(line, "<SCRIPTS_DIR>/%s starts a command but is not executable" % sm.group(1))]
+        return []
     m = a.FIRST_ENV.match(word)
     if not m:
         return []
@@ -143,7 +197,7 @@ def other_fence_problems(a, lang, start, lines):
         bare = stripped
         for tok in a.ENV_TOKENS:
             bare = bare.replace(tok, "")
-        if a.VAR_READ.search(bare):
+        if lang in COMMAND_LANGS and a.VAR_READ.search(bare):
             found.append((start + off, "a %s fence reads a shell variable: %s" % (
                 repr(lang) if lang else "unlabeled", line.strip()[:60])))
         for m in (a.SCRIPT_TOKEN.finditer(stripped) if lang in COMMAND_LANGS else []):
@@ -175,8 +229,8 @@ def check_doc(a, path, skill_dir, plugin_dir, is_reference, scripts_dir):
             for off, msg in a.block_problems(lines):
                 found.append((start + off, msg))
             for off, line in enumerate(lines):
-                for w in a.first_words(line):
-                    found.extend(env_exec_problem(a, w, start + off, skill_dir, plugin_dir))
+                for w in command_words(a, line):
+                    found.extend(env_exec_problem(a, w, start + off, skill_dir, plugin_dir, scripts_dir))
                 found.extend(cd_problems(a, line, start + off))
         else:
             found.extend(other_fence_problems(a, lang, start, lines))
@@ -186,8 +240,8 @@ def check_doc(a, path, skill_dir, plugin_dir, is_reference, scripts_dir):
     for n, span in a.spans_with_lines(prose):
         for msg in a.span_problems("`%s`" % span):
             found.append((n, msg))
-        for w in a.first_words(span):
-            found.extend(env_exec_problem(a, w, n, skill_dir, plugin_dir))
+        for w in command_words(a, span):
+            found.extend(env_exec_problem(a, w, n, skill_dir, plugin_dir, scripts_dir))
         found.extend(cd_problems(a, span, n))
 
     for n, line in enumerate(text.splitlines(), 1):

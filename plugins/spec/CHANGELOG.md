@@ -24,6 +24,8 @@ All notable changes to the **spec** plugin are documented here.
 - The two review scripts escaped only backslash, quote, newline and tab in their JSON. A CR or another control character in a title or directory name gave invalid JSON. `discover-conventions.sh` escaped only backslash and quote, and not epic names or tracking paths. All three scripts now escape every control character.
 - `discover-conventions.sh` takes only all-digit epic names and checks a story number before doing arithmetic on it. It sorts under `LC_ALL=C`, so one invalid byte no longer empties `commonSections`. It finds the sample spec with `find -exec ls -t {} +` instead of `xargs`.
 - `discover-project-architecture.sh` read `find` output word by word and printed it with `printf '%b'`, so a directory name with a space or a backslash sequence was split or cut. It now reads whole lines and prints them as they are.
+- `extract-spec-sections.sh` text mode dropped endpoints: the first grep that found nothing ended the group under `set -e`. Text and `--json` now agree.
+- `spec:review` quotes its `"<SPEC_FILE>"` placeholder, so a spec path with a space works.
 - `extract-spec-sections.sh` and `discover-conventions.sh` stop with an error on an unreadable spec or epic directory, instead of reporting false gaps or `nextStory: 1`.
 
 ### Deprecated

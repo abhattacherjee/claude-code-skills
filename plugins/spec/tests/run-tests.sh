@@ -289,6 +289,24 @@ run_in "$PROJ/sub" "$REVIEW/extract-spec-sections.sh" local.md --json
 json_is "a relative path from a subdirectory finds the file in that subdirectory" 'd["title"] == "Sub spec"'
 run_in "$PROJ/sub" "$REVIEW/extract-spec-sections.sh" "$SPEC_REL" --json
 json_is "a repo-root-relative path still works from a subdirectory" 'd["title"] == "Story 1.1: Login"'
+# Text mode must list every endpoint, and agree with --json on the count. A grep that finds
+# nothing used to end the group under `set -e`, so later endpoints went missing.
+endpoint_case() { # <label> <spec text> <expected count> <expected lines (newline separated)>
+  printf '%b' "$2" > "$PROJ/ep.md"
+  run_in "$PROJ" "$REVIEW/extract-spec-sections.sh" ep.md
+  local listed
+  listed="$(printf '%s\n' "$OUT" | sed -n '/^--- Referenced Endpoints/,/^$/p' | sed '1d;/^$/d')"
+  [[ "$listed" == "$4" ]] && ok "$1: text mode lists exactly the endpoints" || bad "$1: text mode lists exactly the endpoints" "got [$listed], want [$4]"
+  run_in "$PROJ" "$REVIEW/extract-spec-sections.sh" ep.md --json
+  json_is "$1: --json counts $3, the same as the text list" 'd["referencedEndpointCount"] == '"$3"
+}
+endpoint_case "tools and api paths only" '# S\n\nCall /tools/search and /api/users here\n' 2 '/api/users
+/tools/search'
+endpoint_case "a method path and a bare path" '# S\n\nPOST /api/login then /api/users/me here\n' 2 '/api/users/me
+POST /api/login'
+endpoint_case "only a method path" '# S\n\nGET /health ok.\n' 1 'GET /health'
+endpoint_case "no endpoints" '# S\n\nNothing here.\n' 0 ''
+
 run_in "$PROJ" "$REVIEW/extract-spec-sections.sh" does-not-exist.md
 check "missing spec file exits 1" 1 "" 'File not found'
 run_in "$PROJ" "$REVIEW/extract-spec-sections.sh"
@@ -381,8 +399,11 @@ for c in cmds:
     print(c.replace("${CLAUDE_SKILL_DIR}", skill_dir).replace("<SPEC_FILE>", spec))
 EOF
 }
+# A spec path with a space: a placeholder written without quotes in the text splits into two arguments and fails.
+SPEC_SPACE="specs/stories/epic-1/story with space.md"
+cp "$PROJ/$SPEC_REL" "$PROJ/$SPEC_SPACE"
 for skill in create review implement; do
-  cmds="$(extract_commands "$SKILLS/$skill/SKILL.md" "$SKILLS/$skill" "$SPEC_REL")"
+  cmds="$(extract_commands "$SKILLS/$skill/SKILL.md" "$SKILLS/$skill" "$SPEC_SPACE")"
   n=0
   while IFS= read -r cmd; do
     [[ -z "$cmd" ]] && continue

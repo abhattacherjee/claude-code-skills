@@ -104,8 +104,8 @@ After applying the checklist, the spec should have:
 "${CLAUDE_SKILL_DIR}/scripts/discover-project-architecture.sh" "$(git rev-parse --show-toplevel)" --json
 
 # Extract spec sections for analysis
-"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" <SPEC_FILE>
-"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" <SPEC_FILE> --json
+"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" "<SPEC_FILE>"
+"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" "<SPEC_FILE>" --json
 
 # Task checklist for full review
 "${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full-review
@@ -141,9 +141,9 @@ The JSON it prints has: packages with layer classification (frontend/backend/mcp
 frameworks per package, test frameworks, API test tools, Bruno folders (if any),
 E2E framework, data flow patterns, i18n approach, and security patterns.
 
-**1.2 Extract spec sections** (write the spec's path in place of `<SPEC_FILE>`):
+**1.2 Extract spec sections** (write the spec's path in place of `<SPEC_FILE>`, inside the quotes):
 ```bash
-"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" <SPEC_FILE> --json
+"${CLAUDE_SKILL_DIR}/scripts/extract-spec-sections.sh" "<SPEC_FILE>" --json
 ```
 
 The JSON it prints has: title, acceptance criteria counts, referenced files and endpoints,
