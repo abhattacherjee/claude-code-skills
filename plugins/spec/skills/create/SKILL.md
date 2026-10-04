@@ -2,7 +2,7 @@
 name: create
 description: "Creates detailed story specification files from various inputs (Claude plan, requirement file, prompt, GitHub issue). Discovers project spec conventions at runtime, brainstorms approaches with vertical splitting recommendations for large stories, generates template-compliant specs, checks for over-engineering, and optionally chains to spec:review. Was the spec-creator skill. Use when: (1) user wants to write a new story spec, (2) converting a plan or requirements into a formal spec, (3) creating specs from GitHub issues, (4) breaking a large feature into shippable vertical slices."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Spec Create
@@ -498,5 +498,5 @@ If user selects option 1 or 2, invoke the corresponding skill with the spec file
 ## See Also
 
 - `spec:review` — reviews and enriches existing specs (post-creation step)
-- `skill-authoring` — how this skill was built
+- `skill-kit:author` — how this skill was built
 - `spec:implement` — implements a spec (the next step after creation + review)

@@ -16,18 +16,23 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 - **`spec` plugin 1.0.0 (#160).** One install replaces `spec-creator`, `spec-review` and `spec-implement`, with three skills: `create` (was `spec-creator`), `review` (was `spec-review`) and `implement` (was `spec-implement`), invoked as `/spec:create`, `/spec:review` and `/spec:implement`. The old names still match as trigger phrases. Every script command in the three `SKILL.md` files now calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. The old `./scripts/<name>.sh` resolved against the user's project, not the skill, so the commands did not run as written. `spec:review` read `$SPEC_FILE` in a block that never set it; that is now a `<SPEC_FILE>` placeholder.
 - `scripts/check-skill-commands.py`, with tests in `scripts/test-check-skill-commands.sh`. It checks, from the text alone, that every script path in a plugin's `SKILL.md` and `references/*.md` exists and is executable, and that no command reads a variable it did not set. It does not run the commands. It uses the `review` plugin's analyzer. CI runs it on `plugins/spec` and `plugins/review`; other plugins can opt in (#151).
 - Smoke tests for every `spec` script in `plugins/spec/tests/run-tests.sh`, which also run every script command written in the three `SKILL.md` files, and a `spec-tests` CI job on ubuntu and macos (bash 3.2).
+- **`skill-kit` plugin 1.0.0 (#161, #105).** One install replaces the `skill-authoring` plugin, the `skill-publishing` plugin and the bare `claudeception` skill, with three skills: `author` (was `skill-authoring`), `publish` (was `skill-publishing`) and `extract` (was `claudeception`), invoked as `/skill-kit:author`, `/skill-kit:publish` and `/skill-kit:extract`. Every command in the three `SKILL.md` files runs as written from the project directory: `check-skill-commands.py` went from 60 problems to 0. `claudeception-activator.sh` tells Claude to use `Skill(skill-kit:extract)` and stays opt-in. `plugins/skill-kit/skills/publish/` is now the only source of the publishing scripts in the repo (#105).
+- Smoke tests for the `skill-kit` scripts in `plugins/skill-kit/tests/run-tests.sh` and a `skill-kit-tests` CI job on ubuntu and macos (bash 3.2). `check-skill-commands.py` runs on `plugins/skill-kit` in CI.
 
 ### Changed
 
 - `worktree` 1.0.1: added the note on Python virtualenvs from the live copy, written without private repo names, ahead of archiving the standalone repo (#157).
 - `scripts/test-discovery-guards.sh` tests the discovery scripts in `plugins/spec` (it read the bare `spec-creator/` and `spec-review/` dirs).
 - `context-shield` 1.3.1 and `figma-ui-designer` 3.2.1: the related-skill pointers say `spec:review` (were `spec-review`). The `figma-ui-designer` plugin manifest and marketplace entry now say 3.2.1; they were still at 3.1.0.
+- `scripts/test-sync-hygiene.sh` tests `plugins/skill-kit/skills/publish/scripts/` and no longer compares the scripts with a copy at `~/.claude/skills/skill-publishing`. That comparison failed on any machine whose live copy was older than the repo (#105). The `github-board` structure test also checks the `skill-kit` copies of the files it already checked.
+- `spec` 1.0.1: the See Also lines name `skill-kit:author` (was `skill-authoring`). `spec:create` is at 1.0.1.
 
 ### Deprecated
 
 - The `context-bar`, `custom-statusline` and `statusline-creator` plugins. Their marketplace entries stay one release, marked deprecated, and point at `statusline:install`, `statusline:create` and `statusline:context-bar`. They are removed in the next release (#158).
 - The `deep-review` and `adversarial-review` plugins. Their marketplace entries stay one release, marked deprecated, and point at `review:deep` and `review:adversarial`. They are removed in the next release (#159). The bare `deep-review/` directory goes with the other bare directories (#167).
 - The `spec-creator`, `spec-review` and `spec-implement` plugins. Their marketplace entries stay one release, marked deprecated, and point at `spec:create`, `spec:review` and `spec:implement`. They are removed in the next release (#167).
+- The `skill-authoring` and `skill-publishing` plugins, and the bare `claudeception` and `skill-authoring` skills. The two plugin entries stay one release in the marketplace, marked deprecated, and point at `skill-kit:author`, `skill-kit:publish` and `skill-kit:extract`. They are removed in the next release (#167).
 
 ## [3.20.0] - 2026-10-02
 
