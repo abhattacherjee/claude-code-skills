@@ -1,17 +1,19 @@
 # context-shield
 
-Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries
+Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.
 
 ## What It Does
 
-Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Supports ralph-loop iterations for workloads too large for a single session.
+Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count.
 
 **Use when:**
-- task involves reading 3+ large external sources (URLs, Figma frames, wiki pages), 
-- context is getting full from web fetches or file reads, 
-- processing many Figma design frames, 
-- analyzing competitor sites or design references in bulk, 
-- reading a multi-page GitHub wiki or documentation site.
+- reading 3+ large external sources (URLs, Figma frames, wiki pages), 
+- large documentation/API reference sites decomposed into section URLs, 
+- monorepo code audits across many directories, 
+- dependency upgrade research across 5+ packages, 
+- large PR reviews with 15+ changed files, 
+- competitive feature matrix analysis, 
+- security advisory triage for dependency updates.
 
 ## Key Features
 
@@ -52,7 +54,7 @@ $SCRIPTS/visualize.sh full-demo
 
 ### Skills
 
-- `context-shield` — Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Supports ralph-loop iterations for workloads too large for a single session.
+- `context-shield` — Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count.
 
 ### Agents
 
@@ -100,10 +102,14 @@ rm -rf /tmp/ccs
 
 ## See Also
 
-- `figma-ui-designer` — spawns this skill's pattern when processing many Figma frames
+- `figma-ui-designer` — use context-shield when analyzing 10+ Figma frames or 5+ competitor designs
+- `spec:review` — use context-shield when a spec references many external docs or code directories
+- `project-code-review` — use context-shield for large PRs with 15+ changed files
+- `npm-dependency-management` — use context-shield to research 5+ package changelogs before upgrades
+- `ci-security-issue-creator` — use context-shield to triage many CVE/GHSA advisory pages
+- `conversation-search` — use context-shield when summarizing multiple large conversations at once
 - `ralph-loop` plugin — provides the iteration mechanism for multi-batch processing
 - `content-distiller` agent (`~/.claude/agents/content-distiller.md`) — the isolated reader
-- `conversation-summarizer` agent — similar distillation pattern for conversation content
 
 ## Compatibility
 

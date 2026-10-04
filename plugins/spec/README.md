@@ -106,7 +106,7 @@ The old `spec-creator`, `spec-review` and `spec-implement` plugins are deprecate
 These are separate skills and may not be installed with this plugin.
 
 - `review:deep` and `review:adversarial`: code and pull request review. `spec:review` is for specs only.
-- `skill-authoring`: how these skills were built.
+- `skill-kit:author`: how these skills were built.
 - `context-shield`: use it when a spec points at many external docs that need reading.
 - `git-flow:finish`: merges the feature branch after the PR is approved.
 - `ui-from-requirements`: the full UI build pipeline for complex specs.

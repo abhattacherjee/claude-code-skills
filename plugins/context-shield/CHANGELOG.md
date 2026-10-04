@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.2] - 2026-10-04
+
+### Changed
+
+- The published plugin is rebuilt from this source, so its README matches `SKILL.md` and it now ships this changelog (#105).
+
 ## [1.3.1] - 2026-10-04
 
 ### Changed

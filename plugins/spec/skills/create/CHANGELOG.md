@@ -2,6 +2,12 @@
 
 All notable changes to the **create** skill (was `spec-creator`) are documented here.
 
+## [1.0.1] - 2026-10-04
+
+### Changed
+
+- The See Also line names `skill-kit:author` (was `skill-authoring`), after the skill-authoring skill moved into the `skill-kit` plugin (#161).
+
 ## [1.0.0] - 2026-10-04
 
 ### Changed

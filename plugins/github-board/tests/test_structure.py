@@ -114,6 +114,10 @@ CALLERS = ["skill-authoring/SKILL.md", "skill-authoring/references/task-tracking
            "plugins/skill-authoring/skills/skill-authoring/references/task-tracking-pattern.md"]
 CALLERS += ["plugins/skill-publishing/skills/skill-publishing/scripts/validate-pre-sync.sh",
             "README.md"]
+# The same files in the skill-kit plugin. The old paths stay until #167 removes them.
+CALLERS += ["plugins/skill-kit/skills/author/SKILL.md",
+            "plugins/skill-kit/skills/author/references/task-tracking-pattern.md",
+            "plugins/skill-kit/skills/publish/scripts/validate-pre-sync.sh"]
 
 
 @pytest.mark.parametrize("rel", CALLERS)
