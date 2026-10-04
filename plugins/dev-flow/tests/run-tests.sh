@@ -556,6 +556,72 @@ run_in "$PR" "$CL" --version 0.2.0
 check "a second --version 0.2.0 is refused" 1 "" 'already'
 cmp -s "$PR/CHANGELOG.md" "$TMP/promote-once.md" && ok "a refused --version leaves the file unchanged" || bad "a refused --version leaves the file unchanged" "$(diff "$TMP/promote-once.md" "$PR/CHANGELOG.md")"
 
+echo "update-changelog.sh: --version with no new commits"
+# HEAD is tagged, so the auto-detected range is empty; [Unreleased] holds a hand-written entry.
+ER="$TMP/work/emptyrange"
+newrepo "$ER"
+printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- hand-written entry\n\n## [1.0.0] - 2026-01-01\n\n- old\n' > "$ER/CHANGELOG.md"
+cp "$ER/CHANGELOG.md" "$TMP/emptyrange-before.md"
+gitc "$ER" add CHANGELOG.md
+gitc "$ER" commit -q -m "feat: one"
+gitc "$ER" tag v1.0.0
+run_in "$ER" "$CL"
+check "no --version and no new commits: exits 0 and says so" 0 'No new commits since v1\.0\.0'
+cmp -s "$ER/CHANGELOG.md" "$TMP/emptyrange-before.md" && ok "no --version and no new commits: the file is unchanged" || bad "no --version and no new commits: the file is unchanged" "$(diff "$TMP/emptyrange-before.md" "$ER/CHANGELOG.md")"
+run_in "$ER" "$CL" --version 1.1.0
+check "--version 1.1.0 with no new commits exits 0 and writes" 0 'Updated '
+EV="$(grep -m1 '^## \[1\.1\.0\] - ' "$ER/CHANGELOG.md" || true)"
+[[ -n "$EV" ]] && ok "--version with no new commits adds the [1.1.0] heading" || bad "--version with no new commits adds the [1.1.0] heading" "$(cat "$ER/CHANGELOG.md")"
+under "--version with no new commits moves the [Unreleased] entry into [1.1.0]" "$ER/CHANGELOG.md" "${EV:-## [1.1.0]}" '### Added' '- hand-written entry'
+subseq "--version with no new commits keeps every old line" "$TMP/emptyrange-before.md" "$ER/CHANGELOG.md"
+gitc "$ER" add CHANGELOG.md
+gitc "$ER" commit -q --allow-empty -m "chore: release 1.1.0"
+gitc "$ER" tag v1.1.0
+cp "$ER/CHANGELOG.md" "$TMP/emptyrange-released.md"
+run_in "$ER" "$CL" --since HEAD --version 1.2.0
+check "--since HEAD --version with an empty [Unreleased]: exits 1, nothing to release" 1 "" 'nothing to release'
+cmp -s "$ER/CHANGELOG.md" "$TMP/emptyrange-released.md" && ok "nothing to release: the file is unchanged" || bad "nothing to release: the file is unchanged" "$(diff "$TMP/emptyrange-released.md" "$ER/CHANGELOG.md")"
+
+echo "update-changelog.sh: a bullet already in any section is not added again"
+# After --version and before the tag, the next run starts from the whole history again.
+DUP="$TMP/work/dupsec"
+newrepo "$DUP"
+gitc "$DUP" commit -q --allow-empty -m "feat: one"
+gitc "$DUP" commit -q --allow-empty -m "fix: two"
+run_in "$DUP" "$CL"
+run_in "$DUP" "$CL" --version 1.0.0
+check "dup: --version 1.0.0 exits 0" 0 'Updated '
+gitc "$DUP" commit -q --allow-empty -m "feat: three"
+run_in "$DUP" "$CL"
+check "dup: a run before the v1.0.0 tag exits 0" 0 'Updated '
+[[ "$(grep -c -- '^- one$' "$DUP/CHANGELOG.md")" == 1 && "$(grep -c -- '^- two$' "$DUP/CHANGELOG.md")" == 1 ]] && ok "dup: the bullets already in [1.0.0] are not added to [Unreleased] again" || bad "dup: the bullets already in [1.0.0] are not added to [Unreleased] again" "$(cat "$DUP/CHANGELOG.md")"
+under "dup: the new commit goes to [Unreleased]" "$DUP/CHANGELOG.md" '## [Unreleased]' '### Added' '- three'
+run_in "$DUP" "$CL" --help
+check "--help says a subject already listed in any section is skipped" 0 'any section'
+
+echo "update-changelog.sh: a CRLF CHANGELOG.md stays CRLF"
+CRL="$TMP/work/crlf"
+newrepo "$CRL"
+printf '# Changelog\r\n\r\n## [Unreleased]\r\n\r\n### Added\r\n\r\n- one\r\n\r\n## [0.1.0]\r\n\r\n- old\r\n' > "$CRL/CHANGELOG.md"
+gitc "$CRL" commit -q --allow-empty -m "feat: one"
+gitc "$CRL" commit -q --allow-empty -m "feat: two"
+run_in "$CRL" "$CL"
+check "CRLF: write mode exits 0" 0 'Updated '
+python3 - "$CRL/CHANGELOG.md" > "$TMP/crlf.txt" 2>&1 <<'EOF' || true
+import sys
+raw = open(sys.argv[1], "rb").read()
+if raw.count(b"\n") != raw.count(b"\r\n"):
+    print("mixed line endings: %d LF, %d CRLF" % (raw.count(b"\n"), raw.count(b"\r\n")))
+lines = raw.decode().split("\r\n")
+if lines.count("### Added") != 1:
+    print("### Added appears %d times" % lines.count("### Added"))
+if lines.count("- one") != 1:
+    print("- one appears %d times" % lines.count("- one"))
+if "- two" not in lines or not (lines.index("### Added") < lines.index("- two") < lines.index("## [0.1.0]")):
+    print("- two is not under the existing ### Added")
+EOF
+[[ -z "$(cat "$TMP/crlf.txt")" ]] && ok "CRLF: every line ends CRLF, the bullet joins the existing ### Added, no duplicate" || bad "CRLF: every line ends CRLF, the bullet joins the existing ### Added, no duplicate" "$(cat "$TMP/crlf.txt")"
+
 echo "update-changelog.sh: the starting point"
 # A release candidate tag and the final tag on later commits: the final tag wins.
 RT="$TMP/work/rctag"

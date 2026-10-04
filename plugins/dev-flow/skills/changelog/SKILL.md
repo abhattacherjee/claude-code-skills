@@ -74,10 +74,11 @@ After the script generates the raw entry:
 ```
 
 What a write does:
-- Each new bullet goes under the matching `### <Category>` of the `[Unreleased]` block, after the bullets already there. A missing `### <Category>` is added at the end of the block. A bullet that is already in the block is skipped, so running it twice adds nothing.
+- Each new bullet goes under the matching `### <Category>` of the `[Unreleased]` block, after the bullets already there. A missing `### <Category>` is added at the end of the block. A bullet that is already in the block, or already a `- ` bullet line in any other section, is skipped, so running it twice adds nothing, and a commit subject already listed in a released section (say, after `--version` and before the tag) is not added again.
 - The block ends at the next `## ` heading or link reference line (`[Unreleased]: https://...`). Hand-written bullets, other sections (`## v1.0.0 (2024-01-01)` too) and footer links are kept.
 - With no `[Unreleased]` section, one is added before the first `## ` heading or link reference, or at the end of the file.
-- `--version X.Y.Z` adds `## [X.Y.Z] - <today>` right under `## [Unreleased]`, so the old `[Unreleased]` body and the new bullets become the release section, and `[Unreleased]` is left empty. It is refused (exit 1) if `## [X.Y.Z]` already exists.
+- `--version X.Y.Z` adds `## [X.Y.Z] - <today>` right under `## [Unreleased]`, so the old `[Unreleased]` body and the new bullets become the release section, and `[Unreleased]` is left empty. It is refused (exit 1) if `## [X.Y.Z]` already exists. With no new commits it still moves the `[Unreleased]` body into the release section; if `[Unreleased]` is empty too (and no new bullet is left), it exits 1 with "nothing to release". Without `--version`, no new commits prints "No new commits" and exits 0.
+- A `CHANGELOG.md` with CRLF line endings keeps them: lines are compared without the `\r`, old lines are written back as they were, and new lines get CRLF.
 - Before it replaces the file, the script checks that every line of the old file is still there, in order. If not, it exits 1 and leaves the file alone. A `CHANGELOG.md` that is a symlink, a directory or anything else that is not a regular file is refused (exit 1).
 
 ### Step 4: Include in Commit

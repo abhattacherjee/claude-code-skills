@@ -35,11 +35,15 @@ Options:
   --version <ver>        Move [Unreleased] and the new bullets into a
                          "## [<ver>] - <today>" section; [Unreleased] stays,
                          empty. Refused if "## [<ver>]" already exists.
+                         With no new commits, [Unreleased] alone is moved;
+                         if it is empty too, exits 1 (nothing to release).
                          Default: add the new bullets to [Unreleased]
   -h, --help             Show this help
 
-Writing never removes a line: new bullets are added to the matching ### section,
-and bullets already there are skipped.
+Writing never removes a line: new bullets are added to the matching ### section.
+A bullet that is already a line of the file, in any section, is skipped, so a
+commit subject already listed (for example in a released section) is not added
+again. A CHANGELOG.md with CRLF line endings keeps them.
 
 Examples:
   update-changelog.sh                          # Update [Unreleased] in current dir
@@ -169,14 +173,35 @@ if $WHOLE_HISTORY; then
 else
   SPAN="since $SINCE_LABEL"
 fi
+# unreleased_lines: print the number of non-blank lines in the [Unreleased] block of
+# CHANGELOG.md (0 when there is no file or no block). CR line endings are ignored.
+unreleased_lines() {
+  [[ -f "$CHANGELOG" ]] || { echo 0; return 0; }
+  awk '
+    { sub(/\r$/, "") }
+    !u && /^## \[Unreleased\]/ { u = 1; next }
+    u && (/^## / || /^\[[^]]+\]: /) { exit }
+    u && $0 !~ /^[ \t]*$/ { c++ }
+    END { print c + 0 }
+  ' "$CHANGELOG"
+}
+
 COMMITS=$(git log "$RANGE" --pretty=format:"%s" --no-merges)
 if [[ -z "$COMMITS" ]]; then
-  echo "No new commits $SPAN"
-  exit 0
+  if [[ "$MODE" != "version" ]]; then
+    echo "No new commits $SPAN"
+    exit 0
+  fi
+  # --version with no new commits still promotes what [Unreleased] already holds.
+  if [[ "$(unreleased_lines)" == 0 ]]; then
+    echo "Error: nothing to release: no new commits $SPAN and [Unreleased] in CHANGELOG.md is empty or missing" >&2
+    exit 1
+  fi
+  echo "No new commits $SPAN; moving the [Unreleased] entries into [$VERSION]"
+else
+  COMMIT_COUNT=$(printf '%s\n' "$COMMITS" | wc -l | tr -d ' ')
+  echo "Found $COMMIT_COUNT commits $SPAN"
 fi
-
-COMMIT_COUNT=$(printf '%s\n' "$COMMITS" | wc -l | tr -d ' ')
-echo "Found $COMMIT_COUNT commits $SPAN"
 echo ""
 
 # --- Gather changed files for categorization ---
@@ -334,9 +359,11 @@ fi
 # Merge into the existing file. Every line of the old file is kept; lines are only added.
 #   - The [Unreleased] block runs from "## [Unreleased]" to the next line that starts with
 #     "## " or is a link reference ("[x]: url"), or to the end of the file.
-#   - Each generated bullet that is not already a line of that block goes under the block's
-#     "### <Category>" heading (after its last line), or under a new heading at the end
-#     of the block.
+#   - Each generated bullet that is not already a line of that block, nor a "- " bullet
+#     line anywhere in the file, goes under the block's "### <Category>" heading (after
+#     its last line), or under a new heading at the end of the block.
+#   - CRLF: lines are compared with a trailing \r removed. Old lines are written back as
+#     they were; new lines get the file's line ending (CRLF when its first line has one).
 #   - With no [Unreleased] block, a new section goes before the first "## " heading or
 #     link reference, or at the end of the file.
 #   - --version: the "## [X] - DATE" heading goes right under "## [Unreleased]", so the old
@@ -368,7 +395,10 @@ export GEN VHEAD
 cp -p "$CHANGELOG" "$TMPFILE"
 ADDED_COUNT=$(awk -v out="$TMPFILE" '
   function blank(s) { return s ~ /^[ \t]*$/ }
-  function emit(s) { print s > out }
+  # emit: a new line (or several, joined by \n), with the line ending of the file.
+  function emit(s) { if (crlf) gsub(/\n/, "\r\n", s); print s (crlf ? "\r" : "") > out }
+  # keep: an old line, written back exactly as it was read.
+  function keep(i) { print R[i] > out }
   BEGIN {
     ng = split(ENVIRON["GEN"], g, "\n")
     ncat = 0
@@ -382,8 +412,10 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
     }
     vhead = ENVIRON["VHEAD"]
   }
-  { L[++n] = $0 }
+  { R[++n] = $0; if (n == 1) crlf = ($0 ~ /\r$/); sub(/\r$/, ""); L[n] = $0 }
   END {
+    # A "- " bullet line anywhere in the file is not added again.
+    for (i = 1; i <= n; i++) if (L[i] ~ /^- /) { anyb[L[i]] = 1 }
     u = 0
     for (i = 1; i <= n; i++) if (L[i] ~ /^## \[Unreleased\]/) { u = i; break }
     added = 0
@@ -395,25 +427,26 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
       sec = (vhead != "" ? vhead : "## [Unreleased]")
       for (k = 1; k <= ncat; k++) {
         c = order[k]; s = ""
-        for (j = 1; j <= nb[c]; j++) if (!((c, bl[c, j]) in dup)) { dup[c, bl[c, j]] = 1; s = s "\n" bl[c, j]; added++ }
+        for (j = 1; j <= nb[c]; j++) if (!(bl[c, j] in anyb)) { anyb[bl[c, j]] = 1; s = s "\n" bl[c, j]; added++ }
         if (s != "") sec = sec "\n\n### " c "\n" s
       }
-      for (i = 1; i < at; i++) emit(L[i])
+      if (added == 0) { print "0 0"; exit 0 }
+      for (i = 1; i < at; i++) keep(i)
       if (at > 1 && !blank(L[at - 1])) emit("")
       emit(sec)
       if (at <= n) emit("")
-      for (i = at; i <= n; i++) emit(L[i])
-      print added
+      for (i = at; i <= n; i++) keep(i)
+      print added " " added
       exit 0
     }
     e = n + 1
     for (i = u + 1; i <= n; i++) if (L[i] ~ /^## / || L[i] ~ /^\[[^]]+\]: /) { e = i; break }
     # Lines already in the block, the first heading of each category, and the last
     # non-blank line of the sub-section under that heading.
-    hidx = 0; blast = u
+    hidx = 0; blast = u; body = 0
     for (i = u + 1; i < e; i++) {
       have[L[i]] = 1
-      if (!blank(L[i])) blast = i
+      if (!blank(L[i])) { blast = i; body++ }
       if (L[i] ~ /^### /) {
         name = substr(L[i], 5); sub(/[ \t]+$/, "", name)
         hidx = i
@@ -427,35 +460,46 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
       c = order[k]; s = ""
       for (j = 1; j <= nb[c]; j++) {
         b = bl[c, j]
-        if (b in have) continue
-        have[b] = 1; s = s "\n" b; added++
+        if ((b in have) || (b in anyb)) continue
+        have[b] = 1; s = s "\n" b; added++; nbul++
       }
       if (s == "") continue
       if (c in h) { at = last[h[c]]; after[at] = after[at] s }
       else tail = tail "\n\n### " c "\n" s
     }
     if (tail != "") after[blast] = after[blast] tail
+    # With --version, an empty new section (no old body, no new bullet) is not written.
+    if (vhead != "" && body + nbul == 0) { print "0 0"; exit 0 }
     for (i = 1; i <= n; i++) {
-      emit(L[i])
+      keep(i)
       if (i == u && vhead != "") { emit(""); emit(vhead); added++ }
       if (i in after) {
         emit(substr(after[i], 2))
         if (i < n && !blank(L[i + 1])) emit("")
       }
     }
-    print added
+    print added " " (body + nbul)
   }
 ' "$CHANGELOG")
+# "<lines added> <lines in the new section>"; the second is only used with --version.
+SECTION_COUNT="${ADDED_COUNT#* }"
+ADDED_COUNT="${ADDED_COUNT%% *}"
 
+if [[ "$MODE" == "version" && "$SECTION_COUNT" == 0 ]]; then
+  echo "Error: nothing to release: [Unreleased] is empty and every generated bullet is already in CHANGELOG.md" >&2
+  exit 1
+fi
 if [[ "$ADDED_COUNT" == 0 ]]; then
   echo ""
   echo "CHANGELOG.md already has every generated bullet; nothing written."
   exit 0
 fi
 
-# Safety net: every line of the old file must still be in the new one, in the same order.
-# If not, leave CHANGELOG.md alone (the trap removes the temp file) and fail.
+# Safety net: every line of the old file must still be in the new one, in the same order
+# (compared with a trailing \r removed). If not, leave CHANGELOG.md alone (the trap removes
+# the temp file) and fail.
 if ! awk '
+  { sub(/\r$/, "") }
   FILENAME == ARGV[1] { old[++n] = $0; next }
   i < n && ($0 "") == (old[i + 1] "") { i++ }
   END { exit (i == n) ? 0 : 1 }
