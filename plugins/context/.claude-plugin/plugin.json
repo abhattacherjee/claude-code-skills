@@ -1,0 +1,5 @@
+{
+  "name": "context",
+  "version": "1.0.0",
+  "description": "Two skills for working with large content and past sessions, plus the agents they use. context:shield keeps the context window from overflowing by delegating token-heavy reads (URLs, Figma frames, wiki pages, code directories) to isolated sub-agents that return short summaries, and hands multi-batch work to ralph-loop. context:search finds past Claude Code conversations by topic, date, branch or project, shows them verbatim, and can summarize them."
+}
