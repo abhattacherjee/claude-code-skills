@@ -12,22 +12,20 @@ Generates and maintains CHANGELOG.md entries from git commit history. Categorize
 ## Quick Reference
 
 ```bash
-SCRIPT=~/.claude/skills/changelog-keeper/scripts/update-changelog.sh
-
 # Preview changelog entry (dry run)
-$SCRIPT --dry-run
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --dry-run
 
 # Update [Unreleased] section
-$SCRIPT
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh"
 
 # Create a versioned entry
-$SCRIPT --version 2.0.0
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --version 2.0.0
 
 # Changes since a specific tag/commit
-$SCRIPT --since v1.0.0
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --since v1.0.0
 
 # For a different repo
-$SCRIPT --dry-run /path/to/repo
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --dry-run <REPO_DIR>
 ```
 
 ## Workflow
@@ -45,7 +43,7 @@ Run the changelog update script in these situations:
 
 ```bash
 # Always preview first
-~/.claude/skills/changelog-keeper/scripts/update-changelog.sh --dry-run
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --dry-run
 ```
 
 The script:
@@ -67,10 +65,10 @@ After the script generates the raw entry:
 
 ```bash
 # Update the [Unreleased] section
-~/.claude/skills/changelog-keeper/scripts/update-changelog.sh
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh"
 
 # Or create a versioned entry for a release
-~/.claude/skills/changelog-keeper/scripts/update-changelog.sh --version 1.2.0
+"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh" --version 1.2.0
 ```
 
 ### Step 4: Include in Commit
@@ -166,11 +164,14 @@ When building CHANGELOG content via string concatenation, bash `$()` command sub
 Format: Monorepo-level events only.## [1.1.0] - 2026-02-24   ← MISSING BLANK LINE
 ```
 
-**This also affects `printf`:** `HEADER=$(printf '%s\n\n' "$HEADER")` still loses the trailing newlines because `$()` strips them after `printf` outputs them.
+**This also affects `printf`:** `$(printf '%s\n\n' "text")` still loses the trailing newlines because `$()` strips them after `printf` outputs them.
 
 Fix: Never rely on trailing newlines in variables. Add blank lines at the **concatenation point** instead:
 
 ```bash
+EXISTING=$(cat CHANGELOG.md)
+NEW_ENTRY="## [1.2.0] - 2026-02-24"
+
 # Wrong — $() strips trailing newlines from both echo and printf
 HEADER=$(echo "$EXISTING" | awk '/^## \[/{exit} {print}')
 HEADER=$(printf '%s\n\n' "$HEADER")  # Still loses \n\n!

@@ -14,13 +14,15 @@ Multiple Claude Code sessions sharing one working directory fight over the same 
 ## Quick Reference
 
 ```bash
-# From the repo root:
-~/.claude/skills/worktree/scripts/setup-worktree.sh list                                  # Show worktrees + branches
-~/.claude/skills/worktree/scripts/setup-worktree.sh create feature/story-10.11             # Existing branch
-~/.claude/skills/worktree/scripts/setup-worktree.sh create --new story-10.12-new-feature   # New branch from develop
-~/.claude/skills/worktree/scripts/setup-worktree.sh remove feature/story-10.11             # Clean up
-~/.claude/skills/worktree/scripts/setup-worktree.sh --help                                 # Full usage
+# From the repo you want to work in:
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" list                          # Show worktrees + branches
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" create <BRANCH>               # Existing branch
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" create --new <NEW_BRANCH>     # New branch from develop
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" remove <BRANCH>               # Clean up
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" --help                        # Full usage
 ```
+
+Replace `<BRANCH>` with a branch name such as `feature/story-10.11`, and `<NEW_BRANCH>` with a new name such as `story-10.12-new-feature` (the script adds the `feature/` prefix).
 
 ## Workflow
 

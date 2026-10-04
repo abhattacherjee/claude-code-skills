@@ -7,6 +7,7 @@ All notable changes to the **worktree** skill (was `worktree`, a bare skill) are
 ### Changed
 
 - Moved into the `dev-flow` plugin as `dev-flow:worktree` (#165). Same workflow and script as `worktree` 1.0.1. `/worktree` still matches as a trigger phrase.
+- Every command is written to work from your project directory (checked statically by `check-skill-commands.py`): `"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh"`, with `<BRANCH>` and `<NEW_BRANCH>` for the names. The old text called `~/.claude/skills/worktree/scripts/setup-worktree.sh`, which only worked from a loose copy (#165).
 - `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh`.
 - The "See Also" link to the standalone `worktree` repo is gone. That repo is being archived (#157).
 

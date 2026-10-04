@@ -7,6 +7,8 @@ All notable changes to the **changelog** skill (was `changelog-keeper`) are docu
 ### Changed
 
 - Moved into the `dev-flow` plugin as `dev-flow:changelog` (#165). Same workflow and script as `changelog-keeper` 1.1.1. The old name still matches as a trigger phrase.
+- Every command is written to work from your project directory (checked statically by `check-skill-commands.py`): `"${CLAUDE_SKILL_DIR}/scripts/update-changelog.sh"`, with `<REPO_DIR>` for another repo. The old text set `SCRIPT=~/.claude/skills/changelog-keeper/...` in one block and read `$SCRIPT` in others, which only worked from a loose copy (#165).
+- The newline-pitfall example sets `EXISTING` and `NEW_ENTRY`, so the block runs on its own.
 - `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh`.
 
 ## History before 1.0.0 (as `changelog-keeper`)

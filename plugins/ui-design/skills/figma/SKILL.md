@@ -27,12 +27,10 @@ Launch the `figma-ux-expert` agent to research real-world design references and 
 
 ```
 Agent({
-  subagent_type: "general-purpose",
+  subagent_type: "ui-design:figma-ux-expert",
   model: "sonnet",
   description: "UX research and design directions",
-  prompt: `You are the figma-ux-expert agent. Follow the instructions in ~/.claude/agents/figma-ux-expert.md.
-
-## Project Context
+  prompt: `## Project Context
 - **What to design:** [screens/components from Step 0a]
 - **Domain:** [e.g., vacation booking, travel recommendations]
 - **Design goals:** [what the design should communicate]
@@ -195,7 +193,7 @@ Does the user have an EXISTING Figma design to use as input?
 
 1. **Extract design tokens**:
    ```bash
-   ./scripts/extract-design-tokens.sh ./frontend --format html > /tmp/tokens.html
+   "${CLAUDE_SKILL_DIR}/scripts/extract-design-tokens.sh" ./frontend --format html > /tmp/tokens.html
    ```
 2. **Build standalone HTML** using extracted tokens + chosen design
 3. **Include surrounding UI context** — show the new element within existing page layout
@@ -363,9 +361,9 @@ AskUserQuestion({
 ## Quick Check
 
 ```bash
-./scripts/extract-design-tokens.sh ./frontend              # HTML tokens
-./scripts/extract-design-tokens.sh ./frontend --format json # JSON tokens
-./scripts/extract-design-tokens.sh --help                   # Usage
+"${CLAUDE_SKILL_DIR}/scripts/extract-design-tokens.sh" ./frontend              # HTML tokens
+"${CLAUDE_SKILL_DIR}/scripts/extract-design-tokens.sh" ./frontend --format json # JSON tokens
+"${CLAUDE_SKILL_DIR}/scripts/extract-design-tokens.sh" --help                   # Usage
 ```
 
 ## Figma MCP Gotchas

@@ -10,6 +10,7 @@ All notable changes to the **dev-flow** plugin are documented here.
 
 ### Changed
 
+- Every script command in the two `SKILL.md` files is written to work from your project directory (checked statically by `check-skill-commands.py`, which now covers this plugin in CI): `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. The old text used `~/.claude/skills/<skill>/scripts/...` and a `SCRIPT=` variable, which only worked from a loose copy.
 - `worktree/scripts/validate-skill.sh` and `changelog/scripts/validate-skill.sh` are copies of the repo-root `scripts/validate-skill.sh`.
 
 ### Deprecated
