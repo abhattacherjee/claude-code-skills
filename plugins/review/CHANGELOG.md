@@ -12,6 +12,7 @@ All notable changes to the **review** plugin are documented here.
 
 ### Changed
 
+- `detect-mode.sh` local mode: a guessed base that does not exist (for example `feature/*` with no `develop`) falls back to the repo default branch with a note on stderr, and a missing base now exits 1 instead of writing an empty diff. New `--base <branch>` picks the base (an unknown one exits 2). The local diff is now the working tree against the merge base, so committed, staged, unstaged and untracked changes are all included; your index is not changed. PR mode is unchanged.
 - Every command in both skills and in the `deep` references spells out its script path. The Bash tool keeps no shell variables between calls, so the old `$SCRIPTS`, `$AR_SCRIPTS`, `$ADV_REVIEW`, `$AUDIT` and `$RUN_DIR` reads were empty. A test (`skills/adversarial/scripts/test_skill_paths.py`) now fails when a fenced block reads a variable it did not set.
 - `audit_record.py` accepts the skill values `adversarial` and `deep`, and still accepts `adversarial-review` and `deep-review`, because round-record files written by the old skills (for example a `round-N.json` reused with `recheck --prior`, or a Step 5 rerun) carry them. New runs write the new values.
 - The local report file is still `<branch>.adversarial-review.md`, so existing `.gitignore` entries still match.

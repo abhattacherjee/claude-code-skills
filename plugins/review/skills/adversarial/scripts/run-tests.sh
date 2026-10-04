@@ -99,7 +99,7 @@ assert_contains() {
   local name="$1"
   local needle="$2"
   local haystack="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
+  if echo "$haystack" | grep -qF -- "$needle"; then
     pass "$name"
   else
     fail "$name" "expected to contain '$needle' in: $haystack"
@@ -775,6 +775,8 @@ args="\$*"
 case "\$args" in
   *"rev-parse --abbrev-ref HEAD"*) echo "some-other-branch" ;;
   *"rev-parse --verify"*)          exit 0 ;;
+  *"merge-base"*)                  echo 0123456789abcdef0123456789abcdef01234567 ;;
+  *"ls-files"*)                    exit 0 ;;
   *"diff --name-only"*)            echo "README.md" ;;
   *"diff "*)                       cat "${LARGE_DIFF_FILE_ESC}" ;;
   *)                               /usr/bin/git "\$@" ;;
@@ -842,6 +844,86 @@ assert_contains "PR mode -> PR=42"        "PR=42"        "$PR_MODE_OUT"
 assert_contains "PR mode -> BASE=develop" "BASE=develop" "$PR_MODE_OUT"
 assert_contains "PR mode -> DIFF_FILE="   "DIFF_FILE="   "$PR_MODE_OUT"
 assert_contains "PR mode -> FILES_FILE="  "FILES_FILE="  "$PR_MODE_OUT"
+
+# ====================================================================
+# SECTION 7b: detect-mode.sh — local mode in real temp repos (no network)
+# ====================================================================
+section "detect-mode.sh — local mode: base fallback, --base, working tree, index"
+
+# gh always fails here: no PR, and the repo default falls back to main.
+NOGH_DIR="$TMP_DIR/nogh"
+mkdir -p "$NOGH_DIR"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$NOGH_DIR/gh"
+chmod +x "$NOGH_DIR/gh"
+
+dm_git() { local repo="$1"; shift; git -C "$repo" -c user.email=t@example.com -c user.name=t "$@"; }
+dm_run() { local repo="$1"; shift; (cd "$repo" && PATH="$NOGH_DIR:$PATH" bash "$DETECT_MODE" "$@"); }
+dm_val() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
+
+# Repo A: main with a.txt and c.txt; feature/x has one commit (b.txt), then a
+# tracked unstaged edit (a.txt), a staged edit (c.txt) and an untracked file.
+DM_A="$TMP_DIR/dm-a"
+git init -q -b main "$DM_A"
+printf 'one\n' >"$DM_A/a.txt"; printf 'one\n' >"$DM_A/c.txt"
+dm_git "$DM_A" add -A; dm_git "$DM_A" commit -q -m base
+dm_git "$DM_A" branch trunk
+dm_git "$DM_A" checkout -q -b feature/x
+printf 'committed-line\n' >"$DM_A/b.txt"; dm_git "$DM_A" add b.txt; dm_git "$DM_A" commit -q -m "add b"
+printf 'unstaged-edit\n' >>"$DM_A/a.txt"
+printf 'staged-edit\n' >>"$DM_A/c.txt"; dm_git "$DM_A" add c.txt
+printf 'untracked-line\n' >"$DM_A/new.txt"
+IDX_BEFORE="$(shasum "$DM_A/.git/index" | cut -d' ' -f1)"
+CACHED_BEFORE="$(dm_git "$DM_A" diff --cached --name-only)"
+STATUS_BEFORE="$(dm_git "$DM_A" status --porcelain)"
+
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_A"
+assert_exit_code "feature/* with no develop -> exit 0" "0" "$DM_EXIT"
+assert_contains "feature/* with no develop falls back to main" "BASE=main" "$DM_OUT"
+assert_contains "the fallback is announced on stderr" "does not exist; using the repo default branch 'main'" "$DM_OUT"
+DM_DIFF="$(dm_val "$DM_OUT" DIFF_FILE)"; DM_FILES="$(dm_val "$DM_OUT" FILES_FILE)"
+assert_contains "diff has the committed change"       "+committed-line" "$(cat "$DM_DIFF")"
+assert_contains "diff has the unstaged tracked edit"  "+unstaged-edit"  "$(cat "$DM_DIFF")"
+assert_contains "diff has the staged tracked edit"    "+staged-edit"    "$(cat "$DM_DIFF")"
+assert_contains "diff has the untracked file"         "+untracked-line" "$(cat "$DM_DIFF")"
+for f in a.txt b.txt c.txt new.txt; do
+  assert_contains "file list has $f" "$f" "$(cat "$DM_FILES")"
+done
+assert_eq "the index file is unchanged" "$IDX_BEFORE" "$(shasum "$DM_A/.git/index" | cut -d' ' -f1)"
+assert_eq "staged file list is unchanged" "$CACHED_BEFORE" "$(dm_git "$DM_A" diff --cached --name-only)"
+assert_eq "git status is unchanged (new.txt still untracked)" "$STATUS_BEFORE" "$(dm_git "$DM_A" status --porcelain)"
+assert_eq "no temp index file is left behind" "0" "$(ls /tmp/adversarial-review-index.* 2>/dev/null | wc -l | tr -d ' ')"
+
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_A" --base trunk
+assert_exit_code "--base trunk -> exit 0" "0" "$DM_EXIT"
+assert_contains "--base wins over the guess" "BASE=trunk" "$DM_OUT"
+if echo "$DM_OUT" | grep -qF "Note:"; then fail "--base prints no fallback note" "$DM_OUT"; else pass "--base prints no fallback note"; fi
+
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_A" --base no-such-branch
+assert_exit_code "unknown --base -> exit 2" "2" "$DM_EXIT"
+assert_contains "unknown --base says so" "--base 'no-such-branch' is not a branch" "$DM_OUT"
+
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_A" --base
+assert_exit_code "--base without a value -> exit 2" "2" "$DM_EXIT"
+
+# Repo B: the only trunk is "master", so neither develop nor main exists.
+DM_B="$TMP_DIR/dm-b"
+git init -q -b master "$DM_B"
+printf 'one\n' >"$DM_B/a.txt"; dm_git "$DM_B" add -A; dm_git "$DM_B" commit -q -m base
+dm_git "$DM_B" checkout -q -b feature/y
+printf 'two\n' >>"$DM_B/a.txt"
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_B"
+assert_exit_code "no base anywhere -> exit 1" "1" "$DM_EXIT"
+assert_contains "no base anywhere says what to do" "No base branch found" "$DM_OUT"
+assert_contains "no base anywhere points at --base" "--base" "$DM_OUT"
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_B" --base master
+assert_exit_code "--base master rescues it -> exit 0" "0" "$DM_EXIT"
+assert_contains "the rescued diff has the working-tree edit" "+two" "$(cat "$(dm_val "$DM_OUT" DIFF_FILE)")"
 
 # ====================================================================
 # SECTION 8: --help flags on all scripts

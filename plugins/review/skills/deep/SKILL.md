@@ -78,7 +78,7 @@ fallback. Never silently skip a phase.
 1. Establish repo + change scope:
    - `git branch --show-current`; find an open PR for the branch (`gh pr list --head <branch>`).
    - Default base = the PR base, else the repo default branch (`develop`/`main`).
-   - Build the diff: `git diff <base>...HEAD` (PR mode) or `git diff <base>` (local mode). Exclude generated/derived artifacts (e.g. rendered `*.html`, lockfiles, build output) from the diff handed to reviewers — review their source instead, as a single-line source change can inflate the diff with hundreds of KB of generated output and waste reviewer budget.
+   - Build the diff: `git diff <base>...HEAD` (PR mode) or `git diff <base>` (local mode). To build it the way `review:adversarial` does, run `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/detect-mode.sh"`. Add `--base <branch>` when its base guess is wrong. In local mode it diffs the working tree against the merge base, so uncommitted and untracked changes are included. Exclude generated/derived artifacts (e.g. rendered `*.html`, lockfiles, build output) from the diff handed to reviewers — review their source instead, as a single-line source change can inflate the diff with hundreds of KB of generated output and waste reviewer budget.
 2. Enumerate changed files and classify (code / tests / docs / config). This drives which
    reviewers are applicable.
 3. **Include out-of-tree artifacts that are part of the same change-set** if the user mentions

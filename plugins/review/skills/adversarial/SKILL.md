@@ -43,6 +43,9 @@ What you accept by using it: the read-only sandbox still lets Codex read any fil
 # Local mode (working-tree diff vs base)
 /review:adversarial
 
+# Pick the base branch when the guess is wrong (no develop, or a different trunk)
+/review:adversarial --base main
+
 # Force large-diff past the size warning
 /review:adversarial --force
 
@@ -150,7 +153,7 @@ The exit code matters: 3 means the user forced an adversary that is not usable. 
 "${CLAUDE_SKILL_DIR}/scripts/detect-mode.sh"
 ```
 
-Add `--force` when the user passed it. The script prints `MODE`, `PR`, `BASE`, `DIFF_FILE` and `FILES_FILE` as `KEY=VALUE` lines. Note them and write them into later commands. If exit code is 2 and `--force` was not passed, halt and tell the user the diff is too large; offer `--force` to continue.
+Add `--force` when the user passed it, and `--base <branch>` when the user named a base. Without `--base`, local mode guesses the base from the branch prefix (`feature/*` to `develop`, `release/*` and `hotfix/*` to `main`, else the repo default branch). If that branch does not exist it falls back to the repo default branch (`main` when `gh` cannot say) and says so on stderr; if no base exists it exits 1. Tell the user, and offer `--base <branch>`. An unknown `--base` exits 2. In local mode the diff is the working tree against the merge base: committed, staged, unstaged and untracked changes, and your index is not changed. In PR mode `--base` is ignored. The script prints `MODE`, `PR`, `BASE`, `DIFF_FILE` and `FILES_FILE` as `KEY=VALUE` lines. Note them and write them into later commands. If exit code is 2 and `--force` was not passed, halt and tell the user the diff is too large; offer `--force` to continue.
 
 ### Step 2 — R1: Parallel Independent Discovery
 

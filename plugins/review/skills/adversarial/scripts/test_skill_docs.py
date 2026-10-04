@@ -72,6 +72,19 @@ class AdversarialReviewDocTests(unittest.TestCase):
         self.assertIn("--adversary-findings", synth_call)
         self.assertIn("--adversary-verdicts", synth_call)
 
+    def test_step_1_documents_base_and_the_local_diff(self):
+        step1 = section(self.text, "### Step 1", "### Step 2")
+        self.assertIn("`--base <branch>` when the user named a base", step1)
+        self.assertIn("offer `--base <branch>`", step1)
+        self.assertIn("exits 1", step1)
+        self.assertIn("exits 2", step1)
+        self.assertIn("untracked", step1)
+        deep = (DEEP / "SKILL.md").read_text(encoding="utf-8")
+        phase0 = section(deep, "## Phase 0", "## Phase 1")
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/detect-mode.sh", phase0)
+        self.assertIn("--base <branch>", phase0)
+        self.assertIn("uncommitted and untracked", phase0)
+
     def test_codex_sandbox_limits_are_documented(self):
         self.assertIn("read any file your user can read", self.text)
         self.assertIn("pure tests only", self.text)
