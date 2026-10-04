@@ -1,0 +1,14 @@
+{
+  "verdicts": [
+    {
+      "id": "G-001",
+      "claude_verdict": "confirm",
+      "reason": "Confirmed: 'super-secret-key-123' is present on line 78. This is a critical security issue."
+    },
+    {
+      "id": "G-002",
+      "claude_verdict": "refute",
+      "reason": "parse_record() was updated in a prior commit to always return a dict (possibly empty), never None; the docstring is stale. The .get() call is safe."
+    }
+  ]
+}
