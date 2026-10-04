@@ -6,9 +6,9 @@ set -eu
 # epic numbering, and outputs a project-aware template context.
 #
 # Usage:
-#   ./discover-conventions.sh <project-root>           # Human-readable report
-#   ./discover-conventions.sh <project-root> --json    # JSON for agent consumption
-#   ./discover-conventions.sh --help
+#   discover-conventions.sh <project-root>           # Human-readable report
+#   discover-conventions.sh <project-root> --json    # JSON for agent consumption
+#   discover-conventions.sh --help
 
 usage() {
     cat <<EOF
@@ -56,6 +56,13 @@ json_escape() {
     # Escape a string for use inside a JSON "...": backslash, quote, and every
     # control character below 0x20 (\n, \r and \t by name, the rest as \u00XX).
     local str="$1" code c esc
+    # Drop bytes that are not valid UTF-8 (a JSON string cannot hold them). Work in
+    # the C locale so the pattern tests below see bytes. Valid UTF-8 is kept.
+    local LC_ALL=C
+    if [[ "$str" == *[!\ -~]* ]] && command -v iconv >/dev/null 2>&1; then
+        str=$(printf '%s.' "$str" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null) || true
+        str="${str%.}"
+    fi
     str="${str//\\/\\\\}"
     str="${str//\"/\\\"}"
     str="${str//$'\n'/\\n}"
@@ -72,8 +79,23 @@ json_escape() {
 }
 
 # Epic names come from directory and file names, so they are untrusted. Only a
-# plain number is accepted. The same check guards every $(( )) below.
+# plain number is accepted. The same check guards every $(( )) below. A story
+# number is also capped at 9 digits, so $(( )) cannot overflow. `10#` makes bash
+# read `07` as 7, not as octal, and the number is printed without its zero.
 is_number() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+# An unreadable spec or epic directory would look empty (find hides the error),
+# and an epic would be reported as having no stories. Stop instead.
+check_readable() {
+    local d
+    for d in "$1" "$1"/*/; do
+        [[ -d "$d" ]] || continue
+        if [[ ! -r "$d" || ! -x "$d" ]]; then
+            echo "Error: cannot read directory: $d" >&2
+            exit 1
+        fi
+    done
+}
 
 # --- Discovery functions ---
 
@@ -146,6 +168,18 @@ find_epics() {
     fi
 }
 
+# Names of epic directories that were skipped because they are not all digits.
+find_skipped_epics() {
+    local spec_dir="$1" d name
+    [[ -z "$spec_dir" ]] && return
+    [[ "$(detect_epic_structure "$spec_dir")" == "epic-subdirs" ]] || return 0
+    for d in "$spec_dir"/epic-*; do
+        [[ -e "$d" ]] || continue
+        name="${d##*/epic-}"
+        is_number "$name" || printf '%s\0' "epic-$name"
+    done
+}
+
 find_tracking_files() {
     # Common tracking file locations
     for f in specs/mvp-tracking.md specs/post-mvp-tracking.md specs/tracking.md docs/tracking.md; do
@@ -160,7 +194,7 @@ extract_common_sections() {
     find "$spec_dir" -name "*.md" -not -name "README*" -not -name "tracking*" 2>/dev/null | \
         head -5 | while read -r f; do
         grep '^## ' "$f" 2>/dev/null | sed 's/^## //'
-    done | sort | uniq -c | sort -rn | head -20
+    done | LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn | head -20
 }
 
 find_latest_story_number() {
@@ -186,6 +220,7 @@ get_sample_spec() {
 # --- Run discovery ---
 
 SPEC_DIR=$(find_spec_dir)
+[[ -n "$SPEC_DIR" ]] && check_readable "$SPEC_DIR"
 SPEC_COUNT=$(count_specs "$SPEC_DIR")
 EPIC_STRUCTURE=$(detect_epic_structure "$SPEC_DIR")
 NAMING_PATTERN=$(find_naming_pattern "$SPEC_DIR")
@@ -207,6 +242,15 @@ if $JSON_MODE; then
         EPIC_JSON+="{\"epic\":\"$(json_escape "$epic")\",\"latestStory\":$latest,\"nextStory\":$next}"
     done < <(find_epics "$SPEC_DIR")
     EPIC_JSON+="]"
+
+    # Build skipped epics array
+    SKIPPED_JSON="["
+    FIRST=true
+    while IFS= read -r -d '' name; do
+        if $FIRST; then FIRST=false; else SKIPPED_JSON+=","; fi
+        SKIPPED_JSON+="\"$(json_escape "$name")\""
+    done < <(find_skipped_epics "$SPEC_DIR")
+    SKIPPED_JSON+="]"
 
     # Build tracking files array
     TRACKING_JSON="["
@@ -243,6 +287,7 @@ if $JSON_MODE; then
   "namingPattern": "$NAMING_ESC",
   "sampleSpec": "$SAMPLE_ESC",
   "epics": $EPIC_JSON,
+  "skippedEpics": $SKIPPED_JSON,
   "trackingFiles": $TRACKING_JSON,
   "commonSections": $SECTIONS_JSON
 }

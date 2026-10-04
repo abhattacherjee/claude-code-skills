@@ -3,6 +3,9 @@ set -euo pipefail
 
 # run-tests.sh — smoke tests for the scripts in the spec plugin.
 #
+# It also runs every script command written in the three SKILL.md files (see the
+# last section), so a wrong argument order or workflow name in the text fails here.
+#
 # Every script runs the way its SKILL.md calls it: by absolute path, from a
 # temp project directory (never the skill directory), in a clean environment
 # (`env -i`, so nothing leaks in from the caller's shell). Needs bash 3.2+
@@ -30,6 +33,8 @@ IMPLEMENT="$SKILLS/implement/scripts"
 
 PASS=0
 FAIL=0
+
+echo "bash under test: $BASH_VERSION"
 ok()  { PASS=$((PASS + 1)); printf '  PASS  %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '        %s\n' "$2"; return 0; }
 
@@ -59,10 +64,10 @@ check() {
 # json_is <label> <python-expr over d>: OUT must be valid JSON and the expression true.
 # The expressions are literals written in this file, never input, so eval is safe here.
 json_is() {
-  local label="$1" expr="$2" res
+  local label="$1" expr="$2" res arg="${3:-}"
   if res="$(printf '%s' "$OUT" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
-print("yes" if eval(sys.argv[1]) else "no")' "$expr" 2>&1)" && [[ "$res" == "yes" ]]; then
+print("yes" if eval(sys.argv[1]) else "no")' "$expr" "$arg" 2>&1)" && [[ "$res" == "yes" ]]; then
     ok "$label"
   else
     bad "$label" "JSON check failed ($expr): $res; stdout: $(printf '%s' "$OUT" | head -c 300)"
@@ -107,6 +112,14 @@ EOF
 done
 echo '{"name":"web","dependencies":{"react":"18","vite":"5"},"devDependencies":{"vitest":"1"}}' > "$PROJ/web/package.json"
 echo '{"name":"api","dependencies":{"express":"4"}}' > "$PROJ/api/package.json"
+
+# The scripts start with `#!/usr/bin/env bash`. In the clean env they must get the same
+# bash major version as this test shell, and EXPECT_BASH_MAJOR (set by CI) pins it.
+run_in "$PROJ" /usr/bin/env bash -c 'echo "${BASH_VERSINFO[0]}"'
+[[ "$OUT" == "${BASH_VERSINFO[0]}" ]] && ok "scripts run under bash $OUT, the same major version as the tests" || bad "scripts run under the same bash as the tests" "env bash is $OUT, test shell is ${BASH_VERSINFO[0]}"
+if [[ -n "${EXPECT_BASH_MAJOR:-}" ]]; then
+  [[ "$OUT" == "$EXPECT_BASH_MAJOR" ]] && ok "bash major version is the expected $EXPECT_BASH_MAJOR" || bad "bash major version is the expected $EXPECT_BASH_MAJOR" "got $OUT"
+fi
 
 echo "discover-conventions.sh (create)"
 run_in "$PROJ" "$CREATE/discover-conventions.sh" .
@@ -158,8 +171,9 @@ check "hostile names: text mode exits 0, skips bad epics on stderr" 0 'Epic 2: l
 no_file "hostile names: text mode executed nothing" "$EVIL/PWNED"
 run_in "$EVIL" "$CREATE/discover-conventions.sh" . --json
 [[ -z "$ERR" ]] && ok "hostile names: --json prints nothing on stderr" || bad "hostile names: --json prints nothing on stderr" "$ERR"
+json_is "hostile names: --json lists the skipped (non-numeric) epic dirs, escaped" '"epic-q\"z" in d["skippedEpics"] and "epic-q\\z" in d["skippedEpics"] and "epic-[a]" in d["skippedEpics"] and "epic-$(touch PWNED)" in d["skippedEpics"] and not any(n.startswith("epic-1") for n in d["skippedEpics"])'
 if [[ "$HAVE_CTRL" == 1 ]]; then
-  json_ok "control char in an epic name: --json still parses"
+  json_is "a control character in an epic name is escaped in skippedEpics" '"epic-q\x01z" in d["skippedEpics"]'
 fi
 # Section headings are sampled from the first few specs only, so test them in a project of their own.
 HEADS="$TMP/heads"
@@ -174,16 +188,33 @@ run_in "$EVIL" "$REVIEW/extract-spec-sections.sh" ctl-title.md --json
 check "extract: control chars in the title, exits 0" 0
 json_ok "extract: --json parses with control chars in the title"
 json_is "extract: the title round-trips" 'd["title"] == "Title\twith\x01ctl\r"'
-mkdir -p "$EVIL/pk\"g\001x"
-echo '{"name":"n"}' > "$EVIL/pk\"g\001x/package.json"
-run_in "$EVIL" "$REVIEW/discover-project-architecture.sh" . --json
-check "architecture: odd package directory name, exits 0" 0
-json_ok "architecture: --json parses with quote and control char in a directory name"
+# Package directories with a quote, a real control character, a literal backslash
+# sequence (\c would cut off %b output), and a space. A plain "zz" package comes last.
+ARCH="$TMP/archnames"
+mkdir -p "$ARCH"
+NAMES=('pk"g' 'z\cq' 'sp ace' 'zz')
+if mkdir "$ARCH/pk$(printf '\001')x" 2>/dev/null; then NAMES+=("pk$(printf '\001')x"); else echo "  note: filesystem refused a control character in a directory name; that case is skipped"; fi
+for n in "${NAMES[@]}"; do
+  mkdir -p "$ARCH/$n"
+  echo '{"name":"pkg"}' > "$ARCH/$n/package.json"
+done
+run_in "$ARCH" "$REVIEW/discover-project-architecture.sh" . --json
+check "architecture: odd package directory names, exits 0" 0
+json_ok "architecture: --json parses with odd directory names"
+for n in "${NAMES[@]}"; do
+  want="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$n")"
+  json_is "architecture: directory $(printf '%s' "$n" | tr -c '[:print:]' '?') is listed exactly" 'any(p["directory"] == json.loads(sys.argv[2]) for p in d["packages"])' "$want"
+done
+run_in "$ARCH" "$REVIEW/discover-project-architecture.sh" .
+check "architecture: text report lists the last package after a backslash name" 0 'zz \(pkg\)'
 
 echo "discover-project-architecture.sh (review)"
 run_in "$PROJ" "$REVIEW/discover-project-architecture.sh" "$(git -C "$PROJ" rev-parse --show-toplevel)"
 check "report exits 0 and names the packages" 0 'api \(api\) +\[backend\] +Express'
 check "report finds the front-end framework and test tool" 0 'web \(web\).*React,Vite.*Vitest'
+# From a subdirectory, with the project root as the argument: the script must cd to the root.
+run_in "$PROJ/sub" "$REVIEW/discover-project-architecture.sh" "$PROJ" --json
+json_is "runs from a subdirectory with the root as argument (both packages listed)" 'sorted(p["name"] for p in d["packages"] if p["name"] in ("web", "api")) == ["api", "web"]'
 run_in "$PROJ" "$REVIEW/discover-project-architecture.sh" . --json
 check "--json exits 0" 0
 json_is "--json is valid with the expected keys" 'set(["packages", "apiTestTools", "e2eFramework", "brunoFolders", "dataFlow", "i18n", "security"]) <= set(d)'
@@ -198,12 +229,51 @@ check "missing directory exits 1" 1 "" 'Directory not found'
 run_in "$PROJ" "$REVIEW/discover-project-architecture.sh"
 check "no argument exits 2" 2 "" 'project root required'
 
+echo "unreadable input (create, review)"
+# chmod 000 does nothing for root, so check that the file really is unreadable first.
+printf '# Locked\n' > "$PROJ/locked.md"
+chmod 000 "$PROJ/locked.md"
+if [[ -r "$PROJ/locked.md" ]]; then
+  echo "  note: this user can read a chmod 000 file (root?); the unreadable-input cases are skipped"
+else
+  run_in "$PROJ" "$REVIEW/extract-spec-sections.sh" locked.md --json
+  check "extract: an unreadable spec exits 1 with a message" 1 "" 'cannot read'
+  [[ -z "$OUT" ]] && ok "extract: an unreadable spec prints no false report" || bad "extract: an unreadable spec prints no false report" "$OUT"
+  UNR="$TMP/unreadable"
+  mkdir -p "$UNR/specs/stories/epic-1" "$UNR/specs/stories/epic-2"
+  touch "$UNR/specs/stories/epic-1/story-1.4-a.md" "$UNR/specs/stories/epic-2/story-2.1-b.md"
+  chmod 000 "$UNR/specs/stories/epic-1"
+  run_in "$UNR" "$CREATE/discover-conventions.sh" . --json
+  check "discover-conventions: an unreadable epic dir exits 1 with a message" 1 "" 'cannot read directory'
+  [[ "$OUT" != *nextStory* ]] && ok "discover-conventions: no false nextStory is printed (json)" || bad "discover-conventions: no false nextStory is printed (json)" "$OUT"
+  run_in "$UNR" "$CREATE/discover-conventions.sh" .
+  check "discover-conventions: an unreadable epic dir exits 1 in text mode too" 1 "" 'cannot read directory'
+  chmod 755 "$UNR/specs/stories/epic-1"
+fi
+chmod 644 "$PROJ/locked.md"
+
+# Headings with a non-UTF-8 byte: valid JSON in the C locale and in a UTF-8 locale.
+LOCALE_BAD="$TMP/localebad"
+mkdir -p "$LOCALE_BAD/specs/stories/epic-1"
+printf '# T\n\n## caf\303\251 \377 bad\n' > "$LOCALE_BAD/specs/stories/epic-1/story-1.1-a.md"
+run_in "$LOCALE_BAD" "$CREATE/discover-conventions.sh" . --json
+json_ok "a non-UTF-8 byte in a heading: --json parses (default locale)"
+json_is "a non-UTF-8 byte in a heading: the valid text is kept, the bad byte dropped" 'any(s["section"].startswith("caf\u00e9") for s in d["commonSections"])'
+UTF8_LOCALE="$(locale -a 2>/dev/null | grep -i 'utf-\{0,1\}8' | head -1 || true)"
+if [[ -n "$UTF8_LOCALE" ]]; then
+  run_in "$LOCALE_BAD" env LC_ALL="$UTF8_LOCALE" "$CREATE/discover-conventions.sh" . --json
+  json_ok "a non-UTF-8 byte in a heading: --json parses under $UTF8_LOCALE"
+  json_is "a non-UTF-8 byte in a heading: text kept under $UTF8_LOCALE" 'any(s["section"].startswith("caf\u00e9") for s in d["commonSections"])'
+else
+  echo "  note: no UTF-8 locale installed; the UTF-8 locale case is skipped"
+fi
+
 echo "extract-spec-sections.sh (review)"
 SPEC_REL="specs/stories/epic-1/story-1.1-thing.md"
 run_in "$PROJ" "$REVIEW/extract-spec-sections.sh" "$SPEC_REL" --json
 check "--json exits 0" 0
 json_is "--json has the title and criteria counts" 'd["title"] == "Story 1.1: Login" and d["criteriaCounts"] == "total=2 checked=1 unchecked=1"'
-json_is "--json counts the sub-tasks, files and endpoints" 'd["subtaskCount"] == 2 and d["referencedFileCount"] == 1 and d["referencedEndpointCount"] == 2'
+json_is "--json counts the sub-tasks, files and distinct endpoints (POST /api/login and /api/login are one)" 'd["subtaskCount"] == 2 and d["referencedFileCount"] == 1 and d["referencedEndpointCount"] == 1'
 json_is "--json reports both gaps for a spec without those sections" 'd["gaps"]["missingCodebaseState"] and d["gaps"]["missingApiTests"]'
 run_in "$PROJ" "$REVIEW/extract-spec-sections.sh" "$PROJ/$SPEC_REL"
 check "report from an absolute path names the sections" 0 'Acceptance Criteria \(total=2 checked=1 unchecked=1\)'
@@ -244,6 +314,13 @@ for pair in "create:$CREATE" "review:$REVIEW" "implement:$IMPLEMENT"; do
   name="${pair%%:*}"
   dir="${pair#*:}"
   run_in "$PROJ" "$dir/task-manifest.sh" --list
+  wfs="$OUT"
+  for wf in $wfs; do
+    run_in "$PROJ" "$dir/task-manifest.sh" "$wf"
+    check "$name listed workflow $wf runs" 0
+    json_is "$name listed workflow $wf is a non-empty task array" 'len(d) > 0 and all(set(["subject", "activeForm", "description"]) <= set(t) for t in d)'
+  done
+  run_in "$PROJ" "$dir/task-manifest.sh" --list
   listed="$(printf '%s' "$OUT" | tr -s ' \n' '\n\n' | grep -c .)"
   expected=2
   [[ "$listed" == "$expected" ]] && ok "$name --list names $expected workflows" || bad "$name --list names $expected workflows" "got $listed: $OUT"
@@ -261,10 +338,14 @@ run_in "$PROJ" "$CREATE/task-manifest.sh" single-story
 single="$OUT"
 run_in "$PROJ" "$CREATE/task-manifest.sh" vertical-split
 all="$single$OUT"
-run_in "$PROJ" "$REVIEW/task-manifest.sh" full-review
-all="$all$OUT"
-run_in "$PROJ" "$IMPLEMENT/task-manifest.sh" standard
-all="$all$OUT"
+for wf in full-review quick-check; do
+  run_in "$PROJ" "$REVIEW/task-manifest.sh" "$wf"
+  all="$all$OUT"
+done
+for wf in standard ui-heavy; do
+  run_in "$PROJ" "$IMPLEMENT/task-manifest.sh" "$wf"
+  all="$all$OUT"
+done
 if printf '%s' "$all" | grep -Eq 'spec-(creator|review|implement)'; then
   bad "no task line names an old skill" "$(printf '%s' "$all" | grep -Eo '.{20}spec-(creator|review|implement).{20}' | head -2)"
 else
@@ -273,6 +354,44 @@ fi
 [[ "$(printf '%s' "$single" | grep -c 'run /spec:review, /simplify, or done')" == 1 ]] \
   && ok "create's post-creation task offers /spec:review" \
   || bad "create's post-creation task offers /spec:review" "$single"
+
+echo "commands written in the SKILL.md files"
+# Pull every command that starts with "${CLAUDE_SKILL_DIR}/scripts/ out of a SKILL.md
+# (fenced bash lines and inline code spans), swap in the skill dir and a fixture spec
+# path, and run each one from the fixture project. <SPEC_FILE> is a placeholder the
+# model fills in; "$(git rev-parse --show-toplevel)" and . stay exactly as written.
+extract_commands() { # <SKILL.md> <skill dir> <spec file>
+  python3 - "$1" "$2" "$3" <<'EOF'
+import re, sys
+text, skill_dir, spec = open(sys.argv[1], encoding="utf-8").read(), sys.argv[2], sys.argv[3]
+cmds, inside, lang = [], False, ""
+for line in text.splitlines():
+    m = re.match(r"^\s*```(\w*)\s*$", line)
+    if m:
+        inside, lang = (not inside), (m.group(1) if not inside else "")
+        continue
+    if inside:
+        if lang in ("bash", "sh", "shell") and line.lstrip().startswith('"${CLAUDE_SKILL_DIR}/scripts/'):
+            cmds.append(re.sub(r"\s+#.*$", "", line.strip()))
+    else:
+        for span in re.findall(r"`([^`\n]+)`", line):
+            if span.startswith('"${CLAUDE_SKILL_DIR}/scripts/') and "<name>" not in span:  # the Paths note shows the shape, not a command
+                cmds.append(span)
+for c in cmds:
+    print(c.replace("${CLAUDE_SKILL_DIR}", skill_dir).replace("<SPEC_FILE>", spec))
+EOF
+}
+for skill in create review implement; do
+  cmds="$(extract_commands "$SKILLS/$skill/SKILL.md" "$SKILLS/$skill" "$SPEC_REL")"
+  n=0
+  while IFS= read -r cmd; do
+    [[ -z "$cmd" ]] && continue
+    n=$((n + 1))
+    run_in "$PROJ" bash -c "$cmd"
+    [[ "$RC" == 0 && -n "$OUT" ]] && ok "$skill SKILL.md command runs: ${cmd#*/scripts/}" || bad "$skill SKILL.md command runs: ${cmd#*/scripts/}" "exit $RC, stderr: $ERR"
+  done <<< "$cmds"
+  [[ "$n" -ge 1 ]] && ok "$skill SKILL.md: found $n script command(s) to run" || bad "$skill SKILL.md: found no script commands to run" "the extractor matched nothing"
+done
 
 echo
 echo "passed: $PASS  failed: $FAIL"

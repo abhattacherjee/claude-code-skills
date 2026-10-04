@@ -5,9 +5,9 @@ set -eu
 # for parallel agent analysis.
 #
 # Usage:
-#   ./extract-spec-sections.sh <spec-file>           # Human-readable report
-#   ./extract-spec-sections.sh <spec-file> --json     # JSON for agent consumption
-#   ./extract-spec-sections.sh --help
+#   extract-spec-sections.sh <spec-file>           # Human-readable report
+#   extract-spec-sections.sh <spec-file> --json     # JSON for agent consumption
+#   extract-spec-sections.sh --help
 
 # Resolve repo root from git (works regardless of where the script lives)
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -62,6 +62,11 @@ fi
 
 if [[ ! -f "$SPEC_FILE" ]]; then
     echo "Error: File not found: $SPEC_FILE" >&2
+    exit 1
+fi
+
+if [[ ! -r "$SPEC_FILE" ]]; then
+    echo "Error: cannot read: $SPEC_FILE" >&2
     exit 1
 fi
 
@@ -139,9 +144,14 @@ extract_referenced_files() {
 
 extract_referenced_endpoints() {
     # Find API endpoints and tool paths
-    grep -oE '(GET|POST|PUT|PATCH|DELETE)\s+/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE" | sort -u
-    grep -oE '/tools/[a-zA-Z0-9_-]+' "$SPEC_FILE" | sort -u
-    grep -oE '/api/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE" | sort -u
+    # A bare path that also appears with a method ("POST /api/x" and "/api/x") is one endpoint.
+    {
+        grep -oE '(GET|POST|PUT|PATCH|DELETE)\s+/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE"
+        grep -oE '/tools/[a-zA-Z0-9_-]+' "$SPEC_FILE"
+        grep -oE '/api/[a-zA-Z0-9/:_.-]+' "$SPEC_FILE"
+    } | sort -u | awk '
+        { line[NR] = $0; if ($0 ~ /^(GET|POST|PUT|PATCH|DELETE)[ \t]+\//) { p = $0; sub(/^[A-Z]+[ \t]+/, "", p); covered[p] = 1 } }
+        END { for (i = 1; i <= NR; i++) if (!(line[i] in covered)) print line[i] }'
 }
 
 extract_testing_section() {
@@ -183,6 +193,13 @@ if $JSON_MODE; then
         # Escape a string for use inside a JSON "...": backslash, quote, and every
         # control character below 0x20 (\n, \r and \t by name, the rest as \u00XX).
         local str="$1" code c esc
+        # Drop bytes that are not valid UTF-8 (a JSON string cannot hold them). Work in
+        # the C locale so the pattern tests below see bytes. Valid UTF-8 is kept.
+        local LC_ALL=C
+        if [[ "$str" == *[!\ -~]* ]] && command -v iconv >/dev/null 2>&1; then
+            str=$(printf '%s.' "$str" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null) || true
+            str="${str%.}"
+        fi
         str="${str//\\/\\\\}"
         str="${str//\"/\\\"}"
         str="${str//$'\n'/\\n}"

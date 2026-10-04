@@ -5,9 +5,9 @@ set -eu
 # key services, test frameworks, API patterns, and data flow for spec review.
 #
 # Usage:
-#   ./discover-project-architecture.sh <project-root>           # Human-readable report
-#   ./discover-project-architecture.sh <project-root> --json    # JSON for agent consumption
-#   ./discover-project-architecture.sh --help
+#   discover-project-architecture.sh <project-root>           # Human-readable report
+#   discover-project-architecture.sh <project-root> --json    # JSON for agent consumption
+#   discover-project-architecture.sh --help
 
 usage() {
     cat <<EOF
@@ -56,6 +56,13 @@ json_escape() {
     # Escape a string for use inside a JSON "...": backslash, quote, and every
     # control character below 0x20 (\n, \r and \t by name, the rest as \u00XX).
     local str="$1" code c esc
+    # Drop bytes that are not valid UTF-8 (a JSON string cannot hold them). Work in
+    # the C locale so the pattern tests below see bytes. Valid UTF-8 is kept.
+    local LC_ALL=C
+    if [[ "$str" == *[!\ -~]* ]] && command -v iconv >/dev/null 2>&1; then
+        str=$(printf '%s.' "$str" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null) || true
+        str="${str%.}"
+    fi
     str="${str//\\/\\\\}"
     str="${str//\"/\\\"}"
     str="${str//$'\n'/\\n}"
@@ -75,38 +82,35 @@ json_escape() {
 
 detect_packages() {
     # Find directories with package.json, Cargo.toml, pyproject.toml, go.mod, etc.
-    local pkgs=""
+    # Each find result is read as one whole line (a directory name may hold spaces
+    # or backslashes) and printed with %s, never %b, which would act on backslashes.
+    local pkgs="" f dir name
     # Node/JS packages
-    for pj in $(find . -maxdepth 3 -name "package.json" -not -path "*/node_modules/*" -not -path "*/.next/*" -not -path "*/dist/*" 2>/dev/null | sort); do
-        local dir
-        dir=$(dirname "$pj" | sed 's|^\./||')
+    while IFS= read -r -d '' f; do
+        dir=$(dirname "$f" | sed 's|^\./||')
         [[ "$dir" == "." ]] && dir="root"
-        local name
-        name=$(grep -m1 '"name"' "$pj" 2>/dev/null | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "$dir")
-        pkgs="${pkgs}${dir}:${name}\n"
-    done
+        name=$(grep -m1 '"name"' "$f" 2>/dev/null | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "$dir")
+        pkgs+="${dir}:${name}"$'\n'
+    done < <(find . -maxdepth 3 -name "package.json" -not -path "*/node_modules/*" -not -path "*/.next/*" -not -path "*/dist/*" -print0 2>/dev/null | sort -z)
     # Python packages
-    for pf in $(find . -maxdepth 3 \( -name "pyproject.toml" -o -name "setup.py" \) -not -path "*/venv/*" 2>/dev/null | sort); do
-        local dir
-        dir=$(dirname "$pf" | sed 's|^\./||')
+    while IFS= read -r -d '' f; do
+        dir=$(dirname "$f" | sed 's|^\./||')
         [[ "$dir" == "." ]] && dir="root"
-        pkgs="${pkgs}${dir}:python-pkg\n"
-    done
+        pkgs+="${dir}:python-pkg"$'\n'
+    done < <(find . -maxdepth 3 \( -name "pyproject.toml" -o -name "setup.py" \) -not -path "*/venv/*" -print0 2>/dev/null | sort -z)
     # Go
-    for gm in $(find . -maxdepth 3 -name "go.mod" 2>/dev/null | sort); do
-        local dir
-        dir=$(dirname "$gm" | sed 's|^\./||')
+    while IFS= read -r -d '' f; do
+        dir=$(dirname "$f" | sed 's|^\./||')
         [[ "$dir" == "." ]] && dir="root"
-        pkgs="${pkgs}${dir}:go-mod\n"
-    done
+        pkgs+="${dir}:go-mod"$'\n'
+    done < <(find . -maxdepth 3 -name "go.mod" -print0 2>/dev/null | sort -z)
     # Rust
-    for ct in $(find . -maxdepth 3 -name "Cargo.toml" -not -path "*/target/*" 2>/dev/null | sort); do
-        local dir
-        dir=$(dirname "$ct" | sed 's|^\./||')
+    while IFS= read -r -d '' f; do
+        dir=$(dirname "$f" | sed 's|^\./||')
         [[ "$dir" == "." ]] && dir="root"
-        pkgs="${pkgs}${dir}:rust-crate\n"
-    done
-    printf '%b' "$pkgs" | grep -v '^$' | sort -u
+        pkgs+="${dir}:rust-crate"$'\n'
+    done < <(find . -maxdepth 3 -name "Cargo.toml" -not -path "*/target/*" -print0 2>/dev/null | sort -z)
+    printf '%s' "$pkgs" | grep -v '^$' | sort -u
 }
 
 classify_layer() {
@@ -300,9 +304,10 @@ detect_e2e_framework() {
     if [[ -f "playwright.config.ts" || -f "playwright.config.js" ]]; then
         found="${found}Playwright,"
     fi
-    for d in $(find . -maxdepth 3 -name "playwright.config.*" -not -path "*/node_modules/*" 2>/dev/null); do
-        echo "$found" | grep -q "Playwright" || found="${found}Playwright,"
-    done
+    if find . -maxdepth 3 -name "playwright.config.*" -not -path "*/node_modules/*" -print -quit 2>/dev/null | grep -q . \
+        && [[ "$found" != *Playwright* ]]; then
+        found="${found}Playwright,"
+    fi
     # Cypress
     if [[ -f "cypress.config.ts" || -f "cypress.config.js" || -d "cypress" ]]; then
         found="${found}Cypress,"
