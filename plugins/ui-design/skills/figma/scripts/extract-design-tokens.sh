@@ -11,10 +11,14 @@ Usage: extract-design-tokens.sh [PROJECT_DIR] [OPTIONS]
 
 Extracts design tokens from a frontend project for use in standalone HTML
 mockups:
-  - CSS custom properties (--name: value) of the top-level :root block, and the
-    dark-mode ones from a top-level .dark block, else from a :root inside
-    @media (prefers-color-scheme: dark). Read from the first of these files
-    that has :root variables: src/index.css, src/styles/globals.css,
+  - CSS custom properties (--name: value) of the top-level rules whose
+    selector is exactly :root, and the dark-mode ones from the top-level dark
+    rules (.dark, :root.dark, .dark:root, html.dark, [data-theme=dark],
+    :root[data-theme=dark]), else from a :root inside
+    @media (prefers-color-scheme: dark). @layer is see-through; rules inside
+    other @media or @supports rules are skipped. Braces in comments and
+    quoted strings are ignored. Read from the first of these files that has
+    :root variables: src/index.css, src/styles/globals.css,
     src/app/globals.css, src/main.css, src/styles.css
   - the Google Fonts link from the first of index.html, public/index.html,
     src/index.html that has one
@@ -85,24 +89,70 @@ done
 
 # --- Extract CSS custom properties ---
 # css_vars <file> <light|dark|media>: print the "--name: value" lines of one kind of block.
-#   light: a top-level :root block. dark: a top-level .dark block. media: a :root block
-#   inside a top-level @media rule that names prefers-color-scheme and dark.
-# The braces on each line are tracked, so a :root inside @media is not read as light.
+#   light: a rule whose selector is exactly :root.
+#   dark:  a rule whose every selector is a dark one: .dark, :root.dark, .dark:root,
+#          html.dark, [data-theme=dark] (quoted or not), :root[data-theme=dark] or
+#          [data-theme=dark]:root.
+#   media: a :root rule inside an @media rule that names prefers-color-scheme and dark.
+# The rule must be at the top level. @layer (named or not) is transparent, so a rule inside
+# it counts as top level. Any other wrapper (@media, @supports, a nested rule) keeps its
+# rules out. Braces are counted outside comments (/* */, also over several lines) and
+# outside quoted strings. A line is read when it starts with "--" and does not start
+# inside a comment or a string.
 css_vars() {
   awk -v mode="$2" '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    # kind of a block opened by "{" after selector text s
+    function kind(s,   n, i, parts, p, alldark) {
+      s = trim(s)
+      if (s ~ /^@layer([ \t]|$)/) return "layer"
+      if (s ~ /^@media/ && s ~ /prefers-color-scheme/ && s ~ /dark/) return "darkmedia"
+      if (s ~ /^@/) return "other"
+      if (s == ":root") return "root"
+      n = split(s, parts, ",")
+      alldark = (n > 0)
+      for (i = 1; i <= n; i++) {
+        p = parts[i]
+        gsub(/[ \t]/, "", p)
+        if (p !~ /^((:root|html)?\.dark|(:root)?\[data-theme=("dark"|\047dark\047|dark)\])$/ && \
+            p !~ /^(\.dark|\[data-theme=("dark"|\047dark\047|dark)\]):root$/) alldark = 0
+      }
+      return alldark ? "dark" : "other"
+    }
+    # the chain of non-layer blocks we are in, as "a/b/c"
+    function chain(   i, c) {
+      c = ""
+      for (i = 1; i <= depth; i++) if (kd[i] != "layer") c = (c == "" ? kd[i] : c "/" kd[i])
+      return c
+    }
     {
       line = $0
+      start_clean = (!incomment && quote == "")
+      ctx = chain()
       for (i = 1; i <= length(line); i++) {
         ch = substr(line, i, 1)
-        if (ch == "{") { sel[++depth] = buf; buf = "" }
+        if (incomment) {
+          if (ch == "*" && substr(line, i + 1, 1) == "/") { incomment = 0; i++ }
+          continue
+        }
+        if (quote != "") {
+          buf = buf ch
+          if (ch == "\\") { buf = buf substr(line, i + 1, 1); i++ }
+          else if (ch == quote) quote = ""
+          continue
+        }
+        if (ch == "/" && substr(line, i + 1, 1) == "*") { incomment = 1; i++; continue }
+        if (ch == "\"" || ch == "\047") { quote = ch; buf = buf ch; continue }
+        if (ch == "{") { kd[++depth] = kind(buf); buf = "" }
         else if (ch == "}") { if (depth > 0) depth--; buf = "" }
         else if (ch == ";") buf = ""
         else buf = buf ch
       }
-      if (line !~ /^[ \t]*--/) next
-      if (mode == "light" && depth == 1 && sel[1] ~ /:root/) print line
-      else if (mode == "dark" && depth == 1 && sel[1] ~ /\.dark/) print line
-      else if (mode == "media" && depth == 2 && sel[1] ~ /@media/ && sel[1] ~ /prefers-color-scheme/ && sel[1] ~ /dark/ && sel[2] ~ /:root/) print line
+      if (buf != "") buf = buf " "
+      if (!start_clean || line !~ /^[ \t]*--/) next
+      if (mode == "light" && ctx == "root") print line
+      else if (mode == "dark" && ctx == "dark") print line
+      else if (mode == "media" && ctx == "darkmedia/root") print line
     }
   ' "$1" 2>/dev/null || true
 }

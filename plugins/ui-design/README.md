@@ -45,7 +45,7 @@ The skill runs its script through `${CLAUDE_SKILL_DIR}`, so it works from your p
 
 | Skill | Script | Purpose |
 |---|---|---|
-| `figma` | `extract-design-tokens.sh [PROJECT_DIR] [--format html\|json\|css]` | Reads, for mockups that match the real look: the `:root` CSS custom properties and the dark-mode ones (`.dark`, else `@media (prefers-color-scheme: dark)`) from the first of `src/index.css`, `src/styles/globals.css`, `src/app/globals.css`, `src/main.css`, `src/styles.css` that has `:root` variables; the Google Fonts link from `index.html`, `public/index.html` or `src/index.html`; the `fontFamily` names from `tailwind.config.js`/`.ts`/`.mjs`. It warns on stderr when it finds no `:root` variables. |
+| `figma` | `extract-design-tokens.sh [PROJECT_DIR] [--format html\|json\|css]` | Reads, for mockups that match the real look: the CSS custom properties of top-level `:root` rules and the dark-mode ones (`.dark`, `:root.dark`, `html.dark`, `[data-theme=dark]` and similar, else `@media (prefers-color-scheme: dark)`); `@layer` counts as top-level from the first of `src/index.css`, `src/styles/globals.css`, `src/app/globals.css`, `src/main.css`, `src/styles.css` that has `:root` variables; the Google Fonts link from `index.html`, `public/index.html` or `src/index.html`; the `fontFamily` names from `tailwind.config.js`/`.ts`/`.mjs`. It warns on stderr when it finds no `:root` variables. |
 
 ## See also
 

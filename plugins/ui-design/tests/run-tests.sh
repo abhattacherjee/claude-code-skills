@@ -216,6 +216,117 @@ ERR="$(cat "$TMP/err")"
 check "--format json with no jq exits 1 and says it needs jq" 1 "" 'needs jq'
 [[ -z "$OUT" ]] && ok "--format json with no jq prints nothing on stdout" || bad "--format json with no jq prints nothing on stdout" "$OUT"
 
+echo "extract-design-tokens.sh: which blocks are light and which are dark"
+# tok_case <name>: write stdin to <name>/src/index.css and run --format json on it.
+tok_case() {
+  mkdir -p "$TMP/work/sel-$1/src"
+  cat > "$TMP/work/sel-$1/src/index.css"
+  run_in "$PROJ" "$TOK" "$TMP/work/sel-$1" --format json
+}
+tok_case rootdark <<'EOF'
+:root {
+  --bg: white;
+  --fg: black;
+}
+:root.dark {
+  --bg: black;
+  --fg: white;
+}
+EOF
+json_is ":root.dark: its values stay out of the light set" 'd["cssVariables"] == "--bg: white;\n--fg: black;"'
+json_is ":root.dark: its values are the dark set" 'd["darkModeVariables"] == "--bg: black;\n--fg: white;"'
+tok_case datatheme <<'EOF'
+:root {
+  --bg: white;
+}
+[data-theme="dark"]:root, :root[data-theme="dark"] {
+  --bg: black;
+}
+EOF
+json_is "[data-theme=\"dark\"] with :root: light set is the plain :root only" 'd["cssVariables"] == "--bg: white;"'
+json_is "[data-theme=\"dark\"] with :root: its values are the dark set" 'd["darkModeVariables"] == "--bg: black;"'
+tok_case darkforms <<'EOF'
+:root { }
+:root {
+  --a: 1;
+}
+html.dark {
+  --a: 2;
+}
+.dark:root {
+  --a: 3;
+}
+[data-theme=dark] {
+  --a: 4;
+}
+.dark .card {
+  --a: 5;
+}
+EOF
+json_is "html.dark, .dark:root and [data-theme=dark] are dark; .dark .card is neither" 'd["cssVariables"] == "--a: 1;" and d["darkModeVariables"] == "--a: 2;\n--a: 3;\n--a: 4;"'
+tok_case layer <<'EOF'
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+  }
+  .dark {
+    --background: 0 0% 4%;
+  }
+}
+@layer {
+  :root {
+    --ring: blue;
+  }
+}
+EOF
+json_is "@layer is transparent: its :root is the light set" 'd["cssVariables"] == "--background: 0 0% 100%;\n--ring: blue;"'
+json_is "@layer is transparent: its .dark is the dark set" 'd["darkModeVariables"] == "--background: 0 0% 4%;"'
+tok_case wrappers <<'EOF'
+:root {
+  --gap: 4px;
+}
+@media (min-width: 768px) {
+  :root {
+    --gap: 8px;
+  }
+}
+@supports (display: grid) {
+  :root {
+    --grid: 1;
+  }
+}
+@layer base {
+  @media (min-width: 768px) {
+    :root {
+      --gap: 16px;
+    }
+  }
+}
+EOF
+json_is "@media (min-width) and @supports :root stay out of the light set" 'd["cssVariables"] == "--gap: 4px;" and d["darkModeVariables"] is None'
+tok_case comment <<'EOF'
+/* Example { */
+/*
+  a multi-line comment { with
+  --fake: 1;
+*/
+:root {
+  --primary: red; /* } */
+}
+EOF
+json_is "a brace inside a comment does not change nesting" 'd["cssVariables"] == "--primary: red; /* } */"'
+tok_case quote <<'EOF'
+:root {
+  --a: "{";
+  --q: '}}';
+  --b: blue;
+}
+.dark {
+  --b: navy;
+}
+EOF
+json_is "a brace inside a quoted value does not change nesting" 'd["cssVariables"] == "--a: \"{\";\n--q: '"'"'}}'"'"';\n--b: blue;" and d["darkModeVariables"] == "--b: navy;"'
+
 echo "figma reaches its agent through the plugin agent type, and nothing points at ~/.claude/agents"
 grep -Fq 'subagent_type: "ui-design:figma-ux-expert"' "$SKILLS/figma/SKILL.md" && ok "figma starts subagent_type ui-design:figma-ux-expert" || bad "figma starts subagent_type ui-design:figma-ux-expert" "line not found in figma/SKILL.md"
 grep -Fq 'subagent_type: "general-purpose"' "$SKILLS/figma/SKILL.md" && bad "figma no longer starts a general-purpose agent" "found subagent_type general-purpose" || ok "figma no longer starts a general-purpose agent"
