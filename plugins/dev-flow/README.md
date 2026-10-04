@@ -14,7 +14,7 @@ Invoke as `/dev-flow:<skill>`. The old names still match as trigger phrases.
 
 | Skill | Was | What it does |
 |---|---|---|
-| `worktree` | `worktree` | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. Worktrees are siblings of the repo (`../repo-name--branch-suffix/`). Lists, creates and removes them, and prints the `cd` + `claude` command to start a session there. New branches start from `origin/develop` (else `develop`, `origin/HEAD`'s branch, or `main`). `remove` refuses a worktree with uncommitted work unless you pass `--force`. |
+| `worktree` | `worktree` | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. Worktrees are siblings of the repo (`../repo-name--branch-suffix/`). Lists, creates and removes them, and prints the `cd` + `claude` command to start a session there. New branches start from `origin/develop` (else `develop`, `origin/HEAD`'s branch, or `main`). `remove` refuses a worktree with uncommitted work or git-ignored files outside `node_modules/` (such as `.env`) unless you pass `--force`. |
 | `changelog` | `changelog-keeper` | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Conventional commit prefixes (`feat:` to Added, `fix:` to Fixed and so on); a commit with no prefix goes to Other. Only when no commit in the range has a prefix and the range changed `src/`, `lib/` or `scripts/` do they go to Changed. Outputs Keep-a-Changelog format. |
 
 ### Use `worktree` when

@@ -260,6 +260,37 @@ check "remove --force exits 0" 0 'Worktree removed'
 run_in "$REPO" git worktree list
 printf '%s' "$OUT" | grep -Fq 'repo--dirty' && bad "git worktree list no longer lists the removed worktree" "$OUT" || ok "git worktree list no longer lists the removed worktree"
 
+echo "setup-worktree.sh: remove keeps git-ignored files unless --force"
+IG="$TMP/work/ign"
+newrepo "$IG"
+printf '.env\nnode_modules/\n' > "$IG/.gitignore"
+gitc "$IG" add .gitignore
+gitc "$IG" commit -q -m "chore: init"
+run_in "$IG" "$WT" create --new x --no-install
+check "ignored: create --new x exits 0" 0
+echo "SECRET=1" > "$TMP/work/ign--x/.env"
+mkdir -p "$TMP/work/ign--x/node_modules/pkg"
+run_in "$IG" "$WT" remove feature/x
+check "remove of a worktree with an ignored .env exits 1, names it and hints --force" 1 "" '\.env'
+printf '%s' "$ERR" | grep -Fq -- '--force' && ok "the ignored-file refusal hints --force" || bad "the ignored-file refusal hints --force" "$ERR"
+printf '%s' "$ERR" | grep -Fq 'node_modules' && bad "the ignored-file refusal does not list node_modules" "$ERR" || ok "the ignored-file refusal does not list node_modules"
+[[ -f "$TMP/work/ign--x/.env" ]] && ok "the refused remove keeps the ignored .env" || bad "the refused remove keeps the ignored .env" "it is gone"
+rm -f "$TMP/work/ign--x/.env"
+run_in "$IG" "$WT" remove feature/x
+check "remove of a worktree whose only ignored files are in node_modules/ exits 0" 0 'Worktree removed'
+run_in "$IG" "$WT" create feature/x --no-install
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo x > "$TMP/work/ign--x/.env.$i"; done
+printf '.env*\nnode_modules/\n' > "$IG/.gitignore"
+cp "$IG/.gitignore" "$TMP/work/ign--x/.gitignore"
+gitc "$TMP/work/ign--x" commit -q -am "chore: ignore .env*"
+run_in "$IG" "$WT" remove feature/x
+check "12 ignored files: remove exits 1 and says how many more" 1 "" 'and 2 more'
+run_in "$IG" "$WT" remove --force feature/x
+check "remove --force with ignored files exits 0" 0 'Worktree removed'
+[[ ! -e "$TMP/work/ign--x" ]] && ok "remove --force deletes the worktree with its ignored files" || bad "remove --force deletes the worktree with its ignored files" "still there"
+run_in "$PROJ" "$WT" --help
+check "--help says ignored files count as work to keep" 0 'ignored'
+
 echo "setup-worktree.sh: worktrees are found by branch, not by directory name"
 run_in "$REPO" "$WT" create --new x/y --no-install
 check "create --new x/y exits 0 (directory repo--x-y)" 0
@@ -344,11 +375,17 @@ check "npm install failing: create exits 1" 1 "" 'npm install failed'
 check "npm install failing: the cd line is still printed" 1 "cd .*npmrepo--fails && claude"
 printf '%s' "$OUT" | grep -q 'Installed dependencies' && bad "npm install failing: no 'Installed' success line" "$OUT" || ok "npm install failing: no 'Installed' success line"
 printf '%s' "$ERR" | grep -Fq 'web' && ok "npm install failing: the failed package is named" || bad "npm install failing: the failed package is named" "$ERR"
+FAIL_ERR="$ERR"
 printf '#!/bin/sh\nmkdir node_modules\nexit 0\n' > "$FAKE/npm"
 run_in "$NP" env PATH="$FAKE:$PATH" "$WT" create --new works
 check "npm install in the repo root and each subdirectory with a package.json: 2 packages" 0 'Installed dependencies in 2 package'
 run_in "$NP" env PATH="$FAKE:$PATH" "$WT" install feature/works
 check "install again: every package already has node_modules" 0 'already have node_modules'
+# The install hint printed by the failed create, pasted in another directory with a working npm.
+iline="$(printf '%s\n' "$FAIL_ERR" | grep -E '^  cd .* install ' | head -1 | sed 's/^  //' || true)"
+RC=0
+got="$(cd "$PROJ" && cenv env PATH="$FAKE:$PATH" bash -c "$iline" 2>&1)" || RC=$?
+[[ -n "$iline" && "$RC" == 0 && -d "$TMP/work/npmrepo--fails/web/node_modules" ]] && ok "the printed install line, pasted in another directory, installs" || bad "the printed install line, pasted in another directory, installs" "line: $iline -> rc $RC: $got"
 
 echo "setup-worktree.sh: printed commands work when pasted, even with a space in the path"
 SPR="$TMP/work/sp ace/proj"
@@ -360,6 +397,10 @@ check "a repo under a path with a space: create exits 0" 0
 line="$(printf '%s\n' "$OUT" | grep -E '^  cd .* && claude$' | head -1 | sed 's/^  //; s/ && claude$//')"
 got="$(cd "$PROJ" && bash -c "$line && pwd -P" 2>&1 || true)"
 [[ "$got" == "$TMP/work/sp ace/proj--y" ]] && ok "the printed cd line, pasted into a shell, lands in the worktree" || bad "the printed cd line, pasted into a shell, lands in the worktree" "line: $line -> $got"
+rline="$(printf '%s\n' "$OUT" | grep -A1 -F 'When done, remove the worktree:' | tail -1 | sed 's/^  //' || true)"
+RC=0
+got="$(cd "$PROJ" && cenv bash -c "$rline" 2>&1)" || RC=$?
+[[ "$RC" == 0 && ! -e "$TMP/work/sp ace/proj--y" ]] && ok "the printed remove line, pasted in another directory, removes the worktree" || bad "the printed remove line, pasted in another directory, removes the worktree" "line: $rline -> rc $RC: $got"
 
 # ---------------------------------------------------------------------------
 echo "update-changelog.sh (changelog)"

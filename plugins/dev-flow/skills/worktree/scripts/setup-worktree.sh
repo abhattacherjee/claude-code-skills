@@ -11,6 +11,8 @@ set -eu
 #   setup-worktree.sh --help
 
 SCRIPT_NAME="$(basename "$0")"
+# The absolute path of this script, for the commands it prints: they work when pasted.
+SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$SCRIPT_NAME"
 
 usage() {
   cat <<EOF
@@ -24,9 +26,11 @@ Commands:
                                 with feature/, hotfix/ or release/) + worktree. Base:
                                 origin/develop, else develop, else origin/HEAD's branch,
                                 else main. The new branch has no upstream.
-  remove <branch> [--force]     Remove the worktree of <branch> (keeps the branch). Git
-                                refuses if it has uncommitted work; --force removes it
-                                anyway and discards uncommitted work.
+  remove <branch> [--force]     Remove the worktree of <branch> (keeps the branch).
+                                Refused if it has uncommitted work: modified or
+                                untracked files, or git-ignored files outside
+                                node_modules/ (such as .env). --force removes it anyway
+                                and discards that work.
   install <branch>              Run npm install in the worktree of <branch>
 
 Options:
@@ -229,7 +233,7 @@ cmd_create() {
       git worktree add --track -b "$branch" "$wt_dir" "origin/$branch"
     else
       echo "ERROR: Branch '$branch' not found locally or on remote" >&2
-      echo "  Use --new to create a new branch: $SCRIPT_NAME create --new $branch" >&2
+      printf '  Use --new to create a new branch: %q create --new %q\n' "$SCRIPT_PATH" "$branch" >&2
       exit 1
     fi
   fi
@@ -241,7 +245,7 @@ cmd_create() {
   local install_ok=true
   if ! $skip_install; then
     echo ""
-    install_deps "$wt_dir" || install_ok=false
+    install_deps "$wt_dir" "$branch" || install_ok=false
   fi
 
   echo ""
@@ -260,15 +264,15 @@ cmd_create() {
   printf '  code %q\n' "$wt_dir"
   echo ""
   echo "When done, remove the worktree:"
-  printf '  %q remove %q\n' "$SCRIPT_NAME" "$branch"
+  printf '  cd %q && %q remove %q\n' "$REPO_ROOT" "$SCRIPT_PATH" "$branch"
 
   $install_ok || exit 1
 }
 
-# Install dependencies in a worktree: the root and each immediate subdirectory that has
-# a package.json and no node_modules. Returns 1 if any install failed.
+# install_deps <worktree> <branch>: install dependencies in the root and each immediate
+# subdirectory that has a package.json and no node_modules. Returns 1 if any install failed.
 install_deps() {
-  local wt_dir="$1"
+  local wt_dir="$1" branch="$2"
   local installed=0
   local failed=""
   local dir name
@@ -294,7 +298,8 @@ install_deps() {
 
   if [ -n "$failed" ]; then
     [ "$installed" -gt 0 ] && echo "Installed dependencies in $installed package(s)."
-    echo "ERROR: npm install failed in:$failed (retry by hand, or run '$SCRIPT_NAME install <branch>')" >&2
+    echo "ERROR: npm install failed in:$failed. Retry by hand, or run:" >&2
+    printf '  cd %q && %q install %q\n' "$REPO_ROOT" "$SCRIPT_PATH" "$branch" >&2
     return 1
   fi
   if [ "$installed" -eq 0 ]; then
@@ -322,7 +327,7 @@ cmd_install() {
     exit 1
   fi
 
-  install_deps "$wt_dir"
+  install_deps "$wt_dir" "$branch"
 }
 
 # Remove command
@@ -357,6 +362,28 @@ cmd_remove() {
     exit 1
   fi
 
+  # git worktree remove deletes git-ignored files (.env, local config) without a word, so
+  # without --force they count as work to keep. node_modules/ is left out: it can be
+  # installed again.
+  if ! $force; then
+    local status ignored n
+    if ! status="$(git -C "$wt_dir" status --porcelain --ignored)"; then
+      echo "ERROR: git status failed in $wt_dir; not removing it" >&2
+      exit 1
+    fi
+    ignored="$(printf '%s\n' "$status" | sed -n 's/^!! //p' \
+      | grep -Ev '(^|/)node_modules(/|$)' || true)"
+    if [ -n "$ignored" ]; then
+      n="$(printf '%s\n' "$ignored" | wc -l | tr -d ' ')"
+      echo "ERROR: $wt_dir has $n git-ignored file(s) or folder(s) that remove would delete:" >&2
+      printf '%s\n' "$ignored" | head -10 | sed 's/^/  /' >&2
+      [ "$n" -gt 10 ] && echo "  ... and $((n - 10)) more" >&2
+      echo "  Copy what you need, or discard it with:" >&2
+      printf '  cd %q && %q remove --force %q\n' "$REPO_ROOT" "$SCRIPT_PATH" "$branch" >&2
+      exit 1
+    fi
+  fi
+
   echo "Removing worktree: $wt_dir"
   local rc=0
   if $force; then
@@ -366,7 +393,8 @@ cmd_remove() {
   fi
   if [ "$rc" -ne 0 ]; then
     echo "ERROR: git did not remove the worktree (see above). If it has uncommitted work you" >&2
-    echo "  want to discard, run: $SCRIPT_NAME remove --force $branch" >&2
+    echo "  want to discard, run:" >&2
+    printf '  cd %q && %q remove --force %q\n' "$REPO_ROOT" "$SCRIPT_PATH" "$branch" >&2
     exit "$rc"
   fi
   echo "Worktree removed. Branch '$branch' is preserved."
@@ -398,7 +426,7 @@ case "${1:---help}" in
     ;;
   *)
     echo "ERROR: Unknown command '$1'" >&2
-    echo "Run '$SCRIPT_NAME --help' for usage" >&2
+    printf 'Run %q --help for usage\n' "$SCRIPT_PATH" >&2
     exit 2
     ;;
 esac
