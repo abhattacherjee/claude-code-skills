@@ -2,7 +2,7 @@
 name: create
 description: "Creates detailed story specification files from various inputs (Claude plan, requirement file, prompt, GitHub issue). Discovers project spec conventions at runtime, brainstorms approaches with vertical splitting recommendations for large stories, generates template-compliant specs, checks for over-engineering, and optionally chains to spec:review. Was the spec-creator skill. Use when: (1) user wants to write a new story spec, (2) converting a plan or requirements into a formal spec, (3) creating specs from GitHub issues, (4) breaking a large feature into shippable vertical slices."
 metadata:
-  version: 1.0.1
+  version: 1.0.2
 ---
 
 # Spec Create
@@ -316,15 +316,15 @@ bump is a drop-in replacement. Compatibility check commands and the decision mat
 in **[`${CLAUDE_SKILL_DIR}/references/codebase-verification.md`](./references/codebase-verification.md#43b-dependency-upgrade-pre-flight-mandatory-for-dependency-upgrade-stories)**.
 
 **4.4 UX design gate** — if the story touches frontend UI (new screens, layout changes,
-visual components), the first implementation task MUST be a Figma mockup step. Skip this step and note the skip if `figma-ui-designer` is not installed.
+visual components), the first implementation task MUST be a Figma mockup step. Skip this step and note the skip if `ui-design:figma` is not installed.
 
 ```markdown
 ### Task X.Y.0: Create Figma Mockups (UX Design)
 
 **Prerequisite:** None (runs before any code)
-**Skill:** `/figma-ui-designer` (workflow C: enhancement mockup)
+**Skill:** `/ui-design:figma` (workflow C: enhancement mockup)
 
-- [ ] **Step 1: Create mockup** — invoke `/figma-ui-designer` with the story's
+- [ ] **Step 1: Create mockup** — invoke `/ui-design:figma` with the story's
       user-facing behavior description and acceptance criteria
 - [ ] **Step 2: User reviews mockup** — present Figma link, get approval or iteration
 - [ ] **Step 3: Extract design tokens** — capture colors, spacing, component structure
@@ -493,7 +493,7 @@ If user selects option 1 or 2, invoke the corresponding skill with the spec file
 | `spec:review` | Phase 5 — optional post-creation review and enrichment |
 | `simplify` | Phase 5 — optional simplification pass |
 | `feature-dev:code-explorer` | Phase 2 — codebase research for accurate paths |
-| `figma-ui-designer` | Phase 4.4 — Figma mockup as Task 0 for UI-touching stories |
+| `ui-design:figma` | Phase 4.4 — Figma mockup as Task 0 for UI-touching stories |
 
 ## See Also
 

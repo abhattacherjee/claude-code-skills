@@ -2,6 +2,12 @@
 
 All notable changes to the **shield** skill (was `context-shield`) are documented here.
 
+## [1.0.1] - 2026-10-04
+
+### Changed
+
+- The related-skill pointers say `ui-design:figma` (was `figma-ui-designer`), after the skill moved into the `ui-design` plugin (#164).
+
 ## [1.0.0] - 2026-10-04
 
 ### Changed

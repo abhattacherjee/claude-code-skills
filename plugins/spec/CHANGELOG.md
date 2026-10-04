@@ -2,6 +2,12 @@
 
 All notable changes to the **spec** plugin are documented here.
 
+## [1.0.3] - 2026-10-04
+
+### Changed
+
+- `spec:create` and the README name `ui-design:figma` (was `figma-ui-designer`), after the skill moved into the `ui-design` plugin (#164). `spec:create` is at 1.0.2.
+
 ## [1.0.2] - 2026-10-04
 
 ### Changed

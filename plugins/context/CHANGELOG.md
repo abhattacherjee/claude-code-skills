@@ -2,6 +2,12 @@
 
 All notable changes to the **context** plugin are documented here.
 
+## [1.0.1] - 2026-10-04
+
+### Changed
+
+- `context:shield` names `ui-design:figma` (was `figma-ui-designer`), after the skill moved into the `ui-design` plugin (#164). `shield` is at 1.0.1.
+
 ## [1.0.0] - 2026-10-04
 
 ### Added
