@@ -309,6 +309,35 @@ EOF
     || bad "$skill SKILL.md: path token outside a code block (it is substituted, so the model sees an absolute path)" "$hits"
 done
 
+echo "extract Step 1 finds a project's plugin installs from inside the project"
+# Run the real Step 1 bash block (cut before "# List all skills", with a printf of SKILL_DIRS
+# added) against a fixture installed_plugins.json, with HOME on a temp dir and never the real one.
+S1="$TMP/step1.sh"
+python3 - "$SKILLS/extract/SKILL.md" "$S1" <<'EOF'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+for block in re.findall(r'```bash\n(.*?)```', text, re.S):
+    if "installed_plugins.json" in block and "# List all skills" in block:
+        open(sys.argv[2], "w").write(block.split("# List all skills")[0] + 'printf "%s\\n" "${SKILL_DIRS[@]}"\n')
+        break
+else:
+    sys.exit("Step 1 block not found")
+EOF
+S1HOME="$TMP/s1home"
+mkdir -p "$S1HOME/.claude/plugins" "$TMP/repo/src" "$TMP/repo2" "$TMP/other" "$TMP/inst-repo"
+printf '{"plugins":{"p@m":[{"scope":"project","projectPath":"%s","installPath":"%s"}]}}\n' "$TMP/repo" "$TMP/inst-repo" > "$S1HOME/.claude/plugins/installed_plugins.json"
+# The block only checks that `rg` exists (the cut-off part is what would run it), so a stub is enough.
+mkdir -p "$TMP/s1bin"; printf '#!/bin/sh\nexit 0\n' > "$TMP/s1bin/rg"; chmod +x "$TMP/s1bin/rg"
+step1_from() { RC=0; OUT="$(cd "$1" && env -i PATH="$TMP/s1bin:$CLEAN_PATH" HOME="$S1HOME" bash "$S1" 2>"$TMP/err")" || RC=$?; }
+step1_from "$TMP/repo"
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && ok "Step 1: searches a project install from the project root" || bad "Step 1: project root misses the install" "$OUT"
+step1_from "$TMP/repo/src"
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && ok "Step 1: searches a project install from a subdirectory" || bad "Step 1: subdirectory misses the project install" "$OUT"
+step1_from "$TMP/other"
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && bad "Step 1: searched another project's install" "$OUT" || ok "Step 1: skips a project install from an unrelated directory"
+step1_from "$TMP/repo2"
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && bad "Step 1: /repo matched /repo2 (prefix trap)" "$OUT" || ok "Step 1: projectPath /repo does not match /repo2"
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

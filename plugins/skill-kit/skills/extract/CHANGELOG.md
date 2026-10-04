@@ -17,6 +17,7 @@ All notable changes to the **extract** skill (was `claudeception`) are documente
 ### Fixed
 
 - Step 1 searched all of `~/.claude/plugins/cache` and `~/.claude/plugins/marketplaces` (323 SKILL.md files on one machine, many of them old versions or plugins that are not installed). It now searches only active installs: each `installPath` in `~/.claude/plugins/installed_plugins.json` (read with python3), at user scope or this project's scope. A missing or unreadable file prints a note and skips plugin skills.
+- Step 1 keeps a project-scope install when the current directory is the project or inside it. It used to match only the project root, so a search from a subdirectory such as `<project>/src` missed the project's installs and could lead to a duplicate skill.
 - A match inside an installed plugin is no longer "Update existing" in place: the install is a cache copy. Edit the plugin's source only when its marketplace is a `directory` source the user owns; otherwise create a new user skill and point to the plugin's source repo.
 
 ## History before 1.0.0 (as `claudeception`)

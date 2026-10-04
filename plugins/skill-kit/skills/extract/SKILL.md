@@ -82,7 +82,8 @@ except (OSError, ValueError, AttributeError) as exc:
 for name, installs in plugins.items():
     for i in installs if isinstance(installs, list) else []:
         project = i.get("projectPath")
-        if i.get("installPath") and (not project or os.path.realpath(project) == cwd):
+        p = os.path.realpath(project) if project else None
+        if i.get("installPath") and (not p or cwd == p or cwd.startswith(p.rstrip("/") + "/")):
             print(i["installPath"])
 EOF
 )
