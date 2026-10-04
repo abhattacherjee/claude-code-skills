@@ -13,7 +13,7 @@ All notable changes to the **skill-kit** plugin are documented here.
 
 ### Changed
 
-- Every script command in the three `SKILL.md` files runs as written from your project directory: `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<NAME>` placeholders for values known only at run time. The old `publish` text used `$SCRIPTS`, `$MONOREPO_DIR` and `~/.claude/skills/skill-publishing/scripts/`, which only worked from a loose copy.
+- Every script command in the three `SKILL.md` files is written to work from your project directory (checked statically by `check-skill-commands.py`; each skill was also run once through headless Claude): `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<NAME>` placeholders for values known only at run time. The old `publish` text used `$SCRIPTS`, `$MONOREPO_DIR` and `~/.claude/skills/skill-publishing/scripts/`, which only worked from a loose copy.
 - Each skill's `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh`. The `skill-authoring` and `claudeception` copies were older.
 - `claudeception-activator.sh` tells Claude to use `Skill(skill-kit:extract)`. It is still opt-in: the plugin does not register it as a hook.
 
