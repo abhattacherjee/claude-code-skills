@@ -394,3 +394,69 @@ jobs:
           bash --version | head -1
           /usr/bin/env bash --version | head -1
           bash plugins/context/tests/run-tests.sh
+
+  dev-flow-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir with HOME on a temp dir, the way its SKILL.md calls it.
+      - name: Run dev-flow script smoke tests
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/dev-flow/tests/run-tests.sh
+
+  ui-design-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir with HOME on a temp dir, the way its SKILL.md calls it.
+      - name: Run ui-design script smoke tests (jq is preinstalled on both runners)
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/ui-design/tests/run-tests.sh

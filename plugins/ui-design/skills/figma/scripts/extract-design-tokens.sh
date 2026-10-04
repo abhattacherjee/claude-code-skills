@@ -38,6 +38,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage ;;
     --format)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --format needs a value (html, json or css)" >&2
+        exit 2
+      fi
       FORMAT="$2"
       shift 2
       ;;
@@ -52,6 +56,12 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
   echo "Error: Directory '$PROJECT_DIR' does not exist" >&2
   exit 1
 fi
+
+# Set up front: the output code reads these when no CSS file is found (set -u).
+CSS_VARS=""
+DARK_VARS=""
+CSS_FILE_FOUND=""
+TAILWIND_CONFIG_FOUND=""
 
 # --- Extract Google Fonts from index.html ---
 GOOGLE_FONTS_URL=""
@@ -131,23 +141,37 @@ case "$FORMAT" in
     echo "</style>"
     echo ""
     echo "<!-- Source files: -->"
-    [[ -n "${CSS_FILE_FOUND:-}" ]] && echo "<!-- CSS: $CSS_FILE_FOUND -->"
-    [[ -n "${TAILWIND_CONFIG_FOUND:-}" ]] && echo "<!-- Tailwind: $TAILWIND_CONFIG_FOUND -->"
+    [[ -n "$CSS_FILE_FOUND" ]] && echo "<!-- CSS: $CSS_FILE_FOUND -->"
+    [[ -n "$TAILWIND_CONFIG_FOUND" ]] && echo "<!-- Tailwind: $TAILWIND_CONFIG_FOUND -->"
     if [[ -n "$TAILWIND_FONTS" ]]; then
       echo "<!-- Tailwind fonts: $TAILWIND_FONTS -->"
     fi
     ;;
 
   json)
-    echo "{"
-    echo "  \"source\": \"$PROJECT_DIR\","
-    echo "  \"googleFontsUrl\": \"${GOOGLE_FONTS_URL:-null}\","
-    echo "  \"cssFile\": \"${CSS_FILE_FOUND:-null}\","
-    echo "  \"tailwindConfig\": \"${TAILWIND_CONFIG_FOUND:-null}\","
-    echo "  \"cssVariables\": $(echo "${CSS_VARS:-}" | sed 's/^\s*//' | jq -Rs . 2>/dev/null || echo '""'),"
-    echo "  \"darkModeVariables\": $(echo "${DARK_VARS:-}" | sed 's/^\s*//' | jq -Rs . 2>/dev/null || echo '""'),"
-    echo "  \"tailwindFonts\": $(echo "${TAILWIND_FONTS:-}" | jq -Rs . 2>/dev/null || echo '""')"
-    echo "}"
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "Error: --format json needs jq" >&2
+      exit 1
+    fi
+    # jq builds the JSON, so a quote or backslash in a path or a value cannot break it.
+    # A value that was not found is null.
+    jq -n \
+      --arg source "$PROJECT_DIR" \
+      --arg googleFontsUrl "$GOOGLE_FONTS_URL" \
+      --arg cssFile "$CSS_FILE_FOUND" \
+      --arg tailwindConfig "$TAILWIND_CONFIG_FOUND" \
+      --arg cssVariables "$(printf '%s' "$CSS_VARS" | sed 's/^[[:space:]]*//')" \
+      --arg darkModeVariables "$(printf '%s' "$DARK_VARS" | sed 's/^[[:space:]]*//')" \
+      --arg tailwindFonts "$TAILWIND_FONTS" \
+      '{
+        source: $source,
+        googleFontsUrl: (if $googleFontsUrl == "" then null else $googleFontsUrl end),
+        cssFile: (if $cssFile == "" then null else $cssFile end),
+        tailwindConfig: (if $tailwindConfig == "" then null else $tailwindConfig end),
+        cssVariables: $cssVariables,
+        darkModeVariables: $darkModeVariables,
+        tailwindFonts: $tailwindFonts
+      }'
     ;;
 
   css)

@@ -10,6 +10,12 @@ All notable changes to the **figma** skill (was `figma-ui-designer`) are documen
 - The UX-expert agent is started as `ui-design:figma-ux-expert`. The old text started a general-purpose agent and told it to read `~/.claude/agents/figma-ux-expert.md`, a file that is not part of any install (#164).
 - Every script command is written to work from your project directory (checked statically by `check-skill-commands.py`): `"${CLAUDE_SKILL_DIR}/scripts/extract-design-tokens.sh"`. The old text used `./scripts/extract-design-tokens.sh`, which only worked from the skill directory. The project path argument (`./frontend`) is yours and stays relative.
 
+### Fixed
+
+- `extract-design-tokens.sh` stopped with `unbound variable` (exit 1) for a project with no CSS file in its usual places, in every format.
+- `--format json` built the JSON by hand: a quote or backslash in the project path broke it, and a missing file showed as the text `null`. `jq` builds it now, and a missing file is a real `null`. The old fallback printed `""` when `jq` was missing; the script now exits 1 and says it needs `jq`.
+- `--format` with no value stopped with `unbound variable`. It exits 2 with a message.
+
 ## History before 1.0.0 (as `figma-ui-designer`)
 
 ### figma-ui-designer 3.2.2 - 2026-10-04

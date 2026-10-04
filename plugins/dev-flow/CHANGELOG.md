@@ -7,6 +7,7 @@ All notable changes to the **dev-flow** plugin are documented here.
 ### Added
 
 - First release (#165). It merges the bare `worktree` (1.0.1) and `changelog-keeper` (1.1.1) skills. Two skills under short names: `worktree` (was `worktree`) and `changelog` (was `changelog-keeper`). Invoke them as `/dev-flow:worktree` and `/dev-flow:changelog`. The old names still match as trigger phrases.
+- Smoke tests for both scripts, in `tests/run-tests.sh`, and a CI job (`dev-flow-tests`, bash 5 and bash 3.2) that runs them. They run each script from a temp project directory with `HOME` on a temp dir and a clean environment, in a plugin copy under a path with a space. They cover `create`, `list` and `remove` in a temp repo with an `origin`, the changelog categories, `--dry-run` leaving the file alone, bad input, an untrusted `CHANGELOG.md` heading, a symlinked `CHANGELOG.md` and backslashes in subjects. They also check that every script path in the `SKILL.md` files exists and runs, that `${CLAUDE_SKILL_DIR}` appears only inside fenced code blocks, and that each `validate-skill.sh` matches the repo-root copy.
 
 ### Changed
 
