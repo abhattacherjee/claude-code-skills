@@ -2,6 +2,13 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.0.1] - 2026-10-04
+
+### Changed
+
+- `prune-branches` See Also names `dev-flow:worktree` (was the bare `worktree` skill), after the skill moved into the `dev-flow` plugin (#165). `prune-branches` is at 2.0.1.
+- `test_marketplace_lists_the_plugin` checks that the marketplace and `plugin.json` versions agree. It compared both with the literal `1.0.0`, so every version bump failed it.
+
 ## [1.0.0] - 2026-10-02
 
 ### Added

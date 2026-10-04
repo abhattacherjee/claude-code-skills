@@ -18,7 +18,7 @@
       "name": "context",
       "source": "./plugins/context",
       "description": "Two skills for working with large content and past sessions, plus the agents they use. context:shield keeps the context window from overflowing by delegating token-heavy reads (URLs, Figma frames, wiki pages, code directories) to isolated sub-agents that return short summaries, and hands multi-batch work to ralph-loop. context:search finds past Claude Code conversations by topic, date, branch or project, shows them verbatim, and can summarize them.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "name": "context-bar",
@@ -45,16 +45,22 @@
       "version": "1.4.0"
     },
     {
+      "name": "dev-flow",
+      "source": "./plugins/dev-flow",
+      "description": "Two skills for the daily git loop. dev-flow:worktree creates isolated git worktrees so parallel Claude Code sessions each get their own directory and branch. dev-flow:changelog keeps CHANGELOG.md up to date by turning git commit history into categorized Keep-a-Changelog entries.",
+      "version": "1.0.0"
+    },
+    {
       "name": "figma-ui-designer",
       "source": "./plugins/figma-ui-designer",
-      "description": "Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",
+      "description": "Deprecated: use the ui-design plugin (ui-design:figma). Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",
       "version": "3.2.2"
     },
     {
       "name": "github-board",
       "source": "./plugins/github-board",
       "description": "GitHub workflow skills in one install: create-board, triage-issues, plan-milestones, plan-week, move-card, promote-shipped and prune-branches, plus the four agents create-board dispatches. Per-user settings live in ~/.config/github-board/config.json.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "name": "obsidian-brain",
@@ -102,7 +108,7 @@
       "name": "spec",
       "source": "./plugins/spec",
       "description": "Three skills for story specs in one plugin. spec:create writes a template-compliant story spec from a plan, requirements file, prompt or GitHub issue, with TDD implementation steps, success metrics, a Figma mockup gate for UI stories and vertical splitting for large stories. spec:review checks a spec against the real codebase and architecture and adds verified sub-tasks, an API test plan and design simplification notes. spec:implement builds a reviewed spec end-to-end: feature branch, sub-tasks, acceptance checks and a PR.",
-      "version": "1.0.2"
+      "version": "1.0.3"
     },
     {
       "name": "spec-creator",
@@ -132,6 +138,12 @@
       "name": "statusline-creator",
       "source": "./plugins/statusline-creator",
       "description": "Deprecated: use the statusline plugin (statusline:install / statusline:create / statusline:context-bar). Creates and customizes Claude Code statusline scripts from composable items",
+      "version": "1.0.0"
+    },
+    {
+      "name": "ui-design",
+      "source": "./plugins/ui-design",
+      "description": "Interactive Figma UI design, with the UX-expert agent it uses. ui-design:figma brainstorms with you, tracks progress, builds Figma-native mockups through the Figma MCP, and extracts existing Figma designs as input for specs, plans and code. It starts the figma-ux-expert agent (ui-design:figma-ux-expert) to research real-world references before it proposes design directions.",
       "version": "1.0.0"
     }
   ]

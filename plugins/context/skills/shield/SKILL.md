@@ -2,7 +2,7 @@
 name: shield
 description: "Was the context-shield skill (/context-shield still works as a phrase). Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count. Use when: (1) reading 3+ large external sources (URLs, Figma frames, wiki pages), (2) large documentation/API reference sites decomposed into section URLs, (3) monorepo code audits across many directories, (4) dependency upgrade research across 5+ packages, (5) large PR reviews with 15+ changed files, (6) competitive feature matrix analysis, (7) security advisory triage for dependency updates."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Context Shield
@@ -197,7 +197,7 @@ Collect all distilled summaries:
 The summaries output is compact — each source compressed to ~500 tokens. Use this to:
 - Write a synthesis report
 - Make design decisions
-- Feed into another skill (e.g., `figma-ui-designer`, `spec:review`)
+- Feed into another skill (e.g., `ui-design:figma`, `spec:review`)
 - Answer the user's original question
 
 ---
@@ -411,7 +411,7 @@ Fetch and distill CVE/advisory pages when triaging dependency vulnerabilities.
 
 ## See Also
 
-- `figma-ui-designer` — use shield when analyzing 10+ Figma frames or 5+ competitor designs
+- `ui-design:figma` — use shield when analyzing 10+ Figma frames or 5+ competitor designs
 - `spec:review` — use shield when a spec references many external docs or code directories
 - `project-code-review` — use shield for large PRs with 15+ changed files
 - `npm-dependency-management` — use shield to research 5+ package changelogs before upgrades

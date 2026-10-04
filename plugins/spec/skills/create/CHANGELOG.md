@@ -2,6 +2,12 @@
 
 All notable changes to the **create** skill (was `spec-creator`) are documented here.
 
+## [1.0.2] - 2026-10-04
+
+### Changed
+
+- The Figma mockup step names `ui-design:figma` and `/ui-design:figma` (was `figma-ui-designer`), after the skill moved into the `ui-design` plugin (#164).
+
 ## [1.0.1] - 2026-10-04
 
 ### Changed

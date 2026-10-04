@@ -1,0 +1,5 @@
+{
+  "name": "dev-flow",
+  "version": "1.0.0",
+  "description": "Two skills for the daily git loop. dev-flow:worktree creates isolated git worktrees so parallel Claude Code sessions each get their own directory and branch. dev-flow:changelog keeps CHANGELOG.md up to date by turning git commit history into categorized Keep-a-Changelog entries."
+}

@@ -103,7 +103,9 @@ def test_marketplace_lists_the_plugin():
     row = next(r for r in rows if r["name"] == "github-board")
     assert row["source"] == "./plugins/github-board"
     plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
-    assert row["version"] == plugin["version"] == "1.0.0"
+    # The two must agree; a literal here would break on every release.
+    assert row["version"] == plugin["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", plugin["version"])
 
 
 REPO = PLUGIN.parent.parent
