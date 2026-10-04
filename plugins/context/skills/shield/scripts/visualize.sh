@@ -382,9 +382,11 @@ while [[ $# -gt 0 ]]; do
     *)         args+=("$1"); shift ;;
   esac
 done
-set -- "${args[@]}"
+# An empty array is "unbound" under set -u on bash 3.2 (the macOS default).
+set -- ${args[@]+"${args[@]}"}
 
-COMMAND="$1"; shift
+COMMAND="${1:-}"
+if [[ $# -gt 0 ]]; then shift; fi
 
 # Parse command-specific options
 while [[ $# -gt 0 ]]; do
@@ -402,13 +404,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Split labels into array
-IFS=',' read -ra LABEL_ARR <<< "${LABELS:-}"
+LABEL_ARR=()
+if [[ -n "${LABELS:-}" ]]; then
+  IFS=',' read -ra LABEL_ARR <<< "$LABELS"
+fi
 
 case "$COMMAND" in
   manifest)    scene_manifest "${TASK:-Task}" "${COUNT:-4}" ;;
-  dispatch)    scene_dispatch "${BATCH:-1}" "${LABEL_ARR[@]}" ;;
-  working)     scene_working "${LABEL_ARR[@]}" ;;
-  return)      scene_return "${BATCH:-1}" "${LABEL_ARR[@]}" ;;
+  dispatch)    scene_dispatch "${BATCH:-1}" ${LABEL_ARR[@]+"${LABEL_ARR[@]}"} ;;
+  working)     scene_working ${LABEL_ARR[@]+"${LABEL_ARR[@]}"} ;;
+  return)      scene_return "${BATCH:-1}" ${LABEL_ARR[@]+"${LABEL_ARR[@]}"} ;;
   synthesize)  scene_synthesize "${DONE:-4}" "${TOTAL:-4}" ;;
   complete)    scene_complete "${TASK:-Task}" ;;
   ralph-iter)  scene_ralph_iter "${ITERATION:-1}" "${REMAINING:-0}" ;;

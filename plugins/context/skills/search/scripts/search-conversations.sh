@@ -60,6 +60,25 @@ EOF
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+# Usage errors exit 2, like an unknown option.
+usage_error() { echo "Error: $1" >&2; exit 2; }
+
+# require_count <option> <value>: a non-negative integer. The value is handed to jq with
+# --argjson, never pasted into a program, but it must still be a number.
+require_count() {
+  [[ "${2:-}" =~ ^[0-9]+$ ]] || usage_error "$1 must be a non-negative integer, got '${2:-}'"
+}
+
+# require_date <option> <value>: YYYY-MM-DD, or a full ISO 8601 timestamp. Anything else
+# would compare as text against the stored timestamps and quietly match nothing.
+require_date() {
+  local re_day='^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
+  local re_ts='^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?$'
+  if ! [[ "${2:-}" =~ $re_day ]] && ! [[ "${2:-}" =~ $re_ts ]]; then
+    usage_error "Invalid date for $1: '${2:-}' (use YYYY-MM-DD or a full ISO 8601 timestamp such as 2025-02-18T10:00:00Z)"
+  fi
+}
+
 # Normalize date to ISO 8601 prefix for lexicographic comparison
 normalize_date() {
   local d="$1"
@@ -86,6 +105,7 @@ collect_indexed_ids() {
     return
   fi
   echo "$index_files" | while IFS= read -r idx; do
+    # An unreadable index is reported once, by gather_entries; its sessions then show as orphans.
     jq -r '.entries[]?.sessionId // empty' "$idx" 2>/dev/null || true
   done | sort -u
 }
@@ -183,7 +203,12 @@ gather_entries() {
     index_files=$(find_index_files)
     if [[ -n "$index_files" ]]; then
       echo "$index_files" | while IFS= read -r idx; do
-        jq -c '.entries[]?' "$idx" 2>/dev/null || true
+        # Keep going past a malformed index, but say so. Take all of a file or none of it.
+        if entries_out=$(jq -c '.entries[]?' "$idx" 2>/dev/null); then
+          [[ -z "$entries_out" ]] || printf '%s\n' "$entries_out"
+        else
+          echo "warning: skipping unreadable $idx" >&2
+        fi
       done
     fi
 
@@ -299,7 +324,7 @@ lookup_session_metadata() {
 
   # Try indexed entries first
   local result
-  result=$(gather_entries | jq -c "[.[] | select(.sessionId | startswith(\"${session_id}\"))][0] // empty")
+  result=$(gather_entries | jq -c --arg sid "$session_id" '[.[] | select(.sessionId | startswith($sid))][0] // empty')
 
   if [[ -n "$result" ]]; then
     echo "$result"
@@ -350,7 +375,7 @@ format_entries_text() {
   local shown=$((count < limit ? count : limit))
   printf "${BOLD}Found %d conversations (showing %d):${RESET}\n\n" "$count" "$shown"
 
-  echo "$entries" | jq -c ".[0:${limit}][]" | while IFS= read -r entry; do
+  echo "$entries" | jq -c --argjson n "$limit" '.[0:$n][]' | while IFS= read -r entry; do
     format_entry_text "$entry"
   done
 }
@@ -404,13 +429,13 @@ cmd_list() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --limit) limit="$2"; shift 2 ;;
+      --limit) require_count --limit "${2:-}"; limit="$2"; shift 2 ;;
       --json) output_json=true; shift ;;
-      --topic) topic="$2"; shift 2 ;;
-      --after) after="$2"; shift 2 ;;
-      --before) before="$2"; shift 2 ;;
-      --branch) branch="$2"; shift 2 ;;
-      --project) project="$2"; shift 2 ;;
+      --topic) topic="${2:-}"; shift 2 ;;
+      --after) require_date --after "${2:-}"; after="$2"; shift 2 ;;
+      --before) require_date --before "${2:-}"; before="$2"; shift 2 ;;
+      --branch) branch="${2:-}"; shift 2 ;;
+      --project) project="${2:-}"; shift 2 ;;
       *) echo "Unknown option: $1" >&2; usage 2 ;;
     esac
   done
@@ -423,7 +448,7 @@ cmd_list() {
   entries=$(echo "$entries" | jq "$filter")
 
   if [[ "$output_json" == "true" ]]; then
-    echo "$entries" | jq ".[0:${limit}]"
+    echo "$entries" | jq --argjson n "$limit" '.[0:$n]'
   else
     format_entries_text "$entries" "$limit"
   fi
@@ -435,13 +460,13 @@ cmd_search() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --topic) topic="$2"; shift 2 ;;
-      --after) after="$2"; shift 2 ;;
-      --before) before="$2"; shift 2 ;;
-      --branch) branch="$2"; shift 2 ;;
-      --project) project="$2"; shift 2 ;;
+      --topic) topic="${2:-}"; shift 2 ;;
+      --after) require_date --after "${2:-}"; after="$2"; shift 2 ;;
+      --before) require_date --before "${2:-}"; before="$2"; shift 2 ;;
+      --branch) branch="${2:-}"; shift 2 ;;
+      --project) project="${2:-}"; shift 2 ;;
       --deep) deep=true; shift ;;
-      --limit) limit="$2"; shift 2 ;;
+      --limit) require_count --limit "${2:-}"; limit="$2"; shift 2 ;;
       --json) output_json=true; shift ;;
       *) echo "Unknown option: $1" >&2; usage 2 ;;
     esac
@@ -495,7 +520,7 @@ cmd_search() {
   fi
 
   if [[ "$output_json" == "true" ]]; then
-    echo "$entries" | jq ".[0:${limit}]"
+    echo "$entries" | jq --argjson n "$limit" '.[0:$n]'
   else
     local label="index"
     [[ "$deep" == "true" ]] && label="index + content"
@@ -517,7 +542,7 @@ cmd_show() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --max-messages) max_messages="$2"; shift 2 ;;
+      --max-messages) require_count --max-messages "${2:-}"; max_messages="$2"; shift 2 ;;
       --json) output_json=true; shift ;;
       --messages-only) messages_only=true; shift ;;
       *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -539,20 +564,20 @@ cmd_show() {
     messages=$(extract_messages "$jsonl_file" "$max_messages" "true")
 
     if [[ -n "$metadata" && "$metadata" != "null" ]]; then
-      jq -n --argjson meta "$metadata" --argjson msgs "$messages" '{
+      jq -n --argjson meta "$metadata" --argjson msgs "$messages" --argjson max "$max_messages" '{
         sessionId: $meta.sessionId,
         metadata: $meta,
         messages: $msgs,
         totalExtracted: ($msgs | length),
-        maxMessages: '"$max_messages"'
+        maxMessages: $max
       }'
     else
-      jq -n --argjson msgs "$messages" '{
-        sessionId: "'"$actual_sid"'",
+      jq -n --argjson msgs "$messages" --argjson max "$max_messages" --arg sid "$actual_sid" '{
+        sessionId: $sid,
         metadata: null,
         messages: $msgs,
         totalExtracted: ($msgs | length),
-        maxMessages: '"$max_messages"'
+        maxMessages: $max
       }'
     fi
   else

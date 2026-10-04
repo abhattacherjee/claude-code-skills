@@ -90,4 +90,4 @@ Return a structured summary in this exact format:
 3. **Include specifics** — vague summaries are useless. "Uses blue" is bad. "#2563eb blue-600, 4.5:1 contrast on white" is good.
 4. **Never pass through raw content** — don't copy-paste paragraphs from the source. Distill into findings.
 5. **Flag relevance** — if the source turns out to be irrelevant to the task, say so clearly and keep the summary minimal.
-6. **Handle failures gracefully** — if a URL is broken, a file doesn't exist, or Figma returns an error, report it in the summary rather than failing silently.
+6. **Handle failures gracefully** — if a URL is broken, a file doesn't exist, Figma returns an error, or the page is a login wall or empty, do not summarise the error page. Start your reply with one line, `FAILED: <short reason>` (for example `FAILED: 404 not found`), and write nothing else. The orchestrator records that source as failed instead of storing your reply as a finding.

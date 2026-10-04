@@ -38,8 +38,11 @@ Prevents context overflow by delegating token-heavy content reads to isolated su
 # Check progress
 "${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" status --manifest /tmp/cs-run/manifest.json
 
-# Get next batch
+# Get next batch (each item carries the manifest's task)
 "${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" next-batch --manifest /tmp/cs-run/manifest.json
+
+# Record a source the agent could not read
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" mark-failed --manifest /tmp/cs-run/manifest.json --index 1 --reason "404 not found"
 
 # Collect all summaries
 "${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" summaries --manifest /tmp/cs-run/manifest.json
@@ -130,7 +133,7 @@ Process all batches in the current session. For each batch:
 "${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" next-batch --manifest "<OUTPUT_DIR>/manifest.json"
 ```
 
-2. For each item in the batch, launch a `context:content-distiller` agent in parallel (SINGLE message). The agent's own definition is its instructions, so the prompt is only the item:
+2. For each item in the batch, launch a `context:content-distiller` agent in parallel (SINGLE message). The agent's own definition is its instructions, so the prompt is only the item. `next-batch` has already added the manifest's `task` to each item, and the agent reads it to judge what matters:
 ```javascript
 Agent({
   subagent_type: "context:content-distiller",
@@ -140,7 +143,14 @@ Agent({
 })
 ```
 
-3. After agents return, mark each done:
+3. After agents return, record each result. If the agent's reply starts with `FAILED:` (404, login wall, empty page, missing file), mark the source failed with the text after `FAILED:` as the reason, so a dead page is never stored as a finding:
+```bash
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" mark-failed \
+  --manifest "<OUTPUT_DIR>/manifest.json" \
+  --index N \
+  --reason "why the source could not be read"
+```
+Otherwise mark it done:
 ```bash
 "${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" mark-done \
   --manifest "<OUTPUT_DIR>/manifest.json" \
@@ -148,7 +158,7 @@ Agent({
   --summary "the agent's distilled summary"
 ```
 
-4. Check status — if items remain, repeat for the next batch. Then proceed to Step 4 (Synthesize).
+4. Check status — if items remain, repeat for the next batch. If status says `BLOCKED`, only failed sources are left: fix the source or tell the user which ones failed, and retry one with `mark-done`. Then proceed to Step 4 (Synthesize). `summaries` lists failed sources apart from the summaries, so say so in the report.
 
 ### Step 3b: Ralph Mode (>2 batches)
 
@@ -157,7 +167,7 @@ Delegate the entire batch-processing loop to `/ralph-loop`. Each iteration gets 
 **Invoke ralph-loop with this pattern:**
 
 ```
-/ralph-loop Process one batch per iteration from shield manifest OUTPUT_DIR/manifest.json then exit. Scripts at ${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh. Each iteration: check status, if COMPLETE then collect summaries and synthesize and output promise DONE, otherwise get next-batch, spawn 3 parallel agents of subagent type context:content-distiller with sonnet model, mark done, then exit so ralph gives a fresh context for the next batch. --completion-promise DONE --max-iterations MAX
+/ralph-loop Process one batch per iteration from shield manifest OUTPUT_DIR/manifest.json then exit. Scripts at ${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh. Each iteration: check status, if COMPLETE or BLOCKED then collect summaries and synthesize and name any failed sources and output promise DONE, otherwise get next-batch, spawn 3 parallel agents of subagent type context:content-distiller with sonnet model, passing each item as the prompt, mark each done or mark-failed when the agent reply starts with FAILED, then exit so ralph gives a fresh context for the next batch. --completion-promise DONE --max-iterations MAX
 ```
 
 **Replace** `OUTPUT_DIR` and `MAX` with actual values. The script path is already filled in. Set `MAX` to `TOTAL_BATCHES + 2` (extra headroom for the synthesis iteration and any retries).
@@ -166,9 +176,9 @@ Delegate the entire batch-processing loop to `/ralph-loop`. Each iteration gets 
 
 **How ralph-loop processes each iteration:**
 1. Reads manifest from disk → checks status
-2. If COMPLETE → collects summaries, synthesizes report, outputs `<promise>DONE</promise>`
-3. Otherwise → gets next batch, spawns parallel content-distiller agents
-4. Marks items done with summaries → exits
+2. If COMPLETE or BLOCKED (only failed sources left) → collects summaries, synthesizes report and names the failed sources, outputs `<promise>DONE</promise>`
+3. Otherwise → gets next batch (items already carry the task), spawns parallel content-distiller agents
+4. Marks items done with summaries, or failed with a reason → exits
 5. Stop hook feeds the same prompt back → next iteration with fresh context
 
 **Token economics:**

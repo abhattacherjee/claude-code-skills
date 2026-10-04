@@ -25,11 +25,18 @@ Commands:
            Show progress: total, done, pending, current batch.
 
   next-batch --manifest /path/to/manifest.json [--batch-size N]
-           Output the next batch of pending items as JSON array.
+           Output the next batch of pending items as JSON array. Each item
+           carries the manifest's "task".
            Default batch size: 4.
 
   mark-done --manifest /path/to/manifest.json --index N --summary "text"
            Mark item at index N as done and store its distilled summary.
+           Also clears an earlier failure, so it is the retry path.
+
+  mark-failed --manifest /path/to/manifest.json --index N --reason "text"
+           Mark item at index N as failed (404, login wall, empty page) and store why.
+           Failed items are not returned by next-batch; status reports BLOCKED
+           once only failed items remain. Retry one with mark-done.
 
   reset    --manifest /path/to/manifest.json
            Reset all items to pending (clear summaries). Useful for re-processing.
@@ -58,6 +65,10 @@ Examples:
   $SCRIPT_NAME mark-done --manifest /tmp/cs-run1/manifest.json --index 0 \\
     --summary "Travel app uses card-based layout with hero image..."
 
+  # Record a source the agent could not read
+  $SCRIPT_NAME mark-failed --manifest /tmp/cs-run1/manifest.json --index 1 \\
+    --reason "404 not found"
+
   # Collect all summaries for synthesis
   $SCRIPT_NAME summaries --manifest /tmp/cs-run1/manifest.json
 EOF
@@ -70,6 +81,16 @@ die() { echo "ERROR: $1" >&2; exit 1; }
 
 require_jq() {
   command -v jq >/dev/null 2>&1 || die "jq is required but not installed"
+}
+
+# require_index <value>: an integer from 0 to (number of sources - 1). jq 1.7 reads -1 as
+# "the last item" and any larger index pads the array with nulls, so check it here.
+require_index() {
+  local value="$1" total
+  total=$(jq '.sources | length' "$MANIFEST")
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -ge "$total" ]]; then
+    die "Index must be an integer from 0 to $((total - 1)), got '$value'"
+  fi
 }
 
 require_manifest() {
@@ -124,10 +145,10 @@ parse_source() {
   jq -n \
     --arg type "$src_type" \
     --arg location "$location" \
-    --arg label "$label" \
+    --arg lbl "$label" \
     --arg status "pending" \
     --argjson extra "$extra_json" \
-    '{type: $type, location: $location, label: $label, status: $status, summary: null} + {extra: $extra}'
+    '{type: $type, location: $location, "label": $lbl, status: $status, summary: null} + {extra: $extra}'
 }
 
 # --- Commands ---
@@ -232,9 +253,11 @@ cmd_next_batch() {
     esac
   done
 
-  # Get next N pending items
+  [[ "$batch_size" =~ ^[0-9]+$ ]] || die "--batch-size must be a non-negative integer, got '$batch_size'"
+
+  # Get next N pending items, each with the manifest's task (the distiller reads it)
   jq --argjson n "$batch_size" \
-    '[.sources[] | select(.status == "pending")] | .[:$n]' "$MANIFEST"
+    '.task as $t | [.sources[] | select(.status == "pending")] | .[:$n] | map(. + {task: $t})' "$MANIFEST"
 }
 
 cmd_mark_done() {
@@ -243,20 +266,21 @@ cmd_mark_done() {
   local index="" summary=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --index) index="$2"; shift 2 ;;
-      --summary) summary="$2"; shift 2 ;;
+      --index) index="${2:-}"; shift 2 ;;
+      --summary) summary="${2:-}"; shift 2 ;;
       *) shift ;;
     esac
   done
 
   [[ -n "$index" ]] || die "--index is required"
   [[ -n "$summary" ]] || die "--summary is required"
+  require_index "$index"
 
-  # Update manifest in place (via temp file for atomicity)
+  # Update manifest in place (via temp file for atomicity). Clears an earlier failure.
   local tmp_file
   tmp_file=$(mktemp)
   jq --argjson idx "$index" --arg summary "$summary" \
-    '.sources[$idx].status = "done" | .sources[$idx].summary = $summary' \
+    '.sources[$idx].status = "done" | .sources[$idx].summary = $summary | del(.sources[$idx].reason)' \
     "$MANIFEST" > "$tmp_file"
   mv "$tmp_file" "$MANIFEST"
 
@@ -265,12 +289,40 @@ cmd_mark_done() {
   echo "Marked done: [$index] $label"
 }
 
+cmd_mark_failed() {
+  require_manifest
+
+  local index="" reason=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --index) index="${2:-}"; shift 2 ;;
+      --reason) reason="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  [[ -n "$index" ]] || die "--index is required"
+  [[ -n "$reason" ]] || die "--reason is required"
+  require_index "$index"
+
+  local tmp_file
+  tmp_file=$(mktemp)
+  jq --argjson idx "$index" --arg reason "$reason" \
+    '.sources[$idx].status = "failed" | .sources[$idx].summary = null | .sources[$idx].reason = $reason' \
+    "$MANIFEST" > "$tmp_file"
+  mv "$tmp_file" "$MANIFEST"
+
+  local label
+  label=$(jq -r --argjson idx "$index" '.sources[$idx].label' "$MANIFEST")
+  echo "Marked failed: [$index] $label"
+}
+
 cmd_reset() {
   require_manifest
 
   local tmp_file
   tmp_file=$(mktemp)
-  jq '.sources[].status = "pending" | .sources[].summary = null | .currentBatch = 0 | .iteration = 1' \
+  jq '.sources[].status = "pending" | .sources[].summary = null | del(.sources[].reason) | .currentBatch = 0 | .iteration = 1' \
     "$MANIFEST" > "$tmp_file"
   mv "$tmp_file" "$MANIFEST"
   echo "Reset all items to pending"
@@ -286,6 +338,16 @@ cmd_summaries() {
 
   jq -r '.sources[] | select(.status == "done") |
     "## [\(.index)] \(.label) (\(.type))\n\(.summary)\n"' "$MANIFEST"
+
+  local failed
+  failed=$(jq '[.sources[] | select(.status == "failed")] | length' "$MANIFEST")
+  if [[ "$failed" -gt 0 ]]; then
+    echo "---"
+    echo "*$failed sources failed and have no summary:*"
+    jq -r '.sources[] | select(.status == "failed") |
+      "- [\(.index)] \(.label) (\(.type)): \(.reason // "no reason given")"' "$MANIFEST"
+    echo ""
+  fi
 
   local pending
   pending=$(jq '[.sources[] | select(.status == "pending")] | length' "$MANIFEST")
@@ -344,6 +406,19 @@ case "$COMMAND" in
     done
     require_manifest
     cmd_mark_done ${local_args[@]+"${local_args[@]}"}
+    ;;
+  mark-failed)
+    require_jq
+    MANIFEST=""
+    local_args=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --manifest) MANIFEST="$2"; shift 2 ;;
+        *) local_args+=("$1"); shift ;;
+      esac
+    done
+    require_manifest
+    cmd_mark_failed ${local_args[@]+"${local_args[@]}"}
     ;;
   reset)
     require_jq

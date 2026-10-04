@@ -10,6 +10,11 @@ All notable changes to the **shield** skill (was `context-shield`) are documente
 - Every command runs as written from your project directory: `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<OUTPUT_DIR>` for the run directory. The old text set `SCRIPTS=~/.claude/skills/context-shield/scripts` and read `$SCRIPTS` in later blocks, which only worked from a loose copy (#163).
 - The content-distiller agent now ships in the plugin and is started as `context:content-distiller`. The old text started a general-purpose agent and told it to read `~/.claude/agents/content-distiller.md` (#163).
 
+### Fixed
+
+- `manage-manifest.sh` works on jq 1.6 (an unquoted `label` key and a `$label` variable), `next-batch` adds the manifest `task` to each item, `mark-done` rejects an index outside the manifest, and the new `mark-failed --index N --reason TEXT` records a source that could not be read. Step 3 uses it when the distiller replies `FAILED: <reason>`, and `summaries` lists failed sources apart from the summaries (#163).
+- `visualize.sh` no longer stops on bash 3.2 when `--labels` is empty (#163).
+
 ## History before 1.0.0 (as `context-shield`)
 
 ### context-shield 1.3.2 - 2026-10-04

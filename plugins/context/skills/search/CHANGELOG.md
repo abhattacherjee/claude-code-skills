@@ -18,6 +18,10 @@ All notable changes to the **search** skill (was `conversation-search`) are docu
 - A backslash in `--topic`, `--branch`, `--project`, `--after` or `--before` broke the jq filter, and `\(...)` ran as jq code. Values are escaped now.
 - `--before <date>` no longer keeps a conversation created exactly at that midnight.
 - The "last Tuesday" example named a Monday (`--after 2025-02-17 --before 2025-02-18`). It now uses 2025-02-18 and 2025-02-19.
+- `--limit` ran as jq code (`--limit '0] | {pwned: env.HOME} | .['` printed `$HOME`). `--limit` and `--max-messages` must be non-negative integers (exit 2 otherwise) and go to jq as `--argjson`.
+- `--after` and `--before` accept only `YYYY-MM-DD` or a full ISO 8601 timestamp; `--after garbage` used to return `[]` with exit 0. Anything else now exits 2 with a message.
+- A malformed `sessions-index.json` is still skipped, with `warning: skipping unreadable <path>` on stderr.
+- The summarizer example uses `Agent({subagent_type: "context:conversation-summarizer", ...})`, not `Task(...)`.
 
 ## History before 1.0.0 (as `conversation-search`)
 

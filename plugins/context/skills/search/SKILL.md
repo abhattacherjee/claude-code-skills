@@ -69,8 +69,12 @@ When the user selects a conversation:
 
 If the user requests a summary, launch the `context:conversation-summarizer` agent:
 
-```
-Task(subagent_type="context:conversation-summarizer", prompt=<JSON from show --json>)
+```javascript
+Agent({
+  subagent_type: "context:conversation-summarizer",
+  description: "Summarize conversation",
+  prompt: "<JSON from show --json>"
+})
 ```
 
 Pass the JSON output from `show --json` as the prompt. The agent returns a structured summary
