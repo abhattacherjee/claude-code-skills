@@ -130,6 +130,56 @@ mkdir -p "$TMP/emptyspecs/specs"
 run_in "$TMP/emptyspecs" "$CREATE/discover-conventions.sh" . --json
 json_is "empty spec dir is flat with no specs" 'd["specCount"] == 0 and d["epicStructure"] == "flat"'
 
+# --- hostile names: epics, story files and headings come from the project, so they are untrusted ---
+# json_ok <label>: OUT is valid JSON. no_file <label> <path>: the path must not exist.
+json_ok() { json_is "$1" 'True'; }
+no_file() { [[ ! -e "$2" ]] && ok "$1" || bad "$1" "$2 was created"; }
+EVIL="$TMP/evil"
+mkdir -p "$EVIL/specs/stories/epic-1" "$EVIL/specs/stories/epic-2" "$EVIL/specs/stories/epic-08"
+mkdir "$EVIL/specs/stories/epic-q\"z" "$EVIL/specs/stories/epic-q\\z" "$EVIL/specs/stories/epic-[a]" "$EVIL/specs/stories/epic-\$(touch PWNED)"
+CTRL_NAME="epic-q$(printf '\001')z"
+if mkdir "$EVIL/specs/stories/$CTRL_NAME" 2>/dev/null; then HAVE_CTRL=1; else HAVE_CTRL=0; echo "  note: filesystem refused a control character in a name; that case is skipped"; fi
+touch "$EVIL/specs/stories/epic-1/story-1.3-[\$(touch PWNED)].md" "$EVIL/specs/stories/epic-1/story-1.1-ok.md"
+touch "$EVIL/specs/stories/epic-2/story-2.1-a.md" "$EVIL/specs/stories/epic-2/story-2.9-b.md" "$EVIL/specs/stories/epic-08/story-08.3-c.md"
+mkdir "$EVIL/specs/stories/epic-3"
+mkdir "$EVIL/specs/stories/epic-4"
+touch "$EVIL/specs/stories/epic-3/story-3.08-d.md" "$EVIL/specs/stories/epic-3/story-3.7-e.md"
+run_in "$EVIL" "$CREATE/discover-conventions.sh" . --json
+check "hostile names: --json exits 0" 0
+json_ok "hostile names: --json stdout parses as JSON"
+no_file "hostile names: nothing was executed (no PWNED file)" "$EVIL/PWNED"
+json_is "hostile names: only numeric epics are listed" 'sorted(e["epic"] for e in d["epics"]) == ["08", "1", "2", "3", "4"]'
+json_is "hostile names: a normal epic still reports latest and next" '[e for e in d["epics"] if e["epic"] == "2"][0]["latestStory"] == 9 and [e for e in d["epics"] if e["epic"] == "2"][0]["nextStory"] == 10'
+json_is "hostile names: a story number with a leading zero (08) is not read as octal" '[e for e in d["epics"] if e["epic"] == "3"][0]["latestStory"] == 8 and [e for e in d["epics"] if e["epic"] == "3"][0]["nextStory"] == 9'
+json_is "hostile names: an epic with no stories reports latest 0, next 1" '[e for e in d["epics"] if e["epic"] == "4"][0]["latestStory"] == 0 and [e for e in d["epics"] if e["epic"] == "4"][0]["nextStory"] == 1'
+json_is "hostile names: a leading-zero epic is not read as octal" '[e for e in d["epics"] if e["epic"] == "08"][0]["nextStory"] == 4'
+run_in "$EVIL" "$CREATE/discover-conventions.sh" .
+check "hostile names: text mode exits 0, skips bad epics on stderr" 0 'Epic 2: latest story = 2\.9, next = 2\.10' 'skipped epic with a non-numeric name'
+no_file "hostile names: text mode executed nothing" "$EVIL/PWNED"
+run_in "$EVIL" "$CREATE/discover-conventions.sh" . --json
+[[ -z "$ERR" ]] && ok "hostile names: --json prints nothing on stderr" || bad "hostile names: --json prints nothing on stderr" "$ERR"
+if [[ "$HAVE_CTRL" == 1 ]]; then
+  json_ok "control char in an epic name: --json still parses"
+fi
+# Section headings are sampled from the first few specs only, so test them in a project of their own.
+HEADS="$TMP/heads"
+mkdir -p "$HEADS/specs/stories/epic-1"
+printf '# T\n\n## Say "hi"\\there\r\n## Tab\tand\001ctl\n' > "$HEADS/specs/stories/epic-1/story-1.2-heads.md"
+run_in "$HEADS" "$CREATE/discover-conventions.sh" . --json
+json_ok "headings with quote, CR and control chars: --json parses"
+json_is "headings with quote, CR and control chars: the heading text survives" 'any(s["section"].startswith("Say \"hi\"") for s in d["commonSections"])'
+# Control characters in a title and in a package directory must not break the other two scripts' JSON.
+printf '# Title\twith\001ctl\r\n' > "$EVIL/ctl-title.md"
+run_in "$EVIL" "$REVIEW/extract-spec-sections.sh" ctl-title.md --json
+check "extract: control chars in the title, exits 0" 0
+json_ok "extract: --json parses with control chars in the title"
+json_is "extract: the title round-trips" 'd["title"] == "Title\twith\x01ctl\r"'
+mkdir -p "$EVIL/pk\"g\001x"
+echo '{"name":"n"}' > "$EVIL/pk\"g\001x/package.json"
+run_in "$EVIL" "$REVIEW/discover-project-architecture.sh" . --json
+check "architecture: odd package directory name, exits 0" 0
+json_ok "architecture: --json parses with quote and control char in a directory name"
+
 echo "discover-project-architecture.sh (review)"
 run_in "$PROJ" "$REVIEW/discover-project-architecture.sh" "$(git -C "$PROJ" rev-parse --show-toplevel)"
 check "report exits 0 and names the packages" 0 'api \(api\) +\[backend\] +Express'

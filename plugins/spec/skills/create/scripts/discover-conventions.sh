@@ -50,6 +50,31 @@ fi
 
 cd "$PROJECT_ROOT"
 
+# --- Utility ---
+
+json_escape() {
+    # Escape a string for use inside a JSON "...": backslash, quote, and every
+    # control character below 0x20 (\n, \r and \t by name, the rest as \u00XX).
+    local str="$1" code c esc
+    str="${str//\\/\\\\}"
+    str="${str//\"/\\\"}"
+    str="${str//$'\n'/\\n}"
+    str="${str//$'\r'/\\r}"
+    str="${str//$'\t'/\\t}"
+    if [[ "$str" == *[[:cntrl:]]* ]]; then
+        for code in 1 2 3 4 5 6 7 8 11 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31; do
+            printf -v c "\\$(printf '%03o' "$code")"
+            printf -v esc '\\u%04x' "$code"
+            str="${str//"$c"/$esc}"
+        done
+    fi
+    printf '%s' "$str"
+}
+
+# Epic names come from directory and file names, so they are untrusted. Only a
+# plain number is accepted. The same check guards every $(( )) below.
+is_number() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
 # --- Discovery functions ---
 
 find_spec_dir() {
@@ -102,11 +127,20 @@ find_naming_pattern() {
 }
 
 find_epics() {
-    local spec_dir="$1"
+    local spec_dir="$1" d name
     [[ -z "$spec_dir" ]] && return
-    # List epic directories or extract epic numbers from filenames
+    # List epic directories or extract epic numbers from filenames. A name that is
+    # not a plain number is skipped; text mode says so on stderr, JSON mode stays quiet.
     if [[ "$(detect_epic_structure "$spec_dir")" == "epic-subdirs" ]]; then
-        ls -d "$spec_dir"/epic-* 2>/dev/null | sed 's|.*/epic-||' | sort -n
+        for d in "$spec_dir"/epic-*; do
+            [[ -e "$d" ]] || continue
+            name="${d##*/epic-}"
+            if is_number "$name"; then
+                printf '%s\n' "$name"
+            elif ! $JSON_MODE; then
+                printf 'skipped epic with a non-numeric name: %q\n' "$name" >&2
+            fi
+        done | sort -n
     else
         find "$spec_dir" -name "story-*.md" 2>/dev/null | grep -oE 'story-[0-9]+' | sed 's/story-//' | sort -un
     fi
@@ -132,6 +166,7 @@ extract_common_sections() {
 find_latest_story_number() {
     local spec_dir="$1" epic="$2"
     [[ -z "$spec_dir" ]] && { echo "0"; return; }
+    is_number "$epic" || { echo "0"; return; }
     if [[ -d "$spec_dir/epic-$epic" ]]; then
         find "$spec_dir/epic-$epic" -name "story-${epic}.*-*.md" 2>/dev/null | \
             grep -oE "story-${epic}\.[0-9]+" | sed "s/story-${epic}\.//" | sort -n | tail -1
@@ -145,8 +180,7 @@ get_sample_spec() {
     local spec_dir="$1"
     [[ -z "$spec_dir" ]] && return
     # Get the most recently modified spec
-    find "$spec_dir" -name "story-*.md" -not -name "README*" 2>/dev/null | \
-        xargs ls -t 2>/dev/null | head -1
+    find "$spec_dir" -name "story-*.md" -not -name "README*" -exec ls -t {} + 2>/dev/null | head -1
 }
 
 # --- Run discovery ---
@@ -166,10 +200,11 @@ if $JSON_MODE; then
     while IFS= read -r epic; do
         [[ -z "$epic" ]] && continue
         latest=$(find_latest_story_number "$SPEC_DIR" "$epic")
-        [[ -z "$latest" ]] && latest="0"
-        next=$((latest + 1))
+        is_number "$latest" && [[ ${#latest} -le 9 ]] || latest="0"
+        next=$((10#$latest + 1))
+        latest=$((10#$latest))
         if $FIRST; then FIRST=false; else EPIC_JSON+=","; fi
-        EPIC_JSON+="{\"epic\":\"$epic\",\"latestStory\":$latest,\"nextStory\":$next}"
+        EPIC_JSON+="{\"epic\":\"$(json_escape "$epic")\",\"latestStory\":$latest,\"nextStory\":$next}"
     done < <(find_epics "$SPEC_DIR")
     EPIC_JSON+="]"
 
@@ -179,7 +214,7 @@ if $JSON_MODE; then
     while IFS= read -r tf; do
         [[ -z "$tf" ]] && continue
         if $FIRST; then FIRST=false; else TRACKING_JSON+=","; fi
-        TRACKING_JSON+="\"$tf\""
+        TRACKING_JSON+="\"$(json_escape "$tf")\""
     done < <(find_tracking_files)
     TRACKING_JSON+="]"
 
@@ -188,20 +223,13 @@ if $JSON_MODE; then
     FIRST=true
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
-        count=$(echo "$line" | awk '{print $1}')
-        section=$(echo "$line" | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//')
+        count=$(printf '%s\n' "$line" | awk '{print $1}')
+        section=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//')
+        is_number "$count" || continue
         if $FIRST; then FIRST=false; else SECTIONS_JSON+=","; fi
-        section="${section//\"/\\\"}"
-        SECTIONS_JSON+="{\"section\":\"$section\",\"count\":$count}"
+        SECTIONS_JSON+="{\"section\":\"$(json_escape "$section")\",\"count\":$count}"
     done < <(extract_common_sections "$SPEC_DIR")
     SECTIONS_JSON+="]"
-
-    json_escape() {
-        local str="$1"
-        str="${str//\\/\\\\}"
-        str="${str//\"/\\\"}"
-        printf '%s' "$str"
-    }
 
     SPEC_DIR_ESC=$(json_escape "${SPEC_DIR:-none}")
     NAMING_ESC=$(json_escape "$NAMING_PATTERN")
@@ -234,8 +262,9 @@ else
     while IFS= read -r epic; do
         [[ -z "$epic" ]] && continue
         latest=$(find_latest_story_number "$SPEC_DIR" "$epic")
-        [[ -z "$latest" ]] && latest="0"
-        next=$((latest + 1))
+        is_number "$latest" && [[ ${#latest} -le 9 ]] || latest="0"
+        next=$((10#$latest + 1))
+        latest=$((10#$latest))
         echo "  Epic $epic: latest story = $epic.$latest, next = $epic.$next"
     done < <(find_epics "$SPEC_DIR")
     echo ""

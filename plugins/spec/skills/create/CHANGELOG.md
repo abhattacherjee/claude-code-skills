@@ -9,6 +9,10 @@ All notable changes to the **create** skill (was `spec-creator`) are documented 
 - Moved into the `spec` plugin as `spec:create` (#160). Same five phases, scripts and templates as `spec-creator` 2.4.2. The slash command is `/spec:create`; the old name still matches as a trigger phrase.
 - Cross-references name the new skills: Phase 5 offers `/spec:review`, the spec template says "added by /spec:review", and the `task-manifest.sh` subject lines say `/spec:review`.
 
+### Fixed
+
+- `discover-conventions.sh --json` escapes every control character, takes only all-digit epic names (others are skipped, and named on stderr in text mode only), and checks a story number before doing arithmetic on it. An epic directory named `epic-q"z` used to make the JSON invalid.
+
 ## History before 1.0.0 (as `spec-creator`)
 
 ### spec-creator 2.4.2 - 2026-07-25

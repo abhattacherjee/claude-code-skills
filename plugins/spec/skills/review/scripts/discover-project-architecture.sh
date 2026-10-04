@@ -53,11 +53,21 @@ cd "$PROJECT_ROOT"
 # --- Utility ---
 
 json_escape() {
-    local str="$1"
+    # Escape a string for use inside a JSON "...": backslash, quote, and every
+    # control character below 0x20 (\n, \r and \t by name, the rest as \u00XX).
+    local str="$1" code c esc
     str="${str//\\/\\\\}"
     str="${str//\"/\\\"}"
     str="${str//$'\n'/\\n}"
+    str="${str//$'\r'/\\r}"
     str="${str//$'\t'/\\t}"
+    if [[ "$str" == *[[:cntrl:]]* ]]; then
+        for code in 1 2 3 4 5 6 7 8 11 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31; do
+            printf -v c "\\$(printf '%03o' "$code")"
+            printf -v esc '\\u%04x' "$code"
+            str="${str//"$c"/$esc}"
+        done
+    fi
     printf '%s' "$str"
 }
 

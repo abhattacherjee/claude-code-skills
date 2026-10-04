@@ -12,6 +12,7 @@ All notable changes to the **review** skill (was `spec-review`) are documented h
 ### Fixed
 
 - `extract-spec-sections.sh` looks for a relative spec path in the current directory first, then in the repo root. It used to try only the repo root, so a path typed from a subdirectory was not found, or matched a different file of the same name at the repo root. Its "spec file required" error now goes to stderr.
+- `extract-spec-sections.sh --json` and `discover-project-architecture.sh --json` escape every control character (a CR in a title or a control character in a directory name gave invalid JSON).
 
 ## History before 1.0.0 (as `spec-review`)
 

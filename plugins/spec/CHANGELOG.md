@@ -15,6 +15,7 @@ All notable changes to the **spec** plugin are documented here.
 - Cross-references name the new skills (`/spec:review` after creation, the spec template's "added by /spec:review", the `task-manifest.sh` subject lines).
 - `spec:review` says in its description that it reviews a spec, not code or a pull request.
 - `extract-spec-sections.sh` looks for a relative spec path in the current directory first, then in the repo root. It used to try only the repo root, so a path typed from a subdirectory was not found, or matched a different file of the same name at the repo root.
+- The three discovery and extract scripts escape every control character in the JSON they print (they handled only backslash, quote, newline and tab, so a CR or other control character in a title, heading or directory name gave invalid JSON). `discover-conventions.sh` also takes only all-digit epic names (others are skipped, and named on stderr in text mode only), and no longer does arithmetic on a story number it has not checked.
 
 ### Deprecated
 
