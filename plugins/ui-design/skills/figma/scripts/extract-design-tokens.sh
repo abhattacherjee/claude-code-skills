@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 set -eu
 
-# extract-design-tokens.sh — Extracts design tokens from a project's CSS/Tailwind config
-# Outputs font families, color palette, spacing, and dark mode values for use in
-# standalone HTML mockups that match the project's real look and feel.
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# extract-design-tokens.sh — Extracts design tokens from a project's CSS, HTML and Tailwind config
+# Outputs the :root CSS custom properties, the dark-mode ones, the Tailwind font families and
+# the Google Fonts link, for standalone HTML mockups that match the project's real look and feel.
 
 usage() {
   cat <<'EOF'
 Usage: extract-design-tokens.sh [PROJECT_DIR] [OPTIONS]
 
-Extracts design tokens (fonts, colors, spacing) from a frontend project's
-CSS files and Tailwind config for use in standalone HTML mockups.
+Extracts design tokens from a frontend project for use in standalone HTML
+mockups:
+  - CSS custom properties (--name: value) of the top-level :root block, and the
+    dark-mode ones from a top-level .dark block, else from a :root inside
+    @media (prefers-color-scheme: dark). Read from the first of these files
+    that has :root variables: src/index.css, src/styles/globals.css,
+    src/app/globals.css, src/main.css, src/styles.css
+  - the Google Fonts link from the first of index.html, public/index.html,
+    src/index.html that has one
+  - the fontFamily names from tailwind.config.js, .ts or .mjs
+If no :root variables are found, a warning goes to stderr (exit stays 0).
 
 Arguments:
   PROJECT_DIR    Path to the frontend project root (default: current directory)
@@ -57,7 +64,7 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
   exit 1
 fi
 
-# Set up front: the output code reads these when no CSS file is found (set -u).
+# Set up front: the output code reads these when nothing is found (set -u).
 CSS_VARS=""
 DARK_VARS=""
 CSS_FILE_FOUND=""
@@ -76,21 +83,46 @@ for html_file in "$PROJECT_DIR/index.html" "$PROJECT_DIR/public/index.html" "$PR
   fi
 done
 
-# --- Extract CSS custom properties from main CSS file ---
-CSS_VARS=""
-for css_file in "$PROJECT_DIR/src/index.css" "$PROJECT_DIR/src/styles/globals.css" "$PROJECT_DIR/src/app/globals.css" "$PROJECT_DIR/src/main.css" "$PROJECT_DIR/src/styles.css"; do
-  if [[ -f "$css_file" ]]; then
-    # Extract :root block variables
-    CSS_VARS=$(sed -n '/:root/,/}/p' "$css_file" 2>/dev/null | grep -E '^\s*--' || true)
-    # Also extract dark mode variables
-    DARK_VARS=$(sed -n '/\.dark/,/}/p' "$css_file" 2>/dev/null | grep -E '^\s*--' || true)
-    if [[ -z "$DARK_VARS" ]]; then
-      DARK_VARS=$(sed -n '/@media.*prefers-color-scheme.*dark/,/}/p' "$css_file" 2>/dev/null | grep -E '^\s*--' || true)
-    fi
-    CSS_FILE_FOUND="$css_file"
-    break
+# --- Extract CSS custom properties ---
+# css_vars <file> <light|dark|media>: print the "--name: value" lines of one kind of block.
+#   light: a top-level :root block. dark: a top-level .dark block. media: a :root block
+#   inside a top-level @media rule that names prefers-color-scheme and dark.
+# The braces on each line are tracked, so a :root inside @media is not read as light.
+css_vars() {
+  awk -v mode="$2" '
+    {
+      line = $0
+      for (i = 1; i <= length(line); i++) {
+        ch = substr(line, i, 1)
+        if (ch == "{") { sel[++depth] = buf; buf = "" }
+        else if (ch == "}") { if (depth > 0) depth--; buf = "" }
+        else if (ch == ";") buf = ""
+        else buf = buf ch
+      }
+      if (line !~ /^[ \t]*--/) next
+      if (mode == "light" && depth == 1 && sel[1] ~ /:root/) print line
+      else if (mode == "dark" && depth == 1 && sel[1] ~ /\.dark/) print line
+      else if (mode == "media" && depth == 2 && sel[1] ~ /@media/ && sel[1] ~ /prefers-color-scheme/ && sel[1] ~ /dark/ && sel[2] ~ /:root/) print line
+    }
+  ' "$1" 2>/dev/null || true
+}
+
+CSS_CANDIDATES=("$PROJECT_DIR/src/index.css" "$PROJECT_DIR/src/styles/globals.css" "$PROJECT_DIR/src/app/globals.css" "$PROJECT_DIR/src/main.css" "$PROJECT_DIR/src/styles.css")
+for css_file in "${CSS_CANDIDATES[@]}"; do
+  [[ -f "$css_file" ]] || continue
+  CSS_VARS=$(css_vars "$css_file" light)
+  # The first file that has :root variables wins; a file without them is skipped.
+  [[ -n "$CSS_VARS" ]] || continue
+  DARK_VARS=$(css_vars "$css_file" dark)
+  if [[ -z "$DARK_VARS" ]]; then
+    DARK_VARS=$(css_vars "$css_file" media)
   fi
+  CSS_FILE_FOUND="$css_file"
+  break
 done
+if [[ -z "$CSS_VARS" ]]; then
+  echo "WARNING: no :root custom properties found in $PROJECT_DIR (looked in src/index.css, src/styles/globals.css, src/app/globals.css, src/main.css, src/styles.css)" >&2
+fi
 
 # --- Extract font families from Tailwind config ---
 TAILWIND_FONTS=""
@@ -98,15 +130,6 @@ for tw_config in "$PROJECT_DIR/tailwind.config.js" "$PROJECT_DIR/tailwind.config
   if [[ -f "$tw_config" ]]; then
     TAILWIND_FONTS=$(grep -A 3 'fontFamily' "$tw_config" 2>/dev/null | grep -oE "'[^']+'" | tr -d "'" || true)
     TAILWIND_CONFIG_FOUND="$tw_config"
-    break
-  fi
-done
-
-# --- Extract Tailwind custom colors ---
-TAILWIND_COLORS=""
-for tw_config in "$PROJECT_DIR/tailwind.config.js" "$PROJECT_DIR/tailwind.config.ts" "$PROJECT_DIR/tailwind.config.mjs"; do
-  if [[ -f "$tw_config" ]]; then
-    TAILWIND_COLORS=$(grep -A 50 'colors' "$tw_config" 2>/dev/null | grep -E "^\s+'?[a-zA-Z]" | head -20 || true)
     break
   fi
 done
@@ -141,11 +164,16 @@ case "$FORMAT" in
     echo "</style>"
     echo ""
     echo "<!-- Source files: -->"
-    [[ -n "$CSS_FILE_FOUND" ]] && echo "<!-- CSS: $CSS_FILE_FOUND -->"
-    [[ -n "$TAILWIND_CONFIG_FOUND" ]] && echo "<!-- Tailwind: $TAILWIND_CONFIG_FOUND -->"
+    if [[ -n "$CSS_FILE_FOUND" ]]; then
+      echo "<!-- CSS: $CSS_FILE_FOUND -->"
+    fi
+    if [[ -n "$TAILWIND_CONFIG_FOUND" ]]; then
+      echo "<!-- Tailwind: $TAILWIND_CONFIG_FOUND -->"
+    fi
     if [[ -n "$TAILWIND_FONTS" ]]; then
       echo "<!-- Tailwind fonts: $TAILWIND_FONTS -->"
     fi
+    exit 0
     ;;
 
   json)
@@ -154,7 +182,7 @@ case "$FORMAT" in
       exit 1
     fi
     # jq builds the JSON, so a quote or backslash in a path or a value cannot break it.
-    # A value that was not found is null.
+    # A value that was not found is null. Each variable line loses its leading whitespace.
     jq -n \
       --arg source "$PROJECT_DIR" \
       --arg googleFontsUrl "$GOOGLE_FONTS_URL" \
@@ -168,9 +196,9 @@ case "$FORMAT" in
         googleFontsUrl: (if $googleFontsUrl == "" then null else $googleFontsUrl end),
         cssFile: (if $cssFile == "" then null else $cssFile end),
         tailwindConfig: (if $tailwindConfig == "" then null else $tailwindConfig end),
-        cssVariables: $cssVariables,
-        darkModeVariables: $darkModeVariables,
-        tailwindFonts: $tailwindFonts
+        cssVariables: (if $cssVariables == "" then null else $cssVariables end),
+        darkModeVariables: (if $darkModeVariables == "" then null else $darkModeVariables end),
+        tailwindFonts: (if $tailwindFonts == "" then null else $tailwindFonts end)
       }'
     ;;
 
@@ -187,6 +215,7 @@ case "$FORMAT" in
       echo "$DARK_VARS"
       echo "}"
     fi
+    exit 0
     ;;
 
   *)

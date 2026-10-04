@@ -45,7 +45,7 @@ The skill runs its script through `${CLAUDE_SKILL_DIR}`, so it works from your p
 
 | Skill | Script | Purpose |
 |---|---|---|
-| `figma` | `extract-design-tokens.sh [PROJECT_DIR] [--format html\|json\|css]` | Reads fonts, colors and dark-mode values from a frontend project's CSS and Tailwind config, for mockups that match the real look. |
+| `figma` | `extract-design-tokens.sh [PROJECT_DIR] [--format html\|json\|css]` | Reads, for mockups that match the real look: the `:root` CSS custom properties and the dark-mode ones (`.dark`, else `@media (prefers-color-scheme: dark)`) from the first of `src/index.css`, `src/styles/globals.css`, `src/app/globals.css`, `src/main.css`, `src/styles.css` that has `:root` variables; the Google Fonts link from `index.html`, `public/index.html` or `src/index.html`; the `fontFamily` names from `tailwind.config.js`/`.ts`/`.mjs`. It warns on stderr when it finds no `:root` variables. |
 
 ## See also
 

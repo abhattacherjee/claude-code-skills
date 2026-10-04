@@ -366,6 +366,8 @@ AskUserQuestion({
 "${CLAUDE_SKILL_DIR}/scripts/extract-design-tokens.sh" --help                   # Usage
 ```
 
+The script reads the `:root` CSS custom properties, and the dark-mode ones (a `.dark` block, else a `:root` inside `@media (prefers-color-scheme: dark)`), from the first of `src/index.css`, `src/styles/globals.css`, `src/app/globals.css`, `src/main.css` and `src/styles.css` that has `:root` variables. It reads the Google Fonts link from `index.html`, `public/index.html` or `src/index.html`, and the `fontFamily` names from `tailwind.config.js`, `.ts` or `.mjs`. Paths are relative to the project directory you pass. It does not read spacing or Tailwind colors. When it finds no `:root` variables it prints a warning on stderr and still exits 0, so check stderr before trusting the tokens. In `--format json` a value it did not find is `null`.
+
 ## Figma MCP Gotchas
 
 1. **Single-use capture IDs** — one page per ID

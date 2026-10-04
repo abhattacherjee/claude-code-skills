@@ -22,9 +22,11 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/plugin copy" "$TMP/home" "$TMP/proj" "$TMP/work"
 cp -R "$PLUGIN/skills" "$TMP/plugin copy/skills"
 cp -R "$PLUGIN/agents" "$TMP/plugin copy/agents"
-# SKILLS and AGENTS may each be set by the caller to test another copy.
-SKILLS="${SKILLS:-$TMP/plugin copy/skills}"
-AGENTS="${AGENTS:-$TMP/plugin copy/agents}"
+# UIDESIGN_SKILLS and UIDESIGN_AGENTS may each be set by the caller to test another copy.
+SKILLS="${UIDESIGN_SKILLS:-$TMP/plugin copy/skills}"
+AGENTS="${UIDESIGN_AGENTS:-$TMP/plugin copy/agents}"
+echo "skills under test: $SKILLS"
+echo "agents under test: $AGENTS"
 
 TOK="$SKILLS/figma/scripts/extract-design-tokens.sh"
 PROJ="$TMP/proj"
@@ -143,7 +145,8 @@ run_in "$PROJ" "$TOK" "$TMP/work/bare"
 check "a project with no CSS file: html exits 0 (no unbound variable under set -u)" 0 'No CSS custom properties found'
 run_in "$PROJ" "$TOK" "$TMP/work/bare" --format json
 check "a project with no CSS file: json exits 0" 0
-json_is "a project with no CSS file: json is valid, missing files are null, not the text 'null'" 'd["cssFile"] is None and d["tailwindConfig"] is None and d["googleFontsUrl"] is None and d["cssVariables"] == ""'
+json_is "a project with no CSS file: json is valid, every value not found is null" 'd["cssFile"] is None and d["tailwindConfig"] is None and d["googleFontsUrl"] is None and d["cssVariables"] is None and d["darkModeVariables"] is None and d["tailwindFonts"] is None'
+check "a project with no CSS file: a warning on stderr" 0 "" 'WARNING: no :root custom properties'
 run_in "$PROJ" "$TOK" "$TMP/work/bare" --format css
 check "a project with no CSS file: css exits 0" 0
 ODD="$TMP/work/odd \"dir\\x"
@@ -161,6 +164,57 @@ run_in "$FE" "$TOK"
 check "with no argument it reads the current directory" 0 '--brand-color: #123456'
 run_in "$PROJ" "$TOK" --help
 check "--help exits 0 and shows usage" 0 'Usage: extract-design-tokens.sh'
+printf '%s' "$OUT" | grep -Eiq 'spacing|tailwind colou?rs' && bad "--help claims no spacing or Tailwind colors" "$OUT" || ok "--help claims no spacing or Tailwind colors"
+check "--help names the CSS files it reads" 0 'src/app/globals\.css'
+
+echo "extract-design-tokens.sh: which files it reads"
+# The first CSS candidate has no :root variables; the third one has them.
+P1="$TMP/work/second"
+mkdir -p "$P1/src/app"
+printf 'body { margin: 0; }\n' > "$P1/src/index.css"
+printf ':root {\n  --brand: #f00;\n}\n.dark {\n  --brand: #0f0;\n}\n' > "$P1/src/app/globals.css"
+run_in "$PROJ" "$TOK" "$P1" --format json
+check "a first CSS file with no variables: json exits 0" 0
+json_is "a first CSS file with no variables: the next file that has them is used" 'd["cssFile"].endswith("src/app/globals.css") and d["cssVariables"] == "--brand: #f00;" and d["darkModeVariables"] == "--brand: #0f0;"'
+[[ -z "$ERR" ]] && ok "variables found: no warning" || bad "variables found: no warning" "$ERR"
+# Dark mode from @media (prefers-color-scheme: dark), and its :root stays out of the light set.
+P2="$TMP/work/media"
+mkdir -p "$P2/src"
+cat > "$P2/src/index.css" <<'EOF'
+:root {
+    --bg: #ffffff;
+	--fg: #111111;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+  }
+}
+EOF
+run_in "$PROJ" "$TOK" "$P2" --format json
+json_is "dark mode from @media (prefers-color-scheme: dark) is read" 'd["darkModeVariables"] == "--bg: #000000;"'
+json_is "the dark :root inside @media stays out of cssVariables" 'd["cssVariables"] == "--bg: #ffffff;\n--fg: #111111;"'
+json_is "json strips leading spaces and tabs from each variable" 'all(not l[:1].isspace() for l in d["cssVariables"].split("\n"))'
+json_is "no Tailwind config and no fonts link: those are null" 'd["tailwindFonts"] is None and d["tailwindConfig"] is None and d["googleFontsUrl"] is None'
+# The Google Fonts link is read from public/index.html when index.html has none.
+P3="$TMP/work/html"
+mkdir -p "$P3/public"
+printf '<html></html>\n' > "$P3/index.html"
+printf '<link href="https://fonts.googleapis.com/css2?family=Public+Font" rel="stylesheet">\n' > "$P3/public/index.html"
+run_in "$PROJ" "$TOK" "$P3"
+check "the fonts link is read from public/index.html when index.html has none" 0 'family=Public\+Font'
+# --format json with no jq on PATH.
+NOJQ="$TMP/nojq"
+mkdir -p "$NOJQ"
+for tool in bash env sed grep head tr cat awk dirname basename; do
+  src="$(command -v "$tool" || true)"
+  [[ -n "$src" ]] && ln -s "$src" "$NOJQ/$tool"
+done
+RC=0
+OUT="$(cd "$PROJ" && env -i PATH="$NOJQ" HOME="$HOME_DIR" "$TOK" "$FE" --format json 2>"$TMP/err")" || RC=$?
+ERR="$(cat "$TMP/err")"
+check "--format json with no jq exits 1 and says it needs jq" 1 "" 'needs jq'
+[[ -z "$OUT" ]] && ok "--format json with no jq prints nothing on stdout" || bad "--format json with no jq prints nothing on stdout" "$OUT"
 
 echo "figma reaches its agent through the plugin agent type, and nothing points at ~/.claude/agents"
 grep -Fq 'subagent_type: "ui-design:figma-ux-expert"' "$SKILLS/figma/SKILL.md" && ok "figma starts subagent_type ui-design:figma-ux-expert" || bad "figma starts subagent_type ui-design:figma-ux-expert" "line not found in figma/SKILL.md"
