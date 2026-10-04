@@ -12,6 +12,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 - Plugin consolidation design (`docs/superpowers/specs/2026-10-03-plugin-consolidation-design.md`, epic #156): one plugin per workflow, no bare skill copies, and the four standalone skill repos archived.
 - `claudeception/examples/` and `claudeception/resources/`, brought in from the standalone repo ahead of archiving it (#157).
 - **`statusline` plugin 1.0.0 (#158).** One install replaces `context-bar`, `custom-statusline` and `statusline-creator`, with three skills: `install` (was `install-statusline`), `create` (was `statusline-creator`) and `context-bar`. `install` and `create` no longer overwrite a statusline script they did not write: each script they write carries `# managed-by: statusline-plugin` on line 2, anything else is left alone (exit 3) unless `--force`, and every replaced file is backed up first. A `settings.json` that is not one JSON object stops the install before anything is written. `context-bar` finds the current session's transcript instead of one hardcoded project's. Security fixes in the shipped statuslines: a private per-directory git cache instead of a shared `/tmp` file, control characters stripped from printed names, constant printf formats, and git run with `core.fsmonitor` off. New CI job `statusline-tests` runs the suite on Ubuntu (bash 5) and macOS (bash 3.2).
+- **`review` plugin 1.0.0 (#159).** One install replaces `deep-review` and `adversarial-review`, with two skills, `deep` (was `deep-review`) and `adversarial` (was `adversarial-review`), invoked as `/review:deep` and `/review:adversarial`. The three agents are `review:bug-hunter`, `review:convention-reviewer` and `review:cross-examiner` (were `adversarial-bug-hunter`, `adversarial-convention-reviewer` and `adversarial-cross-examiner`). Every command in both skills spells out its script path, because the Bash tool keeps no shell variables between calls and the old `$SCRIPTS`, `$AR_SCRIPTS`, `$ADV_REVIEW`, `$AUDIT` and `$RUN_DIR` reads were empty. `test_skill_paths.py` fails when a fenced block reads a variable it did not set. Round records accept the skill values `deep` and `adversarial`, and still accept `deep-review` and `adversarial-review` for records already on PRs. A `review-tests` CI job runs the moved suite.
 
 ### Changed
 
@@ -20,6 +21,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 ### Deprecated
 
 - The `context-bar`, `custom-statusline` and `statusline-creator` plugins. Their marketplace entries stay one release, marked deprecated, and point at `statusline:install`, `statusline:create` and `statusline:context-bar`. They are removed in the next release (#158).
+- The `deep-review` and `adversarial-review` plugins. Their marketplace entries stay one release, marked deprecated, and point at `review:deep` and `review:adversarial`. They are removed in the next release (#159). The bare `deep-review/` directory goes with the other bare directories (#167).
 
 ## [3.20.0] - 2026-10-02
 

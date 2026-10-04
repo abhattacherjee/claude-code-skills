@@ -16,4 +16,8 @@ All notable changes to the **review** plugin are documented here.
 - `audit_record.py` accepts the skill values `adversarial` and `deep`, and still accepts `adversarial-review` and `deep-review` for records already on PRs. New runs write the new values.
 - The local report file is still `<branch>.adversarial-review.md`, so existing `.gitignore` entries still match.
 
+### Deprecated
+
+- The `deep-review` and `adversarial-review` plugins. They stay published for one more release, marked deprecated in the marketplace. Install `review`, then uninstall both, so the old names cannot win a plain-language request.
+
 Per-skill history before the merge is in `skills/deep/CHANGELOG.md` and `skills/adversarial/CHANGELOG.md`.
