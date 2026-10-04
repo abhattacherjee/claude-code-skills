@@ -330,13 +330,10 @@ echo "the skills reach their agents as plugin agent types, and nothing points at
 grep -Fq 'subagent_type: "context:content-distiller"' "$SKILLS/shield/SKILL.md" && ok "shield starts subagent_type context:content-distiller" || bad "shield starts subagent_type context:content-distiller" "line not found in shield/SKILL.md"
 grep -Fq 'subagent_type="context:conversation-summarizer"' "$SKILLS/search/SKILL.md" && ok "search starts subagent_type context:conversation-summarizer" || bad "search starts subagent_type context:conversation-summarizer" "line not found in search/SKILL.md"
 grep -Fq 'subagent_type: "general-purpose"' "$SKILLS/shield/SKILL.md" && bad "shield no longer starts a general-purpose agent for the distiller" "found subagent_type general-purpose" || ok "shield no longer starts a general-purpose agent for the distiller"
-for f in "$SKILLS/shield/SKILL.md" "$SKILLS/search/SKILL.md" "$AGENTS/content-distiller.md" "$AGENTS/conversation-summarizer.md" "$PLUGIN/README.md"; do
+# (The README may say where the old loose copies lived, so it is not checked here.)
+for f in "$SKILLS/shield/SKILL.md" "$SKILLS/search/SKILL.md" "$AGENTS/content-distiller.md" "$AGENTS/conversation-summarizer.md"; do
   if grep -Fq '~/.claude/agents' "$f"; then
-    # The README may say where the old loose copies lived; the skills and agents may not.
-    case "$f" in
-      */README.md) ok "README names ~/.claude/agents only to say the old copies go" ;;
-      *) bad "$(basename "$(dirname "$f")")/$(basename "$f") does not mention ~/.claude/agents" "$(grep -Fn '~/.claude/agents' "$f" | head -2)" ;;
-    esac
+    bad "$(basename "$(dirname "$f")")/$(basename "$f") does not mention ~/.claude/agents" "$(grep -Fn '~/.claude/agents' "$f" | head -2)"
   else
     ok "$(basename "$(dirname "$f")")/$(basename "$f") does not mention ~/.claude/agents"
   fi
@@ -347,6 +344,16 @@ for a in content-distiller conversation-summarizer; do
 done
 # The skills must not carry an agents/ directory of their own: agents live at the plugin root.
 [[ ! -e "$SKILLS/shield/agents" ]] && ok "shield has no agents/ directory (agents live at the plugin root)" || bad "shield has no agents/ directory" "skills/shield/agents exists"
+
+echo "the README lists every manage-manifest.sh command"
+# The README's Scripts table is the only place a user sees the full command list, so a command the
+# script gained or the README forgot shows up here.
+help_cmds="$("$SHIELD/manage-manifest.sh" --help | sed -n '/^Commands:/,/^Options:/p' | grep -Eo '^  [a-z][a-z-]+' | tr -d ' ')"
+readme_row="$(grep -F 'manage-manifest.sh' "$PLUGIN/README.md" | head -1)"
+[[ -n "$help_cmds" && -n "$readme_row" ]] || bad "found the command list and the README row" "help: '$help_cmds' row: '$readme_row'"
+for c in $help_cmds; do
+  printf '%s' "$readme_row" | grep -Fq "$c" && ok "README row names manage-manifest.sh $c" || bad "README row names manage-manifest.sh $c" "row: $readme_row"
+done
 
 echo "search/SKILL.md date example names the right day"
 # "last Tuesday" must be given as --after <that Tuesday> --before <the next day>.

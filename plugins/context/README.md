@@ -59,7 +59,7 @@ Each skill's commands run its own scripts through `${CLAUDE_SKILL_DIR}`, so they
 
 | Skill | Script | Purpose |
 |---|---|---|
-| `shield` | `manage-manifest.sh create\|status\|next-batch\|mark-done\|summaries` | Creates and tracks the manifest of sources for a run. |
+| `shield` | `manage-manifest.sh create\|status\|next-batch\|mark-done\|reset\|summaries` | Creates and tracks the manifest of sources for a run. |
 | `shield` | `visualize.sh <phase>` | Animated progress for each workflow phase (`SPEED=instant` skips the delay). |
 | `search` | `search-conversations.sh list\|search\|show\|stats [--json]` | Searches `~/.claude/projects/`. |
 | `search` | `validate-skill.sh <skill-dir>` | Same validator as the repo root. |
