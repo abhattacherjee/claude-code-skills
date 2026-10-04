@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # test-discovery-guards.sh — Regression harness for the discovery scripts'
-# glob/existence guards. Both scripts are covered: spec-creator's
-# discover-conventions.sh and spec-review's discover-project-architecture.sh.
+# glob/existence guards. Both scripts are covered: the spec plugin's
+# create/scripts/discover-conventions.sh and review/scripts/discover-project-architecture.sh
+# (were spec-creator's and spec-review's; they now live in plugins/spec).
 #
 # Each script under test gets its own fixtures + assertions section below.
 # `assert_eq` records a PASS/FAIL line and tracks a running failure count;
@@ -14,8 +15,8 @@ set -euo pipefail
 #   DISCOVER_CONVENTIONS_SCRIPT=/tmp/pre.sh ./test-discovery-guards.sh   # point at a different script build
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISCOVER_CONVENTIONS_SCRIPT="${DISCOVER_CONVENTIONS_SCRIPT:-$REPO_ROOT/spec-creator/scripts/discover-conventions.sh}"
-DISCOVER_ARCHITECTURE_SCRIPT="${DISCOVER_ARCHITECTURE_SCRIPT:-$REPO_ROOT/spec-review/scripts/discover-project-architecture.sh}"
+DISCOVER_CONVENTIONS_SCRIPT="${DISCOVER_CONVENTIONS_SCRIPT:-$REPO_ROOT/plugins/spec/skills/create/scripts/discover-conventions.sh}"
+DISCOVER_ARCHITECTURE_SCRIPT="${DISCOVER_ARCHITECTURE_SCRIPT:-$REPO_ROOT/plugins/spec/skills/review/scripts/discover-project-architecture.sh}"
 
 # The harness runs under `set -euo pipefail`, so an unusable script under test
 # would die with rc=127 and no summary — unhelpful for the documented
@@ -244,9 +245,11 @@ assert_eq "node_modules-only project (negative control): security empty" "" "$NO
 # plugin copies
 # ============================================================
 
-# The assertions above exercise the top-level source scripts, but the
-# plugins/** copies are what actually ship to installers. A guard fix that
-# never reached the plugin copy is a fix nobody receives.
+# The assertions above exercise the copies in plugins/spec, which are what ships.
+# The deprecated spec-creator and spec-review plugins are still published for one
+# more release, each from a bare skill dir plus a plugins/ copy. Keep those two
+# pairs identical, so a guard fix never reaches only one of them. Remove this loop
+# when #167 deletes the old dirs.
 for _rel in spec-review/scripts/discover-project-architecture.sh \
             spec-creator/scripts/discover-conventions.sh; do
     _skill="${_rel%%/*}"
