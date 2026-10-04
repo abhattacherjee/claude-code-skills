@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -eu
 
+# Read files and names as bytes. In a UTF-8 locale GNU grep treats a file with one
+# invalid byte as binary and prints "binary file matches" instead of its lines, so
+# headings, endpoints or packages would silently vanish. (macOS grep does not do this.)
+export LC_ALL=C
+
 # extract-spec-sections.sh — Parses a story spec into structured sections
 # for parallel agent analysis.
 #

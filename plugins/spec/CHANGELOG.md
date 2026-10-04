@@ -25,6 +25,7 @@ All notable changes to the **spec** plugin are documented here.
 - `discover-conventions.sh` takes only all-digit epic names and checks a story number before doing arithmetic on it. It sorts under `LC_ALL=C`, so one invalid byte no longer empties `commonSections`. It finds the sample spec with `find -exec ls -t {} +` instead of `xargs`.
 - `discover-project-architecture.sh` read `find` output word by word and printed it with `printf '%b'`, so a directory name with a space or a backslash sequence was split or cut. It now reads whole lines and prints them as they are.
 - `extract-spec-sections.sh` text mode dropped endpoints: the first grep that found nothing ended the group under `set -e`. Text and `--json` now agree.
+- The three discovery and extract scripts read files as bytes (`LC_ALL=C`). In a UTF-8 locale on Linux, GNU grep calls a file with one invalid byte "binary" and prints no lines, so headings, criteria and endpoints silently vanished. macOS grep does not do this.
 - `spec:review` quotes its `"<SPEC_FILE>"` placeholder, so a spec path with a space works.
 - `extract-spec-sections.sh` and `discover-conventions.sh` stop with an error on an unreadable spec or epic directory, instead of reporting false gaps or `nextStory: 1`.
 

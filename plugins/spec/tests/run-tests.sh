@@ -256,11 +256,17 @@ chmod 644 "$PROJ/locked.md"
 LOCALE_BAD="$TMP/localebad"
 mkdir -p "$LOCALE_BAD/specs/stories/epic-1"
 printf '# T\n\n## caf\303\251 \377 bad\n' > "$LOCALE_BAD/specs/stories/epic-1/story-1.1-a.md"
+# A spec with one invalid byte must still be read in full under a UTF-8 locale (GNU grep
+# called such a file "binary"). Same for extract-spec-sections.sh and its endpoints.
+printf '# Caf\303\251 title\n\n## Acceptance Criteria\n- [ ] one \377\n- [x] two\n\nPOST /api/x here\n' > "$LOCALE_BAD/bad.md"
 run_in "$LOCALE_BAD" "$CREATE/discover-conventions.sh" . --json
 json_ok "a non-UTF-8 byte in a heading: --json parses (default locale)"
 json_is "a non-UTF-8 byte in a heading: the valid text is kept, the bad byte dropped" 'any(s["section"].startswith("caf\u00e9") for s in d["commonSections"])'
 UTF8_LOCALE="$(locale -a 2>/dev/null | grep -i 'utf-\{0,1\}8' | head -1 || true)"
 if [[ -n "$UTF8_LOCALE" ]]; then
+  run_in "$LOCALE_BAD" env LC_ALL="$UTF8_LOCALE" "$CREATE/discover-conventions.sh" . --json
+  run_in "$LOCALE_BAD" env LC_ALL="$UTF8_LOCALE" "$REVIEW/extract-spec-sections.sh" bad.md --json
+  json_is "a spec with an invalid byte is read in full under $UTF8_LOCALE (criteria and endpoint counted)" 'd["criteriaCounts"] == "total=2 checked=1 unchecked=1" and d["referencedEndpointCount"] == 1 and d["title"].startswith("Caf\u00e9")'
   run_in "$LOCALE_BAD" env LC_ALL="$UTF8_LOCALE" "$CREATE/discover-conventions.sh" . --json
   json_ok "a non-UTF-8 byte in a heading: --json parses under $UTF8_LOCALE"
   json_is "a non-UTF-8 byte in a heading: text kept under $UTF8_LOCALE" 'any(s["section"].startswith("caf\u00e9") for s in d["commonSections"])'

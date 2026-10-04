@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -eu
 
+# Read files and names as bytes. In a UTF-8 locale GNU grep treats a file with one
+# invalid byte as binary and prints "binary file matches" instead of its lines, so
+# headings, endpoints or packages would silently vanish. (macOS grep does not do this.)
+export LC_ALL=C
+
 # discover-conventions.sh — Scans a project for story spec conventions.
 # Detects spec directory structure, common sections, naming patterns,
 # epic numbering, and outputs a project-aware template context.
@@ -193,7 +198,9 @@ extract_common_sections() {
     # Sample up to 5 specs and find ## headings
     find "$spec_dir" -name "*.md" -not -name "README*" -not -name "tracking*" 2>/dev/null | \
         head -5 | while read -r f; do
-        grep '^## ' "$f" 2>/dev/null | sed 's/^## //'
+        # Byte mode: GNU grep in a UTF-8 locale calls a file with one invalid byte "binary"
+        # and prints "binary file matches" instead of its headings. -a reads it as text.
+        LC_ALL=C grep -a '^## ' "$f" 2>/dev/null | LC_ALL=C sed 's/^## //'
     done | LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn | head -20
 }
 

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -eu
 
+# Read files and names as bytes. In a UTF-8 locale GNU grep treats a file with one
+# invalid byte as binary and prints "binary file matches" instead of its lines, so
+# headings, endpoints or packages would silently vanish. (macOS grep does not do this.)
+export LC_ALL=C
+
 # discover-project-architecture.sh — Scans a project to detect architecture layers,
 # key services, test frameworks, API patterns, and data flow for spec review.
 #
