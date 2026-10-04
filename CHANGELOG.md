@@ -26,6 +26,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 - `context-shield` 1.3.1 and `figma-ui-designer` 3.2.1: the related-skill pointers say `spec:review` (were `spec-review`). The `figma-ui-designer` plugin manifest and marketplace entry now say 3.2.1; they were still at 3.1.0.
 - `scripts/test-sync-hygiene.sh` tests `plugins/skill-kit/skills/publish/scripts/` and no longer compares the scripts with a copy at `~/.claude/skills/skill-publishing`. That comparison failed on any machine whose live copy was older than the repo (#105). The `github-board` structure test also checks the `skill-kit` copies of the files it already checked.
 - `spec` 1.0.1: the See Also lines name `skill-kit:author` (was `skill-authoring`). `spec:create` is at 1.0.1.
+- **`context-shield` 1.3.2 (#105).** The published plugin is rebuilt from its source with `prepare-plugin.sh`, so `plugins/context-shield/` now matches `context-shield/`: the README follows the current `SKILL.md` and the per-skill `CHANGELOG.md` ships.
 
 ### Deprecated
 
