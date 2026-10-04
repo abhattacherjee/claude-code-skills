@@ -6,7 +6,7 @@ All notable changes to the **publish** skill (was `skill-publishing`) are docume
 
 ### Changed
 
-- Moved into the `skill-kit` plugin as `skill-kit:publish` (#161). Same scripts as `skill-publishing` 4.5.0. The old name still matches as a trigger phrase. `plugins/skill-kit/skills/publish/` is now the only source of these scripts in the repo (#105).
+- Moved into the `skill-kit` plugin as `skill-kit:publish` (#161). Same scripts as `skill-publishing` 4.5.0. The old name still matches as a trigger phrase. `plugins/skill-kit/skills/publish/` is the source of truth for the publishing scripts. The deprecated `plugins/skill-publishing/` copy is frozen until #167 and is not tested. The old loose `~/.claude/skills/skill-publishing` clone is removed at the post-merge cut-over (#105).
 - Every command in `SKILL.md` calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<NAME>` placeholders for values known only at run time. The old text used `$SCRIPTS` and `~/.claude/skills/skill-publishing/scripts/`, which only worked from a loose copy.
 - `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh`.
 

@@ -99,9 +99,11 @@ set -euo pipefail
 # CONTRIBUTING.md, the PR template, and the workflow.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# plugins/skill-kit/skills/publish/ is the only copy of these scripts and of the
-# skill around them. There is no second copy to compare with, so this suite tests
-# the files that ship.
+# plugins/skill-kit/skills/publish/ is the source of truth for these scripts and
+# the skill around them, so this suite tests the files that ship. The deprecated
+# plugins/skill-publishing/ copy is frozen until #167 and is not tested. The old
+# loose ~/.claude/skills/skill-publishing clone is removed at the post-merge
+# cut-over.
 SYNC_SCRIPT="${SYNC_SCRIPT:-$REPO_ROOT/plugins/skill-kit/skills/publish/scripts/sync-monorepo.sh}"
 
 # The harness runs under `set -euo pipefail`, so an unusable script under test
@@ -151,7 +153,6 @@ if [[ ! -x "$RELEASE_SCRIPT" ]]; then
 fi
 
 FAIL_COUNT=0
-SKIPPED_COUNT=0
 
 SCRATCH_DIR="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH_DIR"' EXIT
@@ -5619,17 +5620,9 @@ assert_contains "…naming the field, and suggesting > instead" \
 assert_not_contains "…and a folded (>) scalar is NOT announced, since folding is what it asked for" \
     "block scalar of" "$SCALAR_FOLDED_STDERR"
 
-# The summary reports skips explicitly: without the count, a run where an
-# assertion was skipped and a run where it passed both print the same
-# "All assertions passed." line, so a check that silently stopped running looks
-# exactly like a check that is green.
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
-    if [[ "$SKIPPED_COUNT" -eq 0 ]]; then
-        echo "All assertions passed."
-    else
-        echo "All assertions passed ($SKIPPED_COUNT skipped)."
-    fi
+    echo "All assertions passed."
     exit 0
 else
     echo "$FAIL_COUNT assertion(s) failed."

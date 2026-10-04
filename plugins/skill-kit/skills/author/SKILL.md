@@ -134,9 +134,9 @@ scripts; use `set -eu` (without pipefail) for **context-gathering** scripts.
 ````markdown
 ## Quick Check
 ```bash
-./scripts/validate.sh /tmp/data.json           # Report only
-./scripts/validate.sh /tmp/data.json --fix     # Auto-remediate
-./scripts/validate.sh --help                   # Usage
+<SKILL_SCRIPTS>/validate.sh /tmp/data.json           # Report only
+<SKILL_SCRIPTS>/validate.sh /tmp/data.json --fix     # Auto-remediate
+<SKILL_SCRIPTS>/validate.sh --help                   # Usage
 ```
 ````
 

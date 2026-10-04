@@ -7,7 +7,7 @@ All notable changes to the **skill-kit** plugin are documented here.
 ### Added
 
 - First release (#161). It merges the `skill-authoring` plugin, the `skill-publishing` plugin and the bare `claudeception` skill. Three skills under short names: `author` (was `skill-authoring`), `publish` (was `skill-publishing`) and `extract` (was `claudeception`). Invoke them as `/skill-kit:author`, `/skill-kit:publish` and `/skill-kit:extract`. The old names still match as trigger phrases.
-- `plugins/skill-kit/skills/publish/` is now the only source of the publishing scripts in the repo, so `scripts/test-sync-hygiene.sh` tests the shipped files and no longer compares them with a copy outside the repo (#105).
+- `plugins/skill-kit/skills/publish/` is the source of truth for the publishing scripts. The deprecated `plugins/skill-publishing/` copy is frozen until #167 and is not tested. The old loose `~/.claude/skills/skill-publishing` clone is removed at the post-merge cut-over. `scripts/test-sync-hygiene.sh` tests the shipped files and no longer compares them with a copy outside the repo (#105).
 - Smoke tests for the scripts, in `tests/`, and a CI job (`skill-kit-tests`) that runs them.
 
 ### Changed

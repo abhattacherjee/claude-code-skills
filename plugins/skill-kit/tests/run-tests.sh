@@ -220,6 +220,24 @@ run_in "$PROJ" "$PUBLISH/prepare-skill-repo.sh" "$TMP/no-such-dir"
 check "prepare-skill-repo: missing skill directory exits non-zero with a message" nonzero "" 'skill directory not found'
 run_in "$PROJ" "$PUBLISH/sync-individual-repos.sh" --no-such-option
 check "sync-individual-repos: unknown option exits non-zero" nonzero "" 'Unknown option'
+# Happy paths. Both scripts read their templates from ../references and skip a missing template
+# silently, so a wrong path would drop these files with no error: assert they are produced.
+RS="$TMP/repo-skill"
+mkdir -p "$RS"
+cp "$FX/tiny/SKILL.md" "$FX/tiny/CHANGELOG.md" "$RS/"
+run_in "$PROJ" "$PUBLISH/prepare-skill-repo.sh" --github-user tester "$RS"
+check "prepare-skill-repo: runs on the fixture skill, exit 0" 0
+for f in CONTRIBUTING.md .github/PULL_REQUEST_TEMPLATE.md .github/workflows/validate-skill.yml; do
+  [[ -s "$RS/$f" ]] && ok "prepare-skill-repo writes $f from the templates" || bad "prepare-skill-repo writes $f from the templates" "missing or empty (templates not found?)"
+done
+SH="$TMP/skills-home"
+mkdir -p "$SH/tiny/.git"
+cp "$FX/tiny/SKILL.md" "$FX/tiny/CHANGELOG.md" "$SH/tiny/"
+run_in "$PROJ" env SKILLS_HOME="$SH" "$PUBLISH/sync-individual-repos.sh" --dry-run --github-user tester tiny
+check "sync-individual-repos: --dry-run on the fixture skill, exit 0" 0
+for f in CONTRIBUTING.md .github/PULL_REQUEST_TEMPLATE.md .github/workflows/validate-skill.yml; do
+  printf '%s' "$OUT" | grep -Fq "WOULD UPDATE  $f" && ok "sync-individual-repos announces $f from the templates" || bad "sync-individual-repos announces $f from the templates" "not announced (templates not found?)"
+done
 run_in "$PROJ" "$PUBLISH/apply-branch-protection.sh" --no-such-option
 check "apply-branch-protection: unknown option exits non-zero" nonzero "" 'Unknown option'
 for name in prepare-plugin validate-plugin validate-pre-sync sync-monorepo release-monorepo install-plugin prepare-skill-repo sync-individual-repos apply-branch-protection; do
@@ -254,7 +272,7 @@ EOF
   done <<< "$names"
   # extract's SKILL.md names no script today; the others must name at least one.
   if [[ "$skill" == extract ]]; then
-    ok "extract SKILL.md: $n script command(s) checked"
+    [[ "$n" -eq 0 ]] && ok "extract SKILL.md names no script" || bad "extract SKILL.md names $n script command(s)" "extract now names a script, so add it to the extractor check (the command-run loop above ran it, but this branch no longer applies)"
   else
     [[ "$n" -ge 1 ]] && ok "$skill SKILL.md: found $n script command(s) to run" || bad "$skill SKILL.md: found no script commands to run" "the extractor matched nothing"
   fi

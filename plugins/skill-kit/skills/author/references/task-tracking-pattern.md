@@ -64,7 +64,7 @@ Add a "Progress Tracking (MANDATORY)" section:
 
 Before starting, create the task checklist:
 ```bash
-./scripts/task-manifest.sh full-audit
+<SKILL_SCRIPTS>/task-manifest.sh full-audit
 ```
 
 | # | subject | activeForm |

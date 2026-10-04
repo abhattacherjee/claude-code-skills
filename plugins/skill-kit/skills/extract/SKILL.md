@@ -52,25 +52,30 @@ Before extracting, verify the knowledge meets these criteria:
 **Goal:** Find related skills before creating. Decide: update or create new.
 
 ```sh
-# Skill directories (project-first, then user-level)
-SKILL_DIRS=(
-  ".claude/skills"
-  "$HOME/.claude/skills"
-  "$HOME/.codex/skills"
+# Needs ripgrep. Stop if it is missing: an empty result would read as "nothing related".
+command -v rg >/dev/null || { echo "Stop: ripgrep (rg) is not installed. Install it, then re-run." >&2; exit 1; }
+
+# Skill directories (project-first, then user-level, then plugin-installed).
+# Only directories that exist are searched; other errors still print.
+SKILL_DIRS=()
+for d in ".claude/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" \
+         "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces"; do
+  [ -d "$d" ] && SKILL_DIRS+=("$d")
   # Add other tool paths as needed
-)
+done
+[ "${#SKILL_DIRS[@]}" -gt 0 ] || { echo "Stop: no skill directories found." >&2; exit 1; }
 
 # List all skills
-rg --files -g 'SKILL.md' "${SKILL_DIRS[@]}" 2>/dev/null
+rg --files -g 'SKILL.md' "${SKILL_DIRS[@]}"
 
 # Search by keywords
-rg -i "keyword1|keyword2" "${SKILL_DIRS[@]}" 2>/dev/null
+rg -i "keyword1|keyword2" "${SKILL_DIRS[@]}"
 
 # Search by exact error message
-rg -F "exact error message" "${SKILL_DIRS[@]}" 2>/dev/null
+rg -F "exact error message" "${SKILL_DIRS[@]}"
 
 # Search by context markers (files, functions, config keys)
-rg -i "getServerSideProps|next.config.js|prisma.schema" "${SKILL_DIRS[@]}" 2>/dev/null
+rg -i "getServerSideProps|next.config.js|prisma.schema" "${SKILL_DIRS[@]}"
 ```
 
 | Found                                            | Action                                                   |

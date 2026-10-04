@@ -34,8 +34,8 @@ are synced as standalone directories. Both live in the `claude-code-skills` mono
 
 # --- Plugin (manual assemble + validate) ---
 "${CLAUDE_SKILL_DIR}/scripts/prepare-plugin.sh" "<MANIFEST_PATH>"      # Build plugin
-"${CLAUDE_SKILL_DIR}/scripts/validate-plugin.sh" ./build/plugin-name                # Validate
-"${CLAUDE_SKILL_DIR}/scripts/install-plugin.sh" ./build/plugin-name                 # Install locally
+"${CLAUDE_SKILL_DIR}/scripts/validate-plugin.sh" ./build/<PLUGIN_NAME>                # Validate
+"${CLAUDE_SKILL_DIR}/scripts/install-plugin.sh" ./build/<PLUGIN_NAME>                 # Install locally
 
 # --- Individual repo (first-time publish) ---
 "${CLAUDE_SKILL_DIR}/scripts/prepare-skill-repo.sh" "<SKILL_DIR>"
@@ -89,6 +89,7 @@ For the skill being published, detect which targets it's already published to:
 SKILL_DIR="<SKILL_DIR>"
 SKILL_NAME="<name-from-frontmatter>"
 GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null)
+if [[ -z "$GITHUB_USER" ]]; then echo "Stop: gh is not logged in. Run 'gh auth login' first." >&2; exit 1; fi
 MONOREPO_DIR="<MONOREPO_DIR>"
 
 # Has plugin manifest? (determines default target)
