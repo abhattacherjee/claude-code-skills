@@ -136,7 +136,10 @@ def check_plugin(a, plugin_dir):
 
 
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help"):
+    if argv and argv[0] in ("-h", "--help"):
+        print("usage: check-skill-commands.py <plugin-dir>...")
+        return 0
+    if not argv:
         sys.stderr.write("usage: check-skill-commands.py <plugin-dir>...\n")
         return 2
     dirs = []

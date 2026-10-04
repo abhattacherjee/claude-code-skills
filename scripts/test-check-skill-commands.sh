@@ -208,6 +208,7 @@ expect "one bad plugin among several exits 1" 1 'multi-bad/skills/s/SKILL.md:4' 
 
 # --- usage errors ---
 expect "no arguments exits 2" 2 'usage'
+expect "--help exits 0 and prints usage" 0 '^usage: ' --help
 expect "missing directory exits 2" 2 'not a directory' "$TMP/does-not-exist"
 expect "a file instead of a directory exits 2" 2 'not a directory' "$TMP/clean/skills/s/SKILL.md"
 expect "a missing directory after a good one still exits 2" 2 'not a directory' "$TMP/clean" "$TMP/does-not-exist"
