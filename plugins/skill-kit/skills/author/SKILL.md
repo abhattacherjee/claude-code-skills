@@ -7,6 +7,10 @@ metadata:
 
 # Skill Authoring
 
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command works from the project directory. In `references/` files, which get no such replacement, `<SCRIPTS_DIR>` stands for `${CLAUDE_SKILL_DIR}/scripts`. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
+
+**When you write a new skill, do the same.** In its SKILL.md call each script as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. A bare `./scripts/<name>.sh` resolves against the user's project, not the skill, so it fails. A command may not read a shell variable that an earlier block set (each block may run in a fresh shell). The templates in `references/skill-templates.md` write that prefix as `<SKILL_SCRIPTS>`.
+
 ## Core Principles
 
 1. **Decompose into agents** — break complex skills into an orchestrator + specialized
@@ -116,7 +120,7 @@ Extract into `scripts/` when ANY apply:
 **Pitfall: `set -e` interacts badly with bash arithmetic and pipes.**
 Common triggers: (1) `find | sort | head -N` — `head` closes the pipe causing SIGPIPE
 (exit 141) with `pipefail`, (2) `grep -c` returns exit 1 when count is 0,
-(3) `echo "$var" | while read` in subshells, (4) **`((var++))` when var=0** — `((0))`
+(3) a `while read` loop fed by a pipe (it runs in a subshell), (4) **`((var++))` when var=0** — `((0))`
 evaluates to false, causing `set -e` to terminate the script. Fix: use
 `VAR=$((VAR + 1))` instead of `((VAR++))`. Use `set -euo pipefail` for **validation**
 scripts; use `set -eu` (without pipefail) for **context-gathering** scripts.
@@ -301,7 +305,7 @@ the full script template with examples.
 ### Generating a Task Manifest for a New Skill
 
 ```bash
-~/.claude/skills/skill-authoring/scripts/generate-task-manifest.sh \
+"${CLAUDE_SKILL_DIR}/scripts/generate-task-manifest.sh" \
   --skill-dir /path/to/my-skill \
   --workflows "full-audit:5,quick-check:2"
 ```

@@ -10,6 +10,11 @@ All notable changes to the **author** skill (was `skill-authoring`) are document
 - Cross-references name the new skills (`skill-kit:extract`, `skill-kit:publish`). The task-manifest command runs through `${CLAUDE_SKILL_DIR}`.
 - `scripts/validate-skill.sh` is now a copy of the repo-root `scripts/validate-skill.sh`.
 
+### Fixed
+
+- `references/skill-templates.md`: the two skill templates sat in a three-backtick `markdown` fence that held three-backtick `bash` fences, so the first inner fence closed the template early and the rest rendered as plain text. They are now four-backtick fences. The templates write script calls as `<SKILL_SCRIPTS>/<name>.sh`, and SKILL.md says what to write in its place (`"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`). They used `./scripts/<name>.sh`, which fails from the user's project.
+- `references/quality-checklist.md`: the cross-reference check read `$f` through a `while read f` at the end of a pipe. It is now a `for` loop.
+
 ## History before 1.0.0 (as `skill-authoring`)
 
 ### skill-authoring 2.6.1 - 2026-10-02

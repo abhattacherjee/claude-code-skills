@@ -10,6 +10,11 @@ All notable changes to the **publish** skill (was `skill-publishing`) are docume
 - Every command in `SKILL.md` calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<NAME>` placeholders for values known only at run time. The old text used `$SCRIPTS` and `~/.claude/skills/skill-publishing/scripts/`, which only worked from a loose copy.
 - `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh`.
 
+### Fixed
+
+- Step 7 told you to delete `~/.claude/skills/skill-publishing/build/`, a directory nothing writes. `prepare-plugin.sh` writes `./build/<plugin-name>` relative to where you ran it, and the auto-build in `sync-monorepo.sh` uses a temp dir. The step now names `./build/<plugin-name>` and says it applies to a manual Workflow E run.
+- Workflow E's consumer install ran `/tmp/ccs/scripts/install-plugin.sh`, a copy that exists only after the monorepo has been synced once. It now runs this skill's own `install-plugin.sh`.
+
 ## History before 1.0.0 (as `skill-publishing`)
 
 ### skill-publishing 4.5.0 - 2026-10-02

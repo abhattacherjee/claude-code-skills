@@ -7,7 +7,7 @@ workflows (3+ phases or >2 minutes).
 
 Every skill with tracking should include `scripts/task-manifest.sh`:
 
-```bash
+```shell-script
 #!/usr/bin/env bash
 # task-manifest.sh — Emit task definitions for each workflow
 # Usage: ./scripts/task-manifest.sh <workflow-name>
@@ -157,7 +157,7 @@ Gate at task 4: validation failure blocks embedding generation.
 Use the generator script:
 
 ```bash
-~/.claude/skills/skill-authoring/scripts/generate-task-manifest.sh \
+<SCRIPTS_DIR>/generate-task-manifest.sh \
   --skill-dir /path/to/my-skill \
   --workflows "full-audit:5,quick-check:2"
 ```

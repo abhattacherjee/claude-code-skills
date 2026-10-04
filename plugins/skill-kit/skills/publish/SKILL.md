@@ -7,6 +7,8 @@ metadata:
 
 # Publish Skills & Plugins
 
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command works from the project directory. Values you only know at run time are `<NAME>` placeholders: write the real value in their place, for example `<MONOREPO_DIR>` (the monorepo checkout), `<SKILL_DIR>`, `<SKILL_NAME>`, `<GITHUB_USER>` and `<MANIFEST_PATH>`.
+
 **Plugin-first publishing** for Claude Code skills. Every skill with a `plugin-manifest.json`
 is automatically assembled and synced as an installable plugin. Bare skills (without manifests)
 are synced as standalone directories. Both live in the `claude-code-skills` monorepo.
@@ -14,34 +16,32 @@ are synced as standalone directories. Both live in the `claude-code-skills` mono
 ## Quick Reference
 
 ```bash
-SCRIPTS=~/.claude/skills/skill-publishing/scripts
-
 # --- Monorepo sync (auto-discovers plugins) ---
-$SCRIPTS/validate-pre-sync.sh ~/dev/claude-code-skills        # Pre-sync gate (MANDATORY)
-$SCRIPTS/sync-monorepo.sh --dry-run ~/dev/claude-code-skills   # Preview
-$SCRIPTS/sync-monorepo.sh ~/dev/claude-code-skills             # Sync (auto-builds plugins)
+"${CLAUDE_SKILL_DIR}/scripts/validate-pre-sync.sh" "<MONOREPO_DIR>"        # Pre-sync gate (MANDATORY)
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --dry-run "<MONOREPO_DIR>"   # Preview
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"             # Sync (auto-builds plugins)
 
 # --- Monorepo (add a new skill) ---
-$SCRIPTS/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --add my-new-skill "<MONOREPO_DIR>"
 
 # --- Monorepo (initialize) ---
-$SCRIPTS/sync-monorepo.sh --init ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --init "<MONOREPO_DIR>"
 
 # --- Monorepo release (version tag) ---
-$SCRIPTS/release-monorepo.sh patch ~/dev/claude-code-skills   # Bug fixes
-$SCRIPTS/release-monorepo.sh minor ~/dev/claude-code-skills   # New skill/plugin
-$SCRIPTS/release-monorepo.sh major ~/dev/claude-code-skills   # Breaking change
+"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" patch "<MONOREPO_DIR>"   # Bug fixes
+"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" minor "<MONOREPO_DIR>"   # New skill/plugin
+"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" major "<MONOREPO_DIR>"   # Breaking change
 
 # --- Plugin (manual assemble + validate) ---
-$SCRIPTS/prepare-plugin.sh /path/to/plugin-manifest.json      # Build plugin
-$SCRIPTS/validate-plugin.sh ./build/plugin-name                # Validate
-$SCRIPTS/install-plugin.sh ./build/plugin-name                 # Install locally
+"${CLAUDE_SKILL_DIR}/scripts/prepare-plugin.sh" "<MANIFEST_PATH>"      # Build plugin
+"${CLAUDE_SKILL_DIR}/scripts/validate-plugin.sh" ./build/plugin-name                # Validate
+"${CLAUDE_SKILL_DIR}/scripts/install-plugin.sh" ./build/plugin-name                 # Install locally
 
 # --- Individual repo (first-time publish) ---
-$SCRIPTS/prepare-skill-repo.sh /path/to/skill
+"${CLAUDE_SKILL_DIR}/scripts/prepare-skill-repo.sh" "<SKILL_DIR>"
 
 # --- Individual repos (sync all published) ---
-$SCRIPTS/sync-individual-repos.sh --all --push
+"${CLAUDE_SKILL_DIR}/scripts/sync-individual-repos.sh" --all --push
 ```
 
 ## Architecture
@@ -86,9 +86,10 @@ When invoked (e.g., "publish this skill", "share skill", "sync skills"), start w
 For the skill being published, detect which targets it's already published to:
 
 ```bash
+SKILL_DIR="<SKILL_DIR>"
 SKILL_NAME="<name-from-frontmatter>"
 GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null)
-MONOREPO_DIR="${HOME}/dev/claude-code-skills"
+MONOREPO_DIR="<MONOREPO_DIR>"
 
 # Has plugin manifest? (determines default target)
 HAS_MANIFEST=false
@@ -151,7 +152,7 @@ Use `AskUserQuestion` with `multiSelect: true`. **Default: Plugin is pre-selecte
   `"source": "."` — `"source": "<skill-name>"` resolves to `<skill>/<skill>` and fails.
 
 `sync-monorepo.sh` uses **local-first** precedence when both forms exist for the same skill:
-`$SKILLS_HOME/<name>` wins over an in-repo source directory, and the sync log records a
+`<SKILLS_HOME>/<name>` (default `~/.claude/skills/<name>`) wins over an in-repo source directory, and the sync log records a
 `SKIP (shadowed)` note naming both paths when it dedupes.
 
 **Reversion guard** — local-first is *not* unconditional. A stale local copy left behind after a
@@ -177,7 +178,7 @@ When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and publ
 |--------|--------------------|--------|
 | Plugin | No | Auto-handled by `sync-monorepo.sh` if manifest exists (or manual **Workflow E**) |
 | Plugin | Yes | Auto-rebuilt on next sync if source drifted (or manual **Workflow E**) |
-| Bare skill | No | Run `sync-monorepo.sh --add <name>` then **Workflow B** |
+| Bare skill | No | Run `"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --add <name> "<MONOREPO_DIR>"` then **Workflow B** |
 | Bare skill | Yes | Run **Workflow B** (sync monorepo) |
 | Individual repo | No | Run **Workflow A** (prepare + push) |
 | Individual repo | Yes | Run **Workflow C** (sync individual repo) |
@@ -186,9 +187,9 @@ When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and publ
 
 | Target | Removal Action |
 |--------|---------------|
-| Plugin | `rm -rf $MONOREPO_DIR/plugins/$SKILL_NAME/` then re-sync README + commit + push |
-| Bare skill | `rm -rf $MONOREPO_DIR/$SKILL_NAME/` then re-sync README + commit + push |
-| Individual repo | `gh repo delete $GITHUB_USER/$SKILL_NAME --yes` (confirm with user first!) |
+| Plugin | `rm -rf "<MONOREPO_DIR>/plugins/<SKILL_NAME>/"` then re-sync README + commit + push |
+| Bare skill | `rm -rf "<MONOREPO_DIR>/<SKILL_NAME>/"` then re-sync README + commit + push |
+| Individual repo | `gh repo delete <GITHUB_USER>/<SKILL_NAME> --yes` (confirm with user first!) |
 
 **Always confirm destructive removals** with the user before executing.
 
@@ -197,11 +198,8 @@ When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and publ
 **Before syncing, validate that every skill's CHANGELOG matches its version.** This catches the common failure where SKILL.md version is bumped but CHANGELOG.md is not updated.
 
 ```bash
-SCRIPTS=~/.claude/skills/skill-publishing/scripts
-MONOREPO_DIR="${HOME}/dev/claude-code-skills"
-
 # GATE: Validate all skill CHANGELOGs match their SKILL.md versions
-$SCRIPTS/validate-pre-sync.sh $MONOREPO_DIR
+"${CLAUDE_SKILL_DIR}/scripts/validate-pre-sync.sh" "<MONOREPO_DIR>"
 ```
 
 **If validation fails (exit code 1):** STOP. Do not proceed to sync. Fix each failing skill:
@@ -221,10 +219,10 @@ $SCRIPTS/validate-pre-sync.sh $MONOREPO_DIR
 
 ```bash
 # 1. Sync all skills + auto-build plugins (single command does both)
-$SCRIPTS/sync-monorepo.sh $MONOREPO_DIR
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"
 
 # 2. Commit and push
-cd $MONOREPO_DIR
+cd "<MONOREPO_DIR>"
 git add -A
 CHANGED=$(git diff --cached --stat)
 if [[ -n "$CHANGED" ]]; then
@@ -235,7 +233,7 @@ fi
 
 **Important**: The `prevent-direct-push` hook in some projects blocks `git push origin main` via Claude. If push is blocked, instruct the user to push manually from their terminal:
 ```
-cd ~/dev/claude-code-skills && git push origin main
+cd "<MONOREPO_DIR>" && git push origin main
 ```
 
 ### Step 6: Monorepo Release (MANDATORY)
@@ -247,7 +245,7 @@ cd ~/dev/claude-code-skills && git push origin main
 #   - patch: typo fixes, sync-only updates, no SKILL.md changes
 #   - minor: skill version bumps, new features, new scripts
 #   - major: new skill added, skill removed, breaking structure changes
-$SCRIPTS/release-monorepo.sh <patch|minor|major> $MONOREPO_DIR
+"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" <patch|minor|major> "<MONOREPO_DIR>"
 ```
 
 **Bump level decision:**
@@ -262,7 +260,7 @@ $SCRIPTS/release-monorepo.sh <patch|minor|major> $MONOREPO_DIR
 ### Step 7: Post-Publish
 
 After all targets are processed:
-1. Clean up build artifacts: `rm -rf ~/.claude/skills/skill-publishing/build/`
+1. Clean up build artifacts from a manual Workflow E run: `rm -rf ./build/<plugin-name>` (`prepare-plugin.sh` writes there, relative to where you ran it; the auto-build inside `sync-monorepo.sh` uses a temp dir)
 2. Report summary of what was published/synced/released
 
 **Summary must include:**
@@ -278,7 +276,7 @@ After all targets are processed:
 ### Step 1: Run the Preparation Script
 
 ```bash
-~/.claude/skills/skill-publishing/scripts/prepare-skill-repo.sh /path/to/skill
+"${CLAUDE_SKILL_DIR}/scripts/prepare-skill-repo.sh" "<SKILL_DIR>"
 ```
 
 The script:
@@ -310,7 +308,7 @@ Append to the end of `SKILL.md`:
 ### Step 4: Initialize Git and Push
 
 ```bash
-cd /path/to/skill
+cd "<SKILL_DIR>"
 git init
 git add .gitignore LICENSE CHANGELOG.md README.md SKILL.md scripts/ references/
 git commit -m "Initial public release: <skill-name> v<version>"
@@ -340,7 +338,7 @@ After pushing:
 ### First Time: Initialize the Monorepo
 
 ```bash
-~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --init ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --init "<MONOREPO_DIR>"
 ```
 
 This creates the directory, syncs the default skills (conversation-search, skill-authoring, skill-publishing), generates the root README with a catalog table, and creates + pushes the GitHub repo.
@@ -349,18 +347,18 @@ This creates the directory, syncs the default skills (conversation-search, skill
 
 ```bash
 # Preview changes
-~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --dry-run ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --dry-run "<MONOREPO_DIR>"
 # Sync
-~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"
 # Then commit and push
-cd ~/dev/claude-code-skills
+cd "<MONOREPO_DIR>"
 git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
 ```
 
 ### Adding a New Skill to the Monorepo
 
 ```bash
-~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --add my-new-skill "<MONOREPO_DIR>"
 ```
 
 `--skills a,b` replaces the synced set; `--add` appends. **They are mutually exclusive** — passing both is rejected at parse time with exit 1, rather than one silently winning. Both de-duplicate repeats, but they refuse on **different thresholds**: `--add` refuses if *any* name it contributes is unresolvable; `--skills` refuses only if *all* of them are — so a typo in a `--skills` list still publishes the rest. And **`--skills` rewrites the catalogue to exactly the named subset**: skills left out stay on disk but lose their catalogue row, the published count and their CHANGELOG entry until the next full sync. Prefer `--add` to introduce one skill without disturbing the rest.
@@ -373,13 +371,13 @@ When you update a skill locally and want to push changes to its individual GitHu
 
 ```bash
 # Preview changes to all published repos
-~/.claude/skills/skill-publishing/scripts/sync-individual-repos.sh --dry-run --all
+"${CLAUDE_SKILL_DIR}/scripts/sync-individual-repos.sh" --dry-run --all
 
 # Sync all and auto-push
-~/.claude/skills/skill-publishing/scripts/sync-individual-repos.sh --all --push
+"${CLAUDE_SKILL_DIR}/scripts/sync-individual-repos.sh" --all --push
 
 # Sync a specific skill
-~/.claude/skills/skill-publishing/scripts/sync-individual-repos.sh conversation-search
+"${CLAUDE_SKILL_DIR}/scripts/sync-individual-repos.sh" conversation-search
 ```
 
 ## Workflow D: Monorepo Release (Version Tag)
@@ -388,13 +386,13 @@ After syncing skills to the monorepo and committing, create a versioned release:
 
 ```bash
 # 1. Sync skills first
-~/.claude/skills/skill-publishing/scripts/sync-monorepo.sh ~/dev/claude-code-skills
-cd ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"
+cd "<MONOREPO_DIR>"
 git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))"
 git push
 
 # 2. Create a versioned release
-~/.claude/skills/skill-publishing/scripts/release-monorepo.sh minor ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" minor "<MONOREPO_DIR>"
 ```
 
 ### Bump Levels
@@ -455,7 +453,7 @@ Create `plugin-manifest.json` in the skill directory that anchors the plugin:
 ### Step 2: Assemble
 
 ```bash
-$SCRIPTS/prepare-plugin.sh /path/to/plugin-manifest.json
+"${CLAUDE_SKILL_DIR}/scripts/prepare-plugin.sh" "<MANIFEST_PATH>"
 ```
 
 This creates `./build/<plugin-name>/` with the official plugin format, scaffolding, and auto-runs validation.
@@ -463,14 +461,14 @@ This creates `./build/<plugin-name>/` with the official plugin format, scaffoldi
 ### Step 3: Validate
 
 ```bash
-$SCRIPTS/validate-plugin.sh ./build/<plugin-name>
+"${CLAUDE_SKILL_DIR}/scripts/validate-plugin.sh" ./build/<plugin-name>
 ```
 
 ### Step 4: Sync to Monorepo
 
 ```bash
-$SCRIPTS/sync-monorepo.sh --add-plugin <plugin-name> ~/dev/claude-code-skills
-cd ~/dev/claude-code-skills
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --add-plugin <plugin-name> "<MONOREPO_DIR>"
+cd "<MONOREPO_DIR>"
 git add -A && git commit -m "feat: add <plugin-name> plugin" && git push
 ```
 
@@ -478,7 +476,7 @@ git add -A && git commit -m "feat: add <plugin-name> plugin" && git push
 
 ```bash
 git clone https://github.com/USER/claude-code-skills.git /tmp/ccs
-/tmp/ccs/scripts/install-plugin.sh /tmp/ccs/plugins/<plugin-name>
+"${CLAUDE_SKILL_DIR}/scripts/install-plugin.sh" /tmp/ccs/plugins/<plugin-name>
 rm -rf /tmp/ccs
 ```
 

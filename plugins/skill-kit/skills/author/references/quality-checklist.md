@@ -82,7 +82,7 @@ awk '/^---$/{c++;next} c==1{print}' SKILL.md | grep -vE '^(name|description|vers
 ls -la scripts/*.sh scripts/*.py 2>/dev/null  # Check x bit
 
 # Cross-reference validation
-grep -oE '\(references/[^)]+\)' SKILL.md | tr -d '()' | while read f; do
+for f in $(grep -oE '\(references/[^)]+\)' SKILL.md | tr -d '()'); do
   [ -f "$f" ] && echo "OK  $f" || echo "MISS $f"
 done
 
