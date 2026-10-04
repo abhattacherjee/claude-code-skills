@@ -208,6 +208,10 @@ else
   # Work from the repo root so paths are repo-relative.
   TOP="$(git rev-parse --show-toplevel)"
   cd "$TOP"
+  # Guard 1: file names come from the working tree, so git must treat every name as a
+  # literal path. Without this, an untracked file named `[.]env` or `*` is a glob when
+  # it reaches `git add -N` and would pull a secret like `.env` into the diff.
+  export GIT_LITERAL_PATHSPECS=1
   # Untracked, not-ignored files. Their contents would go to an external model, so
   # they are opt-in, and secret-looking names are never sent.
   UNTRACKED=()
@@ -240,6 +244,19 @@ else
     die "Failed to produce git diff against merge base of $BASE and HEAD"
   fi
   git diff --name-only "$MERGE_BASE" >"$FILES_FILE" 2>/dev/null || true
+  # Guard 2 (fail closed): whatever went wrong above, no untracked path may be in the
+  # diff unless it was chosen (SEND) and has a non-secret name. Check the paths the diff
+  # really holds. On any hit, send nothing.
+  SEND_LIST="$(printf '%s\n' ${SEND[@]+"${SEND[@]}"})"
+  UNTRACKED_LIST="$(printf '%s\n' ${UNTRACKED[@]+"${UNTRACKED[@]}"})"
+  while IFS= read -r -d '' p; do
+    if printf '%s\n' "$UNTRACKED_LIST" | grep -qxF -- "$p"; then
+      if is_secret_name "$p" || ! printf '%s\n' "$SEND_LIST" | grep -qxF -- "$p"; then
+        rm -f "$DIFF_FILE" "$FILES_FILE"
+        die "Refusing to send a partial or unsafe diff: untracked path '$p' is in the diff but was not chosen or has a secret-looking name. Nothing was written."
+      fi
+    fi
+  done < <(git diff --name-only -z "$MERGE_BASE" 2>/dev/null)
 fi
 
 # ---- large-diff cap ----

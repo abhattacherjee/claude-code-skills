@@ -943,6 +943,53 @@ assert_contains "ordinary untracked files are still sent" "+ok-content" "$(cat "
 assert_contains "notes.txt is in the diff" "notes.txt" "$(cat "$DM_DIFF")"
 assert_contains "environment.md is in the diff (not a .env match)" "environment.md" "$(cat "$DM_DIFF")"
 
+# Glob-looking names. An untracked file named `[.]env`, `*`, `?env` or `:(glob).env`
+# passes the secret-name filter. If git treated it as a pathspec glob, `git add -N`
+# would pull the real .env into the diff. Each case gets its own new temp dir, and the
+# dir is deleted afterwards, so no glob-named file is ever removed by a shell glob.
+# Guard 1 is literal pathspecs; guard 2 is the final check on the paths in the diff.
+dm_glob_repo() {  # dm_glob_repo DIR NAME
+  git init -q -b main "$1"
+  printf 'x\n' >"$1/a.txt"; dm_git "$1" add -A; dm_git "$1" commit -q -m base
+  dm_git "$1" checkout -q -b feature/g
+  printf 'SECRET=1\n' >"$1/.env"
+  printf 'globfile-content\n' >"$1/$2"
+}
+dm_leaked() {  # true when the diff file exists and holds the .env secret
+  [[ -n "${1:-}" && -f "$1" ]] && grep -qF -- "SECRET=1" "$1"
+}
+REAL_GIT="$(command -v git)"
+SHIM_DIR="$TMP_DIR/shim-no-literal"
+mkdir -p "$SHIM_DIR"
+printf '#!/bin/bash\nunset GIT_LITERAL_PATHSPECS\nexec "%s" "$@"\n' "$REAL_GIT" >"$SHIM_DIR/git"
+chmod +x "$SHIM_DIR/git"
+dm_run_shim() { local repo="$1"; shift; (cd "$repo" && PATH="$SHIM_DIR:$NOGH_DIR:$PATH" bash "$DETECT_MODE" "$@"); }
+
+GLOB_I=0
+for GLOB_NAME in '[.]env' '*' '?env' ':(glob).env' ':(top).env'; do
+  GLOB_I=$((GLOB_I + 1))
+  GD="$TMP_DIR/dm-glob-$GLOB_I"
+  dm_glob_repo "$GD" "$GLOB_NAME"
+
+  DM_OUT=""; DM_EXIT=0
+  run_capture DM_OUT DM_EXIT dm_run "$GD" --include-untracked
+  DM_DIFF="$(dm_val "$DM_OUT" DIFF_FILE)"; DM_FILES="$(dm_val "$DM_OUT" FILES_FILE)"
+  assert_exit_code "guard 1: '$GLOB_NAME' next to .env -> exit 0" "0" "$DM_EXIT"
+  if dm_leaked "$DM_DIFF"; then fail "guard 1: '$GLOB_NAME' does not pull .env content into the diff"; else pass "guard 1: '$GLOB_NAME' does not pull .env content into the diff"; fi
+  if [[ -f "$DM_DIFF" ]] && grep -qF -- "+globfile-content" "$DM_DIFF"; then pass "guard 1: '$GLOB_NAME' itself is sent as a normal file"; else fail "guard 1: '$GLOB_NAME' itself is sent as a normal file"; fi
+  if [[ -f "$DM_FILES" ]] && grep -qxF -- "$GLOB_NAME" "$DM_FILES"; then pass "guard 1: '$GLOB_NAME' is in the file list"; else fail "guard 1: '$GLOB_NAME' is in the file list"; fi
+  if [[ -f "$DM_FILES" ]] && grep -qxF -- ".env" "$DM_FILES"; then fail "guard 1: .env is not in the file list ('$GLOB_NAME')"; else pass "guard 1: .env is not in the file list ('$GLOB_NAME')"; fi
+
+  # Guard 2 on its own: a git that ignores literal pathspecs (as if guard 1 failed).
+  DM_OUT=""; DM_EXIT=0
+  run_capture DM_OUT DM_EXIT dm_run_shim "$GD" --include-untracked
+  assert_exit_code "guard 2: '$GLOB_NAME' with literal pathspecs defeated -> exit 1" "1" "$DM_EXIT"
+  assert_contains "guard 2: '$GLOB_NAME' names the path it refused" "untracked path '.env'" "$DM_OUT"
+  if echo "$DM_OUT" | grep -qF "DIFF_FILE="; then fail "guard 2: '$GLOB_NAME' prints no DIFF_FILE"; else pass "guard 2: '$GLOB_NAME' prints no DIFF_FILE"; fi
+  if echo "$DM_OUT" | grep -qF -- "SECRET=1"; then fail "guard 2: '$GLOB_NAME' never prints the secret"; else pass "guard 2: '$GLOB_NAME' never prints the secret"; fi
+  rm -rf "$GD"
+done
+
 # More than 20 untracked files: the stderr note is bounded.
 DM_C="$TMP_DIR/dm-c"
 git init -q -b main "$DM_C"
