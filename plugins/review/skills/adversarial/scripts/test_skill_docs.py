@@ -1,9 +1,12 @@
 """Doc-contract tests for the review plugin: the skill steps run scripts that exist, and wire in
 the adversary. They read only plugins/review/ (the `adversarial` and `deep` skills, the agents and
 the README); the old adversarial-review plugin keeps its own copy (which also checks deep-review)."""
+import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -237,6 +240,16 @@ class PluginReadmeDocTests(unittest.TestCase):
         ]
         self.assertIn("Codex", cross_examiner_line)
 
+    def test_no_script_install_advice_for_this_plugin(self):
+        # scripts/install-plugin.sh copies skills and agents loose into ~/.claude. That
+        # breaks deep's ${CLAUDE_PLUGIN_ROOT} script paths and the review:* agent names,
+        # and a loose copy shadows the plugin's skills. Install through /plugin only.
+        self.assertNotIn("install-plugin.sh", self.text)
+        self.assertIn("claude plugin install", self.text)
+        for path in (PLUGIN.parents[1] / "LOCAL-TESTING.md",):
+            if path.is_file():
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"install-plugin\.sh[^\n]*plugins/review")
+
     def test_readme_names_both_skills_and_all_three_agents_with_their_old_names(self):
         for new, old in (("deep", "deep-review"), ("adversarial", "adversarial-review"),
                          ("bug-hunter", "adversarial-bug-hunter"),
@@ -431,6 +444,65 @@ class DeepReviewDocTests(unittest.TestCase):
             self.assertIn("ADVERSARY_UNAVAILABLE", part, start)
             self.assertIn("stop the run with exit 3", part, start)
             self.assertIn("never fall back", part.lower(), start)
+
+
+class GeminiFallbackShapeTests(unittest.TestCase):
+    """Step 2.2 of deep tells you to write Gemini's verdicts by hand when
+    gemini-review.sh fails. synthesize.py must read the file exactly as documented."""
+
+    def setUp(self):
+        text = (DEEP / "SKILL.md").read_text(encoding="utf-8")
+        self.step22 = section(text, "### Step 2.2", "### Step 2.3")
+        self.tmp = Path(tempfile.mkdtemp(prefix="fallback-shape-"))
+        self.addCleanup(__import__("shutil").rmtree, str(self.tmp), True)
+
+    def documented_json(self):
+        note = section(self.step22, "**Gemini reliability note:**", "**Missing verdicts")
+        return re.search(r"```json\n(.*?)```", note, re.S).group(1)
+
+    def run_synth(self, verdicts_text):
+        def put(name, obj):
+            path = self.tmp / name
+            path.write_text(json.dumps(obj) if not isinstance(obj, str) else obj, encoding="utf-8")
+            return str(path)
+        finding = lambda fid: {"id": fid, "path": "a.py", "line": 1, "severity": "minor", "category": "bug",
+                               "title": "t", "rationale": "r", "origin": "claude"}
+        claude = put("r1-claude.json", {"findings": [finding("C-001"), finding("C-002"), finding("C-003")]})
+        adv = put("r1-gemini.json", {"findings": []})
+        cv = put("r2-claude-verdicts.json", {"verdicts": []})
+        gv = put("r2-gemini-verdicts.json", verdicts_text)
+        out = self.tmp / "report.json"
+        res = subprocess.run(
+            [sys.executable, str(HERE / "synthesize.py"), "--adversary", "gemini",
+             "--claude-findings", claude, "--adversary-findings", adv,
+             "--adversary-verdicts", gv, "--claude-verdicts", cv, "--json", str(out)],
+            capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return {f["id"]: f for f in json.loads(out.read_text())["findings"]}
+
+    def test_the_documented_shape_is_read_as_confirm_and_refute(self):
+        got = self.run_synth(self.documented_json())
+        self.assertEqual(got["C-001"]["status"], "survivor")
+        self.assertEqual(got["C-001"]["adversary_verdict"], "confirm")
+        self.assertEqual(got["C-002"]["status"], "rejected")
+        self.assertEqual(got["C-002"]["adversary_verdict"], "refute")
+        self.assertEqual(got["C-003"]["status"], "unconfirmed")  # no entry
+
+    def test_the_old_prompt_shape_is_not_what_the_docs_ask_for(self):
+        # The earlier text asked for {id, verdict, reason}. synthesize.py does not read
+        # a bare `verdict` key, so every finding would have stayed unconfirmed.
+        got = self.run_synth(json.dumps({"verdicts": [{"id": "C-001", "verdict": "confirm", "reason": "x"}]}))
+        self.assertEqual(got["C-001"]["status"], "unconfirmed")
+        self.assertNotIn("verdict:confirm|refute", self.step22)
+        self.assertIn("adversary_verdict", self.documented_json())
+
+    def test_empty_verdicts_cover_gemini_as_well_as_codex(self):
+        missing = section(self.step22, "**Missing verdicts", "Emit an R2 digest")
+        self.assertIn('{"verdicts":[]}', missing)
+        self.assertIn("Gemini", missing)
+        self.assertIn("Codex", missing)
+        got = self.run_synth('{"verdicts":[]}')
+        self.assertTrue(all(f["status"] == "unconfirmed" for f in got.values()))
 
 
 if __name__ == "__main__":

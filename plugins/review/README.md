@@ -109,15 +109,13 @@ The `gemini` binary at version 0.38.2 or later supports `gemini -p "<prompt>" -o
 /plugin install review@claude-code-skills
 ```
 
-### Via script
+### Via the command line
 
 ```bash
-git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
-/tmp/ccs/scripts/install-plugin.sh /tmp/ccs/plugins/review
-rm -rf /tmp/ccs
+claude plugin install review@claude-code-skills
 ```
 
-There is no manual copy of the skills alone: `deep` runs the scripts in `skills/adversarial/scripts/` through `${CLAUDE_PLUGIN_ROOT}`, so the skills and agents must be installed together as the plugin.
+Install only through `/plugin` or `claude plugin install`. There is no script or manual copy install for this plugin: the repo's install script and a hand copy put skills and agents loose into `~/.claude`, which breaks the `review:*` agent names, and `deep` runs the scripts in `skills/adversarial/scripts/` through `${CLAUDE_PLUGIN_ROOT}`, so the skills and agents must be installed together as the plugin.
 
 ## Uninstall
 
@@ -125,15 +123,13 @@ There is no manual copy of the skills alone: `deep` runs the scripts in `skills/
 # Via Claude Code
 /plugin uninstall review@claude-code-skills
 
-# Via script
-git clone https://github.com/abhattacherjee/claude-code-skills.git /tmp/ccs
-/tmp/ccs/scripts/install-plugin.sh --uninstall /tmp/ccs/plugins/review
-rm -rf /tmp/ccs
+# Via the command line
+claude plugin uninstall review@claude-code-skills
 ```
 
 ## Moving from the old plugins
 
-The old `deep-review` and `adversarial-review` plugins are deprecated and stay published for one more release. Install `review`, then uninstall both old plugins, so the old names cannot win a plain-language request. Old PR comments carry the skill values `deep-review` and `adversarial-review`; the scripts still read them.
+The old `deep-review` and `adversarial-review` plugins are deprecated and stay published for one more release. Install `review`, then uninstall both old plugins, so the old names cannot win a plain-language request. Round-record files written by the old skills (for example a `round-N.json` reused with `recheck --prior`, or a Step 5 rerun) carry the skill values `deep-review` and `adversarial-review`; the scripts still read them.
 
 ## See also
 

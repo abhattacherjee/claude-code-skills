@@ -242,12 +242,22 @@ In one message:
     path.
   - **Gemini reliability note:** `gemini-review.sh` can come back empty when Gemini's JSON lacks
     `verdicts` (observed: `ADVERSARY_UNAVAILABLE: ... missing verdicts key`). Only then, fall back
-    to a direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
-    verdict:confirm|refute, reason}>"` call. Build a prompt file with the brief and each finding,
-    and parse the JSON yourself. Codex has no such fallback: exit 3 from `codex-review.sh` means
-    Codex's verdicts are missing. Write `{"verdicts":[]}` to `<RUN_DIR>/r2-<ADVERSARY>-verdicts.json`
-    (`synthesize.py` exits 1 on a missing file), and say in the R2 digest that Codex's verdicts
-    are missing. Those Claude findings stay unconfirmed.
+    to a direct `gemini -m gemini-2.5-pro -p "<prompt>"` call. Build a prompt file with the brief
+    and each Claude finding, and ask for JSON in the shape below. Parse the JSON yourself and write
+    it to `<RUN_DIR>/r2-<ADVERSARY>-verdicts.json`. This is the shape `synthesize.py` reads. The
+    verdict key must be `adversary_verdict` (not `verdict`), its value `confirm` or `refute`, and
+    `id` the Claude finding's id:
+
+    ```json
+    {"verdicts":[{"id":"C-001","adversary_verdict":"confirm","reason":"..."},{"id":"C-002","adversary_verdict":"refute","reason":"..."}]}
+    ```
+
+    A finding with no entry stays unconfirmed.
+  - **Missing verdicts (either adversary):** Codex has no direct-call fallback, so exit 3 from
+    `codex-review.sh` means Codex's verdicts are missing. The same holds for Gemini when the direct
+    call also fails. Write `{"verdicts":[]}` to `<RUN_DIR>/r2-<ADVERSARY>-verdicts.json`
+    (`synthesize.py` exits 1 on a missing file), and say in the R2 digest that the adversary's
+    verdicts are missing. Those Claude findings stay unconfirmed.
 
 Emit an R2 digest (confirmed/refuted/unjudged each direction). If a side reports it is waiting on
 a background job, check its output or process within about 10 minutes (`ps -axo pid,etime,command
