@@ -28,13 +28,13 @@ Options:
   --since <ref>          Git ref to start from: a tag, branch or commit, also
                          HEAD~2 or v1.0.0^. Letters, digits and . _ / ~ ^ - only,
                          not starting with -.
-                         Default, in this order: the newest release tag
-                         (v1.2.3 or 1.2.3) reachable from HEAD; else the tag
-                         of the first versioned heading of CHANGELOG.md; else,
-                         when CHANGELOG.md has no versioned heading, the whole
-                         history. If that heading, say [1.0.0], has no tag
-                         v1.0.0 or 1.0.0 reachable from HEAD, it exits 1:
-                         tag the release or pass --since.
+                         Default: the tag of the first versioned heading of
+                         CHANGELOG.md, say [1.1.0-rc1]: v1.1.0-rc1 or
+                         1.1.0-rc1, reachable from HEAD, whatever its form.
+                         If that tag is missing, it exits 1: tag the release
+                         or pass --since. With no versioned heading: the
+                         newest release tag (v1.2.3 or 1.2.3) reachable from
+                         HEAD; else the whole history.
   --version <ver>        Move [Unreleased] and the new bullets into a
                          "## [<ver>] - <today>" section; [Unreleased] stays,
                          empty. Refused if "## [<ver>]" already exists.
@@ -44,10 +44,11 @@ Options:
   -h, --help             Show this help
 
 Writing never removes a line: new bullets are added to the matching ### section.
-A bullet already in [Unreleased] is skipped, once per copy there, so a second run
-adds nothing. Released sections are not checked: a new commit whose subject is
-already in one is added. Two commits with the same text in one run give two
-bullets. A CHANGELOG.md with CRLF line endings keeps them.
+A bullet already in [Unreleased] under a heading of the same category is skipped,
+once per copy there, so a second run adds nothing. The same text under another
+category does not count. Released sections are not checked: a new commit whose
+subject is already in one is added. Two commits with the same text in one run
+give two bullets. A CHANGELOG.md with CRLF line endings keeps them.
 
 Examples:
   update-changelog.sh                          # Update [Unreleased] in current dir
@@ -124,9 +125,10 @@ if [[ -n "$SINCE" ]]; then
     exit 1
   fi
 else
-  # 0. The first versioned heading of CHANGELOG.md ([Unreleased] skipped) must have a tag,
-  #    v<heading> or <heading>, reachable from HEAD. Without one (say, after --version and
-  #    before the tag), an older tag or the whole history would list released commits
+  # 1. The first versioned heading of CHANGELOG.md ([Unreleased] skipped) names the last
+  #    release. Its tag, v<heading> or <heading>, reachable from HEAD, is the starting
+  #    point, whatever its form (v1.1.0-rc1 too). Without that tag (say, after --version
+  #    and before the tag), an older tag or the whole history would list released commits
   #    again, so the run stops.
   LAST_VERSION=""
   HEAD_TAG=""
@@ -138,6 +140,7 @@ else
       if t=$(resolve_ref "refs/tags/${prefix}${LAST_VERSION}") \
           && git merge-base --is-ancestor "$t" HEAD 2>/dev/null; then
         HEAD_TAG="${prefix}${LAST_VERSION}"
+        SINCE="$t"
         break
       fi
     done
@@ -145,35 +148,29 @@ else
       echo "Error: CHANGELOG.md has [$LAST_VERSION] but there is no tag for it; tag the release or pass --since <ref>" >&2
       exit 1
     fi
-  fi
-  # 1. The newest final-release tag reachable from HEAD: v1.2.3 or 1.2.3 exactly. Not
-  #    v1.2.3-rc1, 20261001-snap or release-2.0.0. Sorted by version, so v1.10.0 > v1.9.0.
-  ALL_TAGS=$(git tag -l --merged HEAD 2>/dev/null || true)
-  LAST_TAG=$(printf '%s\n' "$ALL_TAGS" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
-    | awk '{ v = $0; sub(/^v/, "", v); split(v, p, "."); printf "%d %d %d %s\n", p[1], p[2], p[3], $0 }' \
-    | sort -k1,1n -k2,2n -k3,3n | tail -1 | cut -d' ' -f4 || true)
-  SINCE=""
-  if [[ -n "$LAST_TAG" ]] && SINCE=$(resolve_ref "$LAST_TAG"); then
-    SINCE_LABEL="$LAST_TAG"
-    echo "Auto-detected: changes since tag $SINCE_LABEL"
+    SINCE_LABEL="$HEAD_TAG"
+    echo "Auto-detected: changes since tag $SINCE_LABEL (the first versioned heading of CHANGELOG.md)"
   else
-    SINCE=""
-    if [[ -z "$ALL_TAGS" ]]; then
-      echo "No tags found."
+    # 2. No versioned heading: the newest final-release tag reachable from HEAD, v1.2.3 or
+    #    1.2.3 exactly. Not v1.2.3-rc1, 20261001-snap or release-2.0.0. Sorted by version,
+    #    so v1.10.0 > v1.9.0.
+    ALL_TAGS=$(git tag -l --merged HEAD 2>/dev/null || true)
+    LAST_TAG=$(printf '%s\n' "$ALL_TAGS" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+      | awk '{ v = $0; sub(/^v/, "", v); split(v, p, "."); printf "%d %d %d %s\n", p[1], p[2], p[3], $0 }' \
+      | sort -k1,1n -k2,2n -k3,3n | tail -1 | cut -d' ' -f4 || true)
+    if [[ -n "$LAST_TAG" ]] && SINCE=$(resolve_ref "$LAST_TAG"); then
+      SINCE_LABEL="$LAST_TAG"
+      echo "Auto-detected: changes since tag $SINCE_LABEL"
     else
-      echo "Found $(printf '%s\n' "$ALL_TAGS" | wc -l | tr -d ' ') tag(s) reachable from HEAD, but none is a release version (v1.2.3 or 1.2.3)."
-    fi
-    # 2. The tag of the first versioned heading of CHANGELOG.md (step 0 found it), when it
-    #    is not a release version (say, v1.0.0-rc1).
-    if [[ -n "$HEAD_TAG" ]]; then
-      SINCE=$(resolve_ref "refs/tags/$HEAD_TAG")
-      SINCE_LABEL="$HEAD_TAG"
-      echo "Auto-detected: changes since $SINCE_LABEL (from CHANGELOG.md)"
-    fi
-    # 3. The whole history, only when CHANGELOG.md has no versioned heading (a new
-    #    project). An empty SINCE means every commit reachable from HEAD, the first one
-    #    included ("root..HEAD" would skip it).
-    if [[ -z "$SINCE" ]]; then
+      # 3. The whole history: no versioned heading and no release tag (a new project). An
+      #    empty SINCE means every commit reachable from HEAD, the first one included
+      #    ("root..HEAD" would skip it).
+      SINCE=""
+      if [[ -z "$ALL_TAGS" ]]; then
+        echo "No tags found."
+      else
+        echo "Found $(printf '%s\n' "$ALL_TAGS" | wc -l | tr -d ' ') tag(s) reachable from HEAD, but none is a release version (v1.2.3 or 1.2.3)."
+      fi
       WHOLE_HISTORY=true
       echo "Using the whole history (every commit reachable from HEAD, the first one included)."
     fi
@@ -381,8 +378,9 @@ fi
 #     "## " or is a link reference ("[x]: url"), or to the end of the file.
 #   - Each generated bullet goes under the block's "### <Category>" heading (after its
 #     last line), or under a new heading at the end of the block. A bullet that is already
-#     a line of the block is skipped once per copy there, so a re-run adds nothing and two
-#     commits with the same text give two bullets. Released sections are not checked.
+#     a line under a heading of the same category is skipped once per copy there, so a
+#     re-run adds nothing and two commits with the same text give two bullets. The same
+#     text under another category does not count. Released sections are not checked.
 #   - CRLF: lines are compared with a trailing \r removed. Old lines are written back as
 #     they were; new lines get the file's line ending (CRLF when its first line has one).
 #   - With no [Unreleased] block, a new section goes before the first "## " heading or
@@ -460,18 +458,20 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
     }
     e = n + 1
     for (i = u + 1; i <= n; i++) if (L[i] ~ /^## / || L[i] ~ /^\[[^]]+\]: /) { e = i; break }
-    # How many times each line is already in the block, the first heading of each
-    # category, and the last non-blank line of the sub-section under that heading.
-    hidx = 0; blast = u; body = 0
+    # How many times each line is already under each "### <Category>" heading of the block
+    # (have[category, line]), the first heading of each category, and the last non-blank
+    # line of the sub-section under that heading. A line above the first heading has no
+    # category and matches no generated bullet.
+    hidx = 0; blast = u; body = 0; cur = ""
     for (i = u + 1; i < e; i++) {
-      have[L[i]]++
       if (!blank(L[i])) { blast = i; body++ }
       if (L[i] ~ /^### /) {
         name = substr(L[i], 5); sub(/[ \t]+$/, "", name)
-        hidx = i
+        hidx = i; cur = name
         if (!(name in h)) { h[name] = i; last[i] = i }
         continue
       }
+      if (hidx) have[cur, L[i]]++
       if (hidx && !blank(L[i])) last[hidx] = i
     }
     tail = ""
@@ -479,7 +479,7 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
       c = order[k]; s = ""
       for (j = 1; j <= nb[c]; j++) {
         b = bl[c, j]
-        if (have[b] > 0) { have[b]--; continue }
+        if (have[c, b] > 0) { have[c, b]--; continue }
         s = s "\n" b; added++; nbul++
       }
       if (s == "") continue

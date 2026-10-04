@@ -664,6 +664,35 @@ run_in "$RS" "$CL"
 run_in "$RS" "$CL" --help
 check "--help says only [Unreleased] is checked for bullets already there" 0 'already in \[Unreleased\]'
 
+echo "update-changelog.sh: a bullet already in [Unreleased] counts only under its own category"
+# [Unreleased] has '- retry' under Fixed. The new commits give '- retry' under Added and under
+# Fixed. The Fixed one is already there; the Added one is not.
+CK="$TMP/work/catkey"
+newrepo "$CK"
+printf '# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- retry\n\n## [1.0.0] - 2026-01-01\n\n- first\n' > "$CK/CHANGELOG.md"
+gitc "$CK" add CHANGELOG.md
+gitc "$CK" commit -q -m "chore: release 1.0.0"
+gitc "$CK" tag v1.0.0
+gitc "$CK" commit -q --allow-empty -m "feat: retry"
+gitc "$CK" commit -q --allow-empty -m "fix: retry"
+run_in "$CK" "$CL"
+check "same text in two categories: write mode exits 0" 0 'Updated '
+python3 - "$CK/CHANGELOG.md" > "$TMP/catkey.txt" 2>&1 <<'EOF' || true
+import sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+end = lines.index("## [1.0.0] - 2026-01-01")
+counts, cur = {}, None
+for l in lines[lines.index("## [Unreleased]") + 1:end]:
+    if l.startswith("### "):
+        cur = l[4:]
+    elif l == "- retry":
+        counts[cur] = counts.get(cur, 0) + 1
+if counts != {"Added": 1, "Fixed": 1}:
+    print("'- retry' per category in [Unreleased]: %r, want {'Added': 1, 'Fixed': 1}" % counts)
+EOF
+[[ -z "$(cat "$TMP/catkey.txt")" ]] && ok "same text in two categories: one '- retry' under Added and one under Fixed" || bad "same text in two categories: one '- retry' under Added and one under Fixed" "$(cat "$TMP/catkey.txt"; cat "$CK/CHANGELOG.md")"
+mdok "same text in two categories: the Markdown is intact" "$CK/CHANGELOG.md"
+
 echo "update-changelog.sh: a versioned heading with no tag stops the run"
 # (c) After --version 1.1.0 and before the v1.1.0 tag, a default run does not start over.
 NTG="$TMP/work/notag"
@@ -778,8 +807,47 @@ gitc "$CF" commit -q -m "chore: init"
 gitc "$CF" tag v1.0
 gitc "$CF" commit -q --allow-empty -m "feat: after"
 run_in "$CF" "$CL" --dry-run
-check "CHANGELOG.md fallback skips [Unreleased] and uses the [1.0] heading (tag v1.0)" 0 'changes since v1\.0 \(from CHANGELOG\.md\)'
+check "CHANGELOG.md skips [Unreleased] and uses the [1.0] heading (tag v1.0)" 0 'changes since tag v1\.0 \(the first versioned heading of CHANGELOG\.md\)$'
 check "CHANGELOG.md fallback: 1 commit since v1.0" 0 'Found 1 commits since v1\.0$'
+
+# The first versioned heading is a release candidate, [1.1.0-rc1], tagged v1.1.0-rc1 after
+# v1.0.0. The range starts at v1.1.0-rc1, not at the older final tag v1.0.0.
+RCH="$TMP/work/rcheading"
+newrepo "$RCH"
+printf '# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n\n- first\n' > "$RCH/CHANGELOG.md"
+gitc "$RCH" add CHANGELOG.md
+gitc "$RCH" commit -q -m "chore: release 1.0.0"
+gitc "$RCH" tag v1.0.0
+gitc "$RCH" commit -q --allow-empty -m "feat: in the rc"
+printf '# Changelog\n\n## [Unreleased]\n\n## [1.1.0-rc1] - 2026-02-01\n\n### Added\n\n- in the rc\n\n## [1.0.0] - 2026-01-01\n\n- first\n' > "$RCH/CHANGELOG.md"
+gitc "$RCH" add CHANGELOG.md
+gitc "$RCH" commit -q -m "chore: release 1.1.0-rc1"
+gitc "$RCH" tag v1.1.0-rc1
+gitc "$RCH" commit -q --allow-empty -m "fix: after the rc"
+run_in "$RCH" "$CL"
+check "first heading [1.1.0-rc1]: starts at tag v1.1.0-rc1" 0 'changes since tag v1\.1\.0-rc1 \(the first versioned heading of CHANGELOG\.md\)$'
+check "first heading [1.1.0-rc1]: 1 commit since v1.1.0-rc1" 0 'Found 1 commits since v1\.1\.0-rc1$'
+under "first heading [1.1.0-rc1]: the commit after the rc goes to [Unreleased]" "$RCH/CHANGELOG.md" '## [Unreleased]' '### Fixed' '- after the rc'
+[[ "$(grep -c -- '^- in the rc$' "$RCH/CHANGELOG.md")" == 1 ]] && ok "first heading [1.1.0-rc1]: the rc's bullet is not copied into [Unreleased]" || bad "first heading [1.1.0-rc1]: the rc's bullet is not copied into [Unreleased]" "$(cat "$RCH/CHANGELOG.md")"
+# The first versioned heading is a final release, [1.1.0], tagged v1.1.0 after v1.0.0. The
+# range starts at v1.1.0. A newer v1.2.0 tag that CHANGELOG.md does not name is not used.
+FH="$TMP/work/finalheading"
+newrepo "$FH"
+printf '# Changelog\n\n## [Unreleased]\n\n## [1.1.0] - 2026-02-01\n\n- one-one\n\n## [1.0.0] - 2026-01-01\n\n- first\n' > "$FH/CHANGELOG.md"
+gitc "$FH" add CHANGELOG.md
+gitc "$FH" commit -q -m "chore: release 1.0.0"
+gitc "$FH" tag v1.0.0
+gitc "$FH" commit -q --allow-empty -m "feat: one-one"
+gitc "$FH" tag v1.1.0
+gitc "$FH" commit -q --allow-empty -m "feat: after 1.1.0"
+gitc "$FH" commit -q --allow-empty -m "fix: also after 1.1.0"
+run_in "$FH" "$CL" --dry-run
+check "first heading [1.1.0]: starts at tag v1.1.0" 0 'changes since tag v1\.1\.0 \(the first versioned heading of CHANGELOG\.md\)$'
+check "first heading [1.1.0]: 2 commits since v1.1.0" 0 'Found 2 commits since v1\.1\.0$'
+printf '%s' "$OUT" | grep -Fq -- '- one-one' && bad "first heading [1.1.0]: the released bullet is not listed" "$OUT" || ok "first heading [1.1.0]: the released bullet is not listed"
+gitc "$FH" tag v1.2.0
+run_in "$FH" "$CL" --dry-run
+check "first heading [1.1.0] and a newer v1.2.0 tag: still starts at v1.1.0" 0 'changes since tag v1\.1\.0 \(the first versioned heading of CHANGELOG\.md\)$'
 
 echo "update-changelog.sh: categories"
 CT="$TMP/work/cats"

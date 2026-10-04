@@ -47,7 +47,7 @@ Run the changelog update script in these situations:
 ```
 
 The script:
-- Picks the starting point, in this order: `--since <ref>`; the newest release tag (`v1.2.3` or `1.2.3`, so not `v1.2.3-rc1` or `20261001-snap`) reachable from HEAD, by version order; the tag of the first versioned heading of CHANGELOG.md (`[Unreleased]` skipped), `v<heading>` or `<heading>`; else, when CHANGELOG.md has no versioned heading, the whole history, first commit included. It prints which one it used. Without `--since`, that first versioned heading must have its tag, `v<heading>` or `<heading>`, reachable from HEAD. If not (say, after `--version 1.1.0` and before the `v1.1.0` tag), it exits 1 with "CHANGELOG.md has [1.1.0] but there is no tag for it; tag the release or pass --since <ref>" and writes nothing, so released commits are not listed again.
+- Picks the starting point, in this order: `--since <ref>`; the tag of the first versioned heading of CHANGELOG.md (`[Unreleased]` skipped), `v<heading>` or `<heading>`, reachable from HEAD, whatever its form (`[1.1.0-rc1]` starts at `v1.1.0-rc1`); when CHANGELOG.md has no versioned heading, the newest release tag (`v1.2.3` or `1.2.3`, so not `v1.2.3-rc1` or `20261001-snap`) reachable from HEAD, by version order; else the whole history, first commit included. It prints which one it used. Without `--since`, that first versioned heading must have its tag reachable from HEAD. If not (say, after `--version 1.1.0` and before the `v1.1.0` tag), it exits 1 with "CHANGELOG.md has [1.1.0] but there is no tag for it; tag the release or pass --since <ref>" and writes nothing, so released commits are not listed again.
 - Reads all commits since that point
 - Categorizes by conventional commit prefix (`feat:` → Added, `fix:` → Fixed, etc.)
 - Puts commits with no prefix under Other (see File-Path Fallback for the one exception)
@@ -74,7 +74,7 @@ After the script generates the raw entry:
 ```
 
 What a write does:
-- Each new bullet goes under the matching `### <Category>` of the `[Unreleased]` block, after the bullets already there. A missing `### <Category>` is added at the end of the block. A bullet already in the block is skipped, once per copy there, so running it twice adds nothing. Released sections are not checked: a new commit whose subject is already in one is added. Two commits with the same text in one run (`fix(api): retry` and `fix(ui): retry`; the scope is dropped) give two bullets.
+- Each new bullet goes under the matching `### <Category>` of the `[Unreleased]` block, after the bullets already there. A missing `### <Category>` is added at the end of the block. A bullet already in the block under a heading of the same category is skipped, once per copy there, so running it twice adds nothing. The same text under another category does not count: an existing Fixed `- retry` does not stop a new Added `- retry`. Released sections are not checked: a new commit whose subject is already in one is added. Two commits with the same text in one run (`fix(api): retry` and `fix(ui): retry`; the scope is dropped) give two bullets.
 - The block ends at the next `## ` heading or link reference line (`[Unreleased]: https://...`). Hand-written bullets, other sections (`## v1.0.0 (2024-01-01)` too) and footer links are kept.
 - With no `[Unreleased]` section, one is added before the first `## ` heading or link reference, or at the end of the file.
 - `--version X.Y.Z` adds `## [X.Y.Z] - <today>` right under `## [Unreleased]`, so the old `[Unreleased]` body and the new bullets become the release section, and `[Unreleased]` is left empty. It is refused (exit 1) if `## [X.Y.Z]` already exists. With no new commits it still moves the `[Unreleased]` body into the release section; if `[Unreleased]` is empty too, it exits 1 with "nothing to release". Without `--version`, no new commits prints "No new commits" and exits 0.
@@ -202,6 +202,7 @@ ${NEW_ENTRY}"  # Blank line guaranteed
 git describe --tags --abbrev=0
 
 # Right — only final release tags (v1.2.3 or 1.2.3) reachable from HEAD, newest by version.
+# (The script uses this only when CHANGELOG.md has no versioned heading.)
 # `--sort=-v:refname` alone would rank v1.2.3-rc1 above v1.2.3.
 git tag -l --merged HEAD | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
   | awk '{ v = $0; sub(/^v/, "", v); split(v, p, "."); print p[1], p[2], p[3], $0 }' \
