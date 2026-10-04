@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.1] - 2026-10-04
+
+### Changed
+
+- The See Also line says `spec:review` (was `spec-review`), after the three spec skills merged into the `spec` plugin (#160).
+- `plugin.json` and the marketplace entry say 3.2.1. They were still at 3.1.0 while the skill was at 3.2.0.
+
 ## [3.2.0] - 2026-03-17
 
 ### Added

@@ -2,7 +2,7 @@
 name: context-shield
 description: "Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count. Use when: (1) reading 3+ large external sources (URLs, Figma frames, wiki pages), (2) large documentation/API reference sites decomposed into section URLs, (3) monorepo code audits across many directories, (4) dependency upgrade research across 5+ packages, (5) large PR reviews with 15+ changed files, (6) competitive feature matrix analysis, (7) security advisory triage for dependency updates."
 metadata:
-  version: 1.3.0
+  version: 1.3.1
 ---
 
 # Context Shield
@@ -195,7 +195,7 @@ $SCRIPTS/manage-manifest.sh summaries --manifest "$OUTPUT_DIR/manifest.json"
 The summaries output is compact — each source compressed to ~500 tokens. Use this to:
 - Write a synthesis report
 - Make design decisions
-- Feed into another skill (e.g., `figma-ui-designer`, `spec-review`)
+- Feed into another skill (e.g., `figma-ui-designer`, `spec:review`)
 - Answer the user's original question
 
 ---
@@ -410,7 +410,7 @@ $SCRIPTS/manage-manifest.sh create --task "Assess security advisories for depend
 ## See Also
 
 - `figma-ui-designer` — use context-shield when analyzing 10+ Figma frames or 5+ competitor designs
-- `spec-review` — use context-shield when a spec references many external docs or code directories
+- `spec:review` — use context-shield when a spec references many external docs or code directories
 - `project-code-review` — use context-shield for large PRs with 15+ changed files
 - `npm-dependency-management` — use context-shield to research 5+ package changelogs before upgrades
 - `ci-security-issue-creator` — use context-shield to triage many CVE/GHSA advisory pages

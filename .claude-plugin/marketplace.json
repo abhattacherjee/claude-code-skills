@@ -24,7 +24,7 @@
       "name": "context-shield",
       "source": "./plugins/context-shield",
       "description": "Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.",
-      "version": "1.3.0"
+      "version": "1.3.1"
     },
     {
       "name": "custom-statusline",
@@ -42,7 +42,7 @@
       "name": "figma-ui-designer",
       "source": "./plugins/figma-ui-designer",
       "description": "Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",
-      "version": "3.1.0"
+      "version": "3.2.1"
     },
     {
       "name": "github-board",
@@ -87,21 +87,27 @@
       "version": "4.3.0"
     },
     {
+      "name": "spec",
+      "source": "./plugins/spec",
+      "description": "Three skills for story specs in one plugin. spec:create writes a template-compliant story spec from a plan, requirements file, prompt or GitHub issue, with vertical splitting for large stories. spec:review checks a spec against the real codebase and adds verified sub-tasks, an API test plan and design simplification notes. spec:implement builds a reviewed spec end-to-end: feature branch, sub-tasks, acceptance checks and a PR.",
+      "version": "1.0.0"
+    },
+    {
       "name": "spec-creator",
       "source": "./plugins/spec-creator",
-      "description": "Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).",
+      "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).",
       "version": "2.4.2"
     },
     {
       "name": "spec-implement",
       "source": "./plugins/spec-implement",
-      "description": "Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation.",
+      "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation.",
       "version": "1.0.0"
     },
     {
       "name": "spec-review",
       "source": "./plugins/spec-review",
-      "description": "Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.",
+      "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.",
       "version": "2.2.2"
     },
     {

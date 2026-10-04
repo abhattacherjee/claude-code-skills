@@ -90,7 +90,7 @@ rm -rf /tmp/ccs
 ## See Also
 
 - `frontend-design` plugin — generates creative standalone HTML/CSS/JS (input to Workflows B/C)
-- `spec-review` skill — reviews story specs (Workflow D can generate specs as input)
+- `spec:review` skill — reviews story specs (Workflow D can generate specs as input)
 - `feature-dev` skill — guided implementation workflow (Workflow D can feed designs into implementation)
 - Figma MCP tools — `generate_figma_design`, `get_screenshot`, `get_metadata`, `get_design_context`
 

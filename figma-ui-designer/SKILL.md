@@ -2,7 +2,7 @@
 name: figma-ui-designer
 description: "Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. Use when: (1) user asks for Figma mockups or UI designs, (2) user shares a Figma URL to use as input for a spec or plan, (3) starting a new project and needs Figma designs, (4) mocking up a feature enhancement, (5) user wants to translate a Figma design into implementation requirements."
 metadata:
-  version: 3.2.0
+  version: 3.2.1
 ---
 
 # Figma UI Designer
@@ -379,7 +379,7 @@ AskUserQuestion({
 ## See Also
 
 - `frontend-design` plugin — generates creative standalone HTML/CSS/JS (input to Workflows B/C)
-- `spec-review` skill — reviews story specs (Workflow D can generate specs as input)
+- `spec:review` skill — reviews story specs (Workflow D can generate specs as input)
 - `feature-dev` skill — guided implementation workflow (Workflow D can feed designs into implementation)
 - `context-shield` — use when analyzing 10+ Figma frames or researching 5+ competitor designs in Phase 0; delegates reads to isolated agents to avoid context overflow
 - Figma MCP tools — `generate_figma_design`, `get_screenshot`, `get_metadata`, `get_design_context`

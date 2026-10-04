@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-10-04
+
+### Changed
+
+- The related-skill pointers say `spec:review` (was `spec-review`), after the three spec skills merged into the `spec` plugin (#160).
+
 ## [1.3.0] - 2026-02-28
 
 ### Added
