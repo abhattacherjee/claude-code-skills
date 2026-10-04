@@ -84,7 +84,7 @@ with: key topics, decisions made, code changes, outcomes, and open items.
 
 - **Session ID prefix matching**: You can use just the first 8 characters of a session ID
   (e.g., `0be99c26` instead of the full UUID).
-- **Date formats**: Both `YYYY-MM-DD` and full ISO 8601 are supported.
+- **Date formats**: `YYYY-MM-DD`, or a UTC timestamp `YYYY-MM-DDTHH:MM:SSZ` (optionally with `.sss`). Offsets such as `+05:30` are rejected; convert to UTC first.
 - **Large conversations**: Some conversations have 10,000+ messages. Use `--max-messages`
   to avoid overwhelming output. Start with 50-100, increase if the user needs more context.
 - **Multiple criteria**: Combine filters — `search --topic "deploy" --branch "main" --after 2025-01-01`

@@ -63,28 +63,33 @@ EOF
 # Usage errors exit 2, like an unknown option.
 usage_error() { echo "Error: $1" >&2; exit 2; }
 
-# require_count <option> <value>: a non-negative integer. The value is handed to jq with
+# require_count <option> <value>: a non-negative integer with no leading zeros (bash reads 08
+# as bad octal and 010 as 8, while jq reads 10). The value is handed to jq with
 # --argjson, never pasted into a program, but it must still be a number.
 require_count() {
-  [[ "${2:-}" =~ ^[0-9]+$ ]] || usage_error "$1 must be a non-negative integer, got '${2:-}'"
+  [[ "${2:-}" =~ ^(0|[1-9][0-9]{0,8})$ ]] || usage_error "$1 must be a non-negative integer, got '${2:-}'"
 }
 
-# require_date <option> <value>: YYYY-MM-DD, or a full ISO 8601 timestamp. Anything else
-# would compare as text against the stored timestamps and quietly match nothing.
+# require_date <option> <value>: YYYY-MM-DD, or a UTC timestamp YYYY-MM-DDTHH:MM:SSZ with an
+# optional fraction of up to 3 digits (.sss). Offsets such as +05:30 are rejected, not
+# converted: the stored times are UTC text, so only UTC input can be compared safely.
 require_date() {
   local re_day='^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-  local re_ts='^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?$'
+  local re_ts='^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,3})?Z$'
   if ! [[ "${2:-}" =~ $re_day ]] && ! [[ "${2:-}" =~ $re_ts ]]; then
-    usage_error "Invalid date for $1: '${2:-}' (use YYYY-MM-DD or a full ISO 8601 timestamp such as 2025-02-18T10:00:00Z)"
+    usage_error "Invalid date for $1: '${2:-}' (use YYYY-MM-DD or a UTC timestamp such as 2025-02-18T10:00:00Z or 2025-02-18T10:00:00.000Z; offsets are not accepted)"
   fi
 }
 
-# Normalize date to ISO 8601 prefix for lexicographic comparison
+# normalize_date <date>: the canonical form YYYY-MM-DDTHH:MM:SS.sssZ. The filter turns each
+# stored timestamp into the same form, so both sides compare as equal-width text.
 normalize_date() {
-  local d="$1"
-  # If just YYYY-MM-DD, append T00:00:00
+  local d="$1" frac
   if [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-    echo "${d}T00:00:00"
+    echo "${d}T00:00:00.000Z"
+  elif [[ "$d" =~ ^(.{19})(\.([0-9]+))?Z$ ]]; then
+    frac="${BASH_REMATCH[3]:-}000"
+    echo "${BASH_REMATCH[1]}.${frac:0:3}Z"
   else
     echo "$d"
   fi
@@ -105,8 +110,12 @@ collect_indexed_ids() {
     return
   fi
   echo "$index_files" | while IFS= read -r idx; do
-    # An unreadable index is reported once, by gather_entries; its sessions then show as orphans.
-    jq -r '.entries[]?.sessionId // empty' "$idx" 2>/dev/null || true
+    # All or nothing, like gather_entries: if jq fails on an index, take no IDs from it, so its
+    # sessions come back as orphans. gather_entries reports the bad index once.
+    local ids
+    if ids=$(jq -r '.entries[]?.sessionId // empty' "$idx" 2>/dev/null); then
+      [[ -z "$ids" ]] || printf '%s\n' "$ids"
+    fi
   done | sort -u
 }
 
@@ -226,6 +235,8 @@ jq_escape() {
 build_filter() {
   local topic="${1:-}" after="${2:-}" before="${3:-}" branch="${4:-}" project="${5:-}"
   local filters=()
+  # A stored time as canonical text (see normalize_date): first 19 chars, then .sss, then Z.
+  local canon='def canon: .[0:19] + (if .[19:20] == "." then "." + ((.[20:] | sub("[^0-9].*$"; "")) + "000" | .[0:3]) else ".000" end) + "Z";'
 
   if [[ -n "$topic" ]]; then
     # Use ascii_downcase + contains for case-insensitive literal substring match
@@ -237,13 +248,13 @@ build_filter() {
   if [[ -n "$after" ]]; then
     local norm_after
     norm_after=$(jq_escape "$(normalize_date "$after")")
-    filters+=("(.created // .modified // \"\" | . >= \"${norm_after}\")")
+    filters+=("(${canon} (.created // .modified // \"\" | tostring | canon) >= \"${norm_after}\")")
   fi
 
   if [[ -n "$before" ]]; then
     local norm_before
     norm_before=$(jq_escape "$(normalize_date "$before")")
-    filters+=("(.created // .modified // \"\" | . < \"${norm_before}\")")
+    filters+=("(${canon} (.created // .modified // \"\" | tostring | canon) < \"${norm_before}\")")
   fi
 
   if [[ -n "$branch" ]]; then

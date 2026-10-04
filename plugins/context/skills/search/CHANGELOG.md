@@ -19,7 +19,9 @@ All notable changes to the **search** skill (was `conversation-search`) are docu
 - `--before <date>` no longer keeps a conversation created exactly at that midnight.
 - The "last Tuesday" example named a Monday (`--after 2025-02-17 --before 2025-02-18`). It now uses 2025-02-18 and 2025-02-19.
 - `--limit` ran as jq code (`--limit '0] | {pwned: env.HOME} | .['` printed `$HOME`). `--limit` and `--max-messages` must be non-negative integers (exit 2 otherwise) and go to jq as `--argjson`.
-- `--after` and `--before` accept only `YYYY-MM-DD` or a full ISO 8601 timestamp; `--after garbage` used to return `[]` with exit 0. Anything else now exits 2 with a message.
+- `--after` and `--before` accept only `YYYY-MM-DD` or a UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`, optionally with `.sss`); `--after garbage` used to return `[]` with exit 0. Anything else, including offsets such as `+05:30`, exits 2 with a message. Both sides are compared in the form `YYYY-MM-DDTHH:MM:SS.sssZ`, so a session at exactly `10:00:00.000Z` matches `--after 2025-02-18T10:00:00Z`.
+- `--limit` and `--max-messages` reject leading zeros (`08`, `010`) with exit 2; bash and jq read them differently. They also reject more than 9 digits.
+- A sessions-index.json that fails to parse after some entries no longer hides those sessions. The whole index is dropped (one warning) and its sessions are listed as orphans.
 - A malformed `sessions-index.json` is still skipped, with `warning: skipping unreadable <path>` on stderr.
 - The summarizer example uses `Agent({subagent_type: "context:conversation-summarizer", ...})`, not `Task(...)`.
 

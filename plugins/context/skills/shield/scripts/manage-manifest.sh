@@ -88,7 +88,8 @@ require_jq() {
 require_index() {
   local value="$1" total
   total=$(jq '.sources | length' "$MANIFEST")
-  if ! [[ "$value" =~ ^[0-9]+$ ]] || [[ "$value" -ge "$total" ]]; then
+  # No leading zeros: bash reads 08 as bad octal and 010 as 8, while jq reads 10.
+  if ! [[ "$value" =~ ^(0|[1-9][0-9]{0,8})$ ]] || [[ $((10#$value)) -ge "$total" ]]; then
     die "Index must be an integer from 0 to $((total - 1)), got '$value'"
   fi
 }
@@ -253,7 +254,7 @@ cmd_next_batch() {
     esac
   done
 
-  [[ "$batch_size" =~ ^[0-9]+$ ]] || die "--batch-size must be a non-negative integer, got '$batch_size'"
+  [[ "$batch_size" =~ ^(0|[1-9][0-9]{0,8})$ ]] || die "--batch-size must be a non-negative integer, got '$batch_size'"
 
   # Get next N pending items, each with the manifest's task (the distiller reads it)
   jq --argjson n "$batch_size" \

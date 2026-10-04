@@ -12,7 +12,7 @@ All notable changes to the **shield** skill (was `context-shield`) are documente
 
 ### Fixed
 
-- `manage-manifest.sh` works on jq 1.6 (an unquoted `label` key and a `$label` variable), `next-batch` adds the manifest `task` to each item, `mark-done` rejects an index outside the manifest, and the new `mark-failed --index N --reason TEXT` records a source that could not be read. Step 3 uses it when the distiller replies `FAILED: <reason>`, and `summaries` lists failed sources apart from the summaries (#163).
+- `manage-manifest.sh` works on jq 1.6 (an unquoted `label` key and a `$label` variable), `next-batch` adds the manifest `task` to each item, `mark-done` rejects an index outside the manifest (and one with a leading zero such as `08`, which bash and jq read differently, or more than 9 digits; `next-batch --batch-size` follows the same rule), and the new `mark-failed --index N --reason TEXT` records a source that could not be read. Step 3 uses it when the distiller replies `FAILED: <reason>`, and `summaries` lists failed sources apart from the summaries (#163).
 - `visualize.sh` no longer stops on bash 3.2 when `--labels` is empty (#163).
 
 ## History before 1.0.0 (as `context-shield`)

@@ -133,11 +133,13 @@ json_is "next-batch skips the done source" 'len(d) == 2 and d[0]["label"] == "He
 
 # Bad indexes must fail and leave the manifest untouched.
 before="$(cksum < "$M")"
-for badidx in 5 -1 abc 1.5; do
+for badidx in 5 -1 abc 1.5 08 09 010 00 99999999999999999999; do
   run_in "$PROJ" "$MM" mark-done --manifest "$M" --index "$badidx" --summary "x"
   check "mark-done --index '$badidx' exits non-zero with a message" nonzero "" 'Index must be an integer from 0 to 2'
   [[ "$(cksum < "$M")" == "$before" ]] && ok "mark-done --index '$badidx' leaves manifest.json byte-identical" || bad "mark-done --index '$badidx' leaves manifest.json byte-identical" "manifest changed"
 done
+run_in "$PROJ" "$MM" next-batch --manifest "$M" --batch-size 08
+check "next-batch --batch-size 08 exits non-zero with a message" nonzero "" '--batch-size must be a non-negative integer'
 run_in "$PROJ" "$MM" mark-done --manifest "$M" --index "" --summary "x"
 check "mark-done --index '' exits non-zero with a message" nonzero "" '--index is required'
 run_in "$PROJ" "$MM" mark-failed --manifest "$M" --index 3 --reason "x"
@@ -268,7 +270,7 @@ run_in "$PROJ" "$SC" list --json --limit 1
 json_is "list --limit 1 still limits" 'len(d) == 1'
 run_in "$PROJ" "$SC" search --topic deploy --json --limit 0
 json_is "search --limit 0 returns an empty list" 'd == []'
-for badlimit in 'abc' '-1' '' '1.5' '0] | {pwned: env.HOME} | .['; do
+for badlimit in 'abc' '-1' '' '1.5' '08' '09' '010' '00' '99999999999999999999' '0] | {pwned: env.HOME} | .['; do
   run_in "$PROJ" "$SC" list --json --limit "$badlimit"
   check "list --limit '$badlimit' exits 2 with a message" 2 "" '--limit must be a non-negative integer'
   printf '%s' "$OUT" | grep -qF "$HOME_DIR" && bad "list --limit '$badlimit' runs no jq code" "stdout holds \$HOME: $OUT" || ok "list --limit '$badlimit' runs no jq code"
@@ -276,10 +278,24 @@ for badlimit in 'abc' '-1' '' '1.5' '0] | {pwned: env.HOME} | .['; do
   check "search --limit '$badlimit' exits 2 with a message" 2 "" '--limit must be a non-negative integer'
   printf '%s' "$OUT" | grep -qF "$HOME_DIR" && bad "search --limit '$badlimit' runs no jq code" "stdout holds \$HOME: $OUT" || ok "search --limit '$badlimit' runs no jq code"
 done
+run_in "$PROJ" "$SC" list --limit 10
+check "list (text) --limit 10 works" 0 'Found 3 conversations \(showing 3\)'
+run_in "$PROJ" "$SC" list --json --limit 10
+json_is "list --json --limit 10 works" 'len(d) == 3'
 run_in "$PROJ" "$SC" list --limit abc
 check "list (text) --limit abc exits 2 with a message" 2 "" '--limit must be a non-negative integer'
 run_in "$PROJ" "$SC" show 22222222 --json --max-messages '1, pwned: 1'
 check "show --max-messages that is not a number exits 2 with a message" 2 "" '--max-messages must be a non-negative integer'
+for badmax in 08 010; do
+  run_in "$PROJ" "$SC" show 22222222 --max-messages "$badmax"
+  check "show --max-messages $badmax exits 2 with a message" 2 "" '--max-messages must be a non-negative integer'
+  run_in "$PROJ" "$SC" show 22222222 --json --max-messages "$badmax"
+  check "show --json --max-messages $badmax exits 2 with a message" 2 "" '--max-messages must be a non-negative integer'
+done
+run_in "$PROJ" "$SC" show 22222222 --max-messages 10
+check "show --max-messages 10 works in text mode" 0 'deploy to staging'
+run_in "$PROJ" "$SC" show 22222222 --json --max-messages 10
+json_is "show --max-messages 10 works in --json mode" 'isinstance(d, (dict, list))'
 run_in "$PROJ" "$SC" list --project "my-app" --json
 ids_are "list --project filters on the project path" "22,33"
 run_in "$PROJ" "$SC" search --topic "catalog" --json
@@ -312,6 +328,21 @@ run_in "$PROJ" "$SC" search --after 2025-02-18 --json
 ids_are "search --after includes the start date" "22,33"
 run_in "$PROJ" "$SC" search --after 2025-02-18T09:59:59Z --json
 ids_are "search --after accepts a full ISO timestamp" "22,33"
+# Stored times are UTC: S2 is 10:00:00.000Z, S1 is 23:59:59.000Z the day before, S3 is 00:00:00 on 02-19.
+run_in "$PROJ" "$SC" search --after 2025-02-18T10:00:00Z --json
+ids_are "search --after at exactly the stored second includes it (no fraction/Z sort bug)" "22,33"
+run_in "$PROJ" "$SC" search --after 2025-02-18T10:00:00.000Z --json
+ids_are "search --after with .000Z at exactly the stored time includes it" "22,33"
+run_in "$PROJ" "$SC" search --after 2025-02-18T10:00:00.5Z --json
+ids_are "search --after compares the fraction: 10:00:00.5Z is after a 10:00:00.000Z session" "33"
+run_in "$PROJ" "$SC" search --before 2025-02-18T10:00:00Z --json
+ids_are "search --before at exactly the stored second excludes it" "11"
+run_in "$PROJ" "$SC" search --before 2025-02-18T10:00:00.001Z --json
+ids_are "search --before just past the stored time includes it" "11,22"
+for offdate in 2025-02-18T09:00:00+05:30 2025-02-18T09:00:00-0000 2025-02-18T10:00:00 2025-02-18T10:00:00.1234Z; do
+  run_in "$PROJ" "$SC" search --after "$offdate" --json
+  check "search --after '$offdate' (offset, no zone or long fraction) exits 2, not a wrong list" 2 "" 'Invalid date .*YYYY-MM-DD'
+done
 for baddate in garbage 2025-2-18 2025-13-01 2025-02-30x ""; do
   run_in "$PROJ" "$SC" search --after "$baddate" --topic deploy --json
   check "search --after '$baddate' exits 2 with a message, not an empty list" 2 "" 'Invalid date .*YYYY-MM-DD'
@@ -363,6 +394,17 @@ cp "$P1/$S1.jsonl" "$BAD_HOME/.claude/projects/-work-fine/$S1.jsonl"
 RC=0; OUT="$(cd "$PROJ" && env -i PATH="$PATH" HOME="$BAD_HOME" "$SC" list --json 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
 check "list with a malformed sessions-index.json still exits 0 and lists the good session" 0 'sessionId' 'warning: skipping unreadable .*-work-broken/sessions-index\.json'
 [[ "$(printf '%s\n' "$ERR" | grep -c 'warning: skipping unreadable')" == 1 ]] && ok "the warning for a malformed index is one line" || bad "the warning for a malformed index is one line" "stderr: $ERR"
+
+# A truncated index must not hide its sessions: jq prints the first entry, then fails on the
+# trailing text. All or nothing, so the session comes back as an orphan and is listed once.
+TRUNC_HOME="$TMP/trunc-home"
+mkdir -p "$TRUNC_HOME/.claude/projects/-work-trunc"
+printf '{"entries":[{"sessionId":"%s","projectPath":"/work/other","created":"2025-02-17T23:59:59.000Z"}]} garbage' "$S1" > "$TRUNC_HOME/.claude/projects/-work-trunc/sessions-index.json"
+cp "$P1/$S1.jsonl" "$TRUNC_HOME/.claude/projects/-work-trunc/$S1.jsonl"
+RC=0; OUT="$(cd "$PROJ" && env -i PATH="$PATH" HOME="$TRUNC_HOME" "$SC" list --json 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+check "list with a trailing-garbage index still lists the session (as an orphan)" 0 '11111111' 'warning: skipping unreadable'
+json_is "the trailing-garbage index session is listed exactly once" 'len(d) == 1 and d[0]["sessionId"].startswith("11")'
+[[ "$(printf '%s\n' "$ERR" | grep -c 'warning: skipping unreadable')" == 1 ]] && ok "the trailing-garbage index is warned about once" || bad "the trailing-garbage index is warned about once" "stderr: $ERR"
 
 echo "every script named in a SKILL.md exists, is executable and answers --help"
 # Pull each "${CLAUDE_SKILL_DIR}/scripts/<name>" out of a SKILL.md, resolve it against that
