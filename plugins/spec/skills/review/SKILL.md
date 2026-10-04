@@ -2,7 +2,7 @@
 name: review
 description: "Reviews a story or design spec (not code, a diff or a pull request: use review:deep or review:adversarial for those) and enriches it with codebase-verified technical sub-tasks, architecture alignment checks, design simplification suggestions, and API test plans. Dynamically discovers project architecture at runtime. Was the spec-review skill. Use when: (1) a new story spec needs review before implementation, (2) a spec has high-level tasks but lacks implementation-ready detail, (3) need to verify spec assumptions against actual codebase, (4) a spec references API changes but has no test plan, (5) reviewing specs that reference data shapes or pipeline ordering, (6) spec subtasks mention add field X to object Y or call function at line N."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Spec Review
@@ -390,4 +390,4 @@ Ask the user whether to:
 ## See Also
 
 - `spec:create` — generates story specs (this skill reviews them)
-- `context-shield` — use when a spec references many external docs that need reading
+- `context:shield` — use when a spec references many external docs that need reading

@@ -2,6 +2,12 @@
 
 All notable changes to the **spec** plugin are documented here.
 
+## [1.0.2] - 2026-10-04
+
+### Changed
+
+- The See Also lines in the README and in `spec:review` name `context:shield` (was `context-shield`), after `context-shield` moved into the `context` plugin (#163). `spec:review` is at 1.0.1.
+
 ## [1.0.1] - 2026-10-04
 
 ### Changed

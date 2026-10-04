@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.2] - 2026-10-04
+
+### Changed
+
+- The See Also line says `context:shield` (was `context-shield`), after `context-shield` moved into the `context` plugin (#163).
+
 ## [3.2.1] - 2026-10-04
 
 ### Changed
