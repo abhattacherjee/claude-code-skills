@@ -196,21 +196,21 @@ for SKILL_NAME in "${SKILLS[@]}"; do
   # Validate
   if [[ ! -d "$SKILL_DIR" ]]; then
     echo "  ERROR: $SKILL_DIR not found"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
     echo ""
     continue
   fi
 
   if [[ ! -f "$SKILL_MD" ]]; then
     echo "  ERROR: $SKILL_MD not found"
-    ((ERRORS++))
+    ERRORS=$((ERRORS + 1))
     echo ""
     continue
   fi
 
   if [[ ! -d "$SKILL_DIR/.git" ]]; then
     echo "  SKIP: no .git directory (not a published repo)"
-    ((SKIPPED++))
+    SKIPPED=$((SKIPPED + 1))
     echo ""
     continue
   fi
@@ -364,7 +364,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
     cd - >/dev/null
   fi
 
-  ((SYNCED++))
+  SYNCED=$((SYNCED + 1))
   echo ""
 done
 

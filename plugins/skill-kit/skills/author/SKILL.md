@@ -7,9 +7,15 @@ metadata:
 
 # Skill Authoring
 
-> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command works from the project directory. In `references/` files, which get no such replacement, `<SCRIPTS_DIR>` stands for `${CLAUDE_SKILL_DIR}/scripts`. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
+> **Paths:** This skill's commands call its scripts by absolute path. Claude Code fills in this skill's directory before the text reaches you, so each command works from the project directory. In `references/` files, which get no such filling-in, `<SCRIPTS_DIR>` stands for this skill's scripts directory:
+>
+> ```text
+> <SCRIPTS_DIR> = "${CLAUDE_SKILL_DIR}/scripts"
+> ```
+>
+> Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
 
-**When you write a new skill, do the same.** In its SKILL.md call each script as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. A bare `./scripts/<name>.sh` resolves against the user's project, not the skill, so it fails. A command may not read a shell variable that an earlier block set (each block may run in a fresh shell). The templates in `references/skill-templates.md` write that prefix as `<SKILL_SCRIPTS>`.
+**When you write a new skill, do the same, but never copy a path from this file.** Claude Code replaces the skill-directory variable everywhere in a SKILL.md, so any path you see here is already this skill's own absolute path. In the new skill's SKILL.md, call each script as: a double quote, a dollar sign, `{CLAUDE_SKILL_DIR}`, then `/scripts/<name>.sh` and a closing double quote, with no spaces between the parts. `references/skill-templates.md` (section "Script paths") describes the same text with an example. A bare `./scripts/<name>.sh` resolves against the user's project, not the skill, so it fails. A command may not read a shell variable that an earlier block set (each block may run in a fresh shell). The templates in `references/skill-templates.md` and `references/task-tracking-pattern.md`, and the example below, write that prefix as `<SKILL_SCRIPTS>`.
 
 ## Core Principles
 

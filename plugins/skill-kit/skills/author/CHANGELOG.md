@@ -13,6 +13,7 @@ All notable changes to the **author** skill (was `skill-authoring`) are document
 ### Fixed
 
 - `references/skill-templates.md`: the two skill templates sat in a three-backtick `markdown` fence that held three-backtick `bash` fences, so the first inner fence closed the template early and the rest rendered as plain text. They are now four-backtick fences. The templates write script calls as `<SKILL_SCRIPTS>/<name>.sh`, and SKILL.md says what to write in its place (`"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`). They used `./scripts/<name>.sh`, which fails from the user's project.
+- The Paths note told you to call a new skill's scripts as the `${CLAUDE_SKILL_DIR}` path, written in prose. Claude Code replaces that token everywhere in a SKILL.md, so the model read (and copied) the author skill's own absolute path. SKILL.md now spells the variable out in parts outside code blocks, and `references/skill-templates.md` has a "Script paths" section that says what `<SKILL_SCRIPTS>` stands for. `references/task-tracking-pattern.md` says what `<SKILL_SCRIPTS>` and `<SCRIPTS_DIR>` stand for.
 - `references/quality-checklist.md`: the cross-reference check read `$f` through a `while read f` at the end of a pipe. It is now a `for` loop.
 
 ## History before 1.0.0 (as `skill-authoring`)

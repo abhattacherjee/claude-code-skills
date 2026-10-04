@@ -215,4 +215,4 @@ This plugin follows the **Claude Code Plugin** format. Skills use the **Agent Sk
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The `extract` skill is a fork of [blader/Claudeception](https://github.com/blader/Claudeception), MIT, "Copyright (c) 2024 Claude Code". Its original license and copyright notice are kept in [`skills/extract/LICENSE`](skills/extract/LICENSE).

@@ -1,6 +1,10 @@
 <!-- Moved verbatim from SKILL.md (2.6.1) so SKILL.md stays under the 500-line limit. -->
 
-In these templates `<SKILL_SCRIPTS>` stands for the scripts prefix a skill's SKILL.md uses; see the Paths note in SKILL.md for what to write in its place.
+## Script paths
+
+In these templates `<SKILL_SCRIPTS>` stands for the prefix a skill's SKILL.md puts before each script name. Replace it with: a double quote, a dollar sign, `{CLAUDE_SKILL_DIR}`, then `/scripts/`. Close the double quote right after the script name, before any arguments. The result is the shell's `${...}` variable form, with `CLAUDE_SKILL_DIR` as the variable name, followed by `/scripts/`, the script name (for example `check.sh`) and the closing quote.
+
+Never write an absolute path there. Claude Code replaces that variable with the skill's own directory when it loads the SKILL.md, so the command runs from the user's project directory. Because the replacement happens everywhere in a SKILL.md, the author skill spells the variable out in parts like this instead of showing it whole.
 
 ## Skill Template
 

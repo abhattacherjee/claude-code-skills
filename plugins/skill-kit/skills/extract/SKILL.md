@@ -51,18 +51,41 @@ Before extracting, verify the knowledge meets these criteria:
 
 **Goal:** Find related skills before creating. Decide: update or create new.
 
-```sh
-# Needs ripgrep. Stop if it is missing: an empty result would read as "nothing related".
+```bash
+# Needs ripgrep and python3. Stop if one is missing: an empty result would read as "nothing related".
 command -v rg >/dev/null || { echo "Stop: ripgrep (rg) is not installed. Install it, then re-run." >&2; exit 1; }
+command -v python3 >/dev/null || { echo "Stop: python3 is not installed. Install it, then re-run." >&2; exit 1; }
 
-# Skill directories (project-first, then user-level, then plugin-installed).
+# Skill directories: project first, then user level, then ACTIVE plugin installs only.
+# Plugin installs come from ~/.claude/plugins/installed_plugins.json (each install's
+# installPath, user scope or this project's scope). The rest of ~/.claude/plugins/cache
+# and ~/.claude/plugins/marketplaces holds old versions and plugins that are not installed.
 # Only directories that exist are searched; other errors still print.
 SKILL_DIRS=()
-for d in ".claude/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" \
-         "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces"; do
+for d in ".claude/skills" "$HOME/.claude/skills" "$HOME/.codex/skills"; do
   [ -d "$d" ] && SKILL_DIRS+=("$d")
-  # Add other tool paths as needed
 done
+while IFS= read -r d; do
+  [ -n "$d" ] && [ -d "$d" ] && SKILL_DIRS+=("$d")
+done < <(python3 - "$HOME/.claude/plugins/installed_plugins.json" "$(pwd)" <<'EOF'
+import json, os, sys
+path, cwd = sys.argv[1], os.path.realpath(sys.argv[2])
+try:
+    with open(path, encoding="utf-8") as f:
+        plugins = json.load(f).get("plugins", {})
+except FileNotFoundError:
+    sys.stderr.write("Note: %s not found; skipping plugin skills.\n" % path)
+    sys.exit(0)
+except (OSError, ValueError, AttributeError) as exc:
+    sys.stderr.write("Note: cannot read %s (%s); skipping plugin skills.\n" % (path, exc))
+    sys.exit(0)
+for name, installs in plugins.items():
+    for i in installs if isinstance(installs, list) else []:
+        project = i.get("projectPath")
+        if i.get("installPath") and (not project or os.path.realpath(project) == cwd):
+            print(i["installPath"])
+EOF
+)
 [ "${#SKILL_DIRS[@]}" -gt 0 ] || { echo "Stop: no skill directories found." >&2; exit 1; }
 
 # List all skills
@@ -90,6 +113,8 @@ rg -i "getServerSideProps|next.config.js|prisma.schema" "${SKILL_DIRS[@]}"
 **Versioning:** patch = typos/wording, minor = new scenario, major = breaking changes or deprecation.
 
 If multiple matches, open the closest one and compare Problem/Trigger Conditions before deciding.
+
+**A match inside a plugin install is not edited in place.** Its installPath is a cache copy under `~/.claude/plugins/cache`, which the next plugin update overwrites. Read the plugin's marketplace in `~/.claude/plugins/known_marketplaces.json`. If its `source.source` is `"directory"`, `source.path` is a checkout the user owns: make "Update existing" there, in the plugin's own source, not in the cache. Otherwise (a `github` or `git` source) do not edit the plugin: tell the user the fix belongs in the plugin's source repo, and create a new user skill in `~/.claude/skills/` with a `See also:` link to the plugin skill.
 
 ### Step 2: Identify the Knowledge
 

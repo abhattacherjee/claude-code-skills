@@ -3,6 +3,8 @@
 Full reference for adding progress tracking to Claude Code skills with long-running
 workflows (3+ phases or >2 minutes).
 
+`<SKILL_SCRIPTS>` below is the scripts prefix a skill's SKILL.md uses; `skill-templates.md` (section "Script paths") shows what to write in its place. `<SCRIPTS_DIR>` is the skill-kit author skill's own scripts directory.
+
 ## Task Manifest Script Template
 
 Every skill with tracking should include `scripts/task-manifest.sh`:

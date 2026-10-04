@@ -278,6 +278,37 @@ EOF
   fi
 done
 
+echo "author and extract never show the substituted path tokens in prose"
+# Claude Code replaces "${CLAUDE_SKILL_DIR}" and "${CLAUDE_PLUGIN_ROOT}" everywhere in a SKILL.md,
+# prose and inline code included, before the model reads it. In a fenced code block the token is a
+# real command for this skill's own scripts, which is what we want. Outside one it is usually advice
+# about what to write in a NEW skill, and the model would read (and copy) this skill's absolute path.
+# So outside fenced blocks these two skills (the ones that write skills) must not contain the token.
+for skill in author extract; do
+  hits="$(python3 - "$SKILLS/$skill/SKILL.md" <<'EOF'
+import re, sys
+fence = None  # (char, length) of the open fence, or None
+for no, line in enumerate(open(sys.argv[1], encoding="utf-8"), 1):
+    line = re.sub(r'^\s*(>\s*)*', '', line)  # a fence may sit inside a blockquote
+    m = re.match(r'(`{3,}|~{3,})', line)
+    if m:
+        tok = m.group(1)
+        if fence is None:
+            fence = (tok[0], len(tok))
+            continue
+        if tok[0] == fence[0] and len(tok) >= fence[1] and not line.strip()[len(tok):]:
+            fence = None
+            continue
+    if fence is None and re.search(r'\$\{CLAUDE_(SKILL_DIR|PLUGIN_ROOT)\}', line):
+        print(f"line {no}: {line.strip()[:100]}")
+if fence is not None:
+    print("unclosed code fence")
+EOF
+)"
+  [[ -z "$hits" ]] && ok "$skill SKILL.md: no path token outside code blocks" \
+    || bad "$skill SKILL.md: path token outside a code block (it is substituted, so the model sees an absolute path)" "$hits"
+done
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
