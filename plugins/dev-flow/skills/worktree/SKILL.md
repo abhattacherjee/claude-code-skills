@@ -17,8 +17,9 @@ Multiple Claude Code sessions sharing one working directory fight over the same 
 # From the repo you want to work in:
 "${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" list                          # Show worktrees + branches
 "${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" create <BRANCH>               # Existing branch
-"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" create --new <NEW_BRANCH>     # New branch from develop
-"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" remove <BRANCH>               # Clean up
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" create --new <NEW_BRANCH>     # New branch from origin/develop
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" remove <BRANCH>               # Clean up (git refuses if there is uncommitted work)
+"${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" remove --force <BRANCH>       # Discards uncommitted work
 "${CLAUDE_SKILL_DIR}/scripts/setup-worktree.sh" --help                        # Full usage
 ```
 
@@ -39,12 +40,14 @@ Use AskUserQuestion with options based on what `list` returned:
 
 ### Step 3: Execute
 Run the appropriate script command. The script handles:
-- Creating the worktree directory as a sibling (e.g., `../repo-name--branch-suffix/`)
-- Fetching from remote if needed
-- Running `npm install` in backend/frontend/mcp-events-server if node_modules is missing
+- Creating the worktree directory as a sibling (e.g., `../repo-name--branch-suffix/`). If that directory exists and is not the branch's worktree (another branch's worktree, or a plain directory), it stops with an error.
+- For `create --new`: fetching `origin` (a failed fetch prints a warning), then branching from `origin/develop`, else local `develop`, else the branch `origin/HEAD` names, else `main`. The new branch has no upstream; set one on the first push (`git push -u`).
+- Running `npm install` in the worktree root and in each immediate subdirectory that has a `package.json` and no `node_modules`. If any install fails, it names them and exits 1, after printing the `cd` line.
+
+`remove` finds the worktree by branch. If the worktree has uncommitted or untracked work, git refuses and the script exits non-zero. Ask the user before running `remove --force`: it discards that work.
 
 ### Step 4: Tell the user what to do next
-The script outputs the exact `cd` + `claude` command. Relay this clearly.
+The script outputs the exact `cd` + `claude` command, quoted so it works when pasted even if the path has a space. Relay this clearly.
 
 The script does not set up Python virtualenvs. See Notes below before
 dispatching any work in a Python project.
@@ -61,10 +64,10 @@ parent-dir/
 
 ## Notes
 
-- Each worktree has its own `node_modules` — the script installs them automatically
+- Each worktree has its own `node_modules` — the script installs them automatically (`--no-install` skips it)
 - A branch checked out in one worktree CANNOT be checked out in another (git enforces this)
 - Worktrees share the same `.git` history — commits are visible across all worktrees
-- Use `git worktree remove` (or the script's `remove` command) to clean up when done
+- Use the script's `remove` command (or `git worktree remove`) to clean up when done. Neither removes a worktree with uncommitted work unless forced.
 - **Python projects get no virtualenv.** `.venv` is untracked, so a new worktree
   starts without one. Run the project's own venv setup script, if it has one,
   before anything else. If a worktree has no `.venv`, an editable install in the

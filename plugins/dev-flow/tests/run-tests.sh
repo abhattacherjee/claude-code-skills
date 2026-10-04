@@ -242,6 +242,124 @@ run_in "$TMP/notrepo" "$WT" list
 check "outside a git repo, list exits non-zero with a message" nonzero "" 'Not in a git repository'
 run_in "$PROJ" "$WT" --help
 check "--help exits 0 and shows usage" 0 'Usage: setup-worktree.sh'
+check "--help documents remove --force" 0 'remove <branch> \[--force\]'
+for f in "$WT" "$SKILLS/worktree/SKILL.md"; do
+  grep -Eq 'mcp-events-server|backend|frontend' "$f" && bad "$(basename "$f") names no project-specific package directory" "$(grep -En 'mcp-events-server|backend|frontend' "$f" | head -2)" || ok "$(basename "$f") names no project-specific package directory"
+done
+
+echo "setup-worktree.sh: remove keeps uncommitted work unless --force"
+run_in "$REPO" "$WT" create --new dirty --no-install
+check "create --new dirty exits 0" 0
+echo "precious" > "$TMP/work/repo--dirty/unsaved.txt"
+run_in "$REPO" "$WT" remove feature/dirty
+check "remove of a worktree with an untracked file exits non-zero and says why" nonzero "" 'untracked|modified|--force'
+[[ -f "$TMP/work/repo--dirty/unsaved.txt" ]] && ok "the refused remove keeps the uncommitted file" || bad "the refused remove keeps the uncommitted file" "it is gone"
+run_in "$REPO" "$WT" remove --force feature/dirty
+check "remove --force exits 0" 0 'Worktree removed'
+[[ ! -e "$TMP/work/repo--dirty" ]] && ok "remove --force deletes the worktree directory" || bad "remove --force deletes the worktree directory" "still there"
+run_in "$REPO" git worktree list
+printf '%s' "$OUT" | grep -Fq 'repo--dirty' && bad "git worktree list no longer lists the removed worktree" "$OUT" || ok "git worktree list no longer lists the removed worktree"
+
+echo "setup-worktree.sh: worktrees are found by branch, not by directory name"
+run_in "$REPO" "$WT" create --new x/y --no-install
+check "create --new x/y exits 0 (directory repo--x-y)" 0
+gitc "$REPO" branch feature/x-y develop
+run_in "$REPO" "$WT" create feature/x-y --no-install
+check "create for feature/x-y, whose directory is feature/x/y's worktree, exits non-zero" nonzero "" 'already exists'
+[[ "$(cd "$TMP/work/repo--x-y" && cenv git branch --show-current)" == feature/x/y ]] && ok "the x/y worktree is untouched" || bad "the x/y worktree is untouched" "branch changed"
+echo "unsaved" > "$TMP/work/repo--x-y/u.txt"
+run_in "$REPO" "$WT" remove feature/x-y
+check "remove feature/x-y (no worktree of its own) exits non-zero" nonzero "" 'Worktree not found'
+[[ -f "$TMP/work/repo--x-y/u.txt" ]] && ok "remove feature/x-y leaves feature/x/y's worktree alone" || bad "remove feature/x-y leaves feature/x/y's worktree alone" "it was removed"
+run_in "$REPO" "$WT" remove --force feature/x/y
+check "remove --force feature/x/y exits 0" 0
+mkdir -p "$TMP/work/repo--plain"
+run_in "$REPO" "$WT" create --new plain --no-install
+check "create --new into a plain directory that is in the way exits non-zero" nonzero "" 'already exists'
+(cd "$REPO" && cenv git show-ref --verify --quiet refs/heads/feature/plain) && bad "the refused create makes no branch" "feature/plain exists" || ok "the refused create makes no branch"
+
+echo "setup-worktree.sh: the base of a new branch"
+# Local develop is one commit ahead of origin/develop: the new branch must start at origin/develop.
+gitc "$REPO" commit -q --allow-empty -m "chore: local only"
+ORIGIN_DEV="$(cd "$REPO" && cenv git rev-parse origin/develop)"
+run_in "$REPO" "$WT" create --new based --no-install
+check "create --new with origin/develop exits 0" 0
+[[ "$(cd "$REPO" && cenv git rev-parse feature/based)" == "$ORIGIN_DEV" ]] && ok "the new branch starts at origin/develop, not the local develop ahead of it" || bad "the new branch starts at origin/develop" "$(cd "$REPO" && cenv git log --oneline -2 feature/based)"
+(cd "$REPO" && cenv git rev-parse --abbrev-ref 'feature/based@{upstream}' >/dev/null 2>&1) && bad "the new branch has no upstream (--no-track)" "it tracks $(cd "$REPO" && cenv git rev-parse --abbrev-ref 'feature/based@{upstream}')" || ok "the new branch has no upstream (--no-track)"
+run_in "$REPO" "$WT" remove feature/based
+# A fetch that fails is reported, not hidden.
+gitc "$REPO" remote set-url origin "$TMP/no-such-origin.git"
+run_in "$REPO" "$WT" create --new stale --no-install
+check "a failed fetch still creates the branch" 0
+printf '%s' "$ERR" | grep -q 'WARNING.*fetch' && ok "a failed fetch prints a warning" || bad "a failed fetch prints a warning" "stderr: $ERR"
+gitc "$REPO" remote set-url origin "$TMP/origin.git"
+run_in "$REPO" "$WT" remove feature/stale
+# A remote-only branch.
+gitc "$REPO" branch feature/remote develop
+gitc "$REPO" push -q origin feature/remote
+gitc "$REPO" branch -D feature/remote
+run_in "$REPO" "$WT" create feature/remote --no-install
+check "create for a branch that only exists on origin exits 0" 0 'remote branch'
+[[ "$(cd "$TMP/work/repo--remote" && cenv git branch --show-current)" == feature/remote ]] && ok "the remote-only branch is checked out in its worktree" || bad "the remote-only branch is checked out in its worktree" "wrong branch"
+run_in "$REPO" "$WT" remove feature/remote
+
+# A repo with only main, no origin.
+MO="$TMP/work/mainonly"
+newrepo "$MO"
+gitc "$MO" commit -q --allow-empty -m "chore: init"
+run_in "$MO" "$WT" create --new q --no-install
+check "a main-only repo with no origin: create --new exits 0" 0 'from main'
+[[ "$(cd "$MO" && cenv git rev-parse feature/q)" == "$(cd "$MO" && cenv git rev-parse main)" ]] && ok "a main-only repo: the new branch starts at main" || bad "a main-only repo: the new branch starts at main" ""
+# A clone whose origin has main only: origin/HEAD names the base.
+gitc "$TMP" init -q --bare "$TMP/origin-main.git"
+gitc "$TMP/origin-main.git" symbolic-ref HEAD refs/heads/main
+gitc "$MO" remote add origin "$TMP/origin-main.git"
+gitc "$MO" push -q origin main
+gitc "$TMP/work" clone -q "$TMP/origin-main.git" "$TMP/work/clone"
+run_in "$TMP/work/clone" "$WT" create --new c --no-install
+check "a clone with no develop: create --new starts from origin/HEAD's branch" 0 'from origin/main'
+# No base at all: a repo on another branch with no develop, main or origin.
+NB="$TMP/work/nobase"
+mkdir -p "$NB"
+gitc "$NB" init -q
+gitc "$NB" symbolic-ref HEAD refs/heads/trunk
+gitc "$NB" commit -q --allow-empty -m "chore: init"
+run_in "$NB" "$WT" create --new z --no-install
+check "no develop, origin or main: create --new exits non-zero with a message" nonzero "" 'No base branch'
+
+echo "setup-worktree.sh: dependency install"
+FAKE="$TMP/fakebin"
+mkdir -p "$FAKE"
+printf '#!/bin/sh\necho "npm boom" >&2\nexit 1\n' > "$FAKE/npm"
+chmod +x "$FAKE/npm"
+NP="$TMP/work/npmrepo"
+newrepo "$NP"
+echo '{}' > "$NP/package.json"
+mkdir -p "$NP/web"
+echo '{}' > "$NP/web/package.json"
+gitc "$NP" add package.json web/package.json
+gitc "$NP" commit -q -m "chore: init"
+run_in "$NP" env PATH="$FAKE:$PATH" "$WT" create --new fails
+check "npm install failing: create exits 1" 1 "" 'npm install failed'
+check "npm install failing: the cd line is still printed" 1 "cd .*npmrepo--fails && claude"
+printf '%s' "$OUT" | grep -q 'Installed dependencies' && bad "npm install failing: no 'Installed' success line" "$OUT" || ok "npm install failing: no 'Installed' success line"
+printf '%s' "$ERR" | grep -Fq 'web' && ok "npm install failing: the failed package is named" || bad "npm install failing: the failed package is named" "$ERR"
+printf '#!/bin/sh\nmkdir node_modules\nexit 0\n' > "$FAKE/npm"
+run_in "$NP" env PATH="$FAKE:$PATH" "$WT" create --new works
+check "npm install in the repo root and each subdirectory with a package.json: 2 packages" 0 'Installed dependencies in 2 package'
+run_in "$NP" env PATH="$FAKE:$PATH" "$WT" install feature/works
+check "install again: every package already has node_modules" 0 'already have node_modules'
+
+echo "setup-worktree.sh: printed commands work when pasted, even with a space in the path"
+SPR="$TMP/work/sp ace/proj"
+newrepo "$SPR"
+gitc "$SPR" commit -q --allow-empty -m "chore: init"
+gitc "$SPR" branch feature/y
+run_in "$SPR" "$WT" create feature/y --no-install
+check "a repo under a path with a space: create exits 0" 0
+line="$(printf '%s\n' "$OUT" | grep -E '^  cd .* && claude$' | head -1 | sed 's/^  //; s/ && claude$//')"
+got="$(cd "$PROJ" && bash -c "$line && pwd -P" 2>&1 || true)"
+[[ "$got" == "$TMP/work/sp ace/proj--y" ]] && ok "the printed cd line, pasted into a shell, lands in the worktree" || bad "the printed cd line, pasted into a shell, lands in the worktree" "line: $line -> $got"
 
 # ---------------------------------------------------------------------------
 echo "update-changelog.sh (changelog)"

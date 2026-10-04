@@ -14,7 +14,7 @@ Invoke as `/dev-flow:<skill>`. The old names still match as trigger phrases.
 
 | Skill | Was | What it does |
 |---|---|---|
-| `worktree` | `worktree` | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. Worktrees are siblings of the repo (`../repo-name--branch-suffix/`). Lists, creates and removes them, and prints the `cd` + `claude` command to start a session there. |
+| `worktree` | `worktree` | Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. Worktrees are siblings of the repo (`../repo-name--branch-suffix/`). Lists, creates and removes them, and prints the `cd` + `claude` command to start a session there. New branches start from `origin/develop` (else `develop`, `origin/HEAD`'s branch, or `main`). `remove` refuses a worktree with uncommitted work unless you pass `--force`. |
 | `changelog` | `changelog-keeper` | Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Conventional commit prefixes (`feat:` to Added, `fix:` to Fixed and so on); a commit with no prefix goes to Other. Only when no commit in the range has a prefix and the range changed `src/`, `lib/` or `scripts/` do they go to Changed. Outputs Keep-a-Changelog format. |
 
 ### Use `worktree` when
@@ -24,7 +24,7 @@ Invoke as `/dev-flow:<skill>`. The old names still match as trigger phrases.
 - two Claude Code sessions are fighting over the same branch,
 - you want to set up parallel development.
 
-A branch checked out in one worktree cannot be checked out in another (git enforces this). Each worktree has its own `node_modules`, and the script installs them. A worktree has no Python virtualenv, so run the project's own setup first and check that imports resolve inside the worktree.
+A branch checked out in one worktree cannot be checked out in another (git enforces this). Each worktree has its own `node_modules`. The script runs `npm install` in the worktree root and in each immediate subdirectory that has a `package.json` and no `node_modules`, and exits 1 if any install fails. A worktree has no Python virtualenv, so run the project's own setup first and check that imports resolve inside the worktree.
 
 ### Use `changelog` when
 
@@ -46,7 +46,7 @@ Each skill's commands run its own script through `${CLAUDE_SKILL_DIR}`, so they 
 
 | Skill | Script | Purpose |
 |---|---|---|
-| `worktree` | `setup-worktree.sh list\|create [--new]\|remove\|install` | Manages the worktrees of the repo you are in. |
+| `worktree` | `setup-worktree.sh list\|create [--new]\|remove [--force]\|install` | Manages the worktrees of the repo you are in. |
 | `worktree` | `validate-skill.sh <skill-dir>` | Same validator as the repo root. |
 | `changelog` | `update-changelog.sh [--dry-run] [--since REF] [--version X.Y.Z] [repo-dir]` | Builds the changelog entry from git history. |
 | `changelog` | `validate-skill.sh <skill-dir>` | Same validator as the repo root. |
