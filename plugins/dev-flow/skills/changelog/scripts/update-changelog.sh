@@ -21,7 +21,7 @@ Categorizes changes into Added/Changed/Fixed/Removed/Testing/Documentation.
 
 Options:
   --dry-run              Preview changelog entry without writing
-  --since <ref>          Git ref to start from (tag, commit, date)
+  --since <ref>          Git ref to start from (tag, branch or commit)
                          Default: auto-detect from last changelog version tag
   --version <ver>        Create a versioned entry (e.g., "1.2.0")
                          Default: update [Unreleased] section
@@ -40,8 +40,10 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)    DRY_RUN=true; shift ;;
-    --since)      SINCE="$2"; shift 2 ;;
-    --version)    VERSION="$2"; MODE="version"; shift 2 ;;
+    --since)      [[ $# -ge 2 ]] || { echo "Error: --since needs a value" >&2; exit 1; }
+                  SINCE="$2"; shift 2 ;;
+    --version)    [[ $# -ge 2 ]] || { echo "Error: --version needs a value" >&2; exit 1; }
+                  VERSION="$2"; MODE="version"; shift 2 ;;
     -h|--help)    usage ;;
     -*)           echo "Error: Unknown option: $1" >&2; exit 1 ;;
     *)            REPO_DIR="$1"; shift ;;
@@ -56,57 +58,83 @@ fi
 REPO_DIR="$(cd "$REPO_DIR" && pwd)"
 CHANGELOG="$REPO_DIR/CHANGELOG.md"
 
-# Verify it's a git repo
-if [[ ! -d "$REPO_DIR/.git" ]]; then
+# Verify it's a git repo (.git is a file, not a directory, in a worktree)
+if ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   echo "Error: $REPO_DIR is not a git repository" >&2
   exit 1
 fi
 
 cd "$REPO_DIR"
 
-# --- Auto-detect --since if not provided ---
-if [[ -z "$SINCE" ]]; then
-  # Try: last version tag
-  LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-  if [[ -n "$LAST_TAG" ]]; then
-    SINCE="$LAST_TAG"
-    echo "Auto-detected: changes since tag $SINCE"
+# --- Resolve --since to a commit ---
+# resolve_ref <name>: print the commit SHA for <name>, or fail. The name must look like a
+# tag, branch or SHA and must not start with "-", so it can never act as a git option.
+# Names come from the command line and from CHANGELOG.md, which is untrusted input.
+resolve_ref() {
+  local name="$1"
+  [[ "$name" =~ ^[0-9A-Za-z._/-]+$ && "$name" != -* ]] || return 1
+  git rev-parse --verify --quiet "${name}^{commit}"
+}
+
+SINCE_LABEL="$SINCE"
+if [[ -n "$SINCE" ]]; then
+  if ! SINCE=$(resolve_ref "$SINCE"); then
+    echo "Error: --since '$SINCE_LABEL' is not a tag, branch or commit in this repository" >&2
+    exit 1
+  fi
+else
+  # Try: last semver tag reachable from HEAD (v1.2.3 or 1.2.3; not sync-2026-02-24 and the like)
+  LAST_TAG=$(git tag -l 'v[0-9]*' '[0-9]*' --merged HEAD --sort=-v:refname 2>/dev/null | head -1 || true)
+  if [[ -n "$LAST_TAG" ]] && SINCE=$(resolve_ref "$LAST_TAG"); then
+    SINCE_LABEL="$LAST_TAG"
+    echo "Auto-detected: changes since tag $SINCE_LABEL"
   else
+    SINCE=""
     # Try: extract version from CHANGELOG.md
     if [[ -f "$CHANGELOG" ]]; then
       LAST_VERSION=$(grep -m1 '^## \[' "$CHANGELOG" | sed 's/## \[\(.*\)\].*/\1/' || echo "")
-      if [[ -n "$LAST_VERSION" && "$LAST_VERSION" != "Unreleased" ]]; then
+      # Only a plain name is tried. Anything else (spaces, a leading "-") is skipped.
+      if [[ -n "$LAST_VERSION" && "$LAST_VERSION" != "Unreleased" && "$LAST_VERSION" =~ ^[0-9A-Za-z._-]+$ && "$LAST_VERSION" != -* ]]; then
         # Look for a matching tag
         for prefix in "v" ""; do
-          if git rev-parse "${prefix}${LAST_VERSION}" >/dev/null 2>&1; then
-            SINCE="${prefix}${LAST_VERSION}"
-            echo "Auto-detected: changes since $SINCE (from CHANGELOG.md)"
+          if SINCE=$(resolve_ref "${prefix}${LAST_VERSION}"); then
+            SINCE_LABEL="${prefix}${LAST_VERSION}"
+            echo "Auto-detected: changes since $SINCE_LABEL (from CHANGELOG.md)"
             break
           fi
+          SINCE=""
         done
       fi
     fi
     # Fallback: all commits
     if [[ -z "$SINCE" ]]; then
-      SINCE=$(git rev-list --max-parents=0 HEAD 2>/dev/null | head -1)
+      # An empty SINCE means the whole history, root commit included ("root..HEAD" skips it).
+      SINCE_LABEL="$(git rev-list --max-parents=0 HEAD 2>/dev/null | head -1)"
       echo "No tags found, using all commits since initial"
     fi
   fi
 fi
 
 # --- Gather commits ---
-COMMITS=$(git log "$SINCE"..HEAD --pretty=format:"%s" --no-merges 2>/dev/null || echo "")
+if [[ -n "$SINCE" ]]; then
+  RANGE="$SINCE..HEAD"
+  DIFF_FROM="$SINCE"
+else
+  RANGE="HEAD"
+  DIFF_FROM="$(git hash-object -t tree /dev/null)"  # the empty tree
+fi
+COMMITS=$(git log "$RANGE" --pretty=format:"%s" --no-merges)
 if [[ -z "$COMMITS" ]]; then
-  echo "No new commits since $SINCE"
+  echo "No new commits since $SINCE_LABEL"
   exit 0
 fi
 
 COMMIT_COUNT=$(echo "$COMMITS" | wc -l | tr -d ' ')
-echo "Found $COMMIT_COUNT commits since $SINCE"
+echo "Found $COMMIT_COUNT commits since $SINCE_LABEL"
 echo ""
 
 # --- Gather changed files for categorization ---
-CHANGED_FILES=$(git diff --name-only "$SINCE"..HEAD 2>/dev/null || echo "")
+CHANGED_FILES=$(git diff --name-only "$DIFF_FROM" HEAD)
 
 # --- Categorize commits by conventional commit prefix ---
 ADDED=""
@@ -132,14 +160,14 @@ while IFS= read -r msg; do
 
   # Categorize
   case "$prefix" in
-    feat|add)     ADDED="${ADDED}- ${body}\n" ;;
-    fix)          FIXED="${FIXED}- ${body}\n" ;;
-    docs)         DOCS="${DOCS}- ${body}\n" ;;
-    test)         TESTING="${TESTING}- ${body}\n" ;;
+    feat|add)     ADDED="${ADDED}- ${body}"$'\n' ;;
+    fix)          FIXED="${FIXED}- ${body}"$'\n' ;;
+    docs)         DOCS="${DOCS}- ${body}"$'\n' ;;
+    test)         TESTING="${TESTING}- ${body}"$'\n' ;;
     refactor|perf|style|chore|build|ci)
-                  CHANGED="${CHANGED}- ${body}\n" ;;
-    revert)       REMOVED="${REMOVED}- ${body}\n" ;;
-    *)            OTHER="${OTHER}- ${body}\n" ;;
+                  CHANGED="${CHANGED}- ${body}"$'\n' ;;
+    revert)       REMOVED="${REMOVED}- ${body}"$'\n' ;;
+    *)            OTHER="${OTHER}- ${body}"$'\n' ;;
   esac
 done <<< "$COMMITS"
 
@@ -183,50 +211,53 @@ if [[ -n "$ADDED" ]]; then
   ENTRY="${ENTRY}
 ### Added
 
-$(echo -e "$ADDED")"
+${ADDED}"
 fi
 
 if [[ -n "$CHANGED" ]]; then
   ENTRY="${ENTRY}
 ### Changed
 
-$(echo -e "$CHANGED")"
+${CHANGED}"
 fi
 
 if [[ -n "$FIXED" ]]; then
   ENTRY="${ENTRY}
 ### Fixed
 
-$(echo -e "$FIXED")"
+${FIXED}"
 fi
 
 if [[ -n "$REMOVED" ]]; then
   ENTRY="${ENTRY}
 ### Removed
 
-$(echo -e "$REMOVED")"
+${REMOVED}"
 fi
 
 if [[ -n "$TESTING" ]]; then
   ENTRY="${ENTRY}
 ### Testing
 
-$(echo -e "$TESTING")"
+${TESTING}"
 fi
 
 if [[ -n "$DOCS" ]]; then
   ENTRY="${ENTRY}
 ### Documentation
 
-$(echo -e "$DOCS")"
+${DOCS}"
 fi
 
 if [[ -n "$OTHER" ]]; then
   ENTRY="${ENTRY}
 ### Other
 
-$(echo -e "$OTHER")"
+${OTHER}"
 fi
+
+# Each section ends with a newline, so a blank line separates it from the next heading.
+ENTRY="${ENTRY%$'\n'}"
 
 # --- Output ---
 echo "Generated changelog entry:"
@@ -241,28 +272,36 @@ if $DRY_RUN; then
 fi
 
 # --- Write to CHANGELOG.md ---
+# Never write through a symlink: a CHANGELOG.md that points outside the repo would
+# overwrite that file. The new content goes to a temp file in the same directory
+# and is renamed over CHANGELOG.md.
+if [[ -L "$CHANGELOG" ]]; then
+  echo "Error: $CHANGELOG is a symlink; refusing to write through it" >&2
+  exit 1
+fi
+TMPFILE=$(mktemp "$REPO_DIR/.CHANGELOG.XXXXXX")
+trap 'rm -f "$TMPFILE"' EXIT
+
 if [[ ! -f "$CHANGELOG" ]]; then
   # Create new changelog
-  cat > "$CHANGELOG" <<EOF
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-$ENTRY
-EOF
+  chmod 644 "$TMPFILE"
+  printf '# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n%s\n' "$ENTRY" > "$TMPFILE"
+  mv "$TMPFILE" "$CHANGELOG"
   echo ""
   echo "Created $CHANGELOG"
 else
-  # Insert entry into existing changelog
-  TMPFILE=$(mktemp)
+  # Insert entry into existing changelog. The entry goes to awk through the
+  # environment: `awk -v` would turn a backslash in a commit subject into an escape.
+  cp -p "$CHANGELOG" "$TMPFILE"
+  export ENTRY
 
   if [[ "$MODE" == "unreleased" ]]; then
     # Replace existing [Unreleased] section or insert after header
     if grep -q '^\## \[Unreleased\]' "$CHANGELOG"; then
       # Replace the [Unreleased] block (up to next ## [)
-      awk -v entry="$ENTRY" '
+      awk '
         /^## \[Unreleased\]/ {
-          print entry
+          print ENVIRON["ENTRY"]
           skip=1
           next
         }
@@ -276,10 +315,10 @@ else
       ' "$CHANGELOG" > "$TMPFILE"
     else
       # Insert after the header lines (first blank line after title)
-      awk -v entry="$ENTRY" '
+      awk '
         !inserted && /^$/ && NR > 1 {
           print ""
-          print entry
+          print ENVIRON["ENTRY"]
           inserted=1
         }
         { print }
@@ -287,14 +326,14 @@ else
     fi
   else
     # Version mode: insert after header, before first ## [
-    awk -v entry="$ENTRY" '
+    awk '
       /^## \[Unreleased\]/ {
         print $0
         # Skip empty unreleased section
         next
       }
       /^## \[/ && !inserted {
-        print entry
+        print ENVIRON["ENTRY"]
         print ""
         inserted=1
       }
@@ -302,7 +341,7 @@ else
       END {
         if (!inserted) {
           print ""
-          print entry
+          print ENVIRON["ENTRY"]
         }
       }
     ' "$CHANGELOG" > "$TMPFILE"
