@@ -7,7 +7,7 @@ All notable changes to the **search** skill (was `conversation-search`) are docu
 ### Changed
 
 - Moved into the `context` plugin as `context:search` (#163). Same search workflow and script as `conversation-search` 1.1.0. The old name and `/conversation-search` still match as trigger phrases.
-- Every command runs as written from your project directory: `"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh"`. The old text set `SCRIPT=~/.claude/skills/conversation-search/scripts/search-conversations.sh`, which only worked from a loose copy (#163).
+- Every command is written to work from your project directory (checked statically by `check-skill-commands.py`; the skill was also run through headless Claude): `"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh"`. The old text set `SCRIPT=~/.claude/skills/conversation-search/scripts/search-conversations.sh`, which only worked from a loose copy (#163).
 - The summarizer agent now ships in the plugin and is started as `context:conversation-summarizer`. It used to live only in `~/.claude/agents/` and was not in any repo (#163).
 - `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh` (the old copy was older).
 

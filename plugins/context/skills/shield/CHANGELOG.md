@@ -7,7 +7,7 @@ All notable changes to the **shield** skill (was `context-shield`) are documente
 ### Changed
 
 - Moved into the `context` plugin as `context:shield` (#163). Same workflow as `context-shield` 1.3.2. The old name and `/context-shield` still match as trigger phrases.
-- Every command runs as written from your project directory: `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<OUTPUT_DIR>` for the run directory. The old text set `SCRIPTS=~/.claude/skills/context-shield/scripts` and read `$SCRIPTS` in later blocks, which only worked from a loose copy (#163).
+- Every command is written to work from your project directory (checked statically by `check-skill-commands.py`; the skill was also run through headless Claude): `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<OUTPUT_DIR>` for the run directory. The old text set `SCRIPTS=~/.claude/skills/context-shield/scripts` and read `$SCRIPTS` in later blocks, which only worked from a loose copy (#163).
 - The content-distiller agent now ships in the plugin and is started as `context:content-distiller`. The old text started a general-purpose agent and told it to read `~/.claude/agents/content-distiller.md` (#163).
 
 ### Fixed
