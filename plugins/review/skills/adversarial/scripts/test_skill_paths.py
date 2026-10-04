@@ -39,7 +39,8 @@ ASSIGN = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*)\+?="
 )
 FOR_VAR = re.compile(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b")
-READ_VAR = re.compile(r"\bread\s+((?:-[A-Za-z]+\s+)*)([A-Za-z_][A-Za-z0-9_ ]*)")
+READ_VAR = re.compile(
+    r"(?:^|[;&|(]|\bwhile\b|\bdo\b|\bthen\b)\s*read\s+((?:-[A-Za-z]+\s+)*)([A-Za-z_][A-Za-z0-9_ ]*)")
 ZERO = re.compile(r"\$(?:0\b|\{0\})")
 SCRIPT_WORD = re.compile(r"(?<![\w./${}-])([A-Za-z0-9_-]+\.(?:sh|py))\b")
 ENV_PATH = re.compile(r"\$\{CLAUDE_(SKILL_DIR|PLUGIN_ROOT)\}/([A-Za-z0-9_./-]*)")
@@ -73,13 +74,14 @@ def block_problems(lines):
     """Return [(offset, message)] for one bash block (offset is 0-based)."""
     code = [strip_comments_and_single_quotes(l) for l in lines]
     assigned = set()
-    for l in code:
+    problems = []
+    for i, l in enumerate(code):
+        # A name counts as set from the line that sets it, not before: a read on an
+        # earlier line of the same block is still a read of an empty variable.
         assigned.update(ASSIGN.findall(l))
         assigned.update(FOR_VAR.findall(l))
         for flags, names in READ_VAR.findall(l):
             assigned.update(names.split())
-    problems = []
-    for i, l in enumerate(code):
         if ZERO.search(l):
             problems.append((i, '`$0` is the shell, not the skill; never use `dirname "$0"`'))
         for m in VAR_READ.finditer(l):
@@ -143,6 +145,16 @@ class BlockAnalyzerSelfTest(unittest.TestCase):
         got = self.msgs("codex-review.sh --mode find")
         self.assertTrue(any("codex-review.sh" in m for m in got), got)
 
+    def test_flags_a_read_that_comes_before_the_assignment(self):
+        got = self.msgs('echo "$X"', 'X=1')
+        self.assertTrue(any("$X" in m for m in got), got)
+
+    def test_a_prose_word_read_does_not_count_as_setting_a_variable(self):
+        got = self.msgs('git log --oneline  # then read the log', 'echo "$the"')
+        self.assertTrue(any("$the" in m for m in got), got)
+        got = self.msgs('echo read the log "$the"')
+        self.assertTrue(any("$the" in m for m in got), got)
+
     def test_passes_a_variable_set_in_the_same_block(self):
         self.assertEqual(self.msgs('X=$(mktemp -d)', 'echo "$X"'), [])
 
@@ -159,6 +171,20 @@ class BlockAnalyzerSelfTest(unittest.TestCase):
 
 
 class DocCoverage(unittest.TestCase):
+    def test_a_fence_with_another_language_tag_cannot_hide_a_variable_read(self):
+        # Only bash fences are analysed above. A command block tagged `text` or left
+        # untagged would escape that, so no other fence may read a shell variable.
+        problems = []
+        for path in DOC_FILES:
+            for lang, start, lines in fenced_blocks(path.read_text(encoding="utf-8")):
+                if lang in BASH_LANGS:
+                    continue
+                for off, line in enumerate(lines):
+                    if VAR_READ.search(strip_comments_and_single_quotes(line)):
+                        problems.append("%s:%d: a %r fence reads a shell variable: %s" % (
+                            path.relative_to(PLUGIN), start + off, lang or "untagged", line.strip()[:60]))
+        self.assertEqual(problems, [], "\n" + "\n".join(problems))
+
     def test_the_files_exist_and_have_bash_blocks(self):
         self.assertGreaterEqual(len(DOC_FILES), 4, DOC_FILES)
         for path in DOC_FILES:
@@ -198,6 +224,21 @@ class SkillText(unittest.TestCase):
         self.assertTrue(used, "no reference uses <SCRIPTS_DIR>; the scan is not looking")
         self.assertIn("<SCRIPTS_DIR>", skill)
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts`", skill)
+
+    def test_every_scripts_dir_placeholder_names_a_real_script(self):
+        # <SCRIPTS_DIR>/name in a reference is not covered by the ${CLAUDE_...} check.
+        scripts = HERE
+        seen = 0
+        problems = []
+        for path in DOC_FILES:
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for name in re.findall(r"<SCRIPTS_DIR>/([A-Za-z0-9_.-]+)", line):
+                    seen += 1
+                    if not (scripts / name).is_file():
+                        problems.append("%s:%d: <SCRIPTS_DIR>/%s does not exist" % (
+                            path.relative_to(PLUGIN), n, name))
+        self.assertGreater(seen, 0, "no <SCRIPTS_DIR>/ paths found; the scan is not looking")
+        self.assertEqual(problems, [], "\n" + "\n".join(problems))
 
     def test_every_review_name_is_an_agent_or_a_skill(self):
         agents = {p.stem for p in AGENTS.glob("*.md")}
