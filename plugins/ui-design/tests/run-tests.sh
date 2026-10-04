@@ -245,7 +245,7 @@ for m in re.finditer(r'"\$\{CLAUDE_SKILL_DIR\}/scripts/([A-Za-z0-9_.-]+\.(?:sh|p
         seen.append(m.group(1))
 print("\n".join(seen))
 EOF
-)"
+)" || names=""  # a python error leaves no names, and the count check below fails
   n=0
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
@@ -286,7 +286,7 @@ for no, line in enumerate(open(sys.argv[1], encoding="utf-8"), 1):
 if fence is not None:
     print("unclosed code fence")
 EOF
-)"
+)" || hits="the python check failed (exit $?)"
   [[ -z "$hits" ]] && ok "$skill SKILL.md: no path token outside code blocks" \
     || bad "$skill SKILL.md: path token outside a code block (it is substituted, so the model sees an absolute path)" "$hits"
 done
