@@ -6,21 +6,32 @@ script posts it. Never post comments by hand.
 
 ## Setup (Phase 0)
 
+The Bash tool keeps no shell variables between calls, so nothing below is a shell variable. Each
+command shows a value as `<NAME>`; replace it with the real value before you run the command.
+`<SCRIPTS_DIR>` is the scripts directory that `SKILL.md` names (`skills/adversarial/scripts` in
+this plugin). This file is read as plain text, so `SKILL.md` gives you its full path.
+
+Run this once. It prints the run id, then the run directory:
+
 ```bash
-RUN_ID="dr-$(date +%Y%m%d-%H%M%S)-$$"
-RUN_DIR="$(mktemp -d)"
-AUDIT="<adversarial-review plugin dir>/skills/adversarial-review/scripts/pr-audit.py"
-K=0            # round counter, shared by both phases
-PREV_HEAD=null # previous round's head SHA, JSON null for the first round
-PR=""          # the PR number in PR mode; empty in local mode
-NO_POST=false  # true when the user asked not to post to the PR
+echo "dr-$(date +%Y%m%d-%H%M%S)-$$"
+mktemp -d
 ```
+
+Keep these values in your notes for the whole run:
+
+- `RUN_ID`: the first printed line.
+- `RUN_DIR`: the second printed line.
+- `K`: the round counter, shared by both phases. It starts at 0.
+- `PREV_HEAD`: the previous round's head SHA as JSON. It starts as `null`.
+- `PR`: the PR number in PR mode; none in local mode.
+- `NO_POST`: true when the user asked not to post to the PR.
 
 ## After each round
 
-1. `K=$((K+1))`. Head SHA: `gh pr view "$PR" --json headRefOid -q .headRefOid` in PR mode,
+1. Add 1 to `K`. Head SHA: `gh pr view "<PR>" --json headRefOid -q .headRefOid` in PR mode,
    `git rev-parse HEAD` otherwise.
-2. Write `$RUN_DIR/round-$K.json`:
+2. Write `<RUN_DIR>/round-<K>.json`:
 
 ```json
 {
@@ -44,18 +55,22 @@ NO_POST=false  # true when the user asked not to post to the PR
    `{"by": ..., "kind": "resolution", "resolution": "fixed|pushback|deferred", "sha": "<40 hex, only once committed>", "text": "..."}`,
    `{"by": ..., "kind": "recheck", "result": "resolved|partly|missed", "text": "..."}`.
 
-3. Post it:
+3. Post it. In PR mode, unless `NO_POST` is true:
 
 ```bash
-if [[ "$NO_POST" == "true" ]]; then python3 "$AUDIT" local --record "$RUN_DIR/round-$K.json" --out "<branch with / as ->.adversarial-review.md";
-elif [[ -n "$PR" ]]; then python3 "$AUDIT" post --pr "$PR" --record "$RUN_DIR/round-$K.json";
-else python3 "$AUDIT" local --record "$RUN_DIR/round-$K.json" --out "<branch with / as ->.adversarial-review.md"; fi
+python3 "<SCRIPTS_DIR>/pr-audit.py" post --pr "<PR>" --record "<RUN_DIR>/round-<K>.json"
+```
+
+   In local mode, or when `NO_POST` is true, write it to the local file instead:
+
+```bash
+python3 "<SCRIPTS_DIR>/pr-audit.py" local --record "<RUN_DIR>/round-<K>.json" --out "<branch with / as ->.adversarial-review.md"
 ```
 
    pr-audit.py only trusts markers in comments written by the logged-in `gh` user, so post with
    the same account every round.
 
-4. `PREV_HEAD="\"<head sha>\""`.
+4. Set `PREV_HEAD` to this round's head SHA, as a JSON string (for example `"abc123..."`).
 
 Exit codes:
 
@@ -95,8 +110,8 @@ a Phase 2 thread.
 With Codex, Step 2.6 re-checks every fix. Build that record with `pr-audit.py recheck`:
 
 ```bash
-python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_DIR/recheck-$K.json" \
-  --round "$K" --head-sha "$FIX_SHA" --out "$RUN_DIR/round-$K.json"
+python3 "<SCRIPTS_DIR>/pr-audit.py" recheck --prior "<RUN_DIR>/round-<FIX_K>.json" --rechecks "<RUN_DIR>/recheck-<K>.json" \
+  --round "<K>" --head-sha "<FIX_SHA>" --out "<RUN_DIR>/round-<K>.json"
 ```
 
 `--prior` is the last `phase2-fix` record. `--rechecks` is the output of `codex-review.sh --mode
@@ -105,7 +120,7 @@ find --prior`. The record takes `run_id`, `skill` and `adversary` from the prior
 unchanged with no events, and stderr reports `unchecked=<N> (<ids>)`. The exit is still 0, so read
 that line: Step 2.6 counts those findings as not resolved. Exit 2 means the inputs do not make a valid record, or
 `--out` could not be written; a new finding that reuses an earlier id is one cause (rerun
-`codex-review.sh` with a higher `--id-start`). Once `recheck` writes `$RUN_DIR/round-$K.json` (exit 0), you post it exactly as in
+`codex-review.sh` with a higher `--id-start`). Once `recheck` writes `<RUN_DIR>/round-<K>.json` (exit 0), you post it exactly as in
 "After each round" step 3 above, so a posting failure there (or a `pr-audit.py` crash) follows the
 generic Exit codes section above (0/1/3) — `recheck`'s own exit 2 covers only the record-building
 step itself. With Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay

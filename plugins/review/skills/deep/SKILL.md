@@ -11,8 +11,17 @@ metadata:
 > announced as "Base directory for this skill" when the skill is invoked. A Bash tool call's working
 > directory is the user's project, not the skill directory, so prefix these with that base directory
 > when reading them. Paths written without the leading `./` refer to the **target project** being
-> reviewed. The scripts that Phase 2 runs live in the sibling `adversarial` skill and are written
-> out in full as `${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/<name>`.
+> reviewed.
+>
+> **Scripts and run values:** the scripts Phase 2 runs live in the sibling `adversarial` skill. The
+> Bash tool keeps no shell variables between calls, so every command spells its script path out in
+> full, and every run-time value is written into the command as a literal. Commands here use
+> `${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/<name>`. The `./references/` files are read as plain text, so they write
+> that same directory as `<SCRIPTS_DIR>`: replace it with
+> `${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts`. Values created at run time (`RUN_ID`, `RUN_DIR`, the round
+> number `K`, `ADVERSARY`, and the SHAs in Step 2.6) are printed or noted once; shown as `<RUN_DIR>`,
+> `<K>` and so on, replace each with its real value. Never write one as `$RUN_DIR`; it would be
+> empty.
 
 A two-phase convergence harness for high-assurance review of a changeset. Phase 1 drives
 specialized reviewers in fix->re-review rounds until they stop finding actionable issues. Phase 2
@@ -83,8 +92,8 @@ fallback. Never silently skip a phase.
    (`ls .github/workflows`, check the job's `runs-on`). If none does, label it **UNCOVERED**, not
    deferred. Recommend a concrete cross-platform check when feasible (`gtar`, `gawk`, or a
    Linux container), and never treat the local suite as covering the unavailable environment.
-6. **Start the audit trail.** Set up `RUN_ID`, `RUN_DIR`, `AUDIT` and the round counter as in
-   `./references/audit-trail.md`. Every round below ends by writing and posting one record, so the
+6. **Start the audit trail.** Run the setup in `./references/audit-trail.md`. It prints `RUN_ID` and
+   `RUN_DIR` once; keep both, and keep the round counter `K` yourself. Every round below ends by writing and posting one record, so the
    PR shows each iteration: findings as threads, verdicts, counters, fixes and re-checks as replies.
 
 ---
@@ -161,29 +170,26 @@ adversary, is Codex, else Gemini, else a second independent Claude agent.
 
 ### Step 2.0 — Pick the adversary
 
-`AR_SCRIPTS` is the adversarial-review plugin's `skills/adversarial-review/scripts` directory.
-
 ```bash
-unset ADVERSARY
-PICK="$("$AR_SCRIPTS/pick-adversary.sh" ${ADVERSARY_FLAG:+--adversary "$ADVERSARY_FLAG"})"
-PICK_RC=$?
-eval "$PICK"
+"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/pick-adversary.sh"
 ```
 
-`eval "$(cmd)"` alone returns eval's own status, not the command's — so the exit code must be
-captured from `$PICK` before `eval` runs, or the "Exit 3" branch below can never be seen and
-`$ADVERSARY` stays unset. `ADVERSARY_FLAG` is the value of `--adversary` when the user passed it.
-Tell the user `ADVERSARY_REASON` in one line.
+When the user passed `--adversary codex|gemini`, add that flag to the command; call it
+`ADVERSARY_FLAG`. The script prints `KEY='value'` lines: `ADVERSARY` (`codex`, `gemini` or
+`claude-only`), `ADVERSARY_REASON`, and the install and auth hints. Read them; do not `eval` them.
+Write the `ADVERSARY` value into the later commands. Exit code 3 means the user forced an adversary
+that is not usable. Tell the user `ADVERSARY_REASON` in one line.
 
-- `ADVERSARY=codex`: `ADV_REVIEW="$AR_SCRIPTS/codex-review.sh"`. Codex ids are `X-001…`.
-- `ADVERSARY=gemini`: `ADV_REVIEW="$AR_SCRIPTS/gemini-review.sh"`. Renumber its ids `G-001…`.
+- `ADVERSARY=codex`: every adversary call below runs `codex-review.sh`. Codex ids are `X-001…`.
+- `ADVERSARY=gemini`: every adversary call below runs `gemini-review.sh` in place of
+  `codex-review.sh`. Renumber its ids `G-001…`.
   **Interactive Google login is NOT sufficient** — headless calls need an API key.
 - `ADVERSARY=claude-only`: **PROMPT THE USER at runtime** (this skill's chosen policy): offer to
   (a) set up Codex (install it, then `codex login`) or Gemini (`npm i -g @google/gemini-cli`; add
   `GEMINI_API_KEY=<key>` to `~/.gemini/.env`), then run `pick-adversary.sh` again, or (b) proceed
   Claude-only (self-cross-examination: a second independent Claude agent judges the first's
   findings) with a loud banner that cross-model confirmation was skipped. Do not decide silently.
-- `PICK_RC` is 3: the user forced an adversary that is not usable. Show the `ADVERSARY_UNAVAILABLE`
+- Exit code 3: the user forced an adversary that is not usable. Show the `ADVERSARY_UNAVAILABLE`
   line and stop. Do not fall back.
 
 Never call `codex` directly. `codex-review.sh` is what keeps your config, hooks and ChatGPT
@@ -195,10 +201,10 @@ does not stop).
 In one message, launch (none seeing the others):
 - `review:bug-hunter` agent (opus) — bugs/security/perf/correctness, grounded in source.
 - `review:convention-reviewer` agent (sonnet) — convention/maintainability/doc-drift.
-- Adversary finder — `$ADV_REVIEW --diff <DIFF> --mode find --out "$RUN_DIR/r1-$ADVERSARY.json"`.
+- Adversary finder — `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --mode find --out "<RUN_DIR>/r1-<ADVERSARY>.json"` (`gemini-review.sh` with Gemini).
   It emits `{"findings":[...]}` with `origin` set to the adversary. **If exit code is 3**
   (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user forced this adversary): show
-  the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as `PICK_RC` 3 in Step
+  the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as exit code 3 in Step
   2.0. Never fall back to another model or to Claude-only. Otherwise (auto mode): if Codex was
   picked automatically and `GEMINI_AUTHED=yes`, switch to Gemini for the whole phase and rerun this
   step; otherwise follow Step 2.0's Claude-only path.
@@ -225,7 +231,7 @@ In one message:
   partial results at least every ~20 minutes of a long run, and never go idle waiting on its own
   background run.
 - The adversary judges every Claude finding:
-  `$ADV_REVIEW --diff <DIFF> --findings <claude-r1.json> --mode judge --out "$RUN_DIR/r2-$ADVERSARY-verdicts.json"`.
+  `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --findings <claude-r1.json> --mode judge --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"` (`gemini-review.sh` with Gemini).
   Both scripts write the verdict under the key `adversary_verdict`, whichever model gave it.
   - **If exit code is 3** (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user
     forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3.
@@ -236,7 +242,7 @@ In one message:
     to a direct `gemini -m gemini-2.5-pro -p "<brief + each Claude finding, ask for JSON {id,
     verdict:confirm|refute, reason}>"` call. Build a prompt file with the brief and each finding,
     and parse the JSON yourself. Codex has no such fallback: exit 3 from `codex-review.sh` means
-    Codex's verdicts are missing. Write `{"verdicts":[]}` to `$RUN_DIR/r2-$ADVERSARY-verdicts.json`
+    Codex's verdicts are missing. Write `{"verdicts":[]}` to `<RUN_DIR>/r2-<ADVERSARY>-verdicts.json`
     (`synthesize.py` exits 1 on a missing file), and say in the R2 digest that Codex's verdicts
     are missing. Those Claude findings stay unconfirmed.
 
@@ -254,7 +260,7 @@ This is what makes it >=3 rounds and forces genuine convergence rather than a st
 - For each finding the opponent **refuted**, send it back to the originator to **concede or
   defend**, grounded in source. Feed the refuter's reason and the relevant current file facts.
   - With Codex as the originator, use the script:
-    `$AR_SCRIPTS/codex-review.sh --diff <DIFF> --mode counter --findings <refuted-X.json> --out "$RUN_DIR/r3-codex-counters.json"`.
+    `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --mode counter --findings <refuted-X.json> --out "<RUN_DIR>/r3-codex-counters.json"`.
     Each finding in `<refuted-X.json>` carries Claude's refutation in `kill_reason`. It returns
     `{"counters":[{"id","position":"concede|defend","reason"}]}`.
   - For Claude findings that Codex refuted, write Claude's defence into each finding's `rationale`
@@ -306,19 +312,17 @@ Then finalize:
 ### Step 2.6 — Adversary re-check rounds (Codex only)
 
 With `ADVERSARY=codex`, Codex checks each fix itself, so fixed Phase 2 threads can close. Right
-after writing the `phase2-fix` record, set:
+after writing the `phase2-fix` record, note four values and write them into the commands below:
 
-```bash
-FIX_K="$K"                  # the phase2-fix record's own round number
-FIX_SHA="<its head_sha>"    # the commit that record's resolution events point to
-REVIEWED_SHA="<the head the Phase 2 R1 diff was taken from>"
-RECHECK_ROUND=0             # re-check rounds run so far, capped at 3 (see step 4)
-```
+- `FIX_K`: the `phase2-fix` record's own round number (`K` at that moment).
+- `FIX_SHA`: that record's `head_sha`, the commit its resolution events point to.
+- `REVIEWED_SHA`: the head the Phase 2 R1 diff was taken from.
+- `RECHECK_ROUND`: re-check rounds run so far. It starts at 0 and is capped at 3 (see step 4).
 
-1. `git diff "$REVIEWED_SHA".."$FIX_SHA" > "$RUN_DIR/fix-range-$FIX_K.diff"` — only the changes
+1. `git diff <REVIEWED_SHA>..<FIX_SHA> > "<RUN_DIR>/fix-range-<FIX_K>.diff"` — only the changes
    made since the reviewed head.
-2. `K=$((K+1))`, then
-   `$AR_SCRIPTS/codex-review.sh --diff "$RUN_DIR/fix-range-$FIX_K.diff" --mode find --prior "$RUN_DIR/round-$FIX_K.json" --id-start <highest X number so far + 1> --out "$RUN_DIR/recheck-$K.json"`.
+2. Add 1 to `K`, then
+   `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff "<RUN_DIR>/fix-range-<FIX_K>.diff" --mode find --prior "<RUN_DIR>/round-<FIX_K>.json" --id-start <highest X number so far + 1> --out "<RUN_DIR>/recheck-<K>.json"`.
    The prior record holds each fixed finding and the author's reply, so Codex sees both. `--id-start`
    must be above every finding id used anywhere in this run so far — Codex's and Claude's alike —
    so a new finding never reuses a dropped finding's id. Never reuse a `--round` value, here or
@@ -334,7 +338,7 @@ RECHECK_ROUND=0             # re-check rounds run so far, capped at 3 (see step 
      `--prior` or `--diff` file) or could not write `--out`. Stop the re-check loop the same way
      as exit 3: do not retry with guessed flags, and leave the remaining threads open. Note it,
      with the exact stderr message, in the round summary you post, and tell the user.
-3. `python3 "$AUDIT" recheck --prior "$RUN_DIR/round-$FIX_K.json" --rechecks "$RUN_DIR/recheck-$K.json" --round "$K" --head-sha "$FIX_SHA" --out "$RUN_DIR/round-$K.json"`,
+3. `python3 "${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/pr-audit.py" recheck --prior "<RUN_DIR>/round-<FIX_K>.json" --rechecks "<RUN_DIR>/recheck-<K>.json" --round "<K>" --head-sha "<FIX_SHA>" --out "<RUN_DIR>/round-<K>.json"`,
    then post it as in ./references/audit-trail.md. A `resolved` re-check closes its thread.
    - **Exit 2** means the re-check inputs don't make a valid record (see
      ./references/audit-trail.md for the causes). Stop, report the exact stderr message to the
@@ -342,14 +346,14 @@ RECHECK_ROUND=0             # re-check rounds run so far, capped at 3 (see step 
 4. Read the `pr-audit: unchecked=<N> (<ids>)` line that `recheck` prints on stderr. Each id in it
    is a finding Codex gave no re-check for. `recheck` carries it into the record unchanged with no
    events, so its thread stays open. Count every unchecked finding as not resolved.
-   `partly` or `missed`: set `REVIEWED_SHA="$FIX_SHA"`, then fix again (Step 2.5) — this keeps the
+   `partly` or `missed`: set `REVIEWED_SHA` to the value of `FIX_SHA`, then fix again (Step 2.5) — this keeps the
    next fix range to only what changed since *this* re-check, not every earlier fix stacked
    together. Step 2.5 writes a new `phase2-fix` record; set `FIX_K` to its round and `FIX_SHA` to
    its `head_sha`, then repeat from 1. New findings in the re-check record: judge them with the
    cross-examiner (Step 2.2), fix the survivors (Step 2.5) the same way, and repeat from 1.
    Unchecked findings with nothing else to fix: do not fix again; repeat from 1 with the same
    `FIX_K`, `FIX_SHA` and `REVIEWED_SHA`, so Codex re-checks the same fix range.
-   `RECHECK_ROUND=$((RECHECK_ROUND+1))` each time through — once per full loop back to step 1
+   Add 1 to `RECHECK_ROUND` each time through — once per full loop back to step 1
    (whether that loop was triggered by `partly`/`missed`, by unchecked findings or by new
    findings), right before checking the cap below. Stop when a re-check round has every finding
    `resolved`, `unchecked=0` and no new survivors, or once `RECHECK_ROUND` reaches 3 — a fixed cap
