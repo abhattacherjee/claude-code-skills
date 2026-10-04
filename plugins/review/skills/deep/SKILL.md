@@ -16,12 +16,14 @@ metadata:
 > **Scripts and run values:** the scripts Phase 2 runs live in the sibling `adversarial` skill. The
 > Bash tool keeps no shell variables between calls, so every command spells its script path out in
 > full, and every run-time value is written into the command as a literal. Commands here use
-> `${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/<name>`. The `./references/` files are read as plain text, so they write
-> that same directory as `<SCRIPTS_DIR>`: replace it with
-> `${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts`. Values created at run time (`RUN_ID`, `RUN_DIR`, the round
-> number `K`, `ADVERSARY`, and the SHAs in Step 2.6) are printed or noted once; shown as `<RUN_DIR>`,
-> `<K>` and so on, replace each with its real value. Never write one as `$RUN_DIR`; it would be
-> empty.
+> `${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/<name>`.
+>
+> The `./references/` files are read as plain text. They write that same directory as
+> `<SCRIPTS_DIR>`. Replace it with `${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts`.
+>
+> Some values are created at run time: `RUN_ID`, `RUN_DIR`, the round number `K`, `ADVERSARY`, and
+> the SHAs in Step 2.6. They are printed or noted once. The text shows them as `<RUN_DIR>`, `<K>`
+> and so on. Replace each with its real value. Never write one as `$RUN_DIR`; it would be empty.
 
 A two-phase convergence harness for high-assurance review of a changeset. Phase 1 drives
 specialized reviewers in fix->re-review rounds until they stop finding actionable issues. Phase 2
@@ -186,7 +188,7 @@ that is not usable. Tell the user `ADVERSARY_REASON` in one line.
   **Interactive Google login is NOT sufficient** — headless calls need an API key.
 - `ADVERSARY=claude-only`: **PROMPT THE USER at runtime** (this skill's chosen policy): offer to
   (a) set up Codex (install it, then `codex login`) or Gemini (`npm i -g @google/gemini-cli`; add
-  `GEMINI_API_KEY=<key>` to `~/.gemini/.env`), then run `pick-adversary.sh` again, or (b) proceed
+  `GEMINI_API_KEY=<key>` to `~/.gemini/.env`), then run the Step 2.0 command again, or (b) proceed
   Claude-only (self-cross-examination: a second independent Claude agent judges the first's
   findings) with a loud banner that cross-model confirmation was skipped. Do not decide silently.
 - Exit code 3: the user forced an adversary that is not usable. Show the `ADVERSARY_UNAVAILABLE`
@@ -214,7 +216,7 @@ keeping each Bash call under the 10-minute cap (chain calls, or split into chunk
 backgrounding it), and send partial results at least every ~20 minutes of a long run.
 Never go idle waiting on their own background run.
 
-Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..`.
+Give all the **byte-identical diff** (same-diff invariant). Merge Claude findings -> `C-001..` and write them to `<RUN_DIR>/r1-claude.json`.
 Emit an R1 digest (counts by severity/category). An empty findings array is a respectable, valid
 answer. If a side reports it is waiting on a background job, check its output or process within
 about 10 minutes (`ps -axo pid,etime,command | grep <harness>`, or its scratch output) and ping it
@@ -224,7 +226,8 @@ if it is idle — never report "waiting on R1" to the user without having looked
 ### Step 2.2 — R2: symmetric cross-examination
 
 In one message:
-- `review:cross-examiner` agent (opus) judges every adversary finding -> `confirm|refute` with reason,
+- `review:cross-examiner` agent (opus) judges every adversary finding -> `confirm|refute` with reason
+  (write its verdicts to `<RUN_DIR>/r2-claude-verdicts.json`),
   grounded in the **current** source (findings can be stale if Phase 1 already fixed them). Give
   it the same rule as Step 2.1: run long harnesses in the foreground, keeping each Bash call under
   the 10-minute cap (chain calls, or split into chunks, rather than backgrounding it), and send
@@ -288,9 +291,24 @@ finding gets `rejected`.
 - **Unconfirmed** — opponent abstained -> report, fix at discretion.
 - **Rejected** — opponent refuted and originator conceded -> record with reason; do not fix.
 
-`synthesize.py --adversary <adversary>` applies this rule. If no adversary model is usable and you
-are doing the Claude-only self-cross-examination by hand, apply it yourself and print
-`survivors / unconfirmed / rejected` counts.
+`synthesize.py` applies the R1 and R2 part of this rule. Run it once R2 is done:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/synthesize.py" \
+  --adversary "<ADVERSARY>" \
+  --claude-findings "<RUN_DIR>/r1-claude.json" \
+  --adversary-findings "<RUN_DIR>/r1-<ADVERSARY>.json" \
+  --adversary-verdicts "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json" \
+  --claude-verdicts "<RUN_DIR>/r2-claude-verdicts.json" \
+  --md "<RUN_DIR>/report.md" \
+  --json "<RUN_DIR>/report.json"
+```
+
+It does not know about the R3 concessions. Apply those by hand from the `phase2-r3` record: a
+finding the refuter backed down on becomes a survivor, and one the origin gave up on stays
+rejected. Then print the final `survivors / unconfirmed / rejected` counts. If no adversary model
+is usable and you are doing the Claude-only self-cross-examination by hand, apply the whole rule
+yourself and print the same counts.
 
 ### Step 2.5 — Fix survivors + finalize
 

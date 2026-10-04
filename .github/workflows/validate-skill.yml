@@ -187,14 +187,17 @@ jobs:
           python-version: "3.9"
 
       # Unconditional, like adversarial-review-tests above. Keep that job while the
-      # old plugin is still published. run-tests.sh also runs every test_*.py file.
+      # old plugin is still published.
+      #
+      # Run the path test first and by file name. A missing file is an error here;
+      # `unittest discover` would pass on zero tests before Python 3.12. A path or
+      # variable error in a SKILL.md then shows up as its own failure, not inside the
+      # long run-tests.sh log. run-tests.sh runs every test_*.py file again.
+      - name: Check that every skill command spells its script path
+        run: python3 plugins/review/skills/adversarial/scripts/test_skill_paths.py -v
+
       - name: Run review test suite
         run: bash plugins/review/skills/adversarial/scripts/run-tests.sh
-
-      # Also run by run-tests.sh. Kept as its own step so a path or variable error in
-      # a SKILL.md shows up as its own failure instead of inside the long script log.
-      - name: Check that every skill command spells its script path
-        run: python3 -m unittest discover -s plugins/review/skills/adversarial/scripts -p 'test_skill_paths.py' -v
 
   github-board-tests:
     runs-on: ubuntu-latest

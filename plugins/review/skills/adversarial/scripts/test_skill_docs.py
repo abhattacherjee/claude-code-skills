@@ -1,6 +1,6 @@
 """Doc-contract tests for the review plugin: the skill steps run scripts that exist, and wire in
 the adversary. They read only plugins/review/ (the `adversarial` and `deep` skills, the agents and
-the README); the old plugin directories keep their own copies of these tests."""
+the README); the old adversarial-review plugin keeps its own copy (which also checks deep-review)."""
 import os
 import re
 import sys
@@ -23,6 +23,11 @@ def section(text, start, end):
 
 
 WS = re.compile(r"\s+")
+
+
+def fenced_code(text):
+    """The text inside every ``` fence in `text`."""
+    return "\n".join(re.findall(r"```[^\n]*\n(.*?)```", text, re.S))
 
 
 def norm(text):
@@ -52,7 +57,7 @@ class AdversarialReviewDocTests(unittest.TestCase):
         # could never be reached. Step 0 now reads the printed lines and the
         # script's own exit code, and never evals the output.
         self.assertIn("Exit code 3", step0)
-        self.assertNotIn('eval "$', step0)
+        self.assertNotRegex(fenced_code(step0), r"\beval\b")
 
     def test_synthesize_is_told_the_adversary(self):
         step4 = section(self.text, "### Step 4 —", "### Step 4b")
@@ -301,7 +306,7 @@ class DeepReviewDocTests(unittest.TestCase):
         # Ruling F6: eval "$(pick-adversary.sh ...)" discards pick-adversary's own
         # exit code. Step 2.0 reads the printed lines and the exit code, never evals.
         self.assertIn("Exit code 3", phase2)
-        self.assertNotIn('eval "$', phase2)
+        self.assertNotRegex(fenced_code(section(phase2, "### Step 2.0", "### Step 2.1")), r"\beval\b")
 
     def test_recheck_rounds_use_pr_audit_recheck(self):
         text = self.read("references/audit-trail.md")

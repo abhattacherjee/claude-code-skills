@@ -26,7 +26,7 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 
 One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. That can pass the Bash tool's 600 s cap, so run the adversary script (`codex-review.sh` or `gemini-review.sh`) with the Bash tool's `run_in_background`. When you do, do not go idle waiting on it: check its output or process within about 10 minutes (`ps -axo pid,etime,command | grep codex` or `grep gemini`, or the run directory's output file), and ping or re-check it if it looks stuck. Never tell the user you're "waiting on" the adversary script without having looked at it. Unlike a reviewer that goes quiet on its own background job, your background Bash call here does notify you when it finishes — but a turn that ends without acting on that notification, or without checking in the meantime, leaves the same gap, so still check within about 10 minutes.
 
-Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `codex-review.sh --self-test` reruns the canary on demand.
+Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `"${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" --self-test` reruns the canary on demand.
 
 Live testing on codex-cli 0.155.1 proved two of the four canary surfaces leak without their override — each caught by a positive control that failed before the fix existed: `AGENTS.md` (fixed by `project_doc_max_bytes=0` / `project_doc_fallback_filenames=[]`) and `.agents/skills` (fixed by `skills.include_instructions=false`). The other two are not exercised the same way by that version: it does not read `.mcp.json` at all, and it loads a repo's `.codex/config.toml` only for a trusted repo — trust lives in the user's own `config.toml`, which `--ignore-user-config` already drops. Both stay canaried anyway, as cheap guards against a future Codex version that changes either.
 
@@ -106,7 +106,7 @@ The directory it prints is `RUN_DIR`. Round files live in it: `<RUN_DIR>/r1-clau
 
 ### Run values
 
-The Bash tool keeps no shell variables between calls. Every command below spells out its script path, and every value picked at run time is written into the command as a literal. Four values come from earlier steps:
+The Bash tool keeps no shell variables between calls. Every command below spells out its script path, and every value picked at run time is written into the command as a literal. These values come from earlier steps:
 
 | Value | Where it comes from |
 |---|---|
@@ -306,7 +306,7 @@ Re-run `synthesize.py` after the escalation pass and relay the updated digest. T
 
 Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, `unrecognized=` and `unjudged=`. Read and relay these counts to the user, plus any `low_signal=true` flag, any `unrecognized > 0` count, and any `unjudged > 0` count with its `UNJUDGED` banner.
 
-When `ADVERSARY="claude-only"` (the user chose Claude-only in Step 0, or Degradation Behavior's R1 path fired), there is no second model to feed Step 4 real findings from. Run the same command with `--adversary claude-only`, and write `{"findings":[]}` once to `<RUN_DIR>/r1-empty.json` for `--adversary-findings`, and `{"verdicts":[]}` once to `<RUN_DIR>/r2-empty.json` for both `--adversary-verdicts` and `--claude-verdicts` (R2 never ran). Every Claude finding comes out `status=unconfirmed`; nothing is silently dropped, and `report.json`'s `summary.adversary` is `"claude-only"` — matching what Step 4b passes to `pr-audit.py record --adversary "<ADVERSARY>"`, so its adversary/summary mismatch guard does not fire.
+When `ADVERSARY="claude-only"` (the user chose Claude-only in Step 0, or Degradation Behavior's R1 path fired), there is no second model to feed Step 4 real findings from. Run the same command with `--adversary claude-only`, and write `{"findings":[]}` once to `<RUN_DIR>/r1-empty.json` for `--adversary-findings`, and `{"verdicts":[]}` once to `<RUN_DIR>/r2-empty.json` for both `--adversary-verdicts` and `--claude-verdicts` (R2 never ran). Every Claude finding comes out `status=unconfirmed`; nothing is silently dropped, and `report.json`'s `summary.adversary` is `"claude-only"` — matching what Step 4b passes to the `record` call of `pr-audit.py` as `--adversary "<ADVERSARY>"`, so its adversary/summary mismatch guard does not fire.
 
 ### Step 4b — Write the round record
 
@@ -314,7 +314,7 @@ The round record is what `sink.sh` posts to the PR: every finding, and the oppos
 
 ```bash
 RUN_ID="ar-$(date +%Y%m%d-%H%M%S)-$$"
-HEAD_SHA="$(gh pr view "<PR>" --json headRefOid -q .headRefOid)"
+if [ "<MODE>" = pr ]; then HEAD_SHA="$(gh pr view "<PR>" --json headRefOid -q .headRefOid)"; else HEAD_SHA="$(git rev-parse HEAD)"; fi
 "${CLAUDE_SKILL_DIR}/scripts/pr-audit.py" record \
   --report-json "<RUN_DIR>/report.json" \
   --run-id "$RUN_ID" --skill adversarial --phase review --round 1 \
@@ -322,7 +322,7 @@ HEAD_SHA="$(gh pr view "<PR>" --json headRefOid -q .headRefOid)"
   --out "<RUN_DIR>/round-1.json"
 ```
 
-In local mode (`MODE` is `local`), set `HEAD_SHA="$(git rev-parse HEAD)"` instead of the `gh pr view` line. `ADVERSARY` is the Step 0 value (`codex` or `gemini`), or `claude-only` on the R1 degraded path.
+`ADVERSARY` is the Step 0 value (`codex` or `gemini`), or `claude-only` on the R1 degraded path.
 
 Exit 2 means `report.json` could not be read, did not make a valid record, or `--out` could not be written. Tell the user and run Step 5 with `--no-post` and without `--record`.
 

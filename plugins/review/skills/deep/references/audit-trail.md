@@ -93,7 +93,7 @@ A posting failure never stops the review.
 | Phase 2 R2 | every judged finding; confirmed findings get `status: survivor`, refuted ones keep `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
 | Phase 2 R3 | every R2-refuted finding | For contested findings, record `counter` then `verdict`: `survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted finding gets `rejected`. |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
-| Phase 2 re-check (Codex only) | every finding from the last `phase2-fix` record, plus Codex's new findings | Built by `pr-audit.py recheck`, never by hand: one `recheck` event by `codex` on each re-checked finding; a finding Codex did not re-check is carried over unchanged with no events (its thread stays open); new findings get `status: unconfirmed` and no events |
+| Phase 2 re-check (Codex only) | every finding from the last `phase2-fix` record, plus Codex's new findings | Built by the `recheck` mode of `pr-audit.py`, never by hand: one `recheck` event by `codex` on each re-checked finding; a finding Codex did not re-check is carried over unchanged with no events (its thread stays open); new findings get `status: unconfirmed` and no events |
 
 A `rejected` finding's thread is resolved at once. So a finding refuted in R2 keeps
 `status: unconfirmed` in the phase2-r2 record, even though its refute `verdict` is recorded there.
@@ -107,7 +107,7 @@ resolve a Phase 1 thread. Phase 2 records use the Phase 2 adversary: `codex`, `g
 `claude-only` when Step 2.0 degrades. With `gemini` or `codex`, only that model's re-check resolves
 a Phase 2 thread.
 
-With Codex, Step 2.6 re-checks every fix. Build that record with `pr-audit.py recheck`:
+With Codex, Step 2.6 re-checks every fix. Build that record with the `recheck` mode of `pr-audit.py`:
 
 ```bash
 python3 "<SCRIPTS_DIR>/pr-audit.py" recheck --prior "<RUN_DIR>/round-<FIX_K>.json" --rechecks "<RUN_DIR>/recheck-<K>.json" \
