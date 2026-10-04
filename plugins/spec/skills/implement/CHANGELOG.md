@@ -6,7 +6,11 @@ All notable changes to the **implement** skill (was `spec-implement`) are docume
 
 ### Changed
 
-- Moved into the `spec` plugin as `spec:implement` (#160). Same workflow and scripts as `spec-implement` 1.0.0. The slash command is `/spec:implement`; the old name still matches as a trigger phrase.
+- Moved into the `spec` plugin as `spec:implement` (#160). Same workflow as `spec-implement` 1.0.0. The slash command is `/spec:implement`; the old name still matches as a trigger phrase.
+
+### Fixed
+
+- Every command calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. The old `./scripts/<name>.sh` resolved against the user's project, not the skill, so the commands did not run as written.
 
 ## History before 1.0.0 (as `spec-implement`)
 

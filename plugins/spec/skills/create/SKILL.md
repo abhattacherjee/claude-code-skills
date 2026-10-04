@@ -7,7 +7,7 @@ metadata:
 
 # Spec Create
 
-> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command runs from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command works from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
 
 ## Problem
 
@@ -101,6 +101,7 @@ infer from the requirement's domain or ask. Use the `nextStory` value from disco
 Launch 3 agents in a SINGLE Task tool message:
 
 > `feature-dev:code-explorer` requires the separately-installed `feature-dev` plugin; substitute `general-purpose` if unavailable.
+
 **Agent 1: Feature Scout** (`feature-dev:code-explorer`)
 > Research the codebase to find: (1) existing code related to [requirement],
 > (2) services, utilities, and patterns that should be reused, (3) relevant file
@@ -281,7 +282,7 @@ After user selects an approach, generate the spec file(s).
 #### Path A: Single Story (user chose a single-story option)
 
 **4.1 Build spec content** using:
-- The template structure from **[./references/spec-template.md](./references/spec-template.md)**
+- The template structure from **[`${CLAUDE_SKILL_DIR}/references/spec-template.md`](./references/spec-template.md)**
 - The formatting style extracted by Convention Scanner (Phase 2)
 - The codebase facts from Feature Scout (Phase 2)
 - The scope/approach from user selection (Phase 3)
@@ -306,13 +307,13 @@ After user selects an approach, generate the spec file(s).
 every name in the "Current Codebase State" section against the actual codebase — this
 prevents the #1 spec quality issue, fabricated module names. Verification commands,
 common fabrication patterns, and the "don't include unverifiable claims" rule are in
-**[./references/codebase-verification.md](./references/codebase-verification.md)**.
+**[`${CLAUDE_SKILL_DIR}/references/codebase-verification.md`](./references/codebase-verification.md)**.
 
 **4.3b Dependency Upgrade Pre-Flight** (MANDATORY for dependency upgrade stories):
 before writing a spec for a major-version package upgrade, verify module system
 compatibility (CJS vs ESM) — this catches the #2 spec quality issue, assuming a major
 bump is a drop-in replacement. Compatibility check commands and the decision matrix are
-in **[./references/codebase-verification.md](./references/codebase-verification.md#43b-dependency-upgrade-pre-flight-mandatory-for-dependency-upgrade-stories)**.
+in **[`${CLAUDE_SKILL_DIR}/references/codebase-verification.md`](./references/codebase-verification.md#43b-dependency-upgrade-pre-flight-mandatory-for-dependency-upgrade-stories)**.
 
 **4.4 UX design gate** — if the story touches frontend UI (new screens, layout changes,
 visual components), the first implementation task MUST be a Figma mockup step. Skip this step and note the skip if `figma-ui-designer` is not installed.
@@ -349,7 +350,7 @@ Break into **bite-sized TDD steps** (2-5 minutes each) following this pattern:
 - **Checkbox syntax** (`- [ ]`) for each step so implementers track progress
 - **TDD sequence** — test first, run to confirm fail, implement, run to confirm pass
 
-See **[./references/spec-template.md](./references/spec-template.md)** Section 8 for the
+See **[`${CLAUDE_SKILL_DIR}/references/spec-template.md`](./references/spec-template.md)** Section 9 (Implementation Tasks) for the
 full task structure template with examples.
 
 **4.6 Simplification self-check** before writing:
@@ -377,11 +378,8 @@ Create the epic subdirectory if it doesn't exist.
 A split creates a **new epic** grouping all slices, following the project's existing
 epic/story structure.
 
-**4.1 Create a new epic.** Discover the next epic number from conventions:
-```bash
-# From discovery script output, find highest epic number and increment
-NEXT_EPIC=$((highest_epic + 1))
-```
+**4.1 Create a new epic.** Discover the next epic number from conventions.
+`NEXT_EPIC` is the largest `epics[].epic` in the discovery JSON, plus 1.
 
 Create the epic directory and assign sequential story numbers:
 ```

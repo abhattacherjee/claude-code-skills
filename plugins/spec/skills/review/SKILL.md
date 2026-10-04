@@ -1,19 +1,19 @@
 ---
 name: review
-description: "Reviews and enriches story specifications with codebase-verified technical sub-tasks, architecture alignment checks, design simplification suggestions, and API test plans. Dynamically discovers project architecture at runtime. Was the spec-review skill. Reviews a story or design spec, not code or a pull request (use review:deep or review:adversarial for those). Use when: (1) a new story spec needs review before implementation, (2) a spec has high-level tasks but lacks implementation-ready detail, (3) need to verify spec assumptions against actual codebase, (4) a spec references API changes but has no test plan, (5) reviewing specs that reference data shapes or pipeline ordering, (6) spec subtasks mention add field X to object Y or call function at line N."
+description: "Reviews a story or design spec (not code, a diff or a pull request: use review:deep or review:adversarial for those) and enriches it with codebase-verified technical sub-tasks, architecture alignment checks, design simplification suggestions, and API test plans. Dynamically discovers project architecture at runtime. Was the spec-review skill. Use when: (1) a new story spec needs review before implementation, (2) a spec has high-level tasks but lacks implementation-ready detail, (3) need to verify spec assumptions against actual codebase, (4) a spec references API changes but has no test plan, (5) reviewing specs that reference data shapes or pipeline ordering, (6) spec subtasks mention add field X to object Y or call function at line N."
 metadata:
   version: 1.0.0
 ---
 
 # Spec Review
 
-> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command runs from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command works from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
 
 Comprehensive spec review combining codebase verification and implementation planning.
 Discovers project architecture at runtime — works with any codebase structure.
 
 1. **Codebase Verification** — 8-category checklist for verifying spec sub-tasks against code
-2. **Full Planning Workflow** — 4-phase parallel analysis producing enriched specs
+2. **Full Planning Workflow** — 4-phase workflow with 4 parallel agents, producing enriched specs
 
 ---
 
@@ -237,7 +237,7 @@ SUB-TASK COUNT: [N]
 NEW FILES PROPOSED: [list]
 
 SIMPLIFICATION PATTERNS:
-[Paste the full contents of ./references/design-simplification-checklist.md here — inline the content; do not pass the file path to the sub-agent]
+[Paste the full contents of ${CLAUDE_SKILL_DIR}/references/design-simplification-checklist.md here — inline the content; do not pass the file path to the sub-agent]
 
 YOUR TASK:
 1. For each sub-task, ask: "Can this be done more simply?"
@@ -302,7 +302,7 @@ of 4 parallel Agent calls. Benefits:
   the Test Plan, the Test Plan Extractor adjusts in real-time
 
 **Team workflow:**
-1. `TeamCreate("spec-review-{spec-name}")`
+1. `TeamCreate("spec-{spec-name}-review")`
 2. Create 4 tasks (one per analysis dimension)
 3. Spawn 4 teammates with specialized prompts
 4. Teammates claim tasks, work independently, message each other with findings

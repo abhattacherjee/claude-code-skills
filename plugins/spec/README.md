@@ -14,8 +14,8 @@ Invoke as `/spec:<skill>`. The old names still match as trigger phrases.
 
 | Skill | Was | What it does |
 |---|---|---|
-| `create` | `spec-creator` | Writes a story spec file from a Claude plan, a requirements file, a prompt or a GitHub issue. Finds the project's spec conventions at run time, brainstorms approaches with you (and recommends vertical splitting for large stories), writes a spec that follows the template, checks it for over-engineering, and can hand off to `spec:review`. |
-| `review` | `spec-review` | Reviews and enriches an existing story spec. Verifies the spec's claims against the codebase, then runs four parallel analyses and adds implementation-ready sub-tasks, a current-codebase-state section, design simplification notes and an API test plan. It reviews a spec, not code or a pull request; use the `review` plugin for those. |
+| `create` | `spec-creator` | Writes a story spec file from a Claude plan, a requirements file, a prompt or a GitHub issue, with TDD implementation steps, success metrics and a Figma mockup gate for UI stories (needs `figma-ui-designer`). Finds the project's spec conventions at run time, brainstorms approaches with you (and recommends vertical splitting for large stories), writes a spec that follows the template, checks it for over-engineering, and can hand off to `spec:review`. |
+| `review` | `spec-review` | Reviews and enriches an existing story spec. Verifies the spec's claims against the codebase, checks architecture alignment, then runs four parallel analyses and adds implementation-ready sub-tasks, a current-codebase-state section, design simplification notes and an API test plan. It reviews a spec, not code or a pull request; use the `review` plugin for those. |
 | `implement` | `spec-implement` | Builds a created and reviewed spec end-to-end: reads the spec, creates a feature branch, implements the sub-tasks with progress tracking, validates build, lint and acceptance criteria, updates tracking files and opens a PR. For complex UI work it can hand off to separately installed brainstorming, frontend-design and ui-from-requirements skills. |
 
 The usual order is `create`, then `review`, then `implement`.
@@ -44,7 +44,7 @@ The usual order is `create`, then `review`, then `implement`.
 - a spec has been created and reviewed and is ready to build,
 - you give a spec file path to implement.
 
-`implement` has eight phases, a skill delegation matrix and an error recovery table.
+`implement` has eight phases (plus 4b for UI-heavy specs), a skill delegation matrix and an error recovery table.
 
 ## Scripts
 
@@ -52,16 +52,16 @@ Each skill's commands run its own scripts through `${CLAUDE_SKILL_DIR}`, so they
 
 | Skill | Script | Purpose |
 |---|---|---|
-| `create` | `discover-conventions.sh <dir> [--json]` | Finds the project's spec conventions (spec directory, epic layout, numbering). Text report, or JSON with `--json`. |
+| `create` | `discover-conventions.sh <project-root> [--json]` | Finds the project's spec conventions (spec directory, epic layout, numbering). Text report, or JSON with `--json`. |
 | `create` | `task-manifest.sh <workflow>` | Task list for `single-story` or `vertical-split`. |
-| `review` | `discover-project-architecture.sh` | Finds the project's architecture at run time. The result goes to the architecture reviewer. |
-| `review` | `extract-spec-sections.sh` | Pulls the sections of a spec that the reviewers need. |
-| `review` | `task-manifest.sh <workflow>` | Task list for the review workflow. |
-| `implement` | `task-manifest.sh <workflow>` | Task list for the implementation workflow. |
+| `review` | `discover-project-architecture.sh <project-root> [--json]` | Finds the project's architecture at run time. The result goes to the architecture reviewer. |
+| `review` | `extract-spec-sections.sh <spec-file> [--json]` | Pulls the sections of a spec that the reviewers need. |
+| `review` | `task-manifest.sh <workflow>` | Task list for `full-review` (used by `SKILL.md`) or `quick-check` (verification only; `SKILL.md` does not use it). |
+| `implement` | `task-manifest.sh <workflow>` | Task list for `standard` or `ui-heavy`. |
 
 ## Tests
 
-`tests/` has smoke tests for every script, run from a project directory the way the skills call them:
+`tests/` has smoke tests for every script, run from a project directory the way the skills call them. They also run every script command written in the three `SKILL.md` files:
 
 ```bash
 bash plugins/spec/tests/run-tests.sh

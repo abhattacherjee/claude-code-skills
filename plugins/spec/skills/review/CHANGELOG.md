@@ -6,11 +6,12 @@ All notable changes to the **review** skill (was `spec-review`) are documented h
 
 ### Changed
 
-- Moved into the `spec` plugin as `spec:review` (#160). Same two parts, scripts and checklist as `spec-review` 2.2.2. The slash command is `/spec:review`; the old name still matches as a trigger phrase.
+- Moved into the `spec` plugin as `spec:review` (#160). Same two parts, workflow and checklist as `spec-review` 2.2.2. The slash command is `/spec:review`; the old name still matches as a trigger phrase.
 - The description says this skill reviews a design spec, not code or a pull request. Use `review:deep` or `review:adversarial` for code.
 
 ### Fixed
 
+- Every command calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. The old `./scripts/<name>.sh` resolved against the user's project, not the skill, so the commands did not run as written. The spec path is a `<SPEC_FILE>` placeholder; the old text read `$SPEC_FILE` in a block that never set it.
 - `extract-spec-sections.sh` looks for a relative spec path in the current directory first, then in the repo root. It used to try only the repo root, so a path typed from a subdirectory was not found, or matched a different file of the same name at the repo root. Its "spec file required" error now goes to stderr.
 - `extract-spec-sections.sh --json` and `discover-project-architecture.sh --json` escape every control character (a CR in a title or a control character in a directory name gave invalid JSON).
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # task-manifest.sh — Emit task definitions for spec:create workflows
-# Usage: ./scripts/task-manifest.sh <workflow-name>
+# Usage: task-manifest.sh <workflow-name>
 #
 # Workflows:
 #   single-story   — Create a single story spec (5 tasks)

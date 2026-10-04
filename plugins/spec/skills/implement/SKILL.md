@@ -7,7 +7,7 @@ metadata:
 
 # Spec Implement
 
-> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command runs from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
+> **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code replaces `${CLAUDE_SKILL_DIR}` with this skill's directory before the text reaches you, so the command works from the project directory. A link such as `./references/<file>.md` is relative to this skill's directory. A bare path such as `scripts/` or `tests/` inside a search refers to the **target project** being worked on. Values you only know at run time are `<NAME>` placeholders: write the real value in their place.
 
 Implements a reviewed story spec end-to-end — from branch creation to PR.
 
@@ -212,20 +212,20 @@ Run the target project's build and lint commands (discovered in Phase 1; `npm ru
 **TaskUpdate: task 7/9 `in_progress`**
 
 1. **Stage and commit** — use conventional commit format:
-```bash
-git add -A
-git commit -m "feat: <story title> (Story {E}.{S})
+   ```bash
+   git add -A
+   git commit -m "feat: <story title> (Story {E}.{S})
 
-<Summary of changes>
+   <Summary of changes>
 
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
-```
+   Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+   ```
 
 2. **Push and create PR:**
-```bash
-git push -u origin feature/<story-slug>
-gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body "..." # use the integration branch identified in Phase 1
-```
+   ```bash
+   git push -u origin feature/<story-slug>
+   gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body "..." # use the integration branch identified in Phase 1
+   ```
 
 3. **PR body must include:**
    - Summary of changes (from spec sub-tasks)
@@ -261,9 +261,10 @@ gh pr create --base develop --title "feat: <story title> (Story {E}.{S})" --body
 
 ## See Also
 
-> These are separate skills that may not be installed alongside this plugin.
-
 - `spec:create` — creates the specs this skill implements
 - `spec:review` — reviews specs for accuracy before implementation
+
+> These are separate skills that may not be installed alongside this plugin.
+
 - `git-flow:finish` — merges the feature branch after PR approval
 - `ui-from-requirements` — full UI build pipeline for complex specs

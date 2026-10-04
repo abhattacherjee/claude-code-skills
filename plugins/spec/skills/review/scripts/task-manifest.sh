@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # task-manifest.sh — Emit task definitions for each spec:review workflow
 # Each workflow returns a JSON array of {subject, activeForm, description} objects.
-# Usage: ./scripts/task-manifest.sh <workflow-name>
-#        ./scripts/task-manifest.sh --list
-#        ./scripts/task-manifest.sh --help
+# Usage: task-manifest.sh <workflow-name>
+#        task-manifest.sh --list
+#        task-manifest.sh --help
 
 case "${1:-}" in
   full-review)
@@ -32,7 +32,7 @@ JSON
     echo "Usage: task-manifest.sh <workflow>"
     echo ""
     echo "Workflows:"
-    echo "  full-review   5-phase review with 4 parallel agents (3-5 min)"
+    echo "  full-review   4-phase workflow with 4 parallel agents (3-5 min)"
     echo "  quick-check   Fast codebase verification only (1-2 min)"
     echo ""
     echo "Use --list for machine-readable workflow names"

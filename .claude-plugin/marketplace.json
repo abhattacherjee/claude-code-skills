@@ -89,7 +89,7 @@
     {
       "name": "spec",
       "source": "./plugins/spec",
-      "description": "Three skills for story specs in one plugin. spec:create writes a template-compliant story spec from a plan, requirements file, prompt or GitHub issue, with vertical splitting for large stories. spec:review checks a spec against the real codebase and adds verified sub-tasks, an API test plan and design simplification notes. spec:implement builds a reviewed spec end-to-end: feature branch, sub-tasks, acceptance checks and a PR.",
+      "description": "Three skills for story specs in one plugin. spec:create writes a template-compliant story spec from a plan, requirements file, prompt or GitHub issue, with TDD implementation steps, success metrics, a Figma mockup gate for UI stories and vertical splitting for large stories. spec:review checks a spec against the real codebase and architecture and adds verified sub-tasks, an API test plan and design simplification notes. spec:implement builds a reviewed spec end-to-end: feature branch, sub-tasks, acceptance checks and a PR.",
       "version": "1.0.0"
     },
     {

@@ -274,7 +274,7 @@ git commit -m "fix(share): normalize tips after Sheets roundtrip"
 | `## Architecture` | Multi-layer stories, complex data flow |
 | `## Prerequisites` | External dependencies, setup requirements |
 | `## Sentry Metrics` | Observability additions |
-| `## Bruno API Test Plan` | Stories with API changes (added by /spec:review) |
+| `## API Test Plan` | Stories with API changes (added by /spec:review) |
 | `## Design Simplification Notes` | After review (added by /spec:review) |
 | `## Verification` | Specific commands to prove completion |
 
