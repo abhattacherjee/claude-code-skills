@@ -14,6 +14,7 @@ All notable changes to the **spec** plugin are documented here.
 - Every command in the three `SKILL.md` files runs as written from your project directory. The old text called `./scripts/<name>.sh`, which resolves against your project, not the skill, so no script ran. Commands now use `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. `spec:review` also read `$SPEC_FILE` and `$PROJECT_ROOT` in blocks that never set them; those are now placeholders you fill in.
 - Cross-references name the new skills (`/spec:review` after creation, the spec template's "added by /spec:review", the `task-manifest.sh` subject lines).
 - `spec:review` says in its description that it reviews a spec, not code or a pull request.
+- `extract-spec-sections.sh` looks for a relative spec path in the current directory first, then in the repo root. It used to try only the repo root, so a path typed from a subdirectory was not found, or matched a different file of the same name at the repo root.
 
 ### Deprecated
 

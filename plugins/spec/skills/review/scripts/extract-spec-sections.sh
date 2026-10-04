@@ -19,7 +19,8 @@ Usage: $(basename "$0") <spec-file> [--json]
 Extracts key sections from a story specification file for parallel agent analysis.
 
 Arguments:
-  spec-file    Path to the story spec .md file (absolute or relative to repo root)
+  spec-file    Path to the story spec .md file (absolute, relative to the current
+               directory, or relative to the repo root; the current directory wins)
   --json       Output as JSON (for agent consumption)
   --help       Show this help
 
@@ -41,16 +42,22 @@ EOF
 }
 
 # Argument parsing
-[[ $# -lt 1 ]] && { echo "Error: spec file required. Use --help for usage."; exit 2; }
+[[ $# -lt 1 ]] && { echo "Error: spec file required. Use --help for usage." >&2; exit 2; }
 [[ "$1" == "--help" || "$1" == "-h" ]] && usage
 
 SPEC_FILE="$1"
 JSON_MODE=false
 [[ "${2:-}" == "--json" ]] && JSON_MODE=true
 
-# Resolve relative paths
+# Resolve relative paths: against the current directory first, then the repo root.
+# (It used to try only the repo root, so a path typed from a subdirectory was not
+# found, or, worse, matched a different file of the same name at the repo root.)
 if [[ ! "$SPEC_FILE" = /* ]]; then
-    SPEC_FILE="$REPO_ROOT/$SPEC_FILE"
+    if [[ -f "$SPEC_FILE" ]]; then
+        SPEC_FILE="$(pwd)/$SPEC_FILE"
+    else
+        SPEC_FILE="$REPO_ROOT/$SPEC_FILE"
+    fi
 fi
 
 if [[ ! -f "$SPEC_FILE" ]]; then

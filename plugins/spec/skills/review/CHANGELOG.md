@@ -9,6 +9,10 @@ All notable changes to the **review** skill (was `spec-review`) are documented h
 - Moved into the `spec` plugin as `spec:review` (#160). Same two parts, scripts and checklist as `spec-review` 2.2.2. The slash command is `/spec:review`; the old name still matches as a trigger phrase.
 - The description says this skill reviews a design spec, not code or a pull request. Use `review:deep` or `review:adversarial` for code.
 
+### Fixed
+
+- `extract-spec-sections.sh` looks for a relative spec path in the current directory first, then in the repo root. It used to try only the repo root, so a path typed from a subdirectory was not found, or matched a different file of the same name at the repo root. Its "spec file required" error now goes to stderr.
+
 ## History before 1.0.0 (as `spec-review`)
 
 ### spec-review 2.2.2 - 2026-07-25

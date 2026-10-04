@@ -295,3 +295,18 @@ jobs:
 
       - name: Check that every skill command runs as written
         run: python3 scripts/check-skill-commands.py plugins/spec plugins/review
+
+  spec-tests:
+    # macOS too: it ships bash 3.2 and BSD grep, sed and find, which the spec scripts must run under.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir, the way its SKILL.md calls it.
+      - name: Run spec script smoke tests
+        run: bash plugins/spec/tests/run-tests.sh
