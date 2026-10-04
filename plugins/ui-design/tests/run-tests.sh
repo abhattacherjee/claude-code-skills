@@ -326,6 +326,13 @@ tok_case quote <<'EOF'
 }
 EOF
 json_is "a brace inside a quoted value does not change nesting" 'd["cssVariables"] == "--a: \"{\";\n--q: '"'"'}}'"'"';\n--b: blue;" and d["darkModeVariables"] == "--b: navy;"'
+# CRLF line endings: the \r must not reach the selector (".dark\r" is not dark) or a value.
+tok_case crlf < <(printf ':root {\r\n  --bg: white;\r\n}\r\n.dark {\r\n  --bg: black;\r\n}\r\n')
+json_is "CRLF CSS: the light value has no \\r" 'd["cssVariables"] == "--bg: white;"'
+json_is "CRLF CSS: .dark is still the dark set, with no \\r" 'd["darkModeVariables"] == "--bg: black;"'
+run_in "$PROJ" "$TOK" "$TMP/work/sel-crlf" --format css
+printf '%s' "$OUT" | grep -q $'\r' && bad "CRLF CSS: --format css output has no \\r" "$(printf '%s' "$OUT" | od -c | head -5)" || ok "CRLF CSS: --format css output has no \\r"
+printf '%s\n' "$OUT" | grep -A1 -Fx '.dark {' | grep -Fqx '  --bg: black;' && ok "CRLF CSS: --format css has the .dark block with --bg: black;" || bad "CRLF CSS: --format css has the .dark block with --bg: black;" "$OUT"
 
 echo "figma reaches its agent through the plugin agent type, and nothing points at ~/.claude/agents"
 grep -Fq 'subagent_type: "ui-design:figma-ux-expert"' "$SKILLS/figma/SKILL.md" && ok "figma starts subagent_type ui-design:figma-ux-expert" || bad "figma starts subagent_type ui-design:figma-ux-expert" "line not found in figma/SKILL.md"

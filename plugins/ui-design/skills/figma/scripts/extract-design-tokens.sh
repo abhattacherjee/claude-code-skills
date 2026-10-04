@@ -98,7 +98,7 @@ done
 # it counts as top level. Any other wrapper (@media, @supports, a nested rule) keeps its
 # rules out. Braces are counted outside comments (/* */, also over several lines) and
 # outside quoted strings. A line is read when it starts with "--" and does not start
-# inside a comment or a string.
+# inside a comment or a string. Every \r is removed first, so CRLF files read like LF ones.
 css_vars() {
   awk -v mode="$2" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
@@ -126,6 +126,8 @@ css_vars() {
       return c
     }
     {
+      # CRLF files: a \r would stay in the selector (".dark\r" is not dark) and in values.
+      gsub(/\r/, "")
       line = $0
       start_clean = (!incomment && quote == "")
       ctx = chain()
