@@ -5,8 +5,6 @@ set -euo pipefail
 #
 # Each case builds a small fixture plugin in a temp dir, runs the checker on it
 # and asserts the exit code and, for failures, the `file:line: message` text.
-# Every guard below was proven load-bearing by removing it in a scratch copy of
-# the checker and watching its case go red.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHECKER="${CHECKER:-$REPO_ROOT/scripts/check-skill-commands.py}"
@@ -160,7 +158,7 @@ P="$(new_plugin plainfence)"
 printf '# S\n\n```\ndetect-mode.sh\n  |-- r1.json\n```\n' > "$P/skills/s/SKILL.md"
 expect "unlabeled fence holding a diagram exits 0" 0 '^OK: ' "$P"
 printf '# S\n\n```\n./scripts/run.sh --flag\n```\n' > "$P/skills/s/SKILL.md"
-expect "unlabeled fence starting with a relative script exits 1" 1 'SKILL.md:4: script `\./scripts/run\.sh` is a relative path in an unlabeled block' "$P"
+expect "unlabeled fence starting with a relative script exits 1" 1 'SKILL.md:4: script `\./scripts/run\.sh` has no .* \(in a unlabeled fence\)' "$P"
 
 # --- an unreadable file is a reported problem (exit 1), not a traceback ---
 P="$(new_plugin badbytes)"
@@ -171,6 +169,80 @@ printf '\xff\xfe\n' > "$P/skills/s/references/r.md"
 expect "non-UTF-8 reference exits 1 with a cannot-read line" 1 'references/r.md:1: cannot read file' "$P"
 out="$(python3 "$CHECKER" "$P" 2>&1 || true)"
 if printf '%s' "$out" | grep -q Traceback; then bad "no traceback on unreadable file" "$out"; else ok "no traceback on unreadable file"; fi
+
+# --- new rules (PR #173 fix wave 1) ---
+# A reference holds no ${CLAUDE_...} at all.
+P="$(new_plugin refenv)"
+printf '# ref\n\n```bash\n"${CLAUDE_SKILL_DIR}/scripts/run.sh"\n```\n' > "$P/skills/s/references/r.md"
+expect "any \${CLAUDE_ in a references file exits 1" 1 'references/r.md:4: \$\{CLAUDE_\.\.\.\} in a references file is never substituted' "$P"
+
+# <SCRIPTS_DIR>: defined only by a definition line, and the name must exist there.
+P="$(new_plugin sdname)"
+printf '# ref\n\n```bash\n<SCRIPTS_DIR>/nope.sh\n```\n' > "$P/skills/s/references/r.md"
+printf '\nIn the references, <SCRIPTS_DIR> means "${CLAUDE_SKILL_DIR}/scripts".\n' >> "$P/skills/s/SKILL.md"
+expect "<SCRIPTS_DIR>/name that is not in the defined dir exits 1" 1 'references/r.md:4: <SCRIPTS_DIR>/nope\.sh does not exist' "$P"
+P="$(new_plugin sdself)"
+printf '# ref\n\n```bash\n<SCRIPTS_DIR>/run.sh\n```\n' > "$P/skills/s/references/r.md"
+printf '\nRun `<SCRIPTS_DIR>/run.sh` to start (the scripts live in ${CLAUDE_SKILL_DIR}/scripts).\n' >> "$P/skills/s/SKILL.md"
+expect "<SCRIPTS_DIR> used in SKILL.md but never defined exits 1" 1 'no definition line for <SCRIPTS_DIR>' "$P"
+
+# Fences that are not bash: ~~~, console with a $ prompt, unlabeled, text.
+fence_case() { # <label> <want-exit> <regex> <fence-open> <line...>
+  local label="$1" want="$2" re="$3" open="$4" close; shift 4
+  local d; d="$(new_plugin "fc-$RANDOM$RANDOM")"
+  close="${open%%[a-z]*}"
+  { printf '# S\n\n%s\n' "$open"; printf '%s\n' "$@"; printf '%s\n' "$close"; } > "$d/skills/s/SKILL.md"
+  expect "$label" "$want" "$re" "$d"
+}
+fence_case "~~~ fence: a relative script exits 1" 1 'script `\./scripts/run\.sh`' '~~~' './scripts/run.sh --flag'
+fence_case "~~~bash fence: a relative script exits 1" 1 'script `\./scripts/run\.sh`' '~~~bash' './scripts/run.sh --flag'
+fence_case "console fence: a '\$ ' command with a relative script exits 1" 1 'script `\./scripts/run\.sh`' '```console' '$ ./scripts/run.sh --flag'
+fence_case "console fence: a '\$ ' command that reads an unset variable exits 1" 1 'reads \$X' '```console' '$ echo "$X"'
+fence_case "unlabeled fence: bash ./x.sh exits 1" 1 'script `\./x\.sh`' '```' 'bash ./x.sh'
+fence_case "unlabeled fence: scripts/x.sh exits 1" 1 'script `scripts/x\.sh`' '```' 'scripts/x.sh --a'
+fence_case "unlabeled fence: python3 scripts/y.py exits 1" 1 'script `scripts/y\.py`' '```' 'python3 scripts/y.py'
+fence_case "unlabeled fence: python3 y.py (interpreter, no path) exits 1" 1 'script `y\.py`' '```' 'python3 y.py'
+fence_case "text fence: a \$VAR read exits 1" 1 'a .text. fence reads a shell variable' '```text' 'run $RUN_DIR/x'
+fence_case "unlabeled fence: a \$VAR read exits 1" 1 'unlabeled fence reads a shell variable' '```' 'echo "$X"'
+fence_case "a bare script name in a diagram exits 0" 0 '^OK: ' '```' 'detect-mode.sh' '  |-- r1.json'
+fence_case "a path in a json fence exits 0" 0 '^OK: ' '```json' '{"file": "src/a.py"}'
+fence_case "\${CLAUDE_SKILL_DIR} in an unlabeled fence is not a variable read" 0 '^OK: ' '```' 'see ${CLAUDE_SKILL_DIR}/scripts/run.sh'
+
+# `cd` into the skill or plugin dir moves the user's shell there.
+fence_case "cd \${CLAUDE_SKILL_DIR} in a bash fence exits 1" 1 'moves your shell into the skill directory' '```bash' 'cd "${CLAUDE_SKILL_DIR}/scripts" && ./run.sh'
+fence_case "cd \${CLAUDE_PLUGIN_ROOT} in a bash fence exits 1" 1 'moves your shell into the skill directory' '```bash' 'cd "${CLAUDE_PLUGIN_ROOT}"'
+fence_case "a (cd ...) subshell into the skill dir exits 0" 0 '^OK: ' '```bash' '(cd "${CLAUDE_SKILL_DIR}/scripts" && pwd)'
+P="$(new_plugin cdspan)"
+printf '# S\n\nFirst `cd "${CLAUDE_SKILL_DIR}"` then go.\n' > "$P/skills/s/SKILL.md"
+expect "cd \${CLAUDE_SKILL_DIR} in an inline span exits 1" 1 'SKILL.md:3: .*moves your shell' "$P"
+
+# Sentence punctuation after a path is not part of the path; a missing path is reported without it.
+P="$(new_plugin punct)"
+printf '# S\n\nSee ${CLAUDE_SKILL_DIR}/scripts/run.sh.\nAlso (${CLAUDE_SKILL_DIR}/references/r.md), and ${CLAUDE_SKILL_DIR}/scripts/run.sh; done:\n' > "$P/skills/s/SKILL.md"
+expect "a path followed by . , ; : or ) still resolves" 0 '^OK: ' "$P"
+printf '# S\n\nSee ${CLAUDE_SKILL_DIR}/scripts/gone.sh.\n' > "$P/skills/s/SKILL.md"
+expect "a missing path is reported without the trailing period" 1 'scripts/gone\.sh does not exist' "$P"
+# A path to a document in a span is not a command, so it needs no exec bit.
+printf '# S\n\nRead `${CLAUDE_SKILL_DIR}/references/r.md` first.\n' > "$P/skills/s/SKILL.md"
+expect "a document path that starts a span exits 0" 0 '^OK: ' "$P"
+
+# Python scripts get the same checks as shell scripts.
+P="$(new_plugin py)"
+printf '#!/usr/bin/env python3\n' > "$P/skills/s/scripts/t.py"
+chmod +x "$P/skills/s/scripts/t.py"
+printf '# S\n\n```bash\npython3 "${CLAUDE_SKILL_DIR}/scripts/t.py" --x\n```\n' > "$P/skills/s/SKILL.md"
+expect "an existing .py script with a full path exits 0" 0 '^OK: ' "$P"
+printf '# S\n\n```bash\npython3 "${CLAUDE_SKILL_DIR}/scripts/missing.py" --x\n```\n' > "$P/skills/s/SKILL.md"
+expect "a missing .py script exits 1" 1 'scripts/missing\.py does not exist' "$P"
+printf '# S\n\n```bash\npython3 scripts/t.py --x\n```\n' > "$P/skills/s/SKILL.md"
+expect "python3 scripts/t.py in a bash fence exits 1" 1 'script `scripts/t\.py`' "$P"
+chmod -x "$P/skills/s/scripts/t.py"
+mkdir -p "$P/skills/s/tools"
+printf '#!/usr/bin/env python3\n' > "$P/skills/s/tools/u.py"
+printf '# S\n\n```bash\n"${CLAUDE_SKILL_DIR}/tools/u.py" --x\n```\n' > "$P/skills/s/SKILL.md"
+expect "a non-executable .py outside scripts/ started directly exits 1" 1 'tools/u\.py starts a command but is not executable' "$P"
+printf '# S\n\n```bash\n"${CLAUDE_SKILL_DIR}/scripts/t.py" --x\n```\n' > "$P/skills/s/SKILL.md"
+expect "a non-executable .py script started directly exits 1" 1 'not executable' "$P"
 
 # --- references are checked too ---
 P="$(new_plugin ref)"
@@ -192,7 +264,7 @@ cat > "$P/skills/s/references/r.md" <<'EOF'
 <SCRIPTS_DIR>/run.sh
 ```
 EOF
-expect "<SCRIPTS_DIR> in a reference with no definition exits 1" 1 'never defines it' "$P"
+expect "<SCRIPTS_DIR> in a reference with no definition exits 1" 1 'no definition line for <SCRIPTS_DIR>' "$P"
 printf '\nIn the references, <SCRIPTS_DIR> means "${CLAUDE_SKILL_DIR}/scripts".\n' >> "$P/skills/s/SKILL.md"
 expect "<SCRIPTS_DIR> defined in SKILL.md exits 0" 0 '^OK: ' "$P"
 
