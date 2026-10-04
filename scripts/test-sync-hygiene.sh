@@ -99,16 +99,10 @@ set -euo pipefail
 # CONTRIBUTING.md, the PR template, and the workflow.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SYNC_SCRIPT="${SYNC_SCRIPT:-$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/scripts/sync-monorepo.sh}"
-
-# The authoring source of truth for skill-publishing lives outside the repo.
-# Checked when present (developer machines), reported as unavailable in CI.
-# The whole skill directory, not just the script: a change to this skill lands in
-# SKILL.md (metadata.version, which drives the reversion guard), CHANGELOG.md and
-# scripts/ alike, and a parity check narrower than the publish relationship it
-# describes lets the rest drift unnoticed.
-LIVE_SKILL_DIR="${LIVE_SKILL_DIR:-$HOME/.claude/skills/skill-publishing}"
-IN_REPO_SKILL_DIR="$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing"
+# plugins/skill-kit/skills/publish/ is the only copy of these scripts and of the
+# skill around them. There is no second copy to compare with, so this suite tests
+# the files that ship.
+SYNC_SCRIPT="${SYNC_SCRIPT:-$REPO_ROOT/plugins/skill-kit/skills/publish/scripts/sync-monorepo.sh}"
 
 # The harness runs under `set -euo pipefail`, so an unusable script under test
 # would die with rc=127 and no summary — unhelpful for the documented
@@ -5624,39 +5618,6 @@ assert_contains "…naming the field, and suggesting > instead" \
     "description is a literal (|) block scalar" "$SCALAR_LITERAL_STDERR"
 assert_not_contains "…and a folded (>) scalar is NOT announced, since folding is what it asked for" \
     "block scalar of" "$SCALAR_FOLDED_STDERR"
-
-# ============================================================
-# Authoring-source parity
-# ============================================================
-#
-# skill-publishing is authored outside the repo and published into plugins/**.
-# A fix applied to only one copy is a fix that either nobody receives or the
-# next sync silently reverts. The live copy does not exist in CI.
-
-# Compared as a tree. The single-file form this replaced diffed scripts/
-# sync-monorepo.sh alone while describing the whole publish relationship, so
-# SKILL.md and CHANGELOG.md — two of the three files a typical change to this
-# skill touches — could drift with the check still green. SKILL.md is the
-# load-bearing one: its metadata.version is what the reversion guard compares, so
-# a live copy left behind on the older version is exactly the stale-source shape
-# that guard exists to catch.
-#
-# The live copy is its own git repo and carries repo scaffolding the published
-# copy has no business containing (verified: these seven names are the entire
-# delta). Filtered by anchored whole-line match on diff's own "Only in <live>:"
-# form, so the exclusion applies to those top-level entries and nothing nested.
-#
-# `diff -rq` for the message's sake: one line per differing or missing file
-# instead of every changed line of a 1300-line script.
-if [[ -d "$LIVE_SKILL_DIR" ]]; then
-    LIVE_ONLY_SCAFFOLD="^Only in $LIVE_SKILL_DIR: (\.git|\.github|\.gitignore|CONTRIBUTING\.md|LICENSE|README\.md|plugin-manifest\.json)\$"
-    PARITY_DIFF="$(diff -rq "$LIVE_SKILL_DIR" "$IN_REPO_SKILL_DIR" 2>&1 | grep -vE "$LIVE_ONLY_SCAFFOLD" || true)"
-    assert_eq "live authoring copy is byte-identical to the in-repo copy (whole skill tree)" \
-        "" "$PARITY_DIFF"
-else
-    echo "SKIP: live authoring copy not present, parity check skipped: $LIVE_SKILL_DIR"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-fi
 
 # The summary reports skips explicitly: without the count, a run where an
 # assertion was skipped and a run where it passed both print the same

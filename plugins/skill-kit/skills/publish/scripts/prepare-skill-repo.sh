@@ -56,6 +56,10 @@ if [[ -z "$SKILL_DIR" ]]; then
   exit 1
 fi
 
+if [[ ! -d "$SKILL_DIR" ]]; then
+  echo "Error: skill directory not found: $SKILL_DIR" >&2
+  exit 1
+fi
 SKILL_DIR="$(cd "$SKILL_DIR" && pwd)"
 
 # --- Validate SKILL.md exists ---

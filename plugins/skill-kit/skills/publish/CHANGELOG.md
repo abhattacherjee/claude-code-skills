@@ -14,6 +14,7 @@ All notable changes to the **publish** skill (was `skill-publishing`) are docume
 
 - Step 7 told you to delete `~/.claude/skills/skill-publishing/build/`, a directory nothing writes. `prepare-plugin.sh` writes `./build/<plugin-name>` relative to where you ran it, and the auto-build in `sync-monorepo.sh` uses a temp dir. The step now names `./build/<plugin-name>` and says it applies to a manual Workflow E run.
 - Workflow E's consumer install ran `/tmp/ccs/scripts/install-plugin.sh`, a copy that exists only after the monorepo has been synced once. It now runs this skill's own `install-plugin.sh`.
+- `prepare-skill-repo.sh` given a directory that does not exist stopped on a bare `cd: No such file or directory` from line 59. It now says `Error: skill directory not found: <dir>` and exits 1.
 
 ## History before 1.0.0 (as `skill-publishing`)
 
