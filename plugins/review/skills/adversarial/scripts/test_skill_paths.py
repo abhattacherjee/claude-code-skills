@@ -48,13 +48,12 @@ FOR_VAR = re.compile(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b")
 SEG_SPLIT = re.compile(r"\s*(?:&&|\|\||[;&|()])\s*")
 LEAD_KEYWORD = re.compile(r"(?:if|then|else|elif|do|while|until|!|time)\s+")
 LEAD_DECL = re.compile(r"(?:export|local|readonly|declare(?:\s+-[A-Za-z]+)?)\s+")
-ASSIGN_WORD = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\+?=("(?:[^"\\]|\\.)*"|\S*)\s*')
 READ_CMD = re.compile(r"read\s+((?:-[A-Za-z]+\s+)*)([A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)")
 ZERO = re.compile(r"\$(?:0\b|\{0\})")
 SCRIPT_TOKEN = re.compile(r"[^\s\"'|;&()=]*?[A-Za-z0-9_-]\.(?:sh|py)(?![\w.-])")
 ENV_PATH = re.compile(r"\$\{CLAUDE_(SKILL_DIR|PLUGIN_ROOT)\}/([A-Za-z0-9_./-]*)")
 FIRST_ENV = re.compile(r"^\$\{CLAUDE_(SKILL_DIR|PLUGIN_ROOT)\}/([A-Za-z0-9_./-]+)$")
-SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+SPAN = re.compile(r"(?<!`)`([^`\n]+(?:\n[^`\n]+)?)`(?!`)")
 AGENT_REF = re.compile(r"(?<![\w:/-])review:([a-z][a-z-]*)")
 
 
@@ -108,6 +107,30 @@ def strip_line(line):
     return "".join(out)
 
 
+def word_end(s, i):
+    """Index just past the shell word that starts at s[i]: stop at whitespace outside
+    quotes and ( ) groups, so `X="$(gh pr view "a b")"` is one word."""
+    depth, in_double = 0, False
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            i += 2
+            continue
+        if c == '"':
+            in_double = not in_double
+        elif c == "(" and not in_double or c == "(" and s[i - 1:i] == "$":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif c.isspace() and depth == 0 and not in_double:
+            break
+        i += 1
+    return i
+
+
+ASSIGN_HEAD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\+?=")
+
+
 def command_parts(segment):
     """Return (names assigned by leading NAME=value words, the rest of the command)."""
     s, names = segment.strip(), []
@@ -118,54 +141,136 @@ def command_parts(segment):
                 s = s[m.end():]
                 break
         else:
-            m = ASSIGN_WORD.match(s)
+            m = ASSIGN_HEAD.match(s)
             if not m:
                 return names, s
             names.append(m.group(1))
-            s = s[m.end():]
+            s = s[word_end(s, m.end()):].lstrip()
 
 
-def assigned_in(line):
-    names = set(FOR_VAR.findall(line))
-    for seg in SEG_SPLIT.split(line):
-        got, rest = command_parts(seg)
+def top_level_commands(line):
+    """Split one line into [(command text, piped)] at ; && || | and a lone &, outside
+    quotes and outside ( ) groups. Text inside a group stays in its command, so its
+    reads are checked, but the command is marked as a group (see below)."""
+    cmds, buf, depth, in_double, i = [], [], 0, False, 0
+    piped_before = False
+
+    def flush(piped_after):
+        nonlocal buf, piped_before
+        text = "".join(buf).strip()
+        if text:
+            cmds.append((text, piped_before or piped_after))
+        buf = []
+        piped_before = piped_after
+
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            buf.append(line[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            in_double = not in_double
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and not in_double:
+            two = line[i:i + 2]
+            if two in ("&&", "||"):
+                flush(False)
+                i += 2
+                continue
+            if c == ";":
+                flush(False)
+                i += 1
+                continue
+            if c == "|":
+                flush(True)
+                i += 1
+                continue
+            if c == "&" and not (i > 0 and line[i - 1] in "<>") and not line[i + 1:i + 2].isdigit():
+                flush(False)
+                i += 1
+                continue
+        buf.append(c)
+        i += 1
+    flush(False)
+    return cmds
+
+
+def names_set_by(cmd, piped):
+    """The names one command sets for the commands after it. A name counts only when
+    the whole command is the assignment (or an export/local/readonly/declare of it),
+    or the command is `read NAME` or `for NAME in`, and it is not in a pipeline or a
+    ( ) group, which run in a subshell. `X=v cmd` sets X for cmd only."""
+    if piped or cmd.startswith("("):
+        return set()
+    names = set(FOR_VAR.findall(cmd)) if re.match(r"(?:(?:do|then)\s+)?for\s", cmd) else set()
+    got, rest = command_parts(cmd)
+    if not rest:
         names.update(got)
-        m = READ_CMD.match(rest)
-        if m:
-            names.update(m.group(2).split())
+    m = READ_CMD.match(rest)
+    if m:
+        names.update(m.group(2).split())
     return names
+
+
+def logical_lines(lines):
+    """Join backslash-continued lines. Yields (offset of the first line, text)."""
+    out, cur, start = [], None, 0
+    for i, raw in enumerate(lines):
+        if cur is None:
+            cur, start = raw, i
+        else:
+            cur += " " + raw.strip()
+        if cur.rstrip().endswith("\\"):
+            cur = cur.rstrip()[:-1]
+            continue
+        out.append((start, cur))
+        cur = None
+    if cur is not None:
+        out.append((start, cur))
+    return out
 
 
 def block_problems(lines):
     """Return [(offset, message)] for one command block (offset is 0-based)."""
     assigned = set()
     problems = []
-    for i, raw in enumerate(lines):
+    for i, raw in logical_lines(lines):
         l = strip_line(raw)
-        # A name counts as set from the line that sets it, not before: a read on an
-        # earlier line of the same block is still a read of an empty variable.
-        assigned |= assigned_in(l)
         if ZERO.search(l):
             problems.append((i, '`$0` is the shell, not the skill; never use `dirname "$0"`'))
-        bare = l
-        for tok in ENV_TOKENS:
-            bare = bare.replace(tok, "")
-        for m in VAR_READ.finditer(bare):
-            name = m.group(1) or m.group(2)
-            if name not in assigned and name not in ALLOWED_READS:
-                problems.append((i, "reads $%s, which this block never sets" % name))
         for m in SCRIPT_TOKEN.finditer(l):
             tok = m.group(0)
             if not any(tok.startswith(p + "/") for p in SCRIPT_PREFIXES):
                 problems.append((i, "script `%s` has no ${CLAUDE_...} or <SCRIPTS_DIR> path in front" % tok))
+        # Commands run in order. A command reads what earlier commands set, so a read
+        # before the assignment, on this line or an earlier one, is a read of nothing.
+        for cmd, piped in top_level_commands(l):
+            bare = cmd
+            for tok in ENV_TOKENS:
+                bare = bare.replace(tok, "")
+            for m in VAR_READ.finditer(bare):
+                name = m.group(1) or m.group(2)
+                if name not in assigned and name not in ALLOWED_READS:
+                    problems.append((i, "reads $%s, which this block never sets" % name))
+            assigned |= names_set_by(cmd, piped)
     return problems
 
 
+def spans_with_lines(text):
+    """Yield (line number, span text) for each `code span`. A span may wrap over one
+    newline; the newline becomes a space."""
+    for m in SPAN.finditer(text):
+        yield text.count("\n", 0, m.start()) + 1, m.group(1).replace("\n", " ")
+
+
 def span_problems(prose):
-    """Check each single-line `code span` in one line of prose like a command."""
+    """Check each `code span` in some prose like a command."""
     out = []
-    for m in SPAN.finditer(prose):
-        span = m.group(1)
+    for _, span in spans_with_lines(prose):
         if span in SPAN_ALLOW:
             continue
         is_command = bool(re.search(r"\s", span))  # a lone `name.sh` just names a script
@@ -200,10 +305,17 @@ def doc_problems(path):
     return found
 
 
+def doc_prose(path):
+    """The file's text with every fenced line blanked, so line numbers still match."""
+    keep = dict(prose_lines(path.read_text(encoding="utf-8")))
+    n = len(path.read_text(encoding="utf-8").splitlines())
+    return "\n".join(keep.get(i, "") for i in range(1, n + 1))
+
+
 def doc_span_problems(path):
     found = []
-    for n, line in prose_lines(path.read_text(encoding="utf-8")):
-        for msg in span_problems(line):
+    for n, span in spans_with_lines(doc_prose(path)):
+        for msg in span_problems("`%s`" % span):
             found.append("%s:%d: %s" % (path.relative_to(PLUGIN), n, msg))
     return found
 
@@ -230,12 +342,11 @@ def first_word_env_paths(path):
                     m = FIRST_ENV.match(w)
                     if m:
                         yield "%s:%d" % (name, start + off), m.group(1), m.group(2)
-    for n, line in prose_lines(text):
-        for sm in SPAN.finditer(line):
-            for w in first_words(sm.group(1)):
-                m = FIRST_ENV.match(w)
-                if m:
-                    yield "%s:%d" % (name, n), m.group(1), m.group(2)
+    for n, span in spans_with_lines(doc_prose(path)):
+        for w in first_words(span):
+            m = FIRST_ENV.match(w)
+            if m:
+                yield "%s:%d" % (name, n), m.group(1), m.group(2)
 
 
 def skill_dir_of(path):
@@ -341,10 +452,58 @@ class AnalyzerFixWave1(unittest.TestCase):
     def test_a_flag_value_is_not_an_assignment(self):
         self.flagged("state", "gh api -f state=open", 'echo "$state"')
 
-    def test_a_command_position_assignment_still_counts(self):
+    def test_a_whole_command_assignment_still_counts(self):
         self.assertEqual(self.msgs('X=1; echo "$X"'), [])
-        self.assertEqual(self.msgs('A=1 B=2 true', 'echo "$A$B"'), [])
+        self.assertEqual(self.msgs('A=1 && B=2', 'echo "$A$B"'), [])
         self.assertEqual(self.msgs('if true; then Y=2; fi', 'echo "$Y"'), [])
+        self.assertEqual(self.msgs('export Z=3', 'echo "$Z"'), [])
+        self.assertEqual(self.msgs('X=$(mktemp -d)', 'echo "$X"'), [])
+        self.assertEqual(self.msgs('read A B', 'echo "$A$B"'), [])
+        self.assertEqual(self.msgs('for f in a b; do echo "$f"; done'), [])
+
+    def test_a_prefix_assignment_is_scoped_to_its_command(self):
+        # `X=v cmd` sets X for cmd only; the shell expands "$X" in cmd's args first.
+        self.flagged("X", 'X=v echo "$X"')
+        self.flagged("A", 'A=1 B=2 true', 'echo "$A$B"')
+
+    def test_a_read_in_a_pipeline_does_not_set_the_variable(self):
+        self.flagged("X", 'echo v | read X', 'echo "$X"')
+
+    def test_a_subshell_assignment_does_not_set_the_variable(self):
+        self.flagged("X", '(X=1)', 'echo "$X"')
+        self.flagged("X", 'echo "$(X=1)"', 'echo "$X"')
+
+    def test_a_read_earlier_on_the_same_line_is_not_covered_by_a_later_assignment(self):
+        self.flagged("X", 'echo "$X"; X=1')
+        self.flagged("X", 'echo "$X" && X=1')
+
+    def test_a_value_may_read_a_variable_set_by_an_earlier_command(self):
+        self.assertEqual(self.msgs('D=$(mktemp -d)', 'F="$D/x"', 'echo "$F"'), [])
+        self.flagged("D", 'F="$D/x"; D=1')
+
+    def test_a_backslash_continued_command_is_one_command(self):
+        self.assertEqual(self.msgs('X=1', 'echo a \\', '  "$X"'), [])
+        self.flagged("Y", 'echo a \\', '  "$Y"')
+
+    def test_a_continuation_line_is_an_argument_not_a_new_command(self):
+        # `echo a \` + `X=1` is one command whose last argument is X=1: it sets nothing.
+        self.flagged("X", 'echo a \\', '  X=1', 'echo "$X"')
+
+    def test_a_value_that_reads_its_own_name_reads_it_before_it_is_set(self):
+        self.flagged("X", 'X="$X/a"')
+        self.assertEqual(self.msgs('X=1', 'X="$X/a"'), [])
+
+    def test_a_code_span_wrapped_across_two_lines_is_checked(self):
+        self.assertTrue(span_problems('see `python3 pr-audit.py\n  post --pr 1` here'))
+        self.assertTrue(span_problems('see `echo\n  "$RUN_DIR"` here'))
+        self.assertEqual(span_problems('see `echo\n  hi` here'), [])
+
+    def test_wrapped_spans_in_the_real_docs_are_found(self):
+        # The scan must reach them: count spans that contain a newline.
+        wrapped = 0
+        for path in DOC_FILES:
+            wrapped += sum("\n" in m.group(1) for m in SPAN.finditer(doc_prose(path)))
+        self.assertGreater(wrapped, 0, "no wrapped spans found; the join is not looking")
 
     def test_ifs_prefix_before_read_still_sets_the_variable(self):
         self.assertEqual(self.msgs('while IFS= read -r line; do echo "$line"; done'), [])

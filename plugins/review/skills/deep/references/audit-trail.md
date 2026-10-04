@@ -114,8 +114,8 @@ python3 "<SCRIPTS_DIR>/pr-audit.py" recheck --prior "<RUN_DIR>/round-<FIX_K>.jso
   --round "<K>" --head-sha "<FIX_SHA>" --out "<RUN_DIR>/round-<K>.json"
 ```
 
-`--prior` is the last `phase2-fix` record. `--rechecks` is the output of `codex-review.sh --mode
-find --prior`. The record takes `run_id`, `skill` and `adversary` from the prior record, and its
+`--prior` is the last `phase2-fix` record. `--rechecks` is the output of a `codex-review.sh` run
+with `--mode find --prior`. The record takes `run_id`, `skill` and `adversary` from the prior record, and its
 `prev_head_sha` is the prior head. An earlier finding Codex did not re-check is carried over
 unchanged with no events, and stderr reports `unchecked=<N> (<ids>)`. The exit is still 0, so read
 that line: Step 2.6 counts those findings as not resolved. Exit 2 means the inputs do not make a valid record, or
