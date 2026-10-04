@@ -107,7 +107,8 @@ if [[ -f "$ROOT_VALIDATOR" ]]; then
     cmp -s "$ROOT_VALIDATOR" "$SKILLS/$s/scripts/validate-skill.sh" && ok "$s: validate-skill.sh is byte-identical to the repo-root copy" || bad "$s: validate-skill.sh is byte-identical to the repo-root copy" "they differ"
   done
 else
-  echo "  note: no repo-root scripts/validate-skill.sh next to this plugin; the identical-copy check is skipped"
+  # A skipped check reads as a pass, so a missing root validator fails the run.
+  bad "validate-skill.sh copies can be compared with the repo-root copy" "no scripts/validate-skill.sh at $ROOT_VALIDATOR (run the tests from a checkout of the repo)"
 fi
 mkdir -p "$TMP/badskill"
 printf -- '---\nname: Bad_Name\nowner: me\n---\n\n# Body\n' > "$TMP/badskill/SKILL.md"
@@ -251,9 +252,9 @@ EOF
     run_in "$PROJ" "$SKILLS/$skill/scripts/$name" --help
     check "$skill SKILL.md command runs: scripts/$name --help" 0
   done <<< "$names"
-  # extract's SKILL.md names no script; the others must name at least one.
+  # extract's SKILL.md names no script today; the others must name at least one.
   if [[ "$skill" == extract ]]; then
-    ok "extract SKILL.md: no script commands to run ($n found)"
+    ok "extract SKILL.md: $n script command(s) checked"
   else
     [[ "$n" -ge 1 ]] && ok "$skill SKILL.md: found $n script command(s) to run" || bad "$skill SKILL.md: found no script commands to run" "the extractor matched nothing"
   fi
