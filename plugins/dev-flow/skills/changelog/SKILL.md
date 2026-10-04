@@ -47,7 +47,7 @@ Run the changelog update script in these situations:
 ```
 
 The script:
-- Picks the starting point, in this order: `--since <ref>`; the newest release tag (`v1.2.3` or `1.2.3`, so not `v1.2.3-rc1` or `20261001-snap`) reachable from HEAD, by version order; the first versioned heading of CHANGELOG.md (`[Unreleased]` skipped), if `v<heading>` or `<heading>` is a ref; else the whole history, first commit included. It prints which one it used.
+- Picks the starting point, in this order: `--since <ref>`; the newest release tag (`v1.2.3` or `1.2.3`, so not `v1.2.3-rc1` or `20261001-snap`) reachable from HEAD, by version order; the tag of the first versioned heading of CHANGELOG.md (`[Unreleased]` skipped), `v<heading>` or `<heading>`; else, when CHANGELOG.md has no versioned heading, the whole history, first commit included. It prints which one it used. Without `--since`, that first versioned heading must have its tag, `v<heading>` or `<heading>`, reachable from HEAD. If not (say, after `--version 1.1.0` and before the `v1.1.0` tag), it exits 1 with "CHANGELOG.md has [1.1.0] but there is no tag for it; tag the release or pass --since <ref>" and writes nothing, so released commits are not listed again.
 - Reads all commits since that point
 - Categorizes by conventional commit prefix (`feat:` → Added, `fix:` → Fixed, etc.)
 - Puts commits with no prefix under Other (see File-Path Fallback for the one exception)
@@ -74,10 +74,10 @@ After the script generates the raw entry:
 ```
 
 What a write does:
-- Each new bullet goes under the matching `### <Category>` of the `[Unreleased]` block, after the bullets already there. A missing `### <Category>` is added at the end of the block. A bullet that is already in the block, or already a `- ` bullet line in any other section, is skipped, so running it twice adds nothing, and a commit subject already listed in a released section (say, after `--version` and before the tag) is not added again.
+- Each new bullet goes under the matching `### <Category>` of the `[Unreleased]` block, after the bullets already there. A missing `### <Category>` is added at the end of the block. A bullet already in the block is skipped, once per copy there, so running it twice adds nothing. Released sections are not checked: a new commit whose subject is already in one is added. Two commits with the same text in one run (`fix(api): retry` and `fix(ui): retry`; the scope is dropped) give two bullets.
 - The block ends at the next `## ` heading or link reference line (`[Unreleased]: https://...`). Hand-written bullets, other sections (`## v1.0.0 (2024-01-01)` too) and footer links are kept.
 - With no `[Unreleased]` section, one is added before the first `## ` heading or link reference, or at the end of the file.
-- `--version X.Y.Z` adds `## [X.Y.Z] - <today>` right under `## [Unreleased]`, so the old `[Unreleased]` body and the new bullets become the release section, and `[Unreleased]` is left empty. It is refused (exit 1) if `## [X.Y.Z]` already exists. With no new commits it still moves the `[Unreleased]` body into the release section; if `[Unreleased]` is empty too (and no new bullet is left), it exits 1 with "nothing to release". Without `--version`, no new commits prints "No new commits" and exits 0.
+- `--version X.Y.Z` adds `## [X.Y.Z] - <today>` right under `## [Unreleased]`, so the old `[Unreleased]` body and the new bullets become the release section, and `[Unreleased]` is left empty. It is refused (exit 1) if `## [X.Y.Z]` already exists. With no new commits it still moves the `[Unreleased]` body into the release section; if `[Unreleased]` is empty too, it exits 1 with "nothing to release". Without `--version`, no new commits prints "No new commits" and exits 0.
 - A `CHANGELOG.md` with CRLF line endings keeps them: lines are compared without the `\r`, old lines are written back as they were, and new lines get CRLF.
 - Before it replaces the file, the script checks that every line of the old file is still there, in order. If not, it exits 1 and leaves the file alone. A `CHANGELOG.md` that is a symlink, a directory or anything else that is not a regular file is refused (exit 1).
 

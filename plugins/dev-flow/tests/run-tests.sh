@@ -288,6 +288,15 @@ check "12 ignored files: remove exits 1 and says how many more" 1 "" 'and 2 more
 run_in "$IG" "$WT" remove --force feature/x
 check "remove --force with ignored files exits 0" 0 'Worktree removed'
 [[ ! -e "$TMP/work/ign--x" ]] && ok "remove --force deletes the worktree with its ignored files" || bad "remove --force deletes the worktree with its ignored files" "still there"
+# status.showUntrackedFiles=no hides ignored files from a plain `git status --ignored`.
+gitc "$IG" config status.showUntrackedFiles no
+run_in "$IG" "$WT" create feature/x --no-install
+echo "SECRET=1" > "$TMP/work/ign--x/.env"
+run_in "$IG" "$WT" remove feature/x
+check "status.showUntrackedFiles=no: remove of a worktree with an ignored .env still exits 1" 1 "" '\.env'
+[[ -f "$TMP/work/ign--x/.env" ]] && ok "status.showUntrackedFiles=no: the refused remove keeps the ignored .env" || bad "status.showUntrackedFiles=no: the refused remove keeps the ignored .env" "it is gone"
+run_in "$IG" "$WT" remove --force feature/x
+gitc "$IG" config --unset status.showUntrackedFiles
 run_in "$PROJ" "$WT" --help
 check "--help says ignored files count as work to keep" 0 'ignored'
 
@@ -547,7 +556,9 @@ newrepo "$IR2"
 printf '# Changelog\n\nAll notable changes.\n\n## [1.0.0] - 2026-01-01\n\n- first\n' > "$IR2/CHANGELOG.md"
 cp "$IR2/CHANGELOG.md" "$TMP/nounrel-before.md"
 gitc "$IR2" add CHANGELOG.md
-gitc "$IR2" commit -q -m "fix: a bug"
+gitc "$IR2" commit -q -m "chore: release 1.0.0"
+gitc "$IR2" tag v1.0.0
+gitc "$IR2" commit -q --allow-empty -m "fix: a bug"
 run_in "$IR2" "$CL"
 check "no [Unreleased] section: write mode exits 0" 0 'Updated '
 subseq "no [Unreleased] section: every old line survives, in order" "$TMP/nounrel-before.md" "$IR2/CHANGELOG.md"
@@ -623,27 +634,84 @@ run_in "$ER" "$CL" --since HEAD --version 1.2.0
 check "--since HEAD --version with an empty [Unreleased]: exits 1, nothing to release" 1 "" 'nothing to release'
 cmp -s "$ER/CHANGELOG.md" "$TMP/emptyrange-released.md" && ok "nothing to release: the file is unchanged" || bad "nothing to release: the file is unchanged" "$(diff "$TMP/emptyrange-released.md" "$ER/CHANGELOG.md")"
 
-echo "update-changelog.sh: a bullet already in any section is not added again"
-# After --version and before the tag, the next run starts from the whole history again.
-DUP="$TMP/work/dupsec"
-newrepo "$DUP"
-gitc "$DUP" commit -q --allow-empty -m "feat: one"
-gitc "$DUP" commit -q --allow-empty -m "fix: two"
-run_in "$DUP" "$CL"
-run_in "$DUP" "$CL" --version 1.0.0
-check "dup: --version 1.0.0 exits 0" 0 'Updated '
-gitc "$DUP" commit -q --allow-empty -m "feat: three"
-run_in "$DUP" "$CL"
-check "dup: a run before the v1.0.0 tag exits 0" 0 'Updated '
-[[ "$(grep -c -- '^- one$' "$DUP/CHANGELOG.md")" == 1 && "$(grep -c -- '^- two$' "$DUP/CHANGELOG.md")" == 1 ]] && ok "dup: the bullets already in [1.0.0] are not added to [Unreleased] again" || bad "dup: the bullets already in [1.0.0] are not added to [Unreleased] again" "$(cat "$DUP/CHANGELOG.md")"
-under "dup: the new commit goes to [Unreleased]" "$DUP/CHANGELOG.md" '## [Unreleased]' '### Added' '- three'
-run_in "$DUP" "$CL" --help
-check "--help says a subject already listed in any section is skipped" 0 'any section'
+echo "update-changelog.sh: a new commit whose subject is already in a released section is added"
+# (a) "handle timeout" is in the tagged [1.0.0]; a new commit with the same subject comes after.
+RS="$TMP/work/resubject"
+newrepo "$RS"
+printf '# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- handle timeout\n' > "$RS/CHANGELOG.md"
+gitc "$RS" add CHANGELOG.md
+gitc "$RS" commit -q -m "fix: handle timeout"
+gitc "$RS" tag v1.0.0
+gitc "$RS" commit -q --allow-empty -m "fix: handle timeout"
+run_in "$RS" "$CL"
+check "same subject as a released bullet: write mode exits 0" 0 'Updated '
+under "same subject as a released bullet: the new bullet goes to [Unreleased]" "$RS/CHANGELOG.md" '## [Unreleased]' '### Fixed' '- handle timeout'
+[[ "$(grep -c -- '^- handle timeout$' "$RS/CHANGELOG.md")" == 2 ]] && ok "same subject as a released bullet: the file has it twice, once per section" || bad "same subject as a released bullet: the file has it twice, once per section" "$(cat "$RS/CHANGELOG.md")"
+# (b) Two commits that differ only in scope give the same text; both are listed.
+gitc "$RS" commit -q --allow-empty -m "fix(api): retry once"
+gitc "$RS" commit -q --allow-empty -m "fix(ui): retry once"
+run_in "$RS" "$CL"
+check "two scopes, same text: write mode exits 0" 0 'Updated '
+[[ "$(grep -c -- '^- retry once$' "$RS/CHANGELOG.md")" == 2 ]] && ok "two scopes, same text: two bullets in one run" || bad "two scopes, same text: two bullets in one run" "$(cat "$RS/CHANGELOG.md")"
+# (d) A third run adds nothing: each bullet already in [Unreleased] counts once.
+cp "$RS/CHANGELOG.md" "$TMP/resubject-once.md"
+run_in "$RS" "$CL"
+check "re-run: exits 0" 0
+cmp -s "$RS/CHANGELOG.md" "$TMP/resubject-once.md" && ok "re-run: the file is unchanged (no duplicate of either repeated bullet)" || bad "re-run: the file is unchanged" "$(diff "$TMP/resubject-once.md" "$RS/CHANGELOG.md")"
+gitc "$RS" commit -q --allow-empty -m "fix(db): retry once"
+run_in "$RS" "$CL"
+[[ "$(grep -c -- '^- retry once$' "$RS/CHANGELOG.md")" == 3 ]] && ok "a third commit with the same text adds a third bullet" || bad "a third commit with the same text adds a third bullet" "$(cat "$RS/CHANGELOG.md")"
+run_in "$RS" "$CL" --help
+check "--help says only [Unreleased] is checked for bullets already there" 0 'already in \[Unreleased\]'
+
+echo "update-changelog.sh: a versioned heading with no tag stops the run"
+# (c) After --version 1.1.0 and before the v1.1.0 tag, a default run does not start over.
+NTG="$TMP/work/notag"
+newrepo "$NTG"
+gitc "$NTG" commit -q --allow-empty -m "feat: one"
+gitc "$NTG" tag v1.0.0
+gitc "$NTG" commit -q --allow-empty -m "feat: two"
+run_in "$NTG" "$CL" --version 1.1.0
+check "untagged heading: --version 1.1.0 exits 0" 0 'Created '
+gitc "$NTG" commit -q --allow-empty -m "feat: three"
+cp "$NTG/CHANGELOG.md" "$TMP/notag-before.md"
+before="$(cksum < "$NTG/CHANGELOG.md")"
+run_in "$NTG" "$CL"
+check "untagged heading: a default run exits 1 and names the missing tag" 1 "" 'CHANGELOG\.md has \[1\.1\.0\] but there is no tag for it; tag the release or pass --since <ref>'
+[[ "$(cksum < "$NTG/CHANGELOG.md")" == "$before" ]] && ok "untagged heading: the file is unchanged (checksum)" || bad "untagged heading: the file is unchanged (checksum)" "$(diff "$TMP/notag-before.md" "$NTG/CHANGELOG.md")"
+run_in "$NTG" "$CL" --dry-run
+check "untagged heading: --dry-run exits 1 too" 1 "" 'no tag for it'
+run_in "$NTG" "$CL" --since HEAD~1
+check "untagged heading: --since HEAD~1 works" 0 'Updated '
+under "untagged heading: --since adds only the new commit" "$NTG/CHANGELOG.md" '## [Unreleased]' '### Added' '- three'
+[[ "$(grep -c -- '^- two$' "$NTG/CHANGELOG.md")" == 1 ]] && ok "untagged heading: --since does not add the released bullet again" || bad "untagged heading: --since does not add the released bullet again" "$(cat "$NTG/CHANGELOG.md")"
+# A tag on a branch that HEAD does not contain is not reachable.
+gitc "$NTG" checkout -q -b side HEAD~1
+gitc "$NTG" commit -q --allow-empty -m "chore: side"
+gitc "$NTG" tag v1.1.0
+gitc "$NTG" checkout -q main
+run_in "$NTG" "$CL" --dry-run
+check "untagged heading: a v1.1.0 tag that HEAD does not reach still exits 1" 1 "" 'no tag for it'
+gitc "$NTG" tag -d v1.1.0
+gitc "$NTG" tag 1.1.0 HEAD~1
+run_in "$NTG" "$CL" --dry-run
+check "a reachable tag 1.1.0 (no v) satisfies the [1.1.0] heading" 0 'changes since tag 1\.1\.0'
+# (e) A fresh project: no versioned heading and no tags uses the whole history.
+FR="$TMP/work/fresh"
+newrepo "$FR"
+printf '# Changelog\n\n## [Unreleased]\n' > "$FR/CHANGELOG.md"
+gitc "$FR" add CHANGELOG.md
+gitc "$FR" commit -q -m "feat: one"
+gitc "$FR" commit -q --allow-empty -m "feat: two"
+run_in "$FR" "$CL" --dry-run
+check "no versioned heading and no tags: uses the whole history, 2 commits" 0 'Found 2 commits in the whole history'
 
 echo "update-changelog.sh: a CRLF CHANGELOG.md stays CRLF"
 CRL="$TMP/work/crlf"
 newrepo "$CRL"
 printf '# Changelog\r\n\r\n## [Unreleased]\r\n\r\n### Added\r\n\r\n- one\r\n\r\n## [0.1.0]\r\n\r\n- old\r\n' > "$CRL/CHANGELOG.md"
+gitc "$CRL" commit -q --allow-empty -m "chore: release 0.1.0"
+gitc "$CRL" tag 0.1.0
 gitc "$CRL" commit -q --allow-empty -m "feat: one"
 gitc "$CRL" commit -q --allow-empty -m "feat: two"
 run_in "$CRL" "$CL"
@@ -785,8 +853,7 @@ for head in '--output=owned' '-n1' '--since=x'; do
   gitc "$IR" commit -q --allow-empty -m "feat: two"
   files_before="$(ls -A "$IR" | sort | tr '\n' ' ')"
   run_in "$IR" "$CL" --dry-run
-  check "first heading '## [$head]' does not break the run" 0 'Using the whole history'
-  printf '%s' "$OUT" | grep -Fq 'Found 2 commits in the whole history' && ok "first heading '## [$head]': both commits are listed, the root commit included" || bad "first heading '## [$head]': both commits are listed, the root commit included" "$OUT"
+  check "first heading '## [$head]' has no tag: exits 1 with the tag message" 1 "" 'there is no tag for it'
   [[ "$(ls -A "$IR" | sort | tr '\n' ' ')" == "$files_before" ]] && ok "first heading '## [$head]' creates no file" || bad "first heading '## [$head]' creates no file" "$(ls -A "$IR")"
   printf '%s' "$ERR" | grep -Eiq 'usage|unknown option|unrecognized|invalid' && bad "first heading '## [$head]' causes no git option error" "$ERR" || ok "first heading '## [$head]' causes no git option error"
 done

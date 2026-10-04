@@ -364,10 +364,12 @@ cmd_remove() {
 
   # git worktree remove deletes git-ignored files (.env, local config) without a word, so
   # without --force they count as work to keep. node_modules/ is left out: it can be
-  # installed again.
+  # installed again. status.showUntrackedFiles=no in the user's config would hide ignored
+  # files from `git status --ignored`, so the listing mode is set on the command line.
   if ! $force; then
     local status ignored n
-    if ! status="$(git -C "$wt_dir" status --porcelain --ignored)"; then
+    if ! status="$(git -C "$wt_dir" -c status.showUntrackedFiles=normal status --porcelain \
+        --ignored=traditional --untracked-files=normal)"; then
       echo "ERROR: git status failed in $wt_dir; not removing it" >&2
       exit 1
     fi

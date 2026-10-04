@@ -29,9 +29,12 @@ Options:
                          HEAD~2 or v1.0.0^. Letters, digits and . _ / ~ ^ - only,
                          not starting with -.
                          Default, in this order: the newest release tag
-                         (v1.2.3 or 1.2.3) reachable from HEAD; else the first
-                         versioned heading of CHANGELOG.md, if it names a tag or
-                         ref; else the whole history.
+                         (v1.2.3 or 1.2.3) reachable from HEAD; else the tag
+                         of the first versioned heading of CHANGELOG.md; else,
+                         when CHANGELOG.md has no versioned heading, the whole
+                         history. If that heading, say [1.0.0], has no tag
+                         v1.0.0 or 1.0.0 reachable from HEAD, it exits 1:
+                         tag the release or pass --since.
   --version <ver>        Move [Unreleased] and the new bullets into a
                          "## [<ver>] - <today>" section; [Unreleased] stays,
                          empty. Refused if "## [<ver>]" already exists.
@@ -41,9 +44,10 @@ Options:
   -h, --help             Show this help
 
 Writing never removes a line: new bullets are added to the matching ### section.
-A bullet that is already a line of the file, in any section, is skipped, so a
-commit subject already listed (for example in a released section) is not added
-again. A CHANGELOG.md with CRLF line endings keeps them.
+A bullet already in [Unreleased] is skipped, once per copy there, so a second run
+adds nothing. Released sections are not checked: a new commit whose subject is
+already in one is added. Two commits with the same text in one run give two
+bullets. A CHANGELOG.md with CRLF line endings keeps them.
 
 Examples:
   update-changelog.sh                          # Update [Unreleased] in current dir
@@ -120,6 +124,28 @@ if [[ -n "$SINCE" ]]; then
     exit 1
   fi
 else
+  # 0. The first versioned heading of CHANGELOG.md ([Unreleased] skipped) must have a tag,
+  #    v<heading> or <heading>, reachable from HEAD. Without one (say, after --version and
+  #    before the tag), an older tag or the whole history would list released commits
+  #    again, so the run stops.
+  LAST_VERSION=""
+  HEAD_TAG=""
+  if [[ -f "$CHANGELOG" ]]; then
+    LAST_VERSION=$(grep '^## \[' "$CHANGELOG" | grep -v '^## \[Unreleased\]' | head -1 | sed 's/^## \[\([^]]*\)\].*/\1/' | tr -d '\r' || true)
+  fi
+  if [[ -n "$LAST_VERSION" ]]; then
+    for prefix in "v" ""; do
+      if t=$(resolve_ref "refs/tags/${prefix}${LAST_VERSION}") \
+          && git merge-base --is-ancestor "$t" HEAD 2>/dev/null; then
+        HEAD_TAG="${prefix}${LAST_VERSION}"
+        break
+      fi
+    done
+    if [[ -z "$HEAD_TAG" ]]; then
+      echo "Error: CHANGELOG.md has [$LAST_VERSION] but there is no tag for it; tag the release or pass --since <ref>" >&2
+      exit 1
+    fi
+  fi
   # 1. The newest final-release tag reachable from HEAD: v1.2.3 or 1.2.3 exactly. Not
   #    v1.2.3-rc1, 20261001-snap or release-2.0.0. Sorted by version, so v1.10.0 > v1.9.0.
   ALL_TAGS=$(git tag -l --merged HEAD 2>/dev/null || true)
@@ -137,22 +163,16 @@ else
     else
       echo "Found $(printf '%s\n' "$ALL_TAGS" | wc -l | tr -d ' ') tag(s) reachable from HEAD, but none is a release version (v1.2.3 or 1.2.3)."
     fi
-    # 2. The first versioned heading of CHANGELOG.md ([Unreleased] skipped), as vX or X.
-    if [[ -f "$CHANGELOG" ]]; then
-      LAST_VERSION=$(grep '^## \[' "$CHANGELOG" | grep -v '^## \[Unreleased\]' | head -1 | sed 's/^## \[\([^]]*\)\].*/\1/' || true)
-      if [[ -n "$LAST_VERSION" ]]; then
-        for prefix in "v" ""; do
-          if SINCE=$(resolve_ref "${prefix}${LAST_VERSION}"); then
-            SINCE_LABEL="${prefix}${LAST_VERSION}"
-            echo "Auto-detected: changes since $SINCE_LABEL (from CHANGELOG.md)"
-            break
-          fi
-          SINCE=""
-        done
-      fi
+    # 2. The tag of the first versioned heading of CHANGELOG.md (step 0 found it), when it
+    #    is not a release version (say, v1.0.0-rc1).
+    if [[ -n "$HEAD_TAG" ]]; then
+      SINCE=$(resolve_ref "refs/tags/$HEAD_TAG")
+      SINCE_LABEL="$HEAD_TAG"
+      echo "Auto-detected: changes since $SINCE_LABEL (from CHANGELOG.md)"
     fi
-    # 3. The whole history. An empty SINCE means every commit reachable from HEAD, the
-    #    first one included ("root..HEAD" would skip it).
+    # 3. The whole history, only when CHANGELOG.md has no versioned heading (a new
+    #    project). An empty SINCE means every commit reachable from HEAD, the first one
+    #    included ("root..HEAD" would skip it).
     if [[ -z "$SINCE" ]]; then
       WHOLE_HISTORY=true
       echo "Using the whole history (every commit reachable from HEAD, the first one included)."
@@ -359,9 +379,10 @@ fi
 # Merge into the existing file. Every line of the old file is kept; lines are only added.
 #   - The [Unreleased] block runs from "## [Unreleased]" to the next line that starts with
 #     "## " or is a link reference ("[x]: url"), or to the end of the file.
-#   - Each generated bullet that is not already a line of that block, nor a "- " bullet
-#     line anywhere in the file, goes under the block's "### <Category>" heading (after
-#     its last line), or under a new heading at the end of the block.
+#   - Each generated bullet goes under the block's "### <Category>" heading (after its
+#     last line), or under a new heading at the end of the block. A bullet that is already
+#     a line of the block is skipped once per copy there, so a re-run adds nothing and two
+#     commits with the same text give two bullets. Released sections are not checked.
 #   - CRLF: lines are compared with a trailing \r removed. Old lines are written back as
 #     they were; new lines get the file's line ending (CRLF when its first line has one).
 #   - With no [Unreleased] block, a new section goes before the first "## " heading or
@@ -414,20 +435,18 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
   }
   { R[++n] = $0; if (n == 1) crlf = ($0 ~ /\r$/); sub(/\r$/, ""); L[n] = $0 }
   END {
-    # A "- " bullet line anywhere in the file is not added again.
-    for (i = 1; i <= n; i++) if (L[i] ~ /^- /) { anyb[L[i]] = 1 }
     u = 0
     for (i = 1; i <= n; i++) if (L[i] ~ /^## \[Unreleased\]/) { u = i; break }
     added = 0
     if (u == 0) {
-      # No [Unreleased]: build a new section and put it before the first "## " heading or
-      # link reference, or at the end.
+      # No [Unreleased]: build a new section, with every generated bullet, and put it
+      # before the first "## " heading or link reference, or at the end.
       at = n + 1
       for (i = 1; i <= n; i++) if (L[i] ~ /^## / || L[i] ~ /^\[[^]]+\]: /) { at = i; break }
       sec = (vhead != "" ? vhead : "## [Unreleased]")
       for (k = 1; k <= ncat; k++) {
         c = order[k]; s = ""
-        for (j = 1; j <= nb[c]; j++) if (!(bl[c, j] in anyb)) { anyb[bl[c, j]] = 1; s = s "\n" bl[c, j]; added++ }
+        for (j = 1; j <= nb[c]; j++) { s = s "\n" bl[c, j]; added++ }
         if (s != "") sec = sec "\n\n### " c "\n" s
       }
       if (added == 0) { print "0 0"; exit 0 }
@@ -441,11 +460,11 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
     }
     e = n + 1
     for (i = u + 1; i <= n; i++) if (L[i] ~ /^## / || L[i] ~ /^\[[^]]+\]: /) { e = i; break }
-    # Lines already in the block, the first heading of each category, and the last
-    # non-blank line of the sub-section under that heading.
+    # How many times each line is already in the block, the first heading of each
+    # category, and the last non-blank line of the sub-section under that heading.
     hidx = 0; blast = u; body = 0
     for (i = u + 1; i < e; i++) {
-      have[L[i]] = 1
+      have[L[i]]++
       if (!blank(L[i])) { blast = i; body++ }
       if (L[i] ~ /^### /) {
         name = substr(L[i], 5); sub(/[ \t]+$/, "", name)
@@ -460,8 +479,8 @@ ADDED_COUNT=$(awk -v out="$TMPFILE" '
       c = order[k]; s = ""
       for (j = 1; j <= nb[c]; j++) {
         b = bl[c, j]
-        if ((b in have) || (b in anyb)) continue
-        have[b] = 1; s = s "\n" b; added++; nbul++
+        if (have[b] > 0) { have[b]--; continue }
+        s = s "\n" b; added++; nbul++
       }
       if (s == "") continue
       if (c in h) { at = last[h[c]]; after[at] = after[at] s }
@@ -486,12 +505,12 @@ SECTION_COUNT="${ADDED_COUNT#* }"
 ADDED_COUNT="${ADDED_COUNT%% *}"
 
 if [[ "$MODE" == "version" && "$SECTION_COUNT" == 0 ]]; then
-  echo "Error: nothing to release: [Unreleased] is empty and every generated bullet is already in CHANGELOG.md" >&2
+  echo "Error: nothing to release: [Unreleased] is empty and no new bullet was generated" >&2
   exit 1
 fi
 if [[ "$ADDED_COUNT" == 0 ]]; then
   echo ""
-  echo "CHANGELOG.md already has every generated bullet; nothing written."
+  echo "[Unreleased] in CHANGELOG.md already has every generated bullet; nothing written."
   exit 0
 fi
 
