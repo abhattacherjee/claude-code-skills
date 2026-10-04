@@ -30,24 +30,22 @@ Prevents context overflow by delegating token-heavy content reads to isolated su
 ## Quick Check
 
 ```bash
-SCRIPTS=~/.claude/skills/context-shield/scripts
-
 # Create manifest from sources
-$SCRIPTS/manage-manifest.sh create --task "Analyze competitor UIs" --output-dir /tmp/cs-run \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Analyze competitor UIs" --output-dir /tmp/cs-run \
   "url:https://dribbble.com/shots/travel-app,label=Dribbble Travel" \
   "figma:fileKey=xYz,nodeId=5:42,label=Current Homepage"
 
 # Check progress
-$SCRIPTS/manage-manifest.sh status --manifest /tmp/cs-run/manifest.json
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" status --manifest /tmp/cs-run/manifest.json
 
 # Get next batch
-$SCRIPTS/manage-manifest.sh next-batch --manifest /tmp/cs-run/manifest.json
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" next-batch --manifest /tmp/cs-run/manifest.json
 
 # Collect all summaries
-$SCRIPTS/manage-manifest.sh summaries --manifest /tmp/cs-run/manifest.json
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" summaries --manifest /tmp/cs-run/manifest.json
 
 # Visualize workflow (full animated demo)
-$SCRIPTS/visualize.sh full-demo
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" full-demo
 ```
 
 ## Visualization
@@ -55,15 +53,13 @@ $SCRIPTS/visualize.sh full-demo
 Run `visualize.sh` at each workflow phase to show animated progress:
 
 ```bash
-VIZ=~/.claude/skills/context-shield/scripts/visualize.sh
-
-$VIZ manifest --task "Analyze designs" --count 8     # Phase: manifest created
-$VIZ dispatch --batch 1 --labels "Home,Search,Results,Detail"  # Phase: agents leave
-$VIZ working --labels "Home,Search,Results,Detail"    # Phase: agents working
-$VIZ return --batch 1 --labels "Home,Search,Results,Detail"    # Phase: agents return
-$VIZ ralph-iter --iteration 1 --remaining 4           # Phase: ralph boundary
-$VIZ synthesize --done 8 --total 8                    # Phase: combining
-$VIZ complete --task "Analyze designs"                 # Phase: done
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" manifest --task "Analyze designs" --count 8     # Phase: manifest created
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" dispatch --batch 1 --labels "Home,Search,Results,Detail"  # Phase: agents leave
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" working --labels "Home,Search,Results,Detail"    # Phase: agents working
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" return --batch 1 --labels "Home,Search,Results,Detail"    # Phase: agents return
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" ralph-iter --iteration 1 --remaining 4           # Phase: ralph boundary
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" synthesize --done 8 --total 8                    # Phase: combining
+"${CLAUDE_SKILL_DIR}/scripts/visualize.sh" complete --task "Analyze designs"                 # Phase: done
 ```
 
 **Call these at each workflow step** — they show agents being dispatched through the context boundary, working in isolation, and returning with distilled summaries. Use `--speed slow` for demos, `SPEED=instant` to skip in CI.
@@ -86,13 +82,12 @@ List all content that needs reading. Classify each by type:
 
 ### Step 2: Create Manifest
 
-```bash
-SCRIPTS=~/.claude/skills/context-shield/scripts
-OUTPUT_DIR="/tmp/cs-$(date +%s)"
+`<OUTPUT_DIR>` stands for a fresh directory for this run, such as `/tmp/cs-<TIMESTAMP>`. Write the same path in every later command.
 
-$SCRIPTS/manage-manifest.sh create \
+```bash
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create \
   --task "Brief description of what you're looking for" \
-  --output-dir "$OUTPUT_DIR" \
+  --output-dir "<OUTPUT_DIR>" \
   --batch-size 3 \
   "type:location,label=Name" \
   "type:location,label=Name" \
@@ -132,26 +127,23 @@ Process all batches in the current session. For each batch:
 
 1. Get next batch:
 ```bash
-BATCH=$($SCRIPTS/manage-manifest.sh next-batch --manifest "$OUTPUT_DIR/manifest.json")
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" next-batch --manifest "<OUTPUT_DIR>/manifest.json"
 ```
 
-2. For each item in the batch, launch a `content-distiller` agent in parallel (SINGLE message):
-```
+2. For each item in the batch, launch a `context:content-distiller` agent in parallel (SINGLE message). The agent's own definition is its instructions, so the prompt is only the item:
+```javascript
 Agent({
-  subagent_type: "general-purpose",
+  subagent_type: "context:content-distiller",
   model: "sonnet",
   description: "Distill [label]",
-  prompt: `You are the content-distiller agent. Follow the instructions in ~/.claude/agents/content-distiller.md.
-
-${JSON.stringify(item)}
-`
+  prompt: JSON.stringify(item)
 })
 ```
 
 3. After agents return, mark each done:
 ```bash
-$SCRIPTS/manage-manifest.sh mark-done \
-  --manifest "$OUTPUT_DIR/manifest.json" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" mark-done \
+  --manifest "<OUTPUT_DIR>/manifest.json" \
   --index N \
   --summary "the agent's distilled summary"
 ```
@@ -165,10 +157,10 @@ Delegate the entire batch-processing loop to `/ralph-loop`. Each iteration gets 
 **Invoke ralph-loop with this pattern:**
 
 ```
-/ralph-loop Process one batch per iteration from shield manifest OUTPUT_DIR/manifest.json then exit. Scripts at SCRIPTS/manage-manifest.sh. Each iteration: check status, if COMPLETE then collect summaries and synthesize and output promise DONE, otherwise get next-batch, spawn 3 parallel content-distiller agents with sonnet model and general-purpose subagent type, mark done, then exit so ralph gives a fresh context for the next batch. --completion-promise DONE --max-iterations MAX
+/ralph-loop Process one batch per iteration from shield manifest OUTPUT_DIR/manifest.json then exit. Scripts at ${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh. Each iteration: check status, if COMPLETE then collect summaries and synthesize and output promise DONE, otherwise get next-batch, spawn 3 parallel agents of subagent type context:content-distiller with sonnet model, mark done, then exit so ralph gives a fresh context for the next batch. --completion-promise DONE --max-iterations MAX
 ```
 
-**Replace** `OUTPUT_DIR`, `SCRIPTS`, and `MAX` with actual values. Set `MAX` to `TOTAL_BATCHES + 2` (extra headroom for the synthesis iteration and any retries).
+**Replace** `OUTPUT_DIR` and `MAX` with actual values. The script path is already filled in. Set `MAX` to `TOTAL_BATCHES + 2` (extra headroom for the synthesis iteration and any retries).
 
 **Important: keep the ralph-loop prompt as a single simple string.** The Skill tool is sensitive to special characters — avoid parentheses, angle brackets, and multi-line formatting in the args.
 
@@ -189,7 +181,7 @@ Delegate the entire batch-processing loop to `/ralph-loop`. Each iteration gets 
 Collect all distilled summaries:
 
 ```bash
-$SCRIPTS/manage-manifest.sh summaries --manifest "$OUTPUT_DIR/manifest.json"
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" summaries --manifest "<OUTPUT_DIR>/manifest.json"
 ```
 
 The summaries output is compact — each source compressed to ~500 tokens. Use this to:
@@ -243,14 +235,14 @@ type:key1=value1,key2=value2,label=Human Name
 
 ## Agent Definition
 
-- **`content-distiller`** (`~/.claude/agents/content-distiller.md`) — reads one source, returns distilled summary. Model: `sonnet`. NOT user-invocable.
+- **`context:content-distiller`** (`agents/content-distiller.md` in this plugin) — reads one source, returns distilled summary. Model: `sonnet`. NOT user-invocable.
 
 ## Common Patterns
 
 ### Figma Design Analysis (10+ frames)
 
 ```bash
-$SCRIPTS/manage-manifest.sh create --task "Analyze all Figma frames for design system" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Analyze all Figma frames for design system" \
   --output-dir /tmp/cs-figma --batch-size 3 \
   "figma:fileKey=abc,nodeId=1:2,label=Homepage" \
   "figma:fileKey=abc,nodeId=3:4,label=Search" \
@@ -267,7 +259,7 @@ $SCRIPTS/manage-manifest.sh create --task "Analyze all Figma frames for design s
 ### Competitor Research (many URLs)
 
 ```bash
-$SCRIPTS/manage-manifest.sh create --task "Analyze competitor booking UIs" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Analyze competitor booking UIs" \
   --output-dir /tmp/cs-competitors --batch-size 4 \
   "url:https://booking.com,label=Booking.com" \
   "url:https://airbnb.com,label=Airbnb" \
@@ -283,7 +275,7 @@ Break a single large site into section URLs. With 12 sources at batch-size 3 = 4
 
 ```bash
 # Example: MCP documentation (12 pages, auto-ralph)
-$SCRIPTS/manage-manifest.sh create --task "Comprehensive analysis of MCP protocol" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Comprehensive analysis of MCP protocol" \
   --output-dir /tmp/cs-mcp --batch-size 3 \
   "url:https://modelcontextprotocol.io/introduction,label=Introduction" \
   "url:https://modelcontextprotocol.io/docs/concepts/architecture,label=Architecture" \
@@ -306,7 +298,7 @@ $SCRIPTS/manage-manifest.sh create --task "Comprehensive analysis of MCP protoco
 ### GitHub Wiki Crawl
 
 ```bash
-$SCRIPTS/manage-manifest.sh create --task "Extract architecture decisions from wiki" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Extract architecture decisions from wiki" \
   --output-dir /tmp/cs-wiki --batch-size 5 \
   "wiki:https://github.com/org/repo/wiki/Architecture,label=Architecture" \
   "wiki:https://github.com/org/repo/wiki/API-Reference,label=API Ref" \
@@ -321,7 +313,7 @@ Break a multi-page API reference into per-section URLs. Works for any vendor doc
 
 ```bash
 # Example: OpenAI API reference (9 pages, auto-ralph)
-$SCRIPTS/manage-manifest.sh create --task "Comprehensive OpenAI API reference" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Comprehensive OpenAI API reference" \
   --output-dir /tmp/cs-openai --batch-size 3 \
   "url:https://platform.openai.com/docs/api-reference/chat,label=Chat Completions" \
   "url:https://platform.openai.com/docs/api-reference/embeddings,label=Embeddings" \
@@ -339,7 +331,7 @@ $SCRIPTS/manage-manifest.sh create --task "Comprehensive OpenAI API reference" \
 Use `codebase` type to scan patterns across directories. Use batch-size 4-5 since code files are lighter than web pages.
 
 ```bash
-$SCRIPTS/manage-manifest.sh create --task "Audit error handling across service layers" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Audit error handling across service layers" \
   --output-dir /tmp/cs-audit --batch-size 4 \
   "codebase:backend/src/services/**/*.ts,label=Backend Services" \
   "codebase:backend/src/routes/**/*.ts,label=API Routes" \
@@ -353,7 +345,7 @@ $SCRIPTS/manage-manifest.sh create --task "Audit error handling across service l
 Fetch changelogs and migration guides before a major upgrade. Label with version ranges.
 
 ```bash
-$SCRIPTS/manage-manifest.sh create --task "Research breaking changes for dependency upgrade" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Research breaking changes for dependency upgrade" \
   --output-dir /tmp/cs-deps --batch-size 3 \
   "url:https://github.com/expressjs/express/releases,label=Express Releases" \
   "url:https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md,label=Vite Changelog" \
@@ -369,7 +361,7 @@ Distill each changed file's diff to review a large PR without exhausting context
 
 ```bash
 # Generate file list from git diff, then create manifest
-$SCRIPTS/manage-manifest.sh create --task "Review PR changes for feature X" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Review PR changes for feature X" \
   --output-dir /tmp/cs-pr --batch-size 5 \
   "file:backend/src/services/eventService.ts,label=eventService" \
   "file:backend/src/services/sessionService.ts,label=sessionService" \
@@ -384,7 +376,7 @@ $SCRIPTS/manage-manifest.sh create --task "Review PR changes for feature X" \
 Analyze pricing/feature pages across competitors to build a comparison matrix.
 
 ```bash
-$SCRIPTS/manage-manifest.sh create --task "Compare vacation rental platform features" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Compare vacation rental platform features" \
   --output-dir /tmp/cs-compete --batch-size 3 \
   "url:https://www.airbnb.com/help/article/2503,label=Airbnb Host Features" \
   "url:https://www.vrbo.com/discoveryhub/tips-and-resources,label=VRBO Features" \
@@ -399,7 +391,7 @@ $SCRIPTS/manage-manifest.sh create --task "Compare vacation rental platform feat
 Fetch and distill CVE/advisory pages when triaging dependency vulnerabilities.
 
 ```bash
-$SCRIPTS/manage-manifest.sh create --task "Assess security advisories for dependency update" \
+"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Assess security advisories for dependency update" \
   --output-dir /tmp/cs-security --batch-size 4 \
   "url:https://github.com/advisories/GHSA-xxxx-yyyy-zzzz,label=minimatch ReDoS" \
   "url:https://github.com/advisories/GHSA-aaaa-bbbb-cccc,label=express path traversal" \
@@ -416,4 +408,4 @@ $SCRIPTS/manage-manifest.sh create --task "Assess security advisories for depend
 - `ci-security-issue-creator` — use shield to triage many CVE/GHSA advisory pages
 - `context:search` — use shield when summarizing multiple large conversations at once
 - `ralph-loop` plugin — provides the iteration mechanism for multi-batch processing
-- `content-distiller` agent (`~/.claude/agents/content-distiller.md`) — the isolated reader
+- `context:content-distiller` agent — the isolated reader

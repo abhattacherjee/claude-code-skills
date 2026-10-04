@@ -48,7 +48,7 @@ Global Options:
 
 Examples:
   search-conversations.sh list
-  search-conversations.sh list --limit 5 --project "tiny-vacation"
+  search-conversations.sh list --limit 5 --project "my-app"
   search-conversations.sh search --topic "catalog" --after 2025-06-01
   search-conversations.sh search --topic "deploy" --deep --branch "main"
   search-conversations.sh show 0be99c26-dc3c-4d3d-a45a-c6ba07978586

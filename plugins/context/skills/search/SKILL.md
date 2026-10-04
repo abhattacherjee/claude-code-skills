@@ -13,28 +13,26 @@ conversations with metadata, verbatim content, and optionally AI-generated summa
 ## Quick Reference
 
 ```bash
-SCRIPT=~/.claude/skills/conversation-search/scripts/search-conversations.sh
-
 # List recent conversations
-$SCRIPT list
-$SCRIPT list --limit 5 --project "tiny-vacation"
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" list
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" list --limit 5 --project "my-app"
 
 # Search by topic (index-based, fast)
-$SCRIPT search --topic "catalog" --after 2025-06-01
-$SCRIPT search --topic "deploy" --branch "main"
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" search --topic "catalog" --after 2025-06-01
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" search --topic "deploy" --branch "main"
 
 # Deep search (scans JSONL content, slower)
-$SCRIPT search --topic "CSRF" --deep
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" search --topic "CSRF" --deep
 
 # Show a specific conversation (supports ID prefix)
-$SCRIPT show 0be99c26
-$SCRIPT show 0be99c26 --max-messages 50
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" show <SESSION_ID>
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" show <SESSION_ID> --max-messages 50
 
 # JSON output (for agent consumption)
-$SCRIPT show 0be99c26 --json --max-messages 100
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" show <SESSION_ID> --json --max-messages 100
 
 # Statistics
-$SCRIPT stats
+"${CLAUDE_SKILL_DIR}/scripts/search-conversations.sh" stats
 ```
 
 ## Workflow
@@ -49,7 +47,7 @@ Map natural language to script flags:
 | "What did I discuss last Tuesday?" | `search --after 2025-02-17 --before 2025-02-18` |
 | "Show my work on the feature/story-6.5 branch" | `search --branch "story-6.5"` |
 | "Find where I debugged CSRF errors" | `search --topic "CSRF" --deep` |
-| "Recent conversations in tiny-vacation project" | `list --project "tiny-vacation" --limit 10` |
+| "Recent conversations in my-app project" | `list --project "my-app" --limit 10` |
 
 **When to use `--deep`:** Only when the topic is unlikely to appear in the conversation's
 `firstPrompt` or `summary` fields (e.g., specific error messages, function names, obscure terms).
@@ -69,10 +67,10 @@ When the user selects a conversation:
 
 ### Step 4: Summarize (Optional)
 
-If the user requests a summary, launch the `conversation-summarizer` agent:
+If the user requests a summary, launch the `context:conversation-summarizer` agent:
 
 ```
-Task(subagent_type="conversation-summarizer", prompt=<JSON from show --json>)
+Task(subagent_type="context:conversation-summarizer", prompt=<JSON from show --json>)
 ```
 
 Pass the JSON output from `show --json` as the prompt. The agent returns a structured summary
