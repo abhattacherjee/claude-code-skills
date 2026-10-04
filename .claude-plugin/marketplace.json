@@ -11,7 +11,7 @@
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
-      "description": "Adversarial PR review \u2014 Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if no adversary is available.",
+      "description": "Deprecated: use the review plugin (review:deep / review:adversarial). Adversarial PR review \u2014 Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if no adversary is available.",
       "version": "0.2.0"
     },
     {
@@ -35,7 +35,7 @@
     {
       "name": "deep-review",
       "source": "./plugins/deep-review",
-      "description": "Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a multi-round adversarial cross-examination with Codex, else Gemini, as the opposing model (it finds -> Claude judges -> it counters -> it re-checks fixes), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.",
+      "description": "Deprecated: use the review plugin (review:deep / review:adversarial). Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a multi-round adversarial cross-examination with Codex, else Gemini, as the opposing model (it finds -> Claude judges -> it counters -> it re-checks fixes), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.",
       "version": "1.4.0"
     },
     {
@@ -61,6 +61,12 @@
       "source": "./plugins/product-video-creation",
       "description": "Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.",
       "version": "2.0.0"
+    },
+    {
+      "name": "review",
+      "source": "./plugins/review",
+      "description": "Two review skills in one plugin. review:deep is a two-phase convergence harness: iterative multi-reviewer fix and re-review until a round finds nothing actionable, then a multi-round cross-examination with an opposing model (Codex, else Gemini). review:adversarial is the single-pass version: Claude and the opposing model find issues independently, cross-examine each other, and only findings the other side confirms are reported. Both save an audit trail on the PR (or a local file with no PR) and degrade loudly to Claude-only when no adversary is available.",
+      "version": "1.0.0"
     },
     {
       "name": "skill-authoring",

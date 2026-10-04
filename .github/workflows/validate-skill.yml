@@ -175,6 +175,30 @@ jobs:
       - name: Run adversarial-review test suite
         run: bash plugins/adversarial-review/skills/adversarial-review/scripts/run-tests.sh
 
+  review-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 is the oldest Python the scripts support (standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      # Unconditional, like adversarial-review-tests above. Keep that job while the
+      # old plugin is still published.
+      #
+      # Run the path test first and by file name. A missing file is an error here;
+      # `unittest discover` would pass on zero tests before Python 3.12. A path or
+      # variable error in a SKILL.md then shows up as its own failure, not inside the
+      # long run-tests.sh log. run-tests.sh runs every test_*.py file again.
+      - name: Check that every skill command spells its script path
+        run: python3 plugins/review/skills/adversarial/scripts/test_skill_paths.py -v
+
+      - name: Run review test suite
+        run: bash plugins/review/skills/adversarial/scripts/run-tests.sh
+
   github-board-tests:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,8 @@
+{
+  "verdicts": [
+    {"id":"C-401","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-402","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-403","adversary_verdict":"confirm","reason":"ok","confidence":0.9},
+    {"id":"C-404","adversary_verdict":"confirm","reason":"ok","confidence":0.9}
+  ]
+}

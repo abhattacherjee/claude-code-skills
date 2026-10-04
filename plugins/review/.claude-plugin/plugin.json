@@ -1,0 +1,5 @@
+{
+  "name": "review",
+  "version": "1.0.0",
+  "description": "Two review skills in one plugin. review:deep is a two-phase convergence harness: iterative multi-reviewer fix and re-review until a round finds nothing actionable, then a multi-round cross-examination with an opposing model (Codex, else Gemini). review:adversarial is the single-pass version: Claude and the opposing model find issues independently, cross-examine each other, and only findings the other side confirms are reported. Both save an audit trail on the PR (or a local file with no PR) and degrade loudly to Claude-only when no adversary is available."
+}
