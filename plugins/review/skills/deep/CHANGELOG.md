@@ -9,7 +9,7 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 - Moved into the `review` plugin as `review:deep` (#159). Same two phases as `deep-review` 1.4.0. The slash command is `/review:deep`; the old name still matches as a trigger phrase.
 - Phase 2 dispatches `review:bug-hunter`, `review:convention-reviewer` and `review:cross-examiner`. The scripts it runs ship in this plugin, in `skills/adversarial/scripts/`, so the "if the adversarial-review plugin is installed" fallback is gone. The manual fallback stays only for a missing adversary model.
 - Every command in `SKILL.md` and `references/audit-trail.md` spells out its script path (`"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/<script>"`). The Bash tool keeps no shell variables between calls, so the old `$AR_SCRIPTS`, `$ADV_REVIEW`, `$AUDIT` and `$RUN_DIR` reads were empty. Values created at run time (`RUN_ID`, `RUN_DIR`, the round counter, `ADVERSARY`) are printed or noted once, and you write them into later commands.
-- Phase 0 points at `detect-mode.sh` for building the diff the same way as `review:adversarial`, with `--base <branch>` for a wrong base guess. In local mode it covers uncommitted and untracked changes.
+- Phase 0 points at `detect-mode.sh` for building the diff the same way as `review:adversarial`, with `--base <branch>` for a wrong base guess. In local mode it covers tracked changes (committed, staged, unstaged); untracked files only with `--include-untracked`, never secret-looking names.
 - Round records use `"skill": "deep"`. `pr-audit.py` still accepts `deep-review` for older records.
 
 ## History before 1.0.0 (as `deep-review`)

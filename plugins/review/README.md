@@ -50,7 +50,7 @@ detect-mode → R1 parallel independent discovery → R2 parallel symmetric cros
 ### Modes
 
 - **PR mode** (a PR exists for the current branch): reviews `gh pr diff`, then saves the exchange on the PR. There is one thread per finding, the opposing model's verdict is a reply, refuted threads are resolved, and one summary review is posted. `--no-post` skips posting.
-- **Local mode** (no PR found): reviews the working tree against the merge base with the base branch, so committed, staged, unstaged and untracked changes are all included and your index is not touched. The base is `--base <branch>` if you pass it, else a guess from the branch prefix (`feature/*` to `develop`, `release/*` and `hotfix/*` to `main`, else the repo default). A guessed base that does not exist falls back to the repo default branch with a note on stderr; if no base exists the run stops. It prints a terminal report and writes a gitignored `<branch>.adversarial-review.md` file.
+- **Local mode** (no PR found): reviews the working tree against the merge base with the base branch: committed, staged and unstaged changes to tracked files. Your index is not touched. The base is `--base <branch>` if you pass it, else a guess from the branch prefix (`feature/*` to `develop`, `release/*` and `hotfix/*` to `main`, else the repo default). A guessed base that does not exist falls back to the repo default branch with a note on stderr; if no base exists the run stops. Untracked files are left out and listed on stderr (paths only), because the diff is sent to the adversary model (Codex or Gemini) and an untracked file may hold a secret. `--include-untracked` adds them, but files named like secrets (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*.p12`, `*.pfx`) are never sent. It prints a terminal report and writes a gitignored `<branch>.adversarial-review.md` file.
 
 ### Degradation
 
@@ -91,7 +91,7 @@ The `gemini` binary at version 0.38.2 or later supports `gemini -p "<prompt>" -o
 - `pick-adversary.sh`: picks Codex, then Gemini, then Claude-only. `--adversary` forces one.
 - `codex-review.sh`: Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`.
 - `gemini-review.sh`: `--mode find` is Gemini's independent R1 pass. `--mode judge` is its R2 cross-examination of Claude's findings. It extracts JSON from the CLI envelope and retries once on a parse failure.
-- `detect-mode.sh`: resolves PR or local mode and writes the shared diff that both models read. `--base <branch>` sets the local base.
+- `detect-mode.sh`: resolves PR or local mode and writes the shared diff that both models read. `--base <branch>` sets the local base; `--include-untracked` adds untracked files, minus secret-looking names.
 - `synthesize.py`: applies the survivor rule to the four symmetric inputs (Claude findings, adversary findings, adversary verdicts, Claude verdicts) and sorts findings into SURVIVORS, UNCONFIRMED and REJECTED.
 - `sink.sh`: delivers the report. It posts the PR audit trail in PR mode, and prints the terminal report and writes the markdown file in local mode.
 - `pr-audit.py`: the PR audit trail. Both skills use it, and `deep` uses it for every round.

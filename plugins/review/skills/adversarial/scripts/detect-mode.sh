@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # detect-mode.sh — resolve PR/local mode, produce shared diff artifact
-# Usage: detect-mode.sh [--force] [--base <branch>] [--help]
+# Usage: detect-mode.sh [--force] [--base <branch>] [--include-untracked] [--help]
 # Outputs KEY=VALUE pairs: MODE, PR, BASE, DIFF_FILE, FILES_FILE
 # Exit codes: 0=ok, 1=error (git/gh failure, or no base branch found), 2=usage/large-diff
 #
@@ -10,19 +10,28 @@
 # default). A guess that names a missing branch falls back to the repo default
 # branch (main when gh cannot say), with a note on stderr. If no base exists the
 # script exits 1; it never writes an empty diff for a missing base.
-# The local diff is the working tree against the merge base: committed, staged,
-# unstaged and untracked changes. The user's index is not changed (untracked files
-# are added with `git add -N` to a temporary copy of the index).
+# The local diff is the working tree against the merge base: committed, staged and
+# unstaged changes to tracked files. Untracked files are left out unless
+# --include-untracked is given, because the diff is sent to an external model and an
+# untracked file may hold a secret. They are listed (paths only) on stderr. With the
+# flag, files whose names look like secrets (SECRET_NAME_GLOBS below) are still left
+# out and listed. The user's index is never changed; the flag path adds the untracked
+# files with `git add -N` to a temporary copy of the index.
 
 set -eu
 
 FORCE=false
 BASE_ARG=""
+INCLUDE_UNTRACKED=false
+# Untracked files with these names are never put in the diff, even with
+# --include-untracked. Matched against the lower-cased file name (not the directory).
+SECRET_NAME_GLOBS=('.env' '.env.*' '*.pem' '*.key' 'id_rsa*' 'id_ed25519*' '*credentials*' '*.p12' '*.pfx')
+MAX_LISTED=20
 SCRIPT_NAME="$(basename "$0")"
 
 usage() {
   cat <<EOF
-Usage: $SCRIPT_NAME [--force] [--base <branch>] [--help]
+Usage: $SCRIPT_NAME [--force] [--base <branch>] [--include-untracked] [--help]
 
 Detect whether a PR exists for the current branch, produce the shared
 diff artifact and changed-file list, and print environment variables
@@ -32,10 +41,15 @@ Options:
   --force          Bypass the large-diff cap (> 4000 lines) and proceed anyway
   --base <branch>  Local mode: diff against this branch instead of guessing from
                    the branch prefix. Unknown branch -> exit 2. Ignored in PR mode.
+  --include-untracked
+                   Local mode: also put untracked (not ignored) files in the diff.
+                   Names that look like secrets (.env, .env.*, *.pem, *.key, id_rsa*,
+                   id_ed25519*, *credentials*, *.p12, *.pfx) are still left out.
   --help           Show this help and exit
 
-Local mode diffs the working tree against the merge base: committed, staged,
-unstaged and untracked changes. Your index is not changed.
+Local mode diffs the working tree against the merge base: committed, staged and
+unstaged changes to tracked files. Untracked files are left out and listed on stderr
+(paths only), because the diff goes to an external model. Your index is not changed.
 
 Output (stdout, KEY=VALUE):
   MODE=pr|local
@@ -56,6 +70,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) FORCE=true; shift ;;
+    --include-untracked) INCLUDE_UNTRACKED=true; shift ;;
     --base)
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "Error: --base requires a branch name" >&2
@@ -111,9 +126,35 @@ base_ref() {
   fi
 }
 
+# True when the file name (last path part, lower-cased) matches SECRET_NAME_GLOBS.
+is_secret_name() {
+  local name glob
+  name="$(basename "$1" | tr 'A-Z' 'a-z')"
+  for glob in "${SECRET_NAME_GLOBS[@]}"; do
+    # shellcheck disable=SC2254
+    case "$name" in $glob) return 0 ;; esac
+  done
+  return 1
+}
+
+# Print up to MAX_LISTED paths from stdin (one per line), then "and N more".
+list_paths() {
+  local n=0 line
+  while IFS= read -r line; do
+    n=$((n + 1))
+    if [[ $n -le $MAX_LISTED ]]; then echo "  $line" >&2; fi
+  done
+  if [[ $n -gt $MAX_LISTED ]]; then echo "  ... and $((n - MAX_LISTED)) more" >&2; fi
+}
+
 # ---- main logic ----
 # Get current branch
-BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || die "Not inside a git repository"
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || {
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    die "This branch has no commits yet; commit something first"
+  fi
+  die "Not inside a git repository"
+}
 [[ "$BRANCH" == "HEAD" ]] && die "Detached HEAD state — cannot determine branch"
 
 MODE=""
@@ -164,20 +205,41 @@ else
     rm -f "$DIFF_FILE" "$FILES_FILE"
     die "No merge base between '$BASE' and HEAD"
   }
-  # Work from the repo root so paths are repo-relative. Untracked files are added
-  # (intent-to-add) to a temporary copy of the index, never to the user's index.
+  # Work from the repo root so paths are repo-relative.
   TOP="$(git rev-parse --show-toplevel)"
   cd "$TOP"
-  TMP_INDEX="$(mktemp /tmp/adversarial-review-index.XXXXXX)"
-  trap 'rm -f "$TMP_INDEX"' EXIT
-  IDX="$(git rev-parse --git-path index)"
-  if [[ -f "$IDX" ]]; then cp "$IDX" "$TMP_INDEX"; else rm -f "$TMP_INDEX"; fi
-  git ls-files --others --exclude-standard -z --full-name | GIT_INDEX_FILE="$TMP_INDEX" xargs -0 git add -N -- 2>/dev/null || true
-  if ! GIT_INDEX_FILE="$TMP_INDEX" git diff "$MERGE_BASE" >"$DIFF_FILE" 2>/dev/null; then
+  # Untracked, not-ignored files. Their contents would go to an external model, so
+  # they are opt-in, and secret-looking names are never sent.
+  UNTRACKED=()
+  while IFS= read -r -d '' f; do UNTRACKED+=("$f"); done < <(git ls-files --others --exclude-standard -z --full-name 2>/dev/null)
+  SEND=(); SKIP_SECRET=()
+  if [[ "$INCLUDE_UNTRACKED" == "true" ]]; then
+    for f in ${UNTRACKED[@]+"${UNTRACKED[@]}"}; do
+      if is_secret_name "$f"; then SKIP_SECRET+=("$f"); else SEND+=("$f"); fi
+    done
+  fi
+  if [[ "$INCLUDE_UNTRACKED" != "true" && ${#UNTRACKED[@]} -gt 0 ]]; then
+    echo "Note: ${#UNTRACKED[@]} untracked file(s) were left out of the diff (their contents would go to the adversary model). Pass --include-untracked to review them. Left out:" >&2
+    printf '%s\n' "${UNTRACKED[@]}" | list_paths
+  fi
+  if [[ ${#SKIP_SECRET[@]} -gt 0 ]]; then
+    echo "Note: ${#SKIP_SECRET[@]} untracked file(s) with secret-looking names were left out even with --include-untracked:" >&2
+    printf '%s\n' "${SKIP_SECRET[@]}" | list_paths
+  fi
+  if [[ ${#SEND[@]} -gt 0 ]]; then
+    # Intent-to-add in a temporary copy of the index, never in the user's index.
+    TMP_INDEX="$(mktemp /tmp/adversarial-review-index.XXXXXX)"
+    trap 'rm -f "$TMP_INDEX"' EXIT
+    IDX="$(git rev-parse --git-path index)"
+    if [[ -f "$IDX" ]]; then cp "$IDX" "$TMP_INDEX"; else rm -f "$TMP_INDEX"; fi
+    printf '%s\0' "${SEND[@]}" | GIT_INDEX_FILE="$TMP_INDEX" xargs -0 git add -N -- 2>/dev/null || true
+    export GIT_INDEX_FILE="$TMP_INDEX"
+  fi
+  if ! git diff "$MERGE_BASE" >"$DIFF_FILE" 2>/dev/null; then
     rm -f "$DIFF_FILE" "$FILES_FILE"
     die "Failed to produce git diff against merge base of $BASE and HEAD"
   fi
-  GIT_INDEX_FILE="$TMP_INDEX" git diff --name-only "$MERGE_BASE" >"$FILES_FILE" 2>/dev/null || true
+  git diff --name-only "$MERGE_BASE" >"$FILES_FILE" 2>/dev/null || true
 fi
 
 # ---- large-diff cap ----

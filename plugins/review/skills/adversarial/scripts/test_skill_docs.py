@@ -78,12 +78,16 @@ class AdversarialReviewDocTests(unittest.TestCase):
         self.assertIn("offer `--base <branch>`", step1)
         self.assertIn("exits 1", step1)
         self.assertIn("exits 2", step1)
-        self.assertIn("untracked", step1)
+        self.assertIn("--include-untracked", step1)
+        self.assertIn("never sent", step1)
+        self.assertIn("external service", step1)
         deep = (DEEP / "SKILL.md").read_text(encoding="utf-8")
         phase0 = section(deep, "## Phase 0", "## Phase 1")
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/detect-mode.sh", phase0)
         self.assertIn("--base <branch>", phase0)
-        self.assertIn("uncommitted and untracked", phase0)
+        self.assertIn("--include-untracked", phase0)
+        self.assertIn("never sent", phase0)
+        self.assertIn("sent to the adversary model", phase0)
 
     def test_codex_sandbox_limits_are_documented(self):
         self.assertIn("read any file your user can read", self.text)
@@ -252,6 +256,14 @@ class PluginReadmeDocTests(unittest.TestCase):
             line for line in agents.splitlines() if line.startswith("| `cross-examiner`")
         ]
         self.assertIn("Codex", cross_examiner_line)
+
+    def test_untracked_files_policy_is_stated(self):
+        local = section(self.text, "- **Local mode**", "\n\n")
+        self.assertIn("--include-untracked", local)
+        self.assertIn("never sent", local)
+        self.assertIn("sent to the adversary model", local)
+        for name in (".env", "*.pem", "id_rsa*", "*credentials*"):
+            self.assertIn(name, local)
 
     def test_no_script_install_advice_for_this_plugin(self):
         # scripts/install-plugin.sh copies skills and agents loose into ~/.claude. That

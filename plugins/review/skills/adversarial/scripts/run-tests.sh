@@ -848,7 +848,7 @@ assert_contains "PR mode -> FILES_FILE="  "FILES_FILE="  "$PR_MODE_OUT"
 # ====================================================================
 # SECTION 7b: detect-mode.sh — local mode in real temp repos (no network)
 # ====================================================================
-section "detect-mode.sh — local mode: base fallback, --base, working tree, index"
+section "detect-mode.sh — local mode: base fallback, --base, tracked diff, untracked opt-in, secrets, index"
 
 # gh always fails here: no PR, and the repo default falls back to main.
 NOGH_DIR="$TMP_DIR/nogh"
@@ -872,6 +872,8 @@ printf 'committed-line\n' >"$DM_A/b.txt"; dm_git "$DM_A" add b.txt; dm_git "$DM_
 printf 'unstaged-edit\n' >>"$DM_A/a.txt"
 printf 'staged-edit\n' >>"$DM_A/c.txt"; dm_git "$DM_A" add c.txt
 printf 'untracked-line\n' >"$DM_A/new.txt"
+printf 'SECRET_TOKEN=abc123\n' >"$DM_A/.env"
+printf 'PEM-CONTENT-xyz\n' >"$DM_A/secret.pem"
 IDX_BEFORE="$(shasum "$DM_A/.git/index" | cut -d' ' -f1)"
 CACHED_BEFORE="$(dm_git "$DM_A" diff --cached --name-only)"
 STATUS_BEFORE="$(dm_git "$DM_A" status --porcelain)"
@@ -882,23 +884,96 @@ assert_exit_code "feature/* with no develop -> exit 0" "0" "$DM_EXIT"
 assert_contains "feature/* with no develop falls back to main" "BASE=main" "$DM_OUT"
 assert_contains "the fallback is announced on stderr" "does not exist; using the repo default branch 'main'" "$DM_OUT"
 DM_DIFF="$(dm_val "$DM_OUT" DIFF_FILE)"; DM_FILES="$(dm_val "$DM_OUT" FILES_FILE)"
-assert_contains "diff has the committed change"       "+committed-line" "$(cat "$DM_DIFF")"
-assert_contains "diff has the unstaged tracked edit"  "+unstaged-edit"  "$(cat "$DM_DIFF")"
-assert_contains "diff has the staged tracked edit"    "+staged-edit"    "$(cat "$DM_DIFF")"
-assert_contains "diff has the untracked file"         "+untracked-line" "$(cat "$DM_DIFF")"
-for f in a.txt b.txt c.txt new.txt; do
-  assert_contains "file list has $f" "$f" "$(cat "$DM_FILES")"
+assert_contains "default diff has the committed change"       "+committed-line" "$(cat "$DM_DIFF")"
+assert_contains "default diff has the unstaged tracked edit"  "+unstaged-edit"  "$(cat "$DM_DIFF")"
+assert_contains "default diff has the staged tracked edit"    "+staged-edit"    "$(cat "$DM_DIFF")"
+for f in a.txt b.txt c.txt; do
+  assert_contains "default file list has $f" "$f" "$(cat "$DM_FILES")"
 done
-assert_eq "the index file is unchanged" "$IDX_BEFORE" "$(shasum "$DM_A/.git/index" | cut -d' ' -f1)"
-assert_eq "staged file list is unchanged" "$CACHED_BEFORE" "$(dm_git "$DM_A" diff --cached --name-only)"
-assert_eq "git status is unchanged (new.txt still untracked)" "$STATUS_BEFORE" "$(dm_git "$DM_A" status --porcelain)"
+for needle in untracked-line SECRET_TOKEN PEM-CONTENT-xyz; do
+  if grep -qF -- "$needle" "$DM_DIFF"; then fail "default diff leaves out untracked content '$needle'"; else pass "default diff leaves out untracked content '$needle'"; fi
+  if echo "$DM_OUT" | grep -qF -- "$needle"; then fail "stderr never shows untracked content '$needle'"; else pass "stderr never shows untracked content '$needle'"; fi
+done
+for f in new.txt .env secret.pem; do
+  if grep -qxF -- "$f" "$DM_FILES"; then fail "default file list leaves out $f"; else pass "default file list leaves out $f"; fi
+  assert_contains "default run names untracked $f on stderr" "  $f" "$DM_OUT"
+done
+assert_contains "default run says how to include them" "--include-untracked" "$DM_OUT"
+assert_eq "the index file is unchanged (default)" "$IDX_BEFORE" "$(shasum "$DM_A/.git/index" | cut -d' ' -f1)"
+assert_eq "staged file list is unchanged (default)" "$CACHED_BEFORE" "$(dm_git "$DM_A" diff --cached --name-only)"
+assert_eq "git status is unchanged (default)" "$STATUS_BEFORE" "$(dm_git "$DM_A" status --porcelain)"
+
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_A" --include-untracked
+assert_exit_code "--include-untracked -> exit 0" "0" "$DM_EXIT"
+DM_DIFF="$(dm_val "$DM_OUT" DIFF_FILE)"; DM_FILES="$(dm_val "$DM_OUT" FILES_FILE)"
+assert_contains "--include-untracked puts the untracked file in the diff" "+untracked-line" "$(cat "$DM_DIFF")"
+assert_contains "--include-untracked lists it in the file list" "new.txt" "$(cat "$DM_FILES")"
+assert_contains "--include-untracked keeps the tracked edits" "+unstaged-edit" "$(cat "$DM_DIFF")"
+for needle in SECRET_TOKEN PEM-CONTENT-xyz; do
+  if grep -qF -- "$needle" "$DM_DIFF"; then fail "--include-untracked still leaves out secret content '$needle'"; else pass "--include-untracked still leaves out secret content '$needle'"; fi
+done
+for f in .env secret.pem; do
+  if grep -qxF -- "$f" "$DM_FILES"; then fail "--include-untracked still leaves $f out of the file list"; else pass "--include-untracked still leaves $f out of the file list"; fi
+  assert_contains "--include-untracked names skipped $f on stderr" "  $f" "$DM_OUT"
+done
+assert_contains "--include-untracked explains the skipped names" "secret-looking names were left out" "$DM_OUT"
+assert_eq "the index file is unchanged (--include-untracked)" "$IDX_BEFORE" "$(shasum "$DM_A/.git/index" | cut -d' ' -f1)"
+assert_eq "staged file list is unchanged (--include-untracked)" "$CACHED_BEFORE" "$(dm_git "$DM_A" diff --cached --name-only)"
+assert_eq "git status is unchanged (--include-untracked)" "$STATUS_BEFORE" "$(dm_git "$DM_A" status --porcelain)"
 assert_eq "no temp index file is left behind" "0" "$(ls /tmp/adversarial-review-index.* 2>/dev/null | wc -l | tr -d ' ')"
+
+# Secret-looking names: each pattern, and a normal name that must not match.
+DM_S="$TMP_DIR/dm-s"
+git init -q -b main "$DM_S"
+printf 'x\n' >"$DM_S/a.txt"; dm_git "$DM_S" add -A; dm_git "$DM_S" commit -q -m base
+dm_git "$DM_S" checkout -q -b feature/s
+mkdir -p "$DM_S/sub"
+for f in .env .env.local server.pem tls.key id_rsa id_rsa.pub id_ed25519 aws-credentials.json credentials sub/.env cert.p12 cert.pfx KEY.PEM; do
+  printf 'S3CRET\n' >"$DM_S/$f"
+done
+printf 'ok-content\n' >"$DM_S/notes.txt"
+printf 'ok-content\n' >"$DM_S/environment.md"
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_S" --include-untracked
+DM_DIFF="$(dm_val "$DM_OUT" DIFF_FILE)"
+assert_exit_code "secret-name run -> exit 0" "0" "$DM_EXIT"
+if grep -qF -- "S3CRET" "$DM_DIFF"; then fail "no secret-named file reaches the diff"; else pass "no secret-named file reaches the diff"; fi
+assert_contains "ordinary untracked files are still sent" "+ok-content" "$(cat "$DM_DIFF")"
+assert_contains "notes.txt is in the diff" "notes.txt" "$(cat "$DM_DIFF")"
+assert_contains "environment.md is in the diff (not a .env match)" "environment.md" "$(cat "$DM_DIFF")"
+
+# More than 20 untracked files: the stderr note is bounded.
+DM_C="$TMP_DIR/dm-c"
+git init -q -b main "$DM_C"
+printf 'x\n' >"$DM_C/a.txt"; dm_git "$DM_C" add -A; dm_git "$DM_C" commit -q -m base
+dm_git "$DM_C" checkout -q -b feature/c
+for i in $(seq 1 23); do printf 'u\n' >"$DM_C/u$i.txt"; done
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_C"
+assert_exit_code "many untracked files -> exit 0" "0" "$DM_EXIT"
+assert_contains "the untracked note says how many were left out" "23 untracked file(s)" "$DM_OUT"
+assert_contains "the untracked list is bounded" "... and 3 more" "$DM_OUT"
+assert_eq "exactly 20 paths are listed" "20" "$(echo "$DM_OUT" | grep -c '^  u[0-9]*\.txt$')"
+
+# A repo with no commits: say so, not "Not inside a git repository".
+DM_E="$TMP_DIR/dm-e"
+git init -q -b main "$DM_E"
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_E"
+assert_exit_code "no commits yet -> exit 1" "1" "$DM_EXIT"
+assert_contains "no commits yet says so" "no commits yet" "$DM_OUT"
+DM_N="$TMP_DIR/dm-notrepo"; mkdir -p "$DM_N"
+DM_OUT=""; DM_EXIT=0
+run_capture DM_OUT DM_EXIT dm_run "$DM_N"
+assert_exit_code "outside a repo -> exit 1" "1" "$DM_EXIT"
+assert_contains "outside a repo still says so" "Not inside a git repository" "$DM_OUT"
 
 DM_OUT=""; DM_EXIT=0
 run_capture DM_OUT DM_EXIT dm_run "$DM_A" --base trunk
 assert_exit_code "--base trunk -> exit 0" "0" "$DM_EXIT"
 assert_contains "--base wins over the guess" "BASE=trunk" "$DM_OUT"
-if echo "$DM_OUT" | grep -qF "Note:"; then fail "--base prints no fallback note" "$DM_OUT"; else pass "--base prints no fallback note"; fi
+if echo "$DM_OUT" | grep -qF "using the repo default branch"; then fail "--base prints no fallback note" "$DM_OUT"; else pass "--base prints no fallback note"; fi
 
 DM_OUT=""; DM_EXIT=0
 run_capture DM_OUT DM_EXIT dm_run "$DM_A" --base no-such-branch
