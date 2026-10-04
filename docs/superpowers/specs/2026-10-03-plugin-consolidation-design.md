@@ -38,7 +38,11 @@ The same runbook as #146 and #147:
 2. Build `plugins/<group>/` as the only source. Rename agents to `<group>:<agent>`.
 3. Keep the old marketplace entries for one release, with descriptions that say "Deprecated: moved to `<group>:<skill>`". Remove them in the next release.
 4. Bump `plugin.json` for every change, because `/plugin update` compares versions only.
-5. Live cut-over: install the plugin, diff each loose `~/.claude/skills` copy against it and carry over local edits, move callers first, then delete the loose copy. Long-lived jobs must point at a copy the plugin owns, never the versioned cache.
+5. Live cut-over and dogfood:
+   - Before merge, run each new skill by explicit invocation (`claude -p "/<plugin>:<skill> ..." --plugin-dir plugins/<group>`) from a temp project dir, and check that it runs its bundled scripts from the plugin dir. A plain-language request would reach the old loose copy, so it proves nothing at this stage.
+   - After merge: install the plugin, diff each loose `~/.claude/skills` copy against it and carry over local edits, move callers first, then delete the loose copy. Long-lived jobs must point at a copy the plugin owns, never the versioned cache.
+   - Only after the loose copies are removed, run the plain-language test: each skill's own trigger phrases plus one ordinary phrasing.
+   - Probe any skill whose text shows `${CLAUDE_SKILL_DIR}` or `${CLAUDE_PLUGIN_ROOT}` outside a command: Claude Code substitutes the token in prose too, so the skill would show its own absolute path.
 
 ## Removing the bare directories (#167)
 

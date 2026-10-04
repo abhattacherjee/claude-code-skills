@@ -2,6 +2,12 @@
 
 All notable changes to the **review** skill (was `spec-review`) are documented here.
 
+## [1.0.1] - 2026-10-04
+
+### Changed
+
+- The See Also line names `context:shield` (was `context-shield`) (#163).
+
 ## [1.0.0] - 2026-10-04
 
 ### Changed
