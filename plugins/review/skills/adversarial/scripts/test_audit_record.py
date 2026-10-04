@@ -34,6 +34,31 @@ def record(findings=None, rnd=1, head=SHA1, prev=None, **over):
     return r
 
 
+class SkillValueTests(unittest.TestCase):
+    """The review plugin writes `deep` and `adversarial`. Records already on PRs
+    carry `deep-review` and `adversarial-review`, so those stay valid."""
+
+    def test_new_and_old_skill_values_validate(self):
+        for skill in ("deep", "adversarial", "deep-review", "adversarial-review"):
+            ar.validate(record(skill=skill))
+
+    def test_other_skill_values_are_rejected(self):
+        for skill in ("review", "deep-reviewer", "", None):
+            with self.assertRaises(ar.RecordError, msg=repr(skill)) as cm:
+                ar.validate(record(skill=skill))
+            self.assertIn("skill", str(cm.exception))
+
+    def test_the_label_follows_the_value(self):
+        for skill in ("deep", "adversarial", "deep-review", "adversarial-review"):
+            rec = record(skill=skill)
+            rows = [{"id": "X-001", "severity": "important", "origin": "codex", "outcome": "confirmed",
+                     "new": True, "thread": None, "note": None}]
+            body = ar.summary_bodies(rec, rows, redacted=0, failures=0)[0]
+            self.assertIn("**%s · phase2 · Round 1**" % skill, body)
+            md, _ = ar.markdown(rec)
+            self.assertIn("## %s · phase2 · Round 1" % skill, md)
+
+
 class ValidateTests(unittest.TestCase):
     def test_valid_record_passes(self):
         ar.validate(record())

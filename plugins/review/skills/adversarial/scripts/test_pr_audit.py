@@ -562,6 +562,23 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(by_id["C-002"]["events"], [])
         self.assertEqual(by_id["C-002"]["category"], "other")
 
+    def test_record_takes_new_and_old_skill_values_and_rejects_others(self):
+        for skill in ("adversarial", "deep", "adversarial-review", "deep-review"):
+            h = Harness(self)
+            report = h.write(json.dumps(REPORT), "report.json")
+            out = h.dir / "round-1.json"
+            res = h.run("record", "--report-json", report, "--run-id", "ar-skill-1",
+                        "--skill", skill, "--phase", "review", "--round", "1",
+                        "--adversary", "codex", "--head-sha", SHA1, "--out", out)
+            self.assertEqual(res.returncode, 0, (skill, res.stderr))
+            self.assertEqual(json.loads(out.read_text())["skill"], skill)
+        h = Harness(self)
+        report = h.write(json.dumps(REPORT), "report.json")
+        res = h.run("record", "--report-json", report, "--run-id", "ar-skill-1",
+                    "--skill", "review", "--phase", "review", "--round", "1",
+                    "--adversary", "codex", "--head-sha", SHA1, "--out", h.dir / "round-1.json")
+        self.assertEqual(res.returncode, 2, res.stderr)
+
     def test_claude_only_writes_no_verdicts(self):
         h = Harness(self)
         res, out = self.build(h, adversary="claude-only")

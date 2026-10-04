@@ -1,4 +1,6 @@
-"""Doc-contract tests: the skill steps run scripts that exist, and wire in the adversary."""
+"""Doc-contract tests for the review plugin: the skill steps run scripts that exist, and wire in
+the adversary. They read only plugins/review/ (the `adversarial` and `deep` skills, the agents and
+the README); the old plugin directories keep their own copies of these tests."""
 import os
 import re
 import sys
@@ -9,9 +11,11 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import codex_review as cr  # noqa: E402
 
+PLUGIN = HERE.parents[2]  # plugins/review
 SKILL = HERE.parent / "SKILL.md"
-PLUGIN_README = HERE.parent.parent.parent / "README.md"
-SCRIPT_REF = re.compile(r"\$SCRIPTS/([A-Za-z0-9_.-]+)")
+PLUGIN_README = PLUGIN / "README.md"
+DEEP = PLUGIN / "skills" / "deep"
+SCRIPT_REF = re.compile(r"\$\{CLAUDE_SKILL_DIR\}/scripts/([A-Za-z0-9_.-]+)")
 
 
 def section(text, start, end):
@@ -41,20 +45,22 @@ class AdversarialReviewDocTests(unittest.TestCase):
 
     def test_step_0_picks_the_adversary(self):
         step0 = section(self.text, "### Step 0", "### Step 1")
-        self.assertIn("$SCRIPTS/pick-adversary.sh", step0)
+        self.assertIn("${CLAUDE_SKILL_DIR}/scripts/pick-adversary.sh", step0)
         self.assertIn("Do not fall back", step0)
         # Ruling F6: eval "$(pick-adversary.sh ...)" discards pick-adversary's own
-        # exit code (eval returns its own status), so the documented "Exit 3"
-        # branch could never be reached. Step 0 must capture the real exit code.
-        self.assertIn("PICK_RC", step0)
+        # exit code (eval returns its own status), so the documented exit 3 branch
+        # could never be reached. Step 0 now reads the printed lines and the
+        # script's own exit code, and never evals the output.
+        self.assertIn("Exit code 3", step0)
+        self.assertNotIn('eval "$', step0)
 
     def test_synthesize_is_told_the_adversary(self):
         step4 = section(self.text, "### Step 4 —", "### Step 4b")
         # The actual synthesize.py invocation, not just any prose mentioning
         # --adversary "$ADVERSARY" elsewhere in the step (the claude-only
         # paragraph below it references pr-audit.py with the same flag string).
-        synth_call = section(step4, "$SCRIPTS/synthesize.py", "```")
-        self.assertIn('--adversary "$ADVERSARY"', synth_call)
+        synth_call = section(step4, '"${CLAUDE_SKILL_DIR}/scripts/synthesize.py"', "```")
+        self.assertIn('--adversary "<ADVERSARY>"', synth_call)
         self.assertIn("--adversary-findings", synth_call)
         self.assertIn("--adversary-verdicts", synth_call)
 
@@ -85,9 +91,9 @@ class AdversarialReviewDocTests(unittest.TestCase):
         self.assertNotIn("holding only `PATH`, `HOME` and your own `CODEX_HOME`", self.text)
 
     def test_changelogs_list_the_passthrough_env_vars(self):
-        paths = [HERE.parent / "CHANGELOG.md", HERE.parent.parent.parent / "CHANGELOG.md"]
+        paths = [HERE.parent / "CHANGELOG.md"]
         root = HERE.parents[4] / "CHANGELOG.md"
-        if (HERE.parents[4] / "deep-review").is_dir() and root.is_file():
+        if (HERE.parents[4] / ".claude-plugin" / "marketplace.json").is_file() and root.is_file():
             paths.append(root)  # the monorepo checkout only
         for path in paths:
             text = path.read_text(encoding="utf-8")
@@ -95,16 +101,16 @@ class AdversarialReviewDocTests(unittest.TestCase):
             for name in cr.PASSTHROUGH_ENV:
                 self.assertIn("`%s`" % name, text, (str(path), name))
 
-    def test_plugin_and_skill_changelogs_match_after_the_intro_line(self):
-        # The skill- and plugin-level CHANGELOG.md copies drifted -- PR #138's
-        # final fix wave landed only in the skill copy. Line 3 (index 2) differs
-        # on purpose ("this project" vs "this skill"); every other line must
-        # match verbatim, or the two copies silently diverge again.
-        skill_changelog = HERE.parent / "CHANGELOG.md"
-        plugin_changelog = HERE.parent.parent.parent / "CHANGELOG.md"
-        skill_lines = skill_changelog.read_text(encoding="utf-8").splitlines()
-        plugin_lines = plugin_changelog.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(plugin_lines[3:], skill_lines[3:])
+    def test_skill_changelog_starts_at_1_0_0_and_names_its_origin(self):
+        # The skill and plugin changelogs no longer mirror each other: the plugin
+        # one covers both skills. The skill one starts a fresh 1.0.0 entry that says
+        # where the skill came from and keeps the older history below it.
+        lines = (HERE.parent / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+        first = next(l for l in lines if l.startswith("## ["))
+        self.assertTrue(first.startswith("## [1.0.0]"), first)
+        self.assertIn("was `adversarial-review`", "\n".join(lines[:4]))
+        self.assertIn("adversarial-review` 0.2.0", "\n".join(lines))
+        self.assertIn("## [1.0.0]", (PLUGIN / "CHANGELOG.md").read_text(encoding="utf-8"))
 
     def test_strict_is_documented_as_the_hardened_judge(self):
         # deep-review X-002: --strict must be described as what it does.
@@ -136,7 +142,7 @@ class AdversarialReviewDocTests(unittest.TestCase):
 
     def test_a_forced_adversary_never_falls_back_at_run_time(self):
         # Final review, Important 2: with --adversary set, an exit 3 at R1 or R2
-        # stops the run, the same as PICK_RC=3 at Step 0.
+        # stops the run, the same as exit code 3 at Step 0.
         for start, end in (("### Step 2", "### Step 3"), ("### Step 3", "### Step 4 —"),
                            ("## Degradation Behavior", "## Same-Diff Invariant")):
             part = section(self.text, start, end)
@@ -149,9 +155,9 @@ class AdversarialReviewDocTests(unittest.TestCase):
         # Final review, minor 4: an R2 judge failure must not drop the adversary's
         # R1 findings or Claude's verdicts on them.
         degraded = section(self.text, "## Degradation Behavior", "## Same-Diff Invariant")
-        self.assertIn('--adversary-findings "$RUN_DIR/r1-$ADVERSARY.json"', degraded)
-        self.assertIn('--claude-verdicts "$RUN_DIR/r2-claude-verdicts.json"', degraded)
-        self.assertIn('--adversary-verdicts "$RUN_DIR/r2-empty.json"', degraded)
+        self.assertIn('--adversary-findings "<RUN_DIR>/r1-<ADVERSARY>.json"', degraded)
+        self.assertIn('--claude-verdicts "<RUN_DIR>/r2-claude-verdicts.json"', degraded)
+        self.assertIn('--adversary-verdicts "<RUN_DIR>/r2-empty.json"', degraded)
 
     def test_codex_timeout_fits_the_bash_tool(self):
         # Final review, minor 2: the default is below the Bash tool's 600 s cap, and
@@ -200,12 +206,10 @@ class AdversarialReviewDocTests(unittest.TestCase):
 
 
 class PluginReadmeDocTests(unittest.TestCase):
-    """Fix round 1: plugins/adversarial-review/README.md's `## Contents` bullets
-    (### Skills and ### Agents) still asserted a Claude<->Gemini-only pipeline
-    after the rest of the file was made adversary-neutral -- a plain missed
-    edit, not a regenerated/stale artifact (review: task-8-review.md Important
-    #1/#2). These bullets are not auto-generated by anything, so a fixed string
-    check is the right test, not a sync-tool run."""
+    """The README's skills table and agents table must name the adversary as Codex
+    or Gemini, not Gemini alone (an earlier README kept a Claude<->Gemini-only
+    description after the rest was made adversary-neutral). Nothing generates
+    these rows, so a fixed string check is the right test."""
 
     def setUp(self):
         self.text = PLUGIN_README.read_text(encoding="utf-8")
@@ -216,72 +220,71 @@ class PluginReadmeDocTests(unittest.TestCase):
         self.assertNotIn("Claude↔Gemini", self.text)
         self.assertNotIn("reads Gemini's R1 findings", self.text)
 
-    def test_skills_bullet_names_the_adversary_not_just_gemini(self):
-        contents = section(self.text, "## Contents", "## Installation")
-        skills = section(contents, "### Skills", "### Agents")
-        self.assertIn("Codex", skills)
+    def test_skills_row_names_the_adversary_not_just_gemini(self):
+        skills = section(self.text, "## Skills", "## Agents")
+        [row] = [line for line in skills.splitlines() if line.startswith("| `adversarial`")]
+        self.assertIn("Codex", row)
 
-    def test_cross_examiner_bullet_names_the_adversary_not_just_gemini(self):
-        contents = section(self.text, "## Contents", "## Installation")
-        agents = section(contents, "### Agents", "### Scripts")
+    def test_cross_examiner_row_names_the_adversary_not_just_gemini(self):
+        agents = section(self.text, "## Agents", "## How `adversarial` works")
         [cross_examiner_line] = [
-            line for line in agents.splitlines() if "adversarial-cross-examiner" in line
+            line for line in agents.splitlines() if line.startswith("| `cross-examiner`")
         ]
         self.assertIn("Codex", cross_examiner_line)
 
+    def test_readme_names_both_skills_and_all_three_agents_with_their_old_names(self):
+        for new, old in (("deep", "deep-review"), ("adversarial", "adversarial-review"),
+                         ("bug-hunter", "adversarial-bug-hunter"),
+                         ("convention-reviewer", "adversarial-convention-reviewer"),
+                         ("cross-examiner", "adversarial-cross-examiner")):
+            [row] = [l for l in self.text.splitlines() if l.startswith("| `%s` |" % new)]
+            self.assertIn("`%s`" % old, row)
 
-AGENTS_DIR = HERE.parent.parent.parent / "agents"
+
+AGENTS_DIR = PLUGIN / "agents"
 
 
 class AgentNeverIdleOnOwnBackgroundRunTests(unittest.TestCase):
     """#137: each agent that a reviewer dispatch can hand a long harness to must
     carry the never-idle rule in its own instructions, not only in the skill
-    that dispatches it -- whoever dispatches it (adversarial-review, deep-review,
+    that dispatches it -- whoever dispatches it (review:adversarial, review:deep,
     or a future caller) gets the rule for free."""
 
     def test_bug_hunter_never_idle_on_its_own_background_run(self):
-        text = (AGENTS_DIR / "adversarial-bug-hunter.md").read_text(encoding="utf-8")
+        text = (AGENTS_DIR / "bug-hunter.md").read_text(encoding="utf-8")
         rules = text.split("## Rules", 1)[1]
         self.assertIn("10-minute cap", rules)
         self.assertIn("20 minutes", rules)
         self.assertIn("Never go idle", rules)
 
     def test_convention_reviewer_never_idle_on_its_own_background_run(self):
-        text = (AGENTS_DIR / "adversarial-convention-reviewer.md").read_text(encoding="utf-8")
+        text = (AGENTS_DIR / "convention-reviewer.md").read_text(encoding="utf-8")
         rules = text.split("## Rules", 1)[1]
         self.assertIn("10-minute cap", rules)
         self.assertIn("20 minutes", rules)
         self.assertIn("Never go idle", rules)
 
     def test_cross_examiner_never_idle_on_its_own_background_run(self):
-        text = (AGENTS_DIR / "adversarial-cross-examiner.md").read_text(encoding="utf-8")
+        text = (AGENTS_DIR / "cross-examiner.md").read_text(encoding="utf-8")
         rules = text.split("## Rules", 1)[1]
         self.assertIn("10-minute cap", rules)
         self.assertIn("20 minutes", rules)
         self.assertIn("Never go idle", rules)
 
 
-REPO = HERE.parents[4]
-DR_SOURCE = REPO / "deep-review"
-DR_COPY = REPO / "plugins" / "deep-review" / "skills" / "deep-review"
 AR_SCRIPT_NAME = re.compile(
     r"\b((?:codex|gemini)-review\.sh|pick-adversary\.sh|ensure-(?:codex|gemini)\.sh|pr-audit\.py|synthesize\.py)\b")
 
 
-@unittest.skipUnless(DR_SOURCE.is_dir() and DR_COPY.is_dir(), "not in the monorepo checkout")
 class DeepReviewDocTests(unittest.TestCase):
-    def read(self, rel):
-        return (DR_SOURCE / rel).read_text(encoding="utf-8")
+    """The same contract checks for the `deep` skill, read from plugins/review/skills/deep/."""
 
-    def test_published_copy_is_byte_identical(self):
-        for src in sorted(DR_SOURCE.rglob("*")):
-            if src.is_dir() or src.name == "plugin-manifest.json":
-                continue
-            rel = src.relative_to(DR_SOURCE)
-            self.assertEqual((DR_COPY / rel).read_bytes(), src.read_bytes(), str(rel))
-        for copy in sorted(DR_COPY.rglob("*")):
-            if copy.is_file():
-                self.assertTrue((DR_SOURCE / copy.relative_to(DR_COPY)).is_file(), str(copy))
+    def read(self, rel):
+        return (DEEP / rel).read_text(encoding="utf-8")
+
+    def test_the_deep_skill_is_where_the_tests_look(self):
+        self.assertTrue((DEEP / "SKILL.md").is_file())
+        self.assertTrue((DEEP / "references" / "audit-trail.md").is_file())
 
     def test_named_adversarial_review_scripts_exist(self):
         text = self.read("SKILL.md") + self.read("references/audit-trail.md")
@@ -296,12 +299,13 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("### Step 2.6", phase2)
         self.assertIn("Never call `codex` directly", phase2)
         # Ruling F6: eval "$(pick-adversary.sh ...)" discards pick-adversary's own
-        # exit code, so Step 2.0 must capture it explicitly, same as AR's Step 0.
-        self.assertIn("PICK_RC", phase2)
+        # exit code. Step 2.0 reads the printed lines and the exit code, never evals.
+        self.assertIn("Exit code 3", phase2)
+        self.assertNotIn('eval "$', phase2)
 
     def test_recheck_rounds_use_pr_audit_recheck(self):
         text = self.read("references/audit-trail.md")
-        self.assertIn('"$AUDIT" recheck', text)
+        self.assertIn('pr-audit.py" recheck', text)
         self.assertIn("phase2-recheck", text)
         self.assertNotIn("Phase 2 has no adversary re-check round yet", text)
 
@@ -337,7 +341,7 @@ class DeepReviewDocTests(unittest.TestCase):
         # Final review, minor 1: synthesize.py exits 1 on a missing verdicts file.
         step22 = section(self.read("SKILL.md"), "### Step 2.2", "### Step 2.3")
         self.assertIn('{"verdicts":[]}', step22)
-        self.assertIn("r2-$ADVERSARY-verdicts.json", step22)
+        self.assertIn("r2-<ADVERSARY>-verdicts.json", step22)
 
     def test_step_2_6_handles_codex_review_exit_1(self):
         # Final review, minor 7: exit 1 (for example a missing --prior file) stops
@@ -409,9 +413,9 @@ class DeepReviewDocTests(unittest.TestCase):
             'Report "waiting on a reviewer" without checking whether it is idle', red_flags)
 
     def test_step_2_1_and_2_2_stop_on_a_forced_unavailable_adversary(self):
-        # #135 follow-up: adversarial-review's own Step 2/3 already stop the run
+        # #135 follow-up: the adversarial skill's own Step 2/3 already stop the run
         # on exit 3 when ADVERSARY_FLAG is set (never fall back for a forced
-        # adversary). deep-review's Step 2.1 (R1 finder) and Step 2.2 (R2 judge)
+        # adversary). The deep skill's Step 2.1 (R1 finder) and Step 2.2 (R2 judge)
         # must apply the same rule instead of always taking the auto-mode
         # fallback path. Auto mode (no ADVERSARY_FLAG) keeps its documented
         # fallback -- see test_step_2_2_writes_empty_verdicts_when_the_codex_judge_fails.

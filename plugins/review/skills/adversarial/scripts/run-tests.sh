@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-tests.sh — test suite for adversarial-review scripts
+# run-tests.sh — test suite for the review plugin's adversarial scripts
 # Usage: run-tests.sh [--help]
 # Exit codes: 0=all tests pass, 1=one or more tests failed
 
@@ -20,7 +20,7 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [--help]
 
-Run the adversarial-review script test suite.
+Run the review plugin's adversarial script test suite.
 
 Tests:
   - synthesize.py: symmetric classification (survivors/unconfirmed/rejected)
@@ -2064,9 +2064,9 @@ assert_contains "presence P3: gemini-review.sh has FORCE_STRICT (--strict implem
   "FORCE_STRICT" \
   "$GEMINI_REVIEW_CONTENT"
 
-# ---- Presence P4: adversarial-cross-examiner.md contains cannot-point phrase ----
-# Path: scripts/ -> (skill)adversarial-review/ -> skills/ -> (plugin)adversarial-review/ -> agents/
-CROSS_EXAMINER_FILE="$SCRIPT_DIR/../../../agents/adversarial-cross-examiner.md"
+# ---- Presence P4: cross-examiner.md contains cannot-point phrase ----
+# Path: scripts/ -> (skill)adversarial/ -> skills/ -> (plugin)review/ -> agents/
+CROSS_EXAMINER_FILE="$SCRIPT_DIR/../../../agents/cross-examiner.md"
 CROSS_EXAMINER_CONTENT="$(cat "$CROSS_EXAMINER_FILE")"
 assert_contains "presence P4: cross-examiner.md has cannot-point-to-proving-line phrase" \
   "cannot point to the proving line" \

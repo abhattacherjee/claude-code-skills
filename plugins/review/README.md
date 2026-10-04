@@ -15,7 +15,7 @@ Invoke as `/review:<skill>`. The old names still match as trigger phrases.
 | Skill | Was | What it does |
 |---|---|---|
 | `deep` | `deep-review` | Two phases. Phase 1: specialised reviewers in fix and re-review rounds until a full round finds nothing actionable. Phase 2: a multi-round cross-examination with the opposing model (it finds, Claude judges, it counters, it re-checks each fix). Every confirmed finding is fixed and verified. |
-| `adversarial` | `adversarial-review` | One pass of the cross-examination: independent discovery (R1), then each side judges the other's findings (R2). Only findings the opposing model confirms survive. |
+| `adversarial` | `adversarial-review` | One pass of the cross-examination: independent discovery (R1), then each side judges the other's findings (R2). The opposing model is Codex, else Gemini. Only findings it confirms survive. |
 
 Use `adversarial` for a high-precision look before merge. Use `deep` when the change is high-stakes and you want it ironclad. `deep` runs the same scripts as `adversarial`, from the same plugin.
 
@@ -27,7 +27,7 @@ Dispatched by both skills as `review:<agent>`. They are not user-invocable.
 |---|---|---|---|
 | `bug-hunter` | `adversarial-bug-hunter` | Opus | R1 bug hunt over the diff, grounded in the actual source. |
 | `convention-reviewer` | `adversarial-convention-reviewer` | Sonnet | R1 convention, CLAUDE.md and maintainability scan. |
-| `cross-examiner` | `adversarial-cross-examiner` | Opus | R2 cross-examiner. Reads the adversary's R1 findings against the source and returns confirm or refute verdicts. |
+| `cross-examiner` | `adversarial-cross-examiner` | Opus | R2 cross-examiner. Reads the adversary's (Codex or Gemini) R1 findings against the source and returns confirm or refute verdicts. |
 
 ## How `adversarial` works
 
