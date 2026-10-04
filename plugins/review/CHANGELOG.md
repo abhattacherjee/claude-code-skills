@@ -8,12 +8,12 @@ All notable changes to the **review** plugin are documented here.
 
 - First release (#159). It merges the `deep-review` and `adversarial-review` plugins. Two skills under short names: `deep` (was `deep-review`) and `adversarial` (was `adversarial-review`). Invoke them as `/review:deep` and `/review:adversarial`. The old names still match as trigger phrases.
 - Three agents, dispatched as `review:bug-hunter`, `review:convention-reviewer` and `review:cross-examiner` (were `adversarial-bug-hunter`, `adversarial-convention-reviewer` and `adversarial-cross-examiner`). Both skills use them.
-- One copy of the adversary scripts, in `skills/adversarial/scripts/`. `deep` runs them from the same plugin, so it no longer depends on a second plugin being installed.
+- One copy of the adversary scripts, in `skills/adversarial/scripts/`. `deep` runs them from the same plugin, so it no longer depends on the `adversarial-review` plugin. `pr-review-toolkit` is still a soft dependency of Phase 1.
 
 ### Changed
 
 - Every command in both skills and in the `deep` references spells out its script path. The Bash tool keeps no shell variables between calls, so the old `$SCRIPTS`, `$AR_SCRIPTS`, `$ADV_REVIEW`, `$AUDIT` and `$RUN_DIR` reads were empty. A test (`skills/adversarial/scripts/test_skill_paths.py`) now fails when a fenced block reads a variable it did not set.
-- `audit_record.py` accepts the skill values `adversarial` and `deep`, and still accepts `adversarial-review` and `deep-review` for records already on PRs. New runs write the new values.
+- `audit_record.py` accepts the skill values `adversarial` and `deep`, and still accepts `adversarial-review` and `deep-review`, because round-record files written by the old skills (for example a `round-N.json` reused with `recheck --prior`, or a Step 5 rerun) carry them. New runs write the new values.
 - The local report file is still `<branch>.adversarial-review.md`, so existing `.gitignore` entries still match.
 
 ### Deprecated

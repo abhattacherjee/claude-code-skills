@@ -35,8 +35,9 @@ def record(findings=None, rnd=1, head=SHA1, prev=None, **over):
 
 
 class SkillValueTests(unittest.TestCase):
-    """The review plugin writes `deep` and `adversarial`. Records already on PRs
-    carry `deep-review` and `adversarial-review`, so those stay valid."""
+    """The review plugin writes `deep` and `adversarial`. Round-record files written by
+    the old skills (for example a round-N.json reused with `recheck --prior`, or a
+    Step 5 rerun) carry `deep-review` and `adversarial-review`, so those stay valid."""
 
     def test_new_and_old_skill_values_validate(self):
         for skill in ("deep", "adversarial", "deep-review", "adversarial-review"):

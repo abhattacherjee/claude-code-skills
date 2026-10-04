@@ -125,7 +125,7 @@ GITIGNORE_PATTERN = "*.adversarial-review.md"
 def ensure_gitignored(out):
     """When out is a *.adversarial-review.md file inside a git repo, make sure the
     pattern is in that repo's root .gitignore. No-op outside a git repo, or when
-    out doesn't end with the local-fallback suffix. deep-review writes local files
+    out doesn't end with the local-fallback suffix. The deep skill writes local files
     without going through sink.sh's own gitignore step, so this covers that path."""
     if not str(out).endswith(LOCAL_SUFFIX):
         return

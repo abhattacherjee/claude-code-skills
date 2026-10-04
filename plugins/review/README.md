@@ -1,6 +1,6 @@
 # review
 
-Two review skills in one install. `deep` converges a changeset to zero actionable issues in two phases. `adversarial` is the single-pass version: Claude and an opposing model (Codex, else Gemini) find issues independently, cross-examine each other, and only findings both confirm are reported.
+Two review skills in one install. `deep` converges a changeset to zero actionable issues in two phases. `adversarial` is the single-pass version: Claude and an opposing model (Codex, else Gemini) find issues independently, cross-examine each other, and only findings the other side confirms are reported.
 
 ```shell
 /plugin install review@claude-code-skills
@@ -17,7 +17,7 @@ Invoke as `/review:<skill>`. The old names still match as trigger phrases.
 | `deep` | `deep-review` | Two phases. Phase 1: specialised reviewers in fix and re-review rounds until a full round finds nothing actionable. Phase 2: a multi-round cross-examination with the opposing model (it finds, Claude judges, it counters, it re-checks each fix). Every confirmed finding is fixed and verified. |
 | `adversarial` | `adversarial-review` | One pass of the cross-examination: independent discovery (R1), then each side judges the other's findings (R2). The opposing model is Codex, else Gemini. Only findings it confirms survive. |
 
-Use `adversarial` for a high-precision look before merge. Use `deep` when the change is high-stakes and you want it ironclad. `deep` runs the same scripts as `adversarial`, from the same plugin.
+Use `adversarial` for a high-precision look before merge, or when Copilot is unavailable and you want a non-Claude second opinion. Use `deep` when the change is high-stakes and you want it ironclad. `deep` runs the same scripts as `adversarial`, from the same plugin.
 
 ## Agents
 
@@ -40,9 +40,10 @@ detect-mode → R1 parallel independent discovery → R2 parallel symmetric cros
 
 ### Survivor rule
 
-- A Claude finding (C-NNN) survives only if the adversary confirmed it in R2.
-- An adversary finding (X-NNN for Codex, G-NNN for Gemini) survives only if Claude confirmed it in R2.
-- All other findings go to the `UNCONFIRMED (single-model)` bucket, shown below the survivors and never dropped.
+- A finding survives only when the other side confirms it.
+  - A Claude finding (C-NNN) needs the adversary's confirmation in R2.
+  - An adversary finding (X-NNN for Codex, G-NNN for Gemini) needs Claude's confirmation in R2.
+- Findings the other side did not judge go to the `UNCONFIRMED (single-model)` bucket, shown below the survivors and never dropped.
 - Rejected findings are kept with the model that refuted them and its reason.
 - `synthesize.py` applies the rule mechanically, with no further adjudication.
 
@@ -58,7 +59,9 @@ If the adversary is not logged in, errors, times out, or returns unparseable JSO
 ## How `deep` works
 
 - **Phase 1** dispatches the `pr-review-toolkit` reviewers (code, tests, silent failures, types, comments) in fix and re-review rounds. It stops when every dimension returns CONVERGED in the same round, after the latest fix. If that plugin is missing, it falls back to `feature-dev:code-reviewer`, `Explore` or a `general-purpose` reviewer.
+- **Targets:** the open PR's diff if the branch has one, else the working tree.
 - **Phase 2** runs the `adversarial` engine with extra rounds. R3 sends each refuted finding back to its originator to concede or defend, and direct source evidence settles factual disputes. With Codex, step 2.6 has Codex re-check each fix, so fixed threads close. Genuine judgment calls go to you.
+- **No usable adversary:** `deep` asks you to set one up or go on Claude-only. In Claude-only mode a second independent Claude agent judges the first's findings, with a loud banner that cross-model confirmation was skipped.
 - Flags: `--phase1-only`, `--phase2-only`, `--max-rounds N`, `--no-post`, `--adversary codex|gemini`, and a PR number or `local`.
 - Every round of both phases is saved on the PR with `pr-audit.py`. See `skills/deep/references/audit-trail.md`.
 
@@ -69,9 +72,11 @@ The skills pick **Codex** first when `codex login status` says you are logged in
 The Gemini notes below apply when Gemini is the adversary. The skill detects and guides setup at the start of every run through `ensure-gemini.sh` and Step 0:
 
 - **Not installed:** the skill tells you what is missing, shows the install command (`npm install -g @google/gemini-cli`) and asks whether to run it. If you decline or the install fails, it goes on Claude-only with a loud banner.
-- **Installed but not authenticated:** the skill asks for a headless-capable credential. Interactive `gemini` Google login is not enough, because the headless calls (`gemini -p ... -o json`) need a `GEMINI_API_KEY` or Vertex AI credentials. Recommended: add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`, which every shell loads, sub-agents included. Get a key at [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey). `export GEMINI_API_KEY=<key>` also works for the current session. If you decline, it goes on Claude-only.
+- **Installed but not authenticated:** the skill asks for a headless-capable credential. Interactive `gemini` Google login is not enough, because the headless calls (`gemini -p ... -o json`) need a `GEMINI_API_KEY` or Vertex AI credentials. Recommended: add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`, which the gemini CLI loads in every shell, sub-agents included. Get a key at [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey). `export GEMINI_API_KEY=<key>` also works for the current session. If you decline, it goes on Claude-only.
 - **Auth state unknown** (installed, no detectable headless credential): the skill goes on and relies on the runtime guard in `gemini-review.sh` (exit 3) to catch a failure.
 - **Installed and authenticated:** no questions.
+
+No manual pre-flight is needed; the check runs at the start of every run.
 
 The `gemini` binary at version 0.38.2 or later supports `gemini -p "<prompt>" -o json` for headless use.
 

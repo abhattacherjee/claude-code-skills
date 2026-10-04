@@ -9,7 +9,7 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 - Moved into the `review` plugin as `review:adversarial` (#159). Same pipeline and scripts as `adversarial-review` 0.2.0. The slash command is `/review:adversarial`; the old name still matches as a trigger phrase.
 - The three agents are `review:bug-hunter`, `review:convention-reviewer` and `review:cross-examiner` (were `adversarial-bug-hunter`, `adversarial-convention-reviewer` and `adversarial-cross-examiner`).
 - Every command in `SKILL.md` spells out its script path (`"${CLAUDE_SKILL_DIR}/scripts/<script>"`). The Bash tool keeps no shell variables between calls, so the old `$SCRIPTS`, `$ADV_REVIEW` and `$RUN_DIR` reads were empty. Values picked at run time (`RUN_DIR`, `ADVERSARY`, `MODE`, `PR`, `DIFF_FILE`) are printed once, and you write them into later commands.
-- `audit_record.py` accepts the skill values `adversarial` and `deep`. It still accepts `adversarial-review` and `deep-review`, because PR comments written before this release carry them. New runs write the new values.
+- `audit_record.py` accepts the skill values `adversarial` and `deep`. It still accepts `adversarial-review` and `deep-review`, because round-record files written by the old skills (for example a `round-N.json` reused with `recheck --prior`, or a Step 5 rerun) carry them. New runs write the new values.
 - The local report file keeps its name, `<branch>.adversarial-review.md`, so existing `.gitignore` entries still match.
 
 ## History before 1.0.0 (as `adversarial-review`)

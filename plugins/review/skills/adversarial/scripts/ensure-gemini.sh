@@ -5,7 +5,7 @@
 #
 # IMPORTANT: This script NEVER installs anything or calls the network.
 # It is a pure detection/guidance script. All install/auth actions are
-# performed by the orchestrator (adversarial-review SKILL.md Step 0)
+# performed by the orchestrator (the adversarial skill's SKILL.md Step 0)
 # with explicit user consent.
 
 set -eu

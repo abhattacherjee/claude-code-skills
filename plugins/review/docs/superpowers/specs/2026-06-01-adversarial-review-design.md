@@ -1,3 +1,5 @@
+> Historical design for adversarial-review 0.1.0; it is now review:adversarial.
+
 # Adversarial PR Review (Claude ↔ Gemini refutation loop)
 
 > **Status: Superseded** — the shipped pipeline is the symmetric 2-round design (R1 parallel independent discovery, R2 symmetric cross-examination). This spec documents the original 3-round design for historical reference; see the skill CHANGELOG.

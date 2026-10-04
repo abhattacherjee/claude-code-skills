@@ -11,7 +11,8 @@ SCHEMA = "audit-round/v1"
 # GitHub rejects comment and review bodies over 65536 characters. 60000 leaves
 # headroom for the marker and for any encoding growth on GitHub's side.
 MAX_BODY = 60000
-# The old values stay valid: PR comments written before the review plugin carry them.
+# The old values stay valid: round-record files written by deep-review or adversarial-review
+# (for example a round-N.json reused with `recheck --prior`, or a Step 5 rerun) carry them.
 SKILLS = {"adversarial", "deep", "adversarial-review", "deep-review"}
 ADVERSARIES = {"codex", "gemini", "claude-only"}
 MODELS = {"claude", "codex", "gemini"}
