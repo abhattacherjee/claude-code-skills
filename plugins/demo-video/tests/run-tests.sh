@@ -192,6 +192,8 @@ print("yes" if eval(sys.argv[2]) else "no")' "$file" "$expr" 2>&1)" && [[ "$res"
 has()   { grep -Fq -- "$3" "$2" && ok "$1" || bad "$1" "no '$3' in $2"; }
 # lacks <label> <file> <fixed-string>: the file does not contain the text.
 lacks() { grep -Fq -- "$3" "$2" && bad "$1" "found '$3' in $2" || ok "$1"; }
+# no_traceback <label>: the last run's stderr has no Python traceback.
+no_traceback() { case "$ERR" in *Traceback*) bad "$1" "$(printf '%s' "$ERR" | tail -3)" ;; *) ok "$1" ;; esac; }
 
 # The scripts start with `#!/usr/bin/env bash`. EXPECT_BASH_MAJOR (set by CI) pins the version.
 echo "bash under test: $BASH_VERSION"
@@ -402,7 +404,73 @@ check "no OPENAI_API_KEY exits 1 with a message, before any request" 1 "" 'OPENA
 mv "$ZA/voiceover-script.json" "$ZA/voiceover-script.json.off"
 run_in "$PROJ" "$REC/generate-tts.py"
 check "a missing voiceover-script.json exits non-zero with a message" nonzero "" 'voiceover-script.json'
+no_traceback "a missing voiceover-script.json gives a clean message, not a traceback"
 mv "$ZA/voiceover-script.json.off" "$ZA/voiceover-script.json"
+
+# A fake OpenAI API on a free 127.0.0.1 port (OPENAI_BASE_URL points there). It answers 401
+# with a JSON error body for any input holding "FAIL", and fake mp3 bytes otherwise, and logs
+# each request. curl is the logging stub: the key must never go on a command line.
+cat > "$TMP/tts-harness.py" <<'PYEND'
+import http.server, json, os, subprocess, sys, threading
+script, home, stubs, log = sys.argv[1:5]
+seen = []
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        seen.append((self.path, self.headers.get("Authorization"), body))
+        if "FAIL" in body["input"]:
+            out, code, ctype = b'{"error": {"message": "bad key"}}', 401, "application/json"
+        else:
+            out, code, ctype = b"ID3 fake mp3 " + body["input"].encode(), 200, "audio/mpeg"
+        self.send_response(code); self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+za = os.path.join(home, "Desktop", "zoom-analysis")
+os.makedirs(za, exist_ok=True)
+results = []
+def check(name, cond, detail=""):
+    results.append(("PASS " if cond else "FAIL ") + name + ("" if cond else " :: " + str(detail)[:300]))
+def run(segments):
+    json.dump({"voice": "nova", "segments": segments}, open(os.path.join(za, "voiceover-script.json"), "w"))
+    env = {"PATH": stubs + os.pathsep + os.environ["PATH"], "HOME": home, "STUB_LOG": log,
+           "OPENAI_API_KEY": "sk-test-secret", "OPENAI_BASE_URL": "http://127.0.0.1:%d/v1" % srv.server_address[1]}
+    return subprocess.run([script], env=env, capture_output=True, text=True)
+seg = lambda i, t: {"id": i, "text": t, "duration": 1.5, "start_time": 0.0}
+r = run([seg("seg_ok", "Hello there."), seg("seg_bad", "FAIL please"), seg("seg_quiet", "")])
+check("one failed segment of two exits 1 with a count", r.returncode == 1 and "1 of 2 segments failed: seg_bad" in r.stderr, (r.returncode, r.stderr[-300:]))
+check("no traceback", "Traceback" not in r.stderr, r.stderr[-300:])
+tts = os.path.join(za, "tts")
+check("the good segment is saved as an mp3", os.path.exists(os.path.join(tts, "seg_ok.mp3")) and open(os.path.join(tts, "seg_ok.mp3"), "rb").read().startswith(b"ID3"))
+check("the error body is not saved as an mp3", not os.path.exists(os.path.join(tts, "seg_bad.mp3")))
+try:
+    man = json.load(open(os.path.join(tts, "tts-manifest.json")))
+except Exception as e:
+    man = e
+check("the manifest lists only the good segment", isinstance(man, list) and [m["id"] for m in man] == ["seg_ok"], man)
+check("the key went in the Authorization header", bool(seen) and all(a == "Bearer sk-test-secret" for _, a, _ in seen), seen[:1])
+check("the empty-text segment (a silence beat) made no request", len(seen) == 2, len(seen))
+check("no curl call (it would put the key on a command line)", not os.path.exists(log) or "curl" not in open(log).read(), open(log).read() if os.path.exists(log) else "")
+n0 = len(seen)
+r = run([seg("seg_00", "Hi."), seg("../evil", "Escape.")])
+check("an id with ../ exits 1 before any request", r.returncode == 1 and "'../evil' must be letters" in r.stderr and len(seen) == n0, (r.returncode, r.stderr[-200:], len(seen) - n0))
+check("an id with ../ writes nothing outside the tts dir", not os.path.exists(os.path.join(za, "evil.mp3")))
+print("\n".join(results))
+PYEND
+mkdir -p "$TMP/tts-home"
+printf '#!/bin/sh\necho "{\\"format\\": {\\"duration\\": \\"2.25\\"}}"\n' > "$TMP/tts-ffprobe"
+mkdir -p "$TMP/tts-bin" && mv "$TMP/tts-ffprobe" "$TMP/tts-bin/ffprobe" && chmod +x "$TMP/tts-bin/ffprobe"
+: > "$TMP/tts-curl-log"
+res="$(python3 "$TMP/tts-harness.py" "$REC/generate-tts.py" "$TMP/tts-home" "$TMP/tts-bin:$TMP/stubs" "$TMP/tts-curl-log" 2>&1)" || true
+n=0
+while IFS= read -r line; do
+  case "$line" in
+    "PASS "*) ok "generate-tts.py: ${line#PASS }"; n=$((n + 1)) ;;
+    "FAIL "*) bad "generate-tts.py: ${line#FAIL }"; n=$((n + 1)) ;;
+  esac
+done <<< "$res"
+[[ "$n" -eq 10 ]] && ok "generate-tts.py: the harness ran all 10 checks" || bad "generate-tts.py: the harness ran all 10 checks" "ran $n; output: $(printf '%s' "$res" | tail -5)"
 
 echo "mix-audio.py"
 printf '{"tts_placement": []}' > "$ZA/integrated-timeline.json"
