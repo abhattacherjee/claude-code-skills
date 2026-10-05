@@ -13,21 +13,22 @@ The Demo Director estimates bounding box coordinates from thumbnail-sized frames
 ## Input (provided by orchestrator)
 
 - Path to raw video file (full resolution, e.g., 6016x3384)
-- Path to zoom-script.json with `zoom_events` containing `target_box` and `target_element`
+- Path to zoom-script.json with an `events` list; each event has `start`, `end`, `target_box` and `target_element`
 - Trim start time (to calculate actual frame numbers)
 
 ## Process
 
-For EACH zoom event in the script:
+For EACH event in the script's `events` list (event `start` and `end` are seconds on the
+trimmed recording):
 
-1. **Calculate frame number**: `(trim_start + event_start) * fps`
+1. **Calculate frame number**: `(trim.start + event.start) * fps`
 2. **Extract the frame at full resolution**:
    ```python
    import cv2
    cap = cv2.VideoCapture(video_path)
    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
    ret, frame = cap.read()
-   cv2.imwrite(f'/tmp/verify_frame_{event_id}.png', frame)
+   cv2.imwrite(f'verify_frame_{event_index}.png', frame)
    ```
 3. **Read the full-resolution frame** with vision
 4. **Find the `target_element`** described in the zoom event
@@ -50,7 +51,8 @@ Typical macOS Retina screen recording landmarks (adjust for actual resolution):
 ## Output
 
 Write the corrected zoom-script.json with:
-- Updated `target_box` coordinates for each zoom event
+- Updated `target_box` coordinates for each event, keeping every other field (`start`, `end`,
+  `transition_in`, `transition_out`, `hold_frames`) as it was
 - A `verification` object documenting the correction method
 - The original estimates preserved for reference
 

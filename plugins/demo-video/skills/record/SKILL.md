@@ -103,7 +103,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/extract-frames.py" \
 ```
 What voice style would you like for the narration?
 
-1. OpenAI TTS (natural, human-like) — requires OpenAI API key
+OpenAI TTS (natural, human-like) — requires an OpenAI API key
    a) nova    — warm, engaging female (recommended for product demos)
    b) alloy   — neutral, versatile
    c) echo    — deeper male voice
@@ -111,15 +111,13 @@ What voice style would you like for the narration?
    e) onyx    — authoritative male
    f) fable   — expressive, storytelling
 
-2. macOS Native (free, more synthetic)
-   a) Samantha — standard US female
-   b) Reed     — US male
-   c) Flo      — casual female
-
 Your choice:
 ```
 
-**If OpenAI selected:**
+This pipeline makes its audio with `generate-tts.py`, which calls OpenAI (`tts-1-hd`)
+only, so there is no macOS (`say`) voice option here.
+
+**Then:**
 - Check if `OPENAI_API_KEY` is set in the environment
 - If not: guide user to get one — "Set your API key: `export OPENAI_API_KEY=sk-...`"
   Or if user prefers browser auth, open `https://platform.openai.com/api-keys`
@@ -194,31 +192,19 @@ Launch the **Demo Director** agent (a Senior Product Demo Director) with
 Pass the user's product description and the narrative brief as context.
 The agent must read ALL extracted frames and produce `zoom-script.json` + `voiceover-script.json`.
 
-**zoom-script.json** format:
-```json
-{
-  "trim": {"start": 27, "end": 125},
-  "video_resolution": {"w": 6016, "h": 3384},
-  "default_zoom": 1.0,
-  "events": [
-    {
-      "description": "What UI element and why it matters narratively",
-      "start": 44, "end": 51,
-      "zoom": 1.5,
-      "target_box": {"x": 1750, "y": 250, "w": 2000, "h": 1550},
-      "target_element": "Interest selection grid with colorful tag pills",
-      "transition_in": 2.5, "transition_out": 2.0
-    }
-  ]
-}
-```
+It writes them in the formats in [references/file-formats.md](references/file-formats.md),
+which the scripts read. In short: zoom `events` with `start`, `end`, `target_box`,
+`target_element`, `transition_in` and `transition_out`; `hold_frames` in zoom-script.json;
+and voiceover `segments` that each need an `id`. All times are seconds on the trimmed
+recording.
 
 **Demo Director rules:**
 - Default is WIDE (zoom 1.0) — zoom only at narrative peaks
-- Maximum 3-4 zoom events in the entire video
+- Maximum 3 zoom events in the entire video
 - Use **bounding boxes** (`target_box`) that encompass the ENTIRE UI element
 - Include `target_element` description so the verification step knows what to look for
-- Gentle zoom (1.4-1.7x), slow transitions (2-2.5s ease-in-out)
+- Gentle zoom (1.4-1.6x, a box about 2900-3300 px wide in a 6016 px frame), slow
+  transitions (2-2.5s ease-in-out)
 - Trim start/end to cut non-demo portions
 - Voiceover: conversational, short sentences, contractions, dramatic pauses
 - Voice field should match user's Step 3 selection
@@ -248,54 +234,52 @@ The verifier should:
 is 6016px wide. Even small estimation errors at thumbnail scale become 200-300px
 misalignment at full resolution, causing the zoom to target the wrong area.
 
-### Step 6: Build Integrated Timeline
+### Step 6: Generate TTS
+
+`generate-tts.py` reads `voiceover-script.json` and writes one `tts/<id>.mp3` per spoken
+segment plus `tts/tts-manifest.json`, which records each clip's measured
+`actual_duration`. It uses OpenAI (`tts-1-hd`, the script's `voice`) and needs
+`OPENAI_API_KEY`. It exits 1, naming the segments, if any request failed.
+
+### Step 6b: Check Voiceover Timing
+
+Launch the **Voiceover Timing Fixer** agent with
+`subagent_type: "demo-video:voiceover-timing-fixer"`. Pass it the TTS audio directory,
+`tts/tts-manifest.json` with the measured durations, the trimmed video duration and
+`zoom-script.json`. It reports clips that overlap or run past the video, and writes its
+sequential start times to `tts/tts-manifest-fixed.json`.
+
+**No script reads those start times.** `build-timeline.py` places each clip from its
+measured `actual_duration` and makes each hold long enough for its clips (Step 7), so
+clips cannot overlap there. Use the fixer's report to decide what to change before you
+build the timeline: shorten a line, move a segment to another hold, or change
+`hold_frames`. If you change narration, regenerate its TTS (Step 6). Then build (or
+rebuild) the timeline.
+
+### Step 7: Build Integrated Timeline
 
 **This is the core of v4.0.** Instead of overlaying audio on a continuously-playing
-video, build an **integrated timeline** that interleaves PLAY and HOLD segments:
+video, build an **integrated timeline** that interleaves PLAY and HOLD segments.
+`build-timeline.py` writes `integrated-timeline.json` (format in
+[references/file-formats.md](references/file-formats.md)): a `timeline` list of `play` and
+`hold_narrate` segments, and a `tts_placement` list of `{file, output_time, duration}`.
 
-```python
-timeline = [
-    {"type": "play", "source_start": 0.0, "source_end": 5.0, "duration": 1.5},
-    {"type": "hold_narrate", "source_time": 5.0, "hold_duration": 5.3,
-     "narration": "Meet the app. Here's what it does...", "tts_file": "seg_00.mp3"},
-    {"type": "play", "source_start": 6.0, "source_end": 10.0, "duration": 1.5},
-    {"type": "hold_narrate", "source_time": 10.0, "hold_duration": 4.8,
-     "narration": "It starts with a simple setup flow...", "tts_file": "seg_02.mp3"},
-    ...
-]
-```
+**How `build-timeline.py` builds it:**
+1. It reads `hold_frames` from zoom-script.json (sorted by `source_time`) and the measured
+   durations from `tts/tts-manifest.json`.
+2. Before each hold, a PLAY segment advances the source from the last point to the hold.
+   It lasts 30% of that source span, at least 1.5s (2s for the last one) and at most the
+   span, or longer when speech is placed in it.
+3. Each HOLD lasts `hold_duration`, or longer if its clips need it: their durations, 0.5s
+   between clips, and 0.3s.
+4. After each hold the source jumps 1s ahead.
+5. Which speech goes in which hold (or the play after it) comes from `speech_groups`, a fixed
+   list of segment ids in the script. Edit it in your copy. The script warns for each id the
+   manifest lacks.
 
-**How to build the timeline:**
-1. Read the voiceover script — each narration segment has a `start_time` (source timeline)
-2. For each segment: play source video UP TO that point (1-1.5s max), then HOLD on
-   that frame for the narration duration + 0.3s buffer
-3. Advance source by 1s after each hold (the user's screen moved slightly during the hold)
-4. Compress play segments to 1.5s max — the viewer doesn't need to watch scrolling in real-time
-5. Remove silence beats (the holds provide natural pacing)
+Rebuild the timeline after any change to the TTS clips, `hold_frames` or the groups.
 
 **Target output duration:** Source duration + ~40% for holds. A 98s source → ~135s output.
-
-### Step 7: Generate TTS and Render
-
-Generate TTS segments (OpenAI or macOS), then render the integrated timeline:
-
-1. **Generate TTS** for each narration segment
-2. **Render video** — the integrated timeline renderer alternates between:
-   - `play`: read source frames and write to encoder
-   - `hold_narrate`: read ONE source frame, write it N times (freeze), record TTS placement
-3. **Mix audio** — place each TTS segment at its exact output timestamp (where the hold begins)
-4. **Merge** video + audio
-
-The renderer tracks `tts_placement` — a list of `{file, output_time, duration}` entries
-that tell ffmpeg where to place each audio segment in the final mix.
-
-### Step 7b: Fix Voiceover Timing
-
-After the TTS clips exist, launch the **Voiceover Timing Fixer** agent with
-`subagent_type: "demo-video:voiceover-timing-fixer"`. Pass it the TTS audio directory,
-the voiceover manifest with the measured durations, the trimmed video duration and
-`zoom-script.json`. It rebuilds the segment timestamps one after another so no two
-clips overlap, and returns the fixed manifest. Use that manifest when you build the timeline.
 
 ### Step 7.5: Preview Before Rendering (MANDATORY)
 
@@ -324,6 +308,18 @@ voiceover-script.json based on feedback, then rebuild the timeline and re-previe
 
 **Only proceed to full render after the user approves the preview.**
 
+### Step 7.6: Render and Mix
+
+1. **Render video** — `render-timeline.py` alternates between:
+   - `play`: read source frames and write them to the encoder
+   - `hold_narrate`: read ONE source frame and write it N times (freeze)
+
+   It applies the zoom `events` and writes `~/Desktop/demo-video-only.mp4` at 3840x2160.
+   It exits 1 if a frame the timeline needs cannot be read, because a shorter video
+   makes the narration drift.
+2. **Mix audio** — `mix-audio.py` places each `tts_placement` clip at its `output_time`
+   and writes `~/Desktop/demo-final.mp4`. It exits 1 if any ffmpeg step fails.
+
 ### Step 8: Post-Production Review (Quality Gate)
 
 **Launch the Post-Production Editor agent** with
@@ -336,8 +332,8 @@ voiceover-script.json based on feedback, then rebuild the timeline and re-previe
 5. Returns a verdict: PASS, NEEDS_FIXES, or RESHOOT
 
 **If NEEDS_FIXES:** Apply the editor's recommended changes:
-- `adjust_zoom` → update zoom-script.json bounding boxes, re-run Step 6
-- `rewrite_voiceover` → update voiceover-script.json, regenerate TTS
+- `adjust_zoom` → update zoom-script.json bounding boxes, re-render (Step 7.6)
+- `rewrite_voiceover` → update voiceover-script.json, regenerate TTS (Step 6), rebuild the timeline (Step 7)
 - `shift_timing` → adjust zoom start/end times
 - `add_pause` → insert silence beats in voiceover
 
@@ -374,7 +370,7 @@ All agents are NOT user-invocable — spawned by the skill orchestrator. Always 
 | Step 3.7 | Demo Storyteller | Sequential | Frames + product context | narrative-themes.json (3 options) |
 | Step 4 | Demo Director | Sequential (after user picks theme) | Frames + narrative brief | zoom-script.json, voiceover-script.json |
 | Step 5 | Zoom QA Verifier | Sequential (after Step 4) | zoom-script.json + raw video | Corrected zoom-script.json |
-| Step 7b | Voiceover Timing Fixer | Sequential (after Step 7) | TTS audio files + manifest | Fixed manifest with 0 overlaps |
+| Step 6b | Voiceover Timing Fixer | Sequential (after Step 6) | TTS audio files + manifest | Timing report + `tts-manifest-fixed.json` (no script reads it) |
 | Step 8 | Post-Production Editor | Sequential (after merge) | Final video + zoom/VO scripts | PASS/NEEDS_FIXES/RESHOOT verdict |
 
 ## Team Mode (Optional)
@@ -387,7 +383,7 @@ The standard pipeline launches 5 sequential sub-agents — each starts fresh wit
 
 1. **Persistent creative team**: Instead of destroying agents between phases, teammates persist across the session. The Director can refer back to the Storyteller's themes. The QA Verifier can ask the Director about intent behind a zoom target. The Post-Production Editor can request the Timing Fixer to adjust specific segments — all without re-explaining context.
 
-2. **Parallel iteration**: During the preview-feedback cycle (Step 9), multiple teammates can work simultaneously — one regenerating TTS clips for segments the user flagged, while another adjusts zoom targets, and a third rewrites narration for a different section.
+2. **Parallel iteration**: During the preview-feedback cycle (Step 7.5), multiple teammates can work simultaneously — one regenerating TTS clips for segments the user flagged, while another adjusts zoom targets, and a third rewrites narration for a different section.
 
 3. **Cross-phase communication**: When the Post-Production Editor returns NEEDS_FIXES, it can message the Director directly about which narration segments need rewriting, rather than the orchestrator relaying instructions.
 
@@ -420,14 +416,15 @@ The Voiceover Timing Fixer and Post-Production Editor roles are handled by the l
 | `cursor-tracker.py` | Track cursor, clicks, active window via Quartz API |
 | `extract-frames.py` | Extract key frames as PNGs for AI analysis |
 | `apply-zoom-script.py` | Apply zoom script with trim, bounding boxes, 4K output |
-| `generate-tts.py` | Generate OpenAI/macOS TTS audio from voiceover script |
+| `generate-tts.py` | Generate OpenAI TTS audio (`tts-1-hd`) from the voiceover script |
 | `build-timeline.py` | Build integrated PLAY+HOLD timeline from zoom + TTS |
+| `preview-timeline.py` | Serve the HTML preview of the timeline (127.0.0.1, token in the URL) |
 | `render-timeline.py` | Render video from integrated timeline with zoom |
 | `mix-audio.py` | Mix TTS audio segments into rendered video at timestamps |
 | `smart-zoom.py` | Legacy heuristic zoom modes (focus/click/velocity) |
 | `install-deps.sh` | Install ffmpeg, pyobjc, opencv, numpy |
 
-`generate-tts.py`, `build-timeline.py`, `render-timeline.py` and `mix-audio.py` read and write fixed paths under `~/Desktop/zoom-analysis`. `build-timeline.py` also has a fixed list of speech segment ids, and `render-timeline.py` a fixed raw video name. They are a worked example of Steps 6 and 7, not tools to run unchanged: copy one, edit those values, and run your copy.
+`generate-tts.py`, `build-timeline.py`, `render-timeline.py` and `mix-audio.py` use fixed paths. They read and write `voiceover-script.json`, `zoom-script.json`, `tts/` and `integrated-timeline.json` under `~/Desktop/zoom-analysis`. `render-timeline.py` reads the raw video `~/Desktop/screen-recording-20260315-084024-raw.mp4` and writes `~/Desktop/demo-video-only.mp4`. `mix-audio.py` reads that file and writes `~/Desktop/demo-final.mp4`. `build-timeline.py` also has a fixed list of speech segment ids (`speech_groups`). `build-timeline.py` and `apply-zoom-script.py` read `hold_frames` from `zoom-script.json`. These four scripts are a worked example of Steps 6 to 7.6, not tools to run unchanged: copy one, edit those values, and run your copy.
 
 ## Dependencies
 
@@ -437,7 +434,7 @@ The Voiceover Timing Fixer and Post-Production Editor roles are handled by the l
 | pyobjc-framework-Quartz | `pip3 install pyobjc-framework-Quartz` | Cursor + window tracking |
 | opencv-python | `pip3 install opencv-python` | Frame extraction + processing |
 | numpy | (with opencv) | Array operations |
-| OPENAI_API_KEY (optional) | `export OPENAI_API_KEY=sk-...` | Natural TTS voices |
+| OPENAI_API_KEY | `export OPENAI_API_KEY=sk-...` | Narration: `generate-tts.py` (OpenAI only) |
 
 macOS only. Requires Screen Recording permission for Terminal. Click tracking
 requires Accessibility permission.
@@ -477,9 +474,10 @@ requires Accessibility permission.
     narration segment, freeze the source on the relevant frame, play the narration,
     then advance to the next scene. The output is longer than the source (source +
     ~40% hold time) but narration and visuals are perfectly synchronized.
-14. **Bounding boxes must be 2000-3000px wide** in a 6016px frame for visible zoom.
-    Boxes of 4000+ px produce imperceptible zoom (~1.2x). Target the content column,
-    not the full browser window.
+14. **The box width sets the zoom.** The scripts pad the box by 15% on each side, so the
+    zoom is about frame width / (1.3 × box width). In a 6016px frame, 1.4-1.6x is a box
+    about 2900-3300px wide; boxes of 4000+ px give an imperceptible ~1.2x. Target the
+    content column, not the full browser window.
 
 ## Related
 

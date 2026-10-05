@@ -176,7 +176,7 @@ The skill runs them through `${CLAUDE_SKILL_DIR}`, so they work from your projec
 | `cursor-tracker.py` | Track cursor, clicks and the active window through the Quartz API |
 | `extract-frames.py` | Extract key frames as PNGs for AI analysis |
 | `apply-zoom-script.py` | Apply a zoom script with trim, bounding boxes and 4K output |
-| `generate-tts.py` | Generate OpenAI/macOS TTS audio |
+| `generate-tts.py` | Generate the narration with OpenAI TTS (`tts-1-hd`; OpenAI only) |
 | `build-timeline.py` | Build the integrated PLAY+HOLD timeline |
 | `preview-timeline.py` | Generate the interactive HTML preview (127.0.0.1:8111, token in the URL) |
 | `render-timeline.py` | Render video from the timeline with zoom effects |
@@ -192,7 +192,7 @@ The skill runs them through `${CLAUDE_SKILL_DIR}`, so they work from your projec
 | opencv-python | `pip3 install opencv-python` | Frame extraction + processing |
 | pyobjc-framework-Quartz | `pip3 install pyobjc-framework-Quartz` | Cursor + window tracking |
 | numpy | (with opencv) | Array operations |
-| OPENAI_API_KEY (optional) | `export OPENAI_API_KEY=sk-...` | Natural TTS voices (nova recommended) |
+| OPENAI_API_KEY | `export OPENAI_API_KEY=sk-...` | Narration through OpenAI TTS (nova recommended); `record` has no macOS voice |
 
 macOS only. Requires Screen Recording permission for Terminal. Click tracking requires Accessibility permission.
 

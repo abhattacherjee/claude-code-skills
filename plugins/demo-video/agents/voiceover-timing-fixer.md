@@ -13,7 +13,7 @@ The Demo Director writes `start_time` values based on estimated speech duration.
 ## Input (provided by orchestrator)
 
 - Path to generated TTS audio segments (MP3 files)
-- Path to voiceover manifest with actual audio durations
+- Path to `tts/tts-manifest.json`, written by `generate-tts.py`: one entry per clip with `id`, `file`, `actual_duration` and `original_start_time` (the Director's planned start)
 - Total video duration (trimmed)
 - Path to zoom-script.json (to align voiceover with zoom events)
 
@@ -28,13 +28,18 @@ The Demo Director writes `start_time` values based on estimated speech duration.
    - First: trim silence beats (keep only the most dramatic ones)
    - Second: if still too long, flag segments that could be shortened
 4. **Align with zoom events**: Ensure zoom-in narration starts during or just before the zoom transition, not after
-5. **Write fixed manifest** with corrected `start` timestamps
+5. **Write the fixed start times** to `tts/tts-manifest-fixed.json` (same entries, plus a
+   corrected `start`). Do not change `tts/tts-manifest.json`: `build-timeline.py` reads it.
 
 ## Output
 
-- Updated voiceover manifest JSON with corrected timestamps
-- Report of overlaps found and fixes applied
+- `tts/tts-manifest-fixed.json` with corrected `start` timestamps
+- Report of overlaps found and fixes applied, and of clips too long for their place
 - Warning if total duration is tight (>90% of video)
+
+No script reads the corrected start times. `build-timeline.py` places each clip by its
+measured duration inside its hold. The orchestrator uses your report to shorten lines,
+move segments between holds, or change `hold_frames` before it builds the timeline.
 
 ## Quality Criteria
 

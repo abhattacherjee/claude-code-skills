@@ -224,8 +224,8 @@ Launch the `product-video-music-curator` agent with `subagent_type: "demo-video:
 **What it returns:** 3-5 track recommendations from Pixabay/Mixkit/FMA with download URLs
 
 After user selects a track:
-1. Download to `public/audio/bg-music.mp3`
-2. Process with ffmpeg for fade-in/fade-out:
+1. Download to `public/audio/bg-music-raw.mp3`
+2. Process with ffmpeg for fade-in/fade-out, writing `public/audio/bg-music.mp3` (the file the composition uses):
 ```bash
 ffmpeg -i public/audio/bg-music-raw.mp3 \
   -af "afade=t=in:st=0:d=3,afade=t=out:st=<end-3>:d=3" \

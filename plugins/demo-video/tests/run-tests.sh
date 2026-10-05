@@ -335,6 +335,26 @@ for skill in record produce; do
 done
 
 # ---------------------------------------------------------------------------
+echo "the agents describe the files the way the scripts read them"
+# apply-zoom-script.py and render-timeline.py read zoom-script.json "events" with start, end,
+# transition_in and transition_out; build-timeline.py reads "hold_frames" from it;
+# generate-tts.py needs each voiceover segment's "id".
+hits="$(grep -rn 'zoom_events' "$AGENTS" "$SKILLS"/*/SKILL.md || true)"
+[[ -z "$hits" ]] && ok "no agent or SKILL.md calls the zoom list zoom_events (the scripts read events)" || bad "no agent or SKILL.md calls the zoom list zoom_events" "$hits"
+for key in '"events"' '"transition_in"' '"transition_out"' '"hold_frames"' '"id": "seg_00"'; do
+  has "demo-director.md shows $key in its output formats" "$AGENTS/demo-director.md" "$key"
+done
+lacks "demo-director.md does not put hold_frames in the voiceover script" "$AGENTS/demo-director.md" 'hold_frames` to the voiceover script'
+lacks "demo-director.md does not call start_time an output-timeline value" "$AGENTS/demo-director.md" 'relative to the OUTPUT video timeline'
+python3 - "$SKILLS/record/SKILL.md" <<'PYEND' && ok "record SKILL.md: TTS (Step 6), timing check (6b), timeline (7), preview (7.5), render (7.6), in that order" || bad "record SKILL.md: steps 6, 6b, 7, 7.5 and 7.6 in order" "see the headings"
+import re, sys
+heads = re.findall(r"^### Step ([0-9.]+b?):", open(sys.argv[1]).read(), re.M)
+want = ["6", "6b", "7", "7.5", "7.6"]
+pos = [heads.index(w) for w in want]
+sys.exit(0 if pos == sorted(pos) else 1)
+PYEND
+
+# ---------------------------------------------------------------------------
 echo "install-deps.sh (record)"
 run_in "$PROJ" "$REC/install-deps.sh" --help
 check "--help exits 0 and shows usage" 0 'USAGE:'

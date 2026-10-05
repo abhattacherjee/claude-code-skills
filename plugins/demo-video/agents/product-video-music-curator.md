@@ -55,7 +55,7 @@ Return a JSON object:
     }
   ],
   "selectedTrack": { ... },
-  "downloadCommand": "curl -L 'download_url' -o public/audio/bg-music.mp3",
+  "downloadCommand": "curl -L 'download_url' -o public/audio/bg-music-raw.mp3",
   "mixingNotes": "Set to -18dB under voiceover. Fade in over 2s at start, fade out over 3s at end. Duck 3dB during narration."
 }
 ```
