@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.1] - 2026-10-05
+
+### Fixed
+- Frontmatter now passes `validate-skill.sh`: `version` moved under `metadata:`, `user_invocable` dropped, and a "Use when:" clause added to the description. `validate-plugin.sh` used to hide this failure (#167).
+
 ## [1.0.0] - 2026-03-13
 
 ### Added

@@ -1,7 +1,8 @@
 ---
 name: install-statusline
-description: Install a custom 4-tier adaptive statusline with icons for folder, git branch, and context usage
-version: 1.3.0
+description: "Deprecated: use statusline:install. Installs a custom 4-tier adaptive statusline with icons for folder, git branch, and context usage. Use when: (1) the user asks to install the custom statusline, (2) the statusline went missing after a settings change."
+metadata:
+  version: 1.3.1
 ---
 
 # Custom Statusline Installer

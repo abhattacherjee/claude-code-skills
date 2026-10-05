@@ -143,6 +143,18 @@ jobs:
       - name: Run discovery-guard regression harness
         run: ./scripts/test-discovery-guards.sh
 
+  validate-plugin-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      # Unconditional: scripts/** is outside the skill and plugin path filters above.
+      - name: Test validate-plugin.sh
+        run: ./scripts/test-validate-plugin.sh
+
   sync-hygiene:
     runs-on: ubuntu-latest
     steps:

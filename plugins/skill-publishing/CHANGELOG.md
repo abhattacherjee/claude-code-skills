@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.5.1] - 2026-10-05
+
+### Fixed
+
+- `validate-plugin.sh` now takes the skill validator's own exit code. It used to take `sed`'s, so a skill that failed validation was reported as PASS. A `skills/` directory with no skill subdirectory is now a FAIL, not a warning. The repo-root copy and this copy stay byte-identical (#167).
+
 ## [4.5.0] - 2026-10-02
 
 ### Changed
