@@ -612,33 +612,62 @@ skill_source_dir() {
   fi
 }
 
-# --- No top-level skills (issue #167) ----------------------------------------
+# --- Plugin-only monorepo (issue #167) --------------------------------------
 #
-# Skills live in plugins/<group>/skills/<name>/ now, and the bare top-level skill
-# directories are gone. sync-monorepo.sh and validate-pre-sync.sh scan only the
-# top level, so on such a monorepo they find zero skills and used to report
-# success over nothing. Both now stop with refuse_no_top_level_skills() when
-# their scan comes up empty. Redesigning the sync for plugins is tracked in
-# #190; nothing here does that, and runs that name skills explicitly
-# (--skills, --add) still work as before.
+# sync-monorepo.sh and validate-pre-sync.sh still write and check the old
+# layout: skills as top-level <name>/ directories. A monorepo whose skills all
+# live under plugins/<group>/skills/<name>/ (this repo after #167) is a layout
+# they do not understand. Run on one, they found no skills and still rewrote
+# the README, CHANGELOG, marketplace catalogue and CI workflow (an --add-plugin
+# run did, measured). So every mode of both scripts refuses such a monorepo
+# before writing anything. Any other monorepo (an empty or new directory, or one
+# with top-level skills, with or without plugins/) behaves as before. Sync for
+# plugin-only monorepos is being redesigned in #190.
 
-# True when <monorepo-dir> has at least one top-level directory holding a SKILL.md.
-# plugins/ and scripts/ are never skill directories, and hidden directories are
-# skipped by the glob.
+# True when <monorepo-dir> has at least one top-level skill directory: one that
+# holds a SKILL.md, or whose name has a SKILL.md under $SKILLS_HOME. That is the
+# test discovery applies (skill_source_dir), so a directory discovery would sync
+# is never called "not a skill" here. plugins/ and scripts/ are never skill
+# directories, and hidden directories are skipped by the glob.
 has_top_level_skill_dirs() {
   local d name
   for d in "$1"/*/; do
     name="$(basename "$d")"
     case "$name" in plugins|scripts) continue ;; esac
     [[ -f "${d}SKILL.md" ]] && return 0
+    [[ -n "${SKILLS_HOME:-}" && -f "$SKILLS_HOME/$name/SKILL.md" ]] && return 0
   done
   return 1
 }
 
-# Usage: refuse_no_top_level_skills <monorepo-dir> <script-name>
-# Prints one message and exits 1.
-refuse_no_top_level_skills() {
-  echo "Error: $2: $1 has no top-level skill directories. Plugins under plugins/ are the source now (#167), and sync is being redesigned in #190. Nothing was changed." >&2
+# True when <monorepo-dir> has at least one plugins/*/.claude-plugin/plugin.json
+# and no top-level skill directory (as has_top_level_skill_dirs defines it).
+is_plugin_only_monorepo() {
+  local f
+  for f in "$1"/plugins/*/.claude-plugin/plugin.json; do
+    if [[ -f "$f" ]]; then
+      has_top_level_skill_dirs "$1" && return 1
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Usage: refuse_if_plugin_only_monorepo <monorepo-dir> <script-name> [json]
+# Returns 0 when the monorepo is not plugin-only. Otherwise prints one message
+# on stderr and exits 1. With a third argument "json", it also prints a JSON
+# error object on stdout, for callers that parse --json output.
+refuse_if_plugin_only_monorepo() {
+  is_plugin_only_monorepo "$1" || return 0
+  local msg="$2: $1 is a plugin-only monorepo (skills under plugins/<group>/skills/, none at the top level). This script only handles top-level skill directories (#167); sync for plugins is being redesigned in #190. Nothing was changed."
+  echo "Error: $msg" >&2
+  if [[ "${3:-}" == json ]]; then
+    # sed, not ${msg//…}: bash 3.2 and 5 treat backslashes and quotes in a
+    # quoted pattern replacement differently.
+    local esc
+    esc="$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    printf '{\n  "error": "plugin_only_monorepo",\n  "message": "%s"\n}\n' "$esc"
+  fi
   exit 1
 }
 

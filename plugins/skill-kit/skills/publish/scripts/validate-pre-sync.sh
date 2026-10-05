@@ -39,9 +39,16 @@ Options:
 
 Exit codes:
   0  All skills have matching CHANGELOG entries
-  1  One or more skills have version/CHANGELOG mismatches, or the monorepo has
-     no top-level skill directory to check (skills live under plugins/ now, #167)
+  1  One or more skills have version/CHANGELOG mismatches, or the monorepo is
+     plugin-only (see below)
   2  Usage error
+
+Plugin-only monorepo (#167):
+  This gate checks top-level <name>/ skill directories, the layout
+  sync-monorepo.sh writes. A monorepo that has plugins/*/.claude-plugin/plugin.json
+  and no top-level skill directory is refused in every mode: exit 1 and one
+  message on stderr (with --json, also a JSON object with an "error" key on
+  stdout). Sync for plugin-only monorepos is being redesigned in #190.
 
 Examples:
   validate-pre-sync.sh ~/dev/claude-code-skills
@@ -82,6 +89,13 @@ fi
 if [[ ! -d "$MONOREPO_DIR" ]]; then
   echo "Error: $MONOREPO_DIR does not exist" >&2
   exit 2
+fi
+
+# #167: same layout rule as sync-monorepo.sh (see the note in _lib.sh).
+if $JSON_MODE; then
+  refuse_if_plugin_only_monorepo "$MONOREPO_DIR" "validate-pre-sync.sh" json
+else
+  refuse_if_plugin_only_monorepo "$MONOREPO_DIR" "validate-pre-sync.sh"
 fi
 
 # --- Discover skills to validate ---
@@ -219,13 +233,6 @@ while IFS= read -r SKILL_NAME <&3; do
     fi
   fi
 done 3<<< "$SKILLS" </dev/null
-
-# #167: skills live under plugins/ now and the scan above covers only top-level
-# skill directories. Zero skills examined used to print "Safe to sync" over
-# nothing; refuse instead.
-if [[ $TOTAL -eq 0 ]]; then
-  refuse_no_top_level_skills "$MONOREPO_DIR" "validate-pre-sync.sh"
-fi
 
 # --- Output ---
 if $JSON_MODE; then

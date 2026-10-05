@@ -78,7 +78,7 @@ set -euo pipefail
 #      regenerate a catalogue describing a plugin it could not build.
 #
 # The whole run is hermetic: 18 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 36 throwaway monorepos, the syncs
+# that is deliberately never a SKILLS_HOME, 34 throwaway monorepos, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
@@ -1178,16 +1178,17 @@ run_sync() {
 }
 
 # seed_top_level_skill <monorepo-dir>: gives a fixture monorepo one top-level skill.
-# Since #167 a discovery run (no --skills, no --add) on a monorepo with no top-level
-# skill directory is refused (see "Issue #167" at the end of this file). Fixtures
-# whose subject is something else (the plugin auto-build, .gitignore, --author, the
-# standalone-plugin skip) need that run to go ahead, so they get one seed skill.
+# Since #167 sync-monorepo.sh refuses a plugin-only monorepo (plugins/*/.claude-plugin/
+# plugin.json and no top-level skill directory; see "Issue #167" at the end of this
+# file). A first sync into an empty directory that only auto-builds plugins leaves
+# exactly that, so fixtures that sync the same monorepo a second time (the hooks
+# and legacy-manifest rebuild runs) get one seed skill to stay on the old layout.
 seed_top_level_skill() {
     mkdir -p "$1/seed-skill"
     cat > "$1/seed-skill/SKILL.md" <<'SEEDEOF'
 ---
 name: seed-skill
-description: Throwaway fixture skill that keeps a discovery run from being refused (#167).
+description: Throwaway fixture skill that keeps a second sync from being refused as plugin-only (#167).
 version: 1.0.0
 ---
 
@@ -1417,7 +1418,6 @@ SKILLSGOOD_README_AFTER="$(cat "$MONOREPO_SKILLSGOOD_FIXTURE/README.md" 2>/dev/n
 BUILDFAIL_STDOUT_LOG="$SCRATCH_DIR/buildfail.stdout"
 BUILDFAIL_STDERR_LOG="$SCRATCH_DIR/buildfail.stderr"
 BUILDFAIL_RC=0
-seed_top_level_skill "$MONOREPO_BUILDFAIL_FIXTURE"
 run_sync "$SKILLS_HOME_BUILDFAIL_FIXTURE" "$MONOREPO_BUILDFAIL_FIXTURE" "$BUILDFAIL_STDOUT_LOG" "$BUILDFAIL_STDERR_LOG" || BUILDFAIL_RC=$?
 BUILDFAIL_STDOUT="$(cat "$BUILDFAIL_STDOUT_LOG")"
 BUILDFAIL_STDERR="$(cat "$BUILDFAIL_STDERR_LOG")"
@@ -1428,7 +1428,6 @@ BUILDFAIL_STDERR="$(cat "$BUILDFAIL_STDERR_LOG")"
 GITIGNORE_STDOUT_LOG="$SCRATCH_DIR/gitignore.stdout"
 GITIGNORE_STDERR_LOG="$SCRATCH_DIR/gitignore.stderr"
 GITIGNORE_RC=0
-seed_top_level_skill "$MONOREPO_GITIGNORE_FIXTURE"
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_GITIGNORE_FIXTURE" "$GITIGNORE_STDOUT_LOG" "$GITIGNORE_STDERR_LOG" || GITIGNORE_RC=$?
 GITIGNORE_STDOUT="$(cat "$GITIGNORE_STDOUT_LOG")"
 
@@ -1639,7 +1638,7 @@ PREPARE_TMPDIR_LEFTOVERS="$(find "$PREPARE_TMPDIR" -mindepth 1 2>/dev/null | wc 
 
 assert_eq "sync run exits 0 on the fixture" "0" "$SYNC_RC"
 assert_eq "--add run exits 0 on the fixture" "0" "$ADD_RC"
-assert_eq "empty-monorepo run is refused with exit 1 on the fixture (#167)" "1" "$EMPTY_RC"
+assert_eq "empty-monorepo run exits 0 on the fixture" "0" "$EMPTY_RC"
 assert_eq "dash-named-skill run exits 0 on the fixture" "0" "$DASHN_RC"
 assert_eq "--skills -n run exits 0 on the fixture" "0" "$SKILLSN_RC"
 assert_eq "--add -n run exits 0 on the fixture" "0" "$ADDN_RC"
@@ -2005,31 +2004,38 @@ assert_eq "the sync wrote its own entry at the top of the CHANGELOG" \
     "## [$TODAY] — Monorepo sync" "$CHANGELOG_TOP_ENTRY"
 
 # ============================================================
-# Defect 5 — an empty skill list; since #167 a discovery run on it is refused
+# Defect 5 — an empty skill list must report zero, not one phantom
 # ============================================================
 #
-# Defect 5 was "Skills to sync (1):" plus a bare "  - " bullet for a monorepo
-# holding only non-skill directories. Since #167 such a run (no --skills, no
-# --add, no skill directory at the top level) is refused before the list is ever
-# printed: skills live under plugins/ and this script only scans the top level,
-# so it used to sync nothing and exit 0. The old phantom-bullet and blank-line
-# checks have nothing left to look at; they are replaced by these.
-EMPTY_STDERR="$(cat "$EMPTY_STDERR_LOG")"
+# Newly reachable: before discovery filtered non-skill directories, docs/ kept
+# the list non-empty. A monorepo holding only those now yields nothing.
 
-assert_contains "a monorepo with no top-level skill is refused with the #167 message" \
-    "has no top-level skill directories" "$EMPTY_STDERR"
-assert_contains "…pointing at plugins/ as the source" \
-    "Plugins under plugins/ are the source now (#167)" "$EMPTY_STDERR"
-assert_contains "…and at the redesign issue" \
-    "sync is being redesigned in #190" "$EMPTY_STDERR"
-assert_not_contains "…and no skill list is printed" \
-    "Skills to sync" "$EMPTY_STDOUT"
-assert_not_contains "…and no ERROR line from the sync loop (the #81 blank-line guards)" \
+assert_eq "a monorepo with no skills reports a count of 0" "0" "$(printed_skill_count "$EMPTY_STDOUT")"
+
+# Counted on the raw block, before the "  - " prefix is stripped. Counting
+# stripped names instead would be vacuous here: the phantom bullet strips down to
+# an empty name, so the defect this exists to catch would still report zero.
+EMPTY_LIST_LINES=$(awk '/^Skills to sync /{f=1; next} f && /^$/{exit} f{print}' <<< "$EMPTY_STDOUT" | wc -l | tr -d ' ')
+
+assert_eq "a monorepo with no skills prints no name lines at all" "0" "$EMPTY_LIST_LINES"
+
+PHANTOM_BULLETS=$(printf '%s\n' "$EMPTY_STDOUT" | grep -c '^  - $' || true)
+assert_eq "a monorepo with no skills prints no bare \"  - \" bullet" "0" "$PHANTOM_BULLETS"
+
+# Issue #81's blank-line guards (`[[ -z "$NAME" ]] && continue`), added to
+# every here-string loop converted in that fix: `<<< ""` still feeds one
+# blank line to `read`, so an empty $SKILLS_TO_SYNC reaches the main sync
+# loop, the install-all loop and the skill-inventory loop with SKILL_NAME=""
+# unless each one skips it. The main loop's case is the loud one — an empty
+# name still resolves nothing and prints its own "no SKILL.md" ERROR at rc 0
+# (verified reachable: reverting just the five guards, keeping the
+# herestring conversion, and probing this exact empty-monorepo shape in
+# isolation reproduces "ERROR: no SKILL.md in …/ or …/, skipping"). Nothing
+# in this harness asserted against it before — the pre-existing rc-0
+# assertion above survives regardless, since the blank iteration still
+# `continue`s either way.
+assert_not_contains "a monorepo with no skills prints no ERROR line (the #81 blank-line guards, not just the rc)" \
     "ERROR:" "$EMPTY_STDOUT"
-assert_eq "…and nothing is written: no README in the refused monorepo" "ABSENT" \
-    "$([[ -e "$MONOREPO_EMPTY_FIXTURE/README.md" ]] && echo PRESENT || echo ABSENT)"
-assert_eq "…and no catalogue" "ABSENT" \
-    "$([[ -e "$MONOREPO_EMPTY_FIXTURE/.claude-plugin/marketplace.json" ]] && echo PRESENT || echo ABSENT)"
 
 # ============================================================
 # A skill name that looks like an option must survive the filter
@@ -4017,7 +4023,6 @@ cat > "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill/plugin-manifest.json" <<'EOF'
 }
 EOF
 
-seed_top_level_skill "$MONOREPO_AUTHOR_FIXTURE"
 AUTHOR_RC=0
 (
     cd "$RUN_CWD"
@@ -5673,7 +5678,6 @@ cat > "$STANDALONE_SKILLS_HOME/obsidian-brain/plugin-manifest.json" <<'EOF'
 }
 EOF
 STANDALONE_RC=0
-seed_top_level_skill "$STANDALONE_MONOREPO"
 run_sync "$STANDALONE_SKILLS_HOME" "$STANDALONE_MONOREPO" "$SCRATCH_DIR/standalone.stdout" "$SCRATCH_DIR/standalone.stderr" || STANDALONE_RC=$?
 assert_eq "plain sync with an obsidian-brain manifest exits 0" "0" "$STANDALONE_RC"
 assert_contains "…and says it skipped obsidian-brain as standalone" \
@@ -5699,7 +5703,6 @@ sed 's/obsidian-brain/git-flow/g' "$STANDALONE_SKILLS_HOME/obsidian-brain/plugin
 GF_MONOREPO="$SCRATCH_DIR/monorepo-standalone-gf"
 mkdir -p "$GF_MONOREPO"
 GF_RC=0
-seed_top_level_skill "$GF_MONOREPO"
 run_sync "$STANDALONE_SKILLS_HOME" "$GF_MONOREPO" "$SCRATCH_DIR/standalone-gf.stdout" "$SCRATCH_DIR/standalone-gf.stderr" || GF_RC=$?
 assert_eq "plain sync with a git-flow manifest exits 0" "0" "$GF_RC"
 assert_contains "…and says it skipped git-flow as standalone" \
@@ -5770,9 +5773,9 @@ ORD_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$ORD_MONO" "$SCRATCH_DIR/addplugin-ord.stdout" "$SCRATCH_DIR/addplugin-ord.stderr" \
     --add-plugin ordinary-plugin || ORD_RC=$?
 assert_eq "control: --add-plugin ordinary-plugin exits 0" "0" "$ORD_RC"
-# #167: --add-plugin names its content, so it is not refused for lack of top-level
-# skills. It also reaches the empty-skill-list printing that defect 5 fixed.
-assert_eq "…on a monorepo with no top-level skill (the #167 refusal does not apply to --add-plugin)" "0" \
+# #167: an empty directory is not a plugin-only monorepo, so it is not refused.
+# The run also reaches the empty-skill-list printing that defect 5 fixed.
+assert_eq "…into an empty directory, which is not plugin-only (#167), with 0 skills listed" "0" \
     "$(printed_skill_count "$(cat "$SCRATCH_DIR/addplugin-ord.stdout")")"
 assert_not_contains "…and prints no bare \"  - \" bullet" \
     "$(printf '\n  - \n')" "$(cat "$SCRATCH_DIR/addplugin-ord.stdout")"
@@ -5781,47 +5784,105 @@ assert_eq "control: …and copies plugins/ordinary-plugin" "PRESENT" \
 rm -rf "$RUN_CWD/build/ordinary-plugin"
 
 # ============================================================
-# Issue #167 — no top-level skill directories: refuse, do not report success
+# Issue #167 — a plugin-only monorepo is refused in every mode
 # ============================================================
 #
 # The bare top-level skill directories are deleted; skills live under
-# plugins/<group>/skills/<name>/. sync-monorepo.sh (discovery mode) and
-# validate-pre-sync.sh scan only the top level, so on such a monorepo they found
-# zero skills and exited 0 ("Safe to sync" over nothing). They now exit 1 with
-# one message. release-monorepo.sh counted top-level SKILL.md files and printed
-# "Skills: 0"; it now counts plugins/*/skills/*/SKILL.md.
-#
-# Plugin-only fixture: a monorepo that looks like the repo after #167.
+# plugins/<group>/skills/<name>/. sync-monorepo.sh and validate-pre-sync.sh only
+# understand top-level skill directories. A first fix refused only a discovery
+# run that found nothing, and --add-plugin got past it: on a copy of this repo
+# it rewrote README.md ("0 reusable Agent Skills"), added a "Synced 0 skills"
+# CHANGELOG entry, rewrote the marketplace catalogue and replaced the 516-line
+# CI workflow with the template, at exit 0. Now both scripts refuse, in every
+# mode, a monorepo that has plugins/*/.claude-plugin/plugin.json and no
+# top-level skill directory, before writing anything. Any other monorepo
+# behaves as before.
+
+# tree_digest <dir>: one hash over every path and every file's bytes.
+tree_digest() {
+    (
+        cd "$1"
+        find . -print | LC_ALL=C sort
+        find . -type f -exec shasum {} + | LC_ALL=C sort
+    ) | shasum | cut -d' ' -f1
+}
+
+# Plugin-only fixture shaped like this repo after #167: README, CHANGELOG,
+# marketplace catalogue, a long CI workflow (the repo's own), one plugin with a
+# skill, docs/, and a .git directory (so --init takes its "existing repo" path).
 NOSKILL_MONO="$SCRATCH_DIR/monorepo-noskills"
-mkdir -p "$NOSKILL_MONO/plugins/pg/.claude-plugin" "$NOSKILL_MONO/plugins/pg/skills/inner" "$NOSKILL_MONO/docs"
+mkdir -p "$NOSKILL_MONO/plugins/pg/.claude-plugin" "$NOSKILL_MONO/plugins/pg/skills/inner" "$NOSKILL_MONO/docs" \
+         "$NOSKILL_MONO/.claude-plugin" "$NOSKILL_MONO/.github/workflows"
 echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$NOSKILL_MONO/plugins/pg/.claude-plugin/plugin.json"
 printf -- '---\nname: inner\ndescription: Fixture skill inside a plugin. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# inner\n' \
     > "$NOSKILL_MONO/plugins/pg/skills/inner/SKILL.md"
 echo "fixture" > "$NOSKILL_MONO/docs/notes.md"
-NOSKILL_MSG="has no top-level skill directories. Plugins under plugins/ are the source now (#167), and sync is being redesigned in #190."
+printf '# Fixture monorepo\n\n39 skills in 23 plugins. Deprecated: old-plugin.\n' > "$NOSKILL_MONO/README.md"
+printf '# Changelog\n\n## [Unreleased]\n\n- NOSKILL-CHANGELOG-MARKER\n' > "$NOSKILL_MONO/CHANGELOG.md"
+echo '{"name": "fixture-marketplace", "plugins": [{"name": "pg", "source": "./plugins/pg"}]}' \
+    > "$NOSKILL_MONO/.claude-plugin/marketplace.json"
+cp "$REPO_ROOT/.github/workflows/validate-skill.yml" "$NOSKILL_MONO/.github/workflows/validate-skill.yml"
+git -C "$NOSKILL_MONO" init -q
+NOSKILL_DIGEST="$(tree_digest "$NOSKILL_MONO")"
+NOSKILL_MSG="is a plugin-only monorepo (skills under plugins/<group>/skills/, none at the top level). This script only handles top-level skill directories (#167); sync for plugins is being redesigned in #190. Nothing was changed."
 
-NOSKILL_SYNC_RC=0
-run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_MONO" "$SCRATCH_DIR/noskill-sync.stdout" "$SCRATCH_DIR/noskill-sync.stderr" || NOSKILL_SYNC_RC=$?
-assert_eq "sync-monorepo.sh on a plugin-only monorepo exits 1 (#167)" "1" "$NOSKILL_SYNC_RC"
-assert_contains "…with the one-line message on stderr" "$NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-sync.stderr")"
-assert_eq "…and the message is one line" "1" "$(grep -c 'no top-level skill directories' "$SCRATCH_DIR/noskill-sync.stderr")"
-assert_eq "…and writes no README" "ABSENT" "$([[ -e "$NOSKILL_MONO/README.md" ]] && echo PRESENT || echo ABSENT)"
-assert_eq "…and writes no marketplace catalogue" "ABSENT" \
-    "$([[ -e "$NOSKILL_MONO/.claude-plugin/marketplace.json" ]] && echo PRESENT || echo ABSENT)"
+# A plugin build dir so --add-plugin has something to copy (it would on beddd96).
+mkdir -p "$RUN_CWD/build/noskill-addplug/.claude-plugin"
+echo '{"name": "noskill-addplug", "version": "0.1.0"}' > "$RUN_CWD/build/noskill-addplug/.claude-plugin/plugin.json"
 
-NOSKILL_DRY_RC=0
-run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_MONO" "$SCRATCH_DIR/noskill-dry.stdout" "$SCRATCH_DIR/noskill-dry.stderr" --dry-run || NOSKILL_DRY_RC=$?
-assert_eq "--dry-run is refused too" "1" "$NOSKILL_DRY_RC"
+# _noskill_sync_case <label> [sync args…]: refused, one message, tree unchanged.
+_noskill_sync_case() {
+    local label="$1" rc=0
+    shift
+    run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_MONO" "$SCRATCH_DIR/noskill-$label.stdout" "$SCRATCH_DIR/noskill-$label.stderr" "$@" || rc=$?
+    assert_eq "sync-monorepo.sh $label on a plugin-only monorepo exits 1 (#167)" "1" "$rc"
+    assert_contains "…$label: the message on stderr" "sync-monorepo.sh: $NOSKILL_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-$label.stderr")"
+    assert_eq "…$label: the message is one line" "1" "$(grep -c 'plugin-only monorepo' "$SCRATCH_DIR/noskill-$label.stderr")"
+    assert_eq "…$label: every file is byte-identical" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+}
+_noskill_sync_case discovery
+_noskill_sync_case dry-run --dry-run
+_noskill_sync_case add-plugin --add-plugin noskill-addplug
+_noskill_sync_case skills --skills demo-skill
+_noskill_sync_case add --add demo-skill
+_noskill_sync_case init --init --skills demo-skill
+rm -rf "$RUN_CWD/build/noskill-addplug"
 
-# Control: the refusal is about discovery. Naming a skill with --skills is not refused
-# (that path is the existing bare-skill publishing; its redesign is #190).
+# Controls: the rule is about layout, not about whether skills were named.
+# A new empty directory with --skills still runs (a consumer monorepo built this way).
 NOSKILL_NAMED_MONO="$SCRATCH_DIR/monorepo-noskills-named"
 mkdir -p "$NOSKILL_NAMED_MONO"
 NOSKILL_NAMED_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_NAMED_MONO" "$SCRATCH_DIR/noskill-named.stdout" "$SCRATCH_DIR/noskill-named.stderr" \
     --skills demo-skill || NOSKILL_NAMED_RC=$?
-assert_eq "control: --skills demo-skill on a monorepo with no top-level skill still runs" "0" "$NOSKILL_NAMED_RC"
-assert_not_contains "…and is not refused" "$NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-named.stderr")"
+assert_eq "control: --skills demo-skill into an empty directory still runs" "0" "$NOSKILL_NAMED_RC"
+assert_not_contains "…and is not refused" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/noskill-named.stderr")"
+assert_file_exists "…and writes the skill at the top level" "$NOSKILL_NAMED_MONO/demo-skill/SKILL.md"
+
+# A monorepo with a top-level skill AND plugins/ is not plugin-only: discovery runs.
+MIXED_MONO="$SCRATCH_DIR/monorepo-mixed"
+mkdir -p "$MIXED_MONO/plugins/pg/.claude-plugin" "$MIXED_MONO/mixed-top"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$MIXED_MONO/plugins/pg/.claude-plugin/plugin.json"
+printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' \
+    > "$MIXED_MONO/mixed-top/SKILL.md"
+printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$MIXED_MONO/mixed-top/CHANGELOG.md"
+MIXED_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_MONO" "$SCRATCH_DIR/mixed.stdout" "$SCRATCH_DIR/mixed.stderr" --dry-run || MIXED_RC=$?
+assert_eq "control: discovery on a monorepo with a top-level skill and plugins/ runs" "0" "$MIXED_RC"
+assert_line_present "…and lists the top-level skill" "  - mixed-top" "$(cat "$SCRATCH_DIR/mixed.stdout")"
+
+# --init with no skill named: there is no default set any more (the old one named
+# deleted skills). Refused before the directory is created.
+INIT_NEW_MONO="$SCRATCH_DIR/monorepo-init-new"
+INIT_NEW_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$INIT_NEW_MONO" "$SCRATCH_DIR/init-new.stdout" "$SCRATCH_DIR/init-new.stderr" --init || INIT_NEW_RC=$?
+assert_eq "--init with no --skills or --add exits 1" "1" "$INIT_NEW_RC"
+assert_contains "…and says to name the skills" "--init needs the skills to publish, named with --skills or --add" "$(cat "$SCRATCH_DIR/init-new.stderr")"
+assert_eq "…and does not create the directory" "ABSENT" "$([[ -e "$INIT_NEW_MONO" ]] && echo PRESENT || echo ABSENT)"
+NODIR_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$INIT_NEW_MONO" "$SCRATCH_DIR/nodir.stdout" "$SCRATCH_DIR/nodir.stderr" || NODIR_RC=$?
+assert_eq "a monorepo directory that does not exist, with no skill named, exits 1" "1" "$NODIR_RC"
+assert_eq "…and is not created" "ABSENT" "$([[ -e "$INIT_NEW_MONO" ]] && echo PRESENT || echo ABSENT)"
 
 # validate-pre-sync.sh
 presync_run() {
@@ -5833,17 +5894,34 @@ presync_run() {
 NOSKILL_PRE_RC=0
 presync_run "$SCRATCH_DIR/noskill-pre.stdout" "$SCRATCH_DIR/noskill-pre.stderr" "$NOSKILL_MONO" || NOSKILL_PRE_RC=$?
 assert_eq "validate-pre-sync.sh on a plugin-only monorepo exits 1 (#167)" "1" "$NOSKILL_PRE_RC"
-assert_contains "…with the same message on stderr" "$NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-pre.stderr")"
+assert_contains "…with the same message on stderr" "validate-pre-sync.sh: $NOSKILL_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-pre.stderr")"
 assert_not_contains "…and never says \"Safe to sync\"" "Safe to sync" "$(cat "$SCRATCH_DIR/noskill-pre.stdout")"
 
 NOSKILL_PREJ_RC=0
 presync_run "$SCRATCH_DIR/noskill-prej.stdout" "$SCRATCH_DIR/noskill-prej.stderr" "$NOSKILL_MONO" --json || NOSKILL_PREJ_RC=$?
 assert_eq "…--json is refused the same way" "1" "$NOSKILL_PREJ_RC"
-assert_eq "…and prints no JSON document" "" "$(cat "$SCRATCH_DIR/noskill-prej.stdout")"
+assert_eq "…and prints a JSON error object on stdout" "plugin_only_monorepo" \
+    "$(jq -r '.error' < "$SCRATCH_DIR/noskill-prej.stdout" 2>/dev/null || echo NOT-JSON)"
+assert_contains "…whose message is the stderr message" "$NOSKILL_MSG" \
+    "$(jq -r '.message' < "$SCRATCH_DIR/noskill-prej.stdout" 2>/dev/null || echo NOT-JSON)"
 
 NOSKILL_PREA_RC=0
-presync_run "$SCRATCH_DIR/noskill-prea.stdout" "$SCRATCH_DIR/noskill-prea.stderr" --add no-such-skill "$NOSKILL_MONO" || NOSKILL_PREA_RC=$?
-assert_eq "…and --add of a name that resolves nowhere does not turn it into success" "1" "$NOSKILL_PREA_RC"
+presync_run "$SCRATCH_DIR/noskill-prea.stdout" "$SCRATCH_DIR/noskill-prea.stderr" --add demo-skill "$NOSKILL_MONO" || NOSKILL_PREA_RC=$?
+assert_eq "…--add of a real skill is refused too" "1" "$NOSKILL_PREA_RC"
+assert_contains "…with the same message" "$NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-prea.stderr")"
+assert_eq "…and validate-pre-sync.sh changed no file" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+
+# Controls: not plugin-only, so not refused (as on develop).
+MIXED_PRE_RC=0
+presync_run "$SCRATCH_DIR/mixed-pre.stdout" "$SCRATCH_DIR/mixed-pre.stderr" "$MIXED_MONO" || MIXED_PRE_RC=$?
+assert_eq "control: validate-pre-sync.sh on a monorepo with a top-level skill and plugins/ passes" "0" "$MIXED_PRE_RC"
+assert_contains "…and checks the top-level skill" "PASS  mixed-top v1.0.0" "$(cat "$SCRATCH_DIR/mixed-pre.stdout")"
+EMPTY_PRE_MONO="$SCRATCH_DIR/monorepo-presync-empty"
+mkdir -p "$EMPTY_PRE_MONO"
+EMPTY_PRE_RC=0
+presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --add no-such-skill "$EMPTY_PRE_MONO" || EMPTY_PRE_RC=$?
+assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
+assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
 
 # release-monorepo.sh counts plugin skills
 NOSKILL_REL="$SCRATCH_DIR/release-plugin-only"
