@@ -48,6 +48,14 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 - The `context-shield` plugin, and the bare `context-shield` and `conversation-search` skills. The plugin entry stays one release in the marketplace, marked deprecated, and points at `context:shield`. It is removed in the next release (#167). The bare directories go with the others (#167).
 - The `figma-ui-designer` plugin, and the bare `worktree`, `changelog-keeper` and `figma-ui-designer` skills. The plugin entry stays one release in the marketplace, marked deprecated, and points at `ui-design:figma`. It is removed in the next release (#167). The bare directories go with it. `worktree` and `changelog-keeper` have no marketplace entry. Install `dev-flow` and `ui-design`, then remove the old ones, so the old names cannot win a plain-language request.
 
+### Removed
+
+- The stale `plugins/obsidian-brain` mirror (2.5.1) and its marketplace entry (#166). obsidian-brain ships from its own repo and marketplace `obsidian-brain-repo`.
+
+### Fixed
+
+- `skill-kit` 1.0.1 (#166): `sync-monorepo.sh` skips `obsidian-brain` as a standalone plugin and `--add-plugin` refuses standalone plugins, with the names in one variable. `--add-plugin` takes a bare lowercase name only, and it also checks the `name` in the built `plugin.json`, so `obsidian-brain/`, `Obsidian-Brain` or another build dir name cannot get past it. The README install note is generated from that variable, one line per standalone plugin (`git-flow` and `obsidian-brain`). The `--add-plugin` example shows `<plugin-name>`.
+
 ## [3.20.0] - 2026-10-02
 
 ### Added
