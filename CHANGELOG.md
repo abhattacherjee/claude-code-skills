@@ -1,16 +1,16 @@
 # Changelog
 
 All notable changes to the **claude-code-skills** monorepo are documented here.
-Each skill also maintains its own `CHANGELOG.md` within its directory.
+Each plugin and each skill also keeps its own `CHANGELOG.md`: `plugins/<group>/CHANGELOG.md` and `plugins/<group>/skills/<name>/CHANGELOG.md`.
 
-Format: Monorepo-level events only. For per-skill change details, see `<skill>/CHANGELOG.md`.
+Format: Monorepo-level events only. For per-skill change details, see `plugins/<group>/skills/<name>/CHANGELOG.md`.
 
 ## [Unreleased]
 
 ### Added
 
 - Plugin consolidation design (`docs/superpowers/specs/2026-10-03-plugin-consolidation-design.md`, epic #156): one plugin per workflow, no bare skill copies, and the four standalone skill repos archived.
-- `claudeception/examples/` and `claudeception/resources/`, brought in from the standalone repo ahead of archiving it (#157).
+- The `claudeception` skill's `examples/` and `resources/`, brought in from the standalone repo ahead of archiving it (#157). They now ship in `plugins/skill-kit/skills/extract/`; the bare `claudeception/` directory was removed in #167.
 - **`statusline` plugin 1.0.0 (#158).** One install replaces `context-bar`, `custom-statusline` and `statusline-creator`, with three skills: `install` (was `install-statusline`), `create` (was `statusline-creator`) and `context-bar`. `install` and `create` no longer overwrite a statusline script they did not write: each script they write carries `# managed-by: statusline-plugin` on line 2, anything else is left alone (exit 3) unless `--force`, and every replaced file is backed up first. A `settings.json` that is not one JSON object stops the install before anything is written. `context-bar` finds the current session's transcript instead of one hardcoded project's. Security fixes in the shipped statuslines: a private per-directory git cache instead of a shared `/tmp` file, control characters stripped from printed names, constant printf formats, and git run with `core.fsmonitor` off. New CI job `statusline-tests` runs the suite on Ubuntu (bash 5) and macOS (bash 3.2).
 - **`review` plugin 1.0.0 (#159).** One install replaces `deep-review` and `adversarial-review`, with two skills, `deep` (was `deep-review`) and `adversarial` (was `adversarial-review`), invoked as `/review:deep` and `/review:adversarial`. The three agents are `review:bug-hunter`, `review:convention-reviewer` and `review:cross-examiner` (were `adversarial-bug-hunter`, `adversarial-convention-reviewer` and `adversarial-cross-examiner`). Every command in both skills spells out its script path, because the Bash tool keeps no shell variables between calls and the old `$SCRIPTS`, `$AR_SCRIPTS`, `$ADV_REVIEW`, `$AUDIT` and `$RUN_DIR` reads were empty. `test_skill_paths.py` fails when a fenced block reads a variable it did not set. Round records accept the skill values `deep` and `adversarial`, and still accept `deep-review` and `adversarial-review`, because round-record files written by the old skills (for example a `round-N.json` reused with `recheck --prior`, or a Step 5 rerun) carry them. A `review-tests` CI job runs the moved suite.
 - **`spec` plugin 1.0.0 (#160).** One install replaces `spec-creator`, `spec-review` and `spec-implement`, with three skills: `create` (was `spec-creator`), `review` (was `spec-review`) and `implement` (was `spec-implement`), invoked as `/spec:create`, `/spec:review` and `/spec:implement`. The old names still match as trigger phrases. Every script command in the three `SKILL.md` files now calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. The old `./scripts/<name>.sh` resolved against the user's project, not the skill, so the commands did not run as written. `spec:review` read `$SPEC_FILE` in a block that never set it; that is now a `<SPEC_FILE>` placeholder.
@@ -32,15 +32,15 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ### Changed
 
-- `worktree` 1.0.1: added the note on Python virtualenvs from the live copy, written without private repo names, ahead of archiving the standalone repo (#157).
+- The bare `worktree` skill 1.0.1: added the note on Python virtualenvs from the live copy, written without private repo names, ahead of archiving the standalone repo (#157). The note ships in `dev-flow:worktree`; the bare directory was removed in #167.
 - `scripts/test-discovery-guards.sh` tests the discovery scripts in `plugins/spec` (it read the bare `spec-creator/` and `spec-review/` dirs).
 - `context-shield` 1.3.1 and `figma-ui-designer` 3.2.1: the related-skill pointers say `spec:review` (were `spec-review`). The `figma-ui-designer` plugin manifest and marketplace entry now say 3.2.1; they were still at 3.1.0.
 - `scripts/test-sync-hygiene.sh` tests `plugins/skill-kit/skills/publish/scripts/` and no longer compares the scripts with a copy at `~/.claude/skills/skill-publishing`. That comparison failed on any machine whose live copy was older than the repo (#105). The `github-board` structure test also checks the `skill-kit` copies of the files it already checked.
 - `spec` 1.0.1: the See Also lines name `skill-kit:author` (was `skill-authoring`). `spec:create` is at 1.0.1.
-- **`context-shield` 1.3.2 (#105).** The published plugin is rebuilt from its source with `prepare-plugin.sh`, so `plugins/context-shield/` now matches `context-shield/`: the README follows the current `SKILL.md` and the per-skill `CHANGELOG.md` ships.
+- **`context-shield` 1.3.2 (#105).** The published plugin is rebuilt from its source with `prepare-plugin.sh`, so `plugins/context-shield/` matched its source, the bare `context-shield/` directory (removed in #167): the README follows the current `SKILL.md` and the per-skill `CHANGELOG.md` ships.
 - `spec` 1.0.2 and `figma-ui-designer` 3.2.2: the See Also lines say `context:shield` (were `context-shield`). `spec:review` is at 1.0.1. The consolidation runbook's step 5 now says to run each new skill by explicit invocation before merge, to run the plain-language test only after the loose copies are removed, and to probe any skill that shows `${CLAUDE_SKILL_DIR}` as text (#176).
 - `spec` 1.0.3, `context` 1.0.1 and `github-board` 1.0.1: they name `ui-design:figma` (was `figma-ui-designer`) and `dev-flow:worktree` (was the bare `worktree` skill). `spec:create` is at 1.0.2, `context:shield` at 1.0.1 and `prune-branches` at 2.0.1.
-- The `worktree` row in the README says 1.0.1. It said 1.0.0.
+- The `worktree` row in the README was corrected from 1.0.0 to 1.0.1. The row went with the README "Skills" section in #167.
 
 ### Deprecated
 

@@ -2,7 +2,9 @@
 # Claude Code Skills
 
 A curated collection of reusable [Agent Skills](https://agentskills.io) for
-Claude Code, Cursor, Codex CLI, and Gemini CLI. Every skill ships inside a plugin.
+Claude Code. Every skill ships inside a plugin, and you install it through Claude
+Code's plugin system (or the install script below, which copies a plugin into
+`~/.claude/`).
 
 ## Plugins
 
@@ -77,12 +79,7 @@ rm -rf /tmp/ccs
 
 ## Compatibility
 
-These skills follow the **Agent Skills** standard — a `SKILL.md` file with YAML frontmatter. This format is recognized by:
-
-- [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) (Anthropic)
-- [Cursor](https://www.cursor.com/)
-- [Codex CLI](https://github.com/openai/codex) (OpenAI)
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google)
+These skills follow the **Agent Skills** standard — a `SKILL.md` file with YAML frontmatter — and ship as [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) plugins. Both install paths above target Claude Code. Other tools that read `SKILL.md` (Cursor, Codex CLI, Gemini CLI) have no install path here since the top-level skill directories were removed (#167); the plugins also use Claude Code features such as `${CLAUDE_SKILL_DIR}` and plugin agent types.
 
 ## License
 
