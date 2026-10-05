@@ -5856,6 +5856,11 @@ run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_NAMED_MONO" "$SCRATCH_DIR/noskill-name
 assert_eq "control: --skills demo-skill into an empty directory still runs" "0" "$NOSKILL_NAMED_RC"
 assert_not_contains "…and is not refused" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/noskill-named.stderr")"
 assert_file_exists "…and writes the skill at the top level" "$NOSKILL_NAMED_MONO/demo-skill/SKILL.md"
+# The CONTRIBUTING.md it writes must describe that layout, not plugins/ only.
+assert_contains "…and its CONTRIBUTING.md says to add a skill at the repo root" \
+    'Create a new directory at the repo root (e.g., `my-skill/`)' "$(cat "$NOSKILL_NAMED_MONO/CONTRIBUTING.md" 2>/dev/null || true)"
+assert_contains "…and where a plugin skill goes" \
+    'A skill that ships inside a plugin goes at `plugins/<plugin>/skills/<name>/` instead' "$(cat "$NOSKILL_NAMED_MONO/CONTRIBUTING.md" 2>/dev/null || true)"
 
 # A monorepo with a top-level skill AND plugins/ is not plugin-only: discovery runs.
 MIXED_MONO="$SCRATCH_DIR/monorepo-mixed"
