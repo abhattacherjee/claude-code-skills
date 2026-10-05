@@ -446,6 +446,126 @@ run_in "$PROJ" "$PRO/generate-voiceover.sh" --provider openai "$TMP/work/narrati
 check "openai with no OPENAI_API_KEY exits 1 with a message, before any request" 1 "" 'OPENAI_API_KEY not set'
 run_in "$PROJ" "$PRO/generate-voiceover.sh" --voice
 check "--voice with no value exits 2 with a message" 2 "" 'Option --voice needs a value'
+run_in "$PROJ" "$PRO/generate-voiceover.sh" --speed 'fast' n.json out
+check "a --speed that is not a number exits 2 with a message" 2 "" '--speed must be a number'
+
+# The OpenAI path runs a JavaScript program that imports "openai". A fake openai package in
+# the project's node_modules stands in for the real one: it logs each request and writes no
+# network traffic. The program must find it from the project directory (an ESM file in /tmp
+# could not), and every value must reach it as data, so quotes cannot break it.
+echo "generate-voiceover.sh: the OpenAI program (fake openai package, needs node)"
+if command -v node >/dev/null 2>&1; then
+  GV="$TMP/gv proj"
+  mkdir -p "$GV/node_modules/openai"
+  printf '{"name":"openai","version":"0.0.0","main":"index.js"}\n' > "$GV/node_modules/openai/package.json"
+  cat > "$GV/node_modules/openai/index.js" <<'JSEND'
+const fs = require("fs");
+class OpenAI {
+  constructor() {
+    this.audio = { speech: { create: async (req) => {
+      fs.appendFileSync(process.env.FAKE_OPENAI_LOG, JSON.stringify(req) + "\n");
+      if (process.env.FAKE_OPENAI_FAIL) throw new Error("fake API failure");
+      return { arrayBuffer: async () => new TextEncoder().encode("fake mp3").buffer };
+    } } };
+  }
+}
+module.exports = OpenAI;
+module.exports.default = OpenAI;
+JSEND
+  cat > "$GV/n.json" <<'JSEND'
+[{"scene": "hook", "text": "It's \"here\"."},
+ {"scene": "../up", "text": "Second.", "instructions": "Per-scene ${x} `y`"}]
+JSEND
+  INSTR='Say "hi" \ and $(touch pwned) '"'"'now'"'"
+  run_in "$GV" env OPENAI_API_KEY=dummy FAKE_OPENAI_LOG="$TMP/openai-log" "$PRO/generate-voiceover.sh" \
+    --provider openai --voice ash --speed 1.1 --instructions "$INSTR" n.json "out dir"
+  check "openai: runs from the project dir and finds its openai package, exit 0" 0 'Generated 2 audio files'
+  [[ -f "$GV/out dir/01-hook.mp3" ]] && ok "openai: wrote 01-hook.mp3" || bad "openai: wrote 01-hook.mp3" "missing; stderr: $(printf '%s' "$ERR" | head -3)"
+  [[ -f "$GV/out dir/02----up.mp3" && ! -e "$GV/up.mp3" ]] && ok "openai: a scene name with ../ stays inside the output dir (02----up.mp3)" || bad "openai: a scene name with ../ stays inside the output dir" "$(ls "$GV/out dir" 2>&1)"
+  [[ ! -e "$GV/pwned" ]] && ok "openai: \$(...) in --instructions is not run" || bad "openai: \$(...) in --instructions is not run" "pwned exists"
+  if res="$(INSTR="$INSTR" python3 -c 'import json,os,sys
+reqs = [json.loads(l) for l in open(sys.argv[1])]
+want = os.environ["INSTR"]
+ok = (len(reqs) == 2 and reqs[0]["instructions"] == want and reqs[1]["instructions"] == "Per-scene ${x} `y`"
+      and reqs[0]["input"] == "It'"'"'s \"here\"." and reqs[0]["voice"] == "ash" and reqs[0]["speed"] == 1.1)
+print("yes" if ok else reqs)' "$TMP/openai-log" 2>&1)" && [[ "$res" == yes ]]; then
+    ok "openai: text, quotes, voice, speed and both kinds of instructions reach the API unchanged"
+  else
+    bad "openai: text, quotes, voice, speed and both kinds of instructions reach the API unchanged" "$res"
+  fi
+  run_in "$GV" env OPENAI_API_KEY=dummy FAKE_OPENAI_LOG="$TMP/openai-log" FAKE_OPENAI_FAIL=1 "$PRO/generate-voiceover.sh" \
+    --provider openai n.json "out2"
+  check "openai: an API failure exits 1 and names the scene" 1 "" '01-hook failed after 0 of 2'
+  printf '{"scene": "hook", "text": "not a list"}' > "$GV/obj.json"
+  run_in "$GV" env OPENAI_API_KEY=dummy FAKE_OPENAI_LOG="$TMP/openai-log" "$PRO/generate-voiceover.sh" --provider openai obj.json out3
+  check "openai: a script file that is not a JSON array exits 1 with a message" 1 "" 'non-empty JSON array'
+else
+  skip "generate-voiceover.sh OpenAI program: node is not installed"
+fi
+
+# The macOS path runs `say` and `ffmpeg`. Stubs stand in for both: `say -v ?` lists two
+# voices, and a call that makes audio copies the text file it was given.
+echo "generate-voiceover.sh: the macOS path (stub say and ffmpeg, needs node)"
+if command -v node >/dev/null 2>&1; then
+  mkdir -p "$TMP/macos-stubs"
+  cat > "$TMP/macos-stubs/say" <<'SHEND'
+#!/bin/sh
+if [ "$1" = "-v" ] && [ "$2" = "?" ]; then
+  printf 'Samantha            en_US    # Hello! My name is Samantha.\n'
+  printf 'Eddy (English (US)) en_US    # Hello! My name is Eddy.\n'
+  exit 0
+fi
+out=""; in=""; text=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -f) in="$2"; shift 2 ;;
+    -v) shift 2 ;;
+    *) text="$1"; shift ;;
+  esac
+done
+if [ -n "$in" ]; then cat "$in" >> "$SAY_LOG"; cp "$in" "$out"; else printf '%s' "$text" >> "$SAY_LOG"; printf '%s' "$text" > "$out"; fi
+echo >> "$SAY_LOG"
+SHEND
+  cat > "$TMP/macos-stubs/ffmpeg" <<'SHEND'
+#!/bin/sh
+in=""; last=""
+for a in "$@"; do last="$a"; done
+while [ $# -gt 0 ]; do if [ "$1" = "-i" ]; then in="$2"; fi; shift; done
+cp "$in" "$last"
+SHEND
+  chmod +x "$TMP/macos-stubs/say" "$TMP/macos-stubs/ffmpeg"
+  MAC="$TMP/mac proj"
+  mkdir -p "$MAC"
+  printf '[{"scene":"hook","text":"-n starts with a dash"},{"scene":"cta","text":"Try it."}]' > "$MAC/n.json"
+  : > "$TMP/say-log"
+  run_in "$MAC" env PATH="$TMP/macos-stubs:$TMP/stubs:$PATH" SAY_LOG="$TMP/say-log" "$PRO/generate-voiceover.sh" \
+    --provider macos --voice 'Eddy (English (US))' n.json audio
+  check "macos: a voice name with spaces and parentheses works, exit 0" 0 'Generated 2 audio files'
+  [[ "$(cat "$MAC/audio/01-hook.mp3" 2>/dev/null)" == "-n starts with a dash" && -f "$MAC/audio/02-cta.mp3" ]] \
+    && ok "macos: each scene's text is spoken as text, even when it starts with -" || bad "macos: each scene's text is spoken as text" "$(ls "$MAC/audio" 2>&1)"
+  : > "$TMP/say-log"
+  run_in "$MAC" env PATH="$TMP/macos-stubs:$TMP/stubs:$PATH" SAY_LOG="$TMP/say-log" "$PRO/generate-voiceover.sh" \
+    --provider macos --voice Nobody n.json audio
+  check "macos: an unknown --voice exits 2 with a message" 2 "" 'unknown macOS voice: Nobody'
+  [[ ! -s "$TMP/say-log" ]] && ok "macos: an unknown voice makes no audio" || bad "macos: an unknown voice makes no audio" "$(cat "$TMP/say-log")"
+  printf '[{"scene":"hook","text":"Hi."},{"scene":"cta"}]' > "$MAC/notext.json"
+  run_in "$MAC" env PATH="$TMP/macos-stubs:$TMP/stubs:$PATH" SAY_LOG="$TMP/say-log" "$PRO/generate-voiceover.sh" \
+    --provider macos notext.json audio2
+  check "macos: a scene with no text exits 1 with a message" 1 "" 'scene 2 has no "text"'
+  if grep -q undefined "$TMP/say-log" || [[ -s "$TMP/say-log" ]]; then
+    bad "macos: a scene with no text speaks nothing (not \"undefined\")" "$(cat "$TMP/say-log")"
+  else
+    ok "macos: a scene with no text speaks nothing (not \"undefined\")"
+  fi
+  printf '{"not": "a list"}' > "$MAC/obj.json"
+  run_in "$MAC" env PATH="$TMP/macos-stubs:$TMP/stubs:$PATH" SAY_LOG="$TMP/say-log" "$PRO/generate-voiceover.sh" \
+    --provider macos obj.json audio3
+  check "macos: a script file that is not a JSON array exits 1 (no success line)" 1 "" 'non-empty JSON array'
+  case "$OUT" in *Generated*) bad "macos: a bad script file prints no success line" "$OUT" ;; *) ok "macos: a bad script file prints no success line" ;; esac
+else
+  skip "generate-voiceover.sh macOS path: node is not installed"
+fi
 
 echo "capture-screenshots.sh (produce)"
 run_in "$PROJ" "$PRO/capture-screenshots.sh"
@@ -454,7 +574,49 @@ run_in "$PROJ" "$PRO/capture-screenshots.sh" --url
 check "--url with no value exits 2 with a message" 2 "" 'Option --url needs a value'
 run_in "$PROJ" "$PRO/capture-screenshots.sh" --bogus out
 check "an unknown option exits 2" 2 "" 'Unknown option: --bogus'
+run_in "$PROJ" "$PRO/capture-screenshots.sh" --flow-script x.mjs out
+check "--flow-script is gone (it was never used): exit 2" 2 "" 'Unknown option: --flow-script'
+run_in "$PROJ" "$PRO/capture-screenshots.sh" --viewport big out
+check "a --viewport that is not WxH exits 2 with a message" 2 "" '--viewport must be WIDTHxHEIGHT'
 skip "capture-screenshots.sh capture: needs Playwright, a browser and a running app"
+
+# A fake playwright package in the project's node_modules stands in for the real one. Its
+# browser logs each call and "screenshots" by writing the path. FAKE_PW_FAIL makes goto throw.
+echo "capture-screenshots.sh: the capture program (fake playwright package, needs node)"
+if command -v node >/dev/null 2>&1; then
+  CS="$TMP/cs proj"
+  mkdir -p "$CS/node_modules/playwright"
+  printf '{"name":"playwright","version":"0.0.0","main":"index.js"}\n' > "$CS/node_modules/playwright/package.json"
+  cat > "$CS/node_modules/playwright/index.js" <<'JSEND'
+const fs = require("fs");
+const log = (s) => fs.appendFileSync(process.env.FAKE_PW_LOG, s + "\n");
+const page = {
+  goto: async (url) => { log("goto " + url); if (process.env.FAKE_PW_FAIL) throw new Error("fake goto failure"); },
+  waitForTimeout: async () => {},
+  evaluate: async (fn, arg) => { if (arg !== undefined) log("hide " + arg); return { scrollHeight: 1, clientHeight: 1 }; },
+  screenshot: async (o) => { fs.writeFileSync(o.path, "png"); log("shot " + o.path); },
+};
+exports.chromium = { launch: async () => ({
+  newContext: async (o) => { log("ctx " + JSON.stringify(o)); return { newPage: async () => page }; },
+  close: async () => log("close"),
+}) };
+JSEND
+  : > "$TMP/pw-log"
+  run_in "$CS" env FAKE_PW_LOG="$TMP/pw-log" "$PRO/capture-screenshots.sh" "shots dir" \
+    --url 'http://localhost:5173/?q="x"&y=$(touch pwned)' --hide-selectors '.a,[data-x="1"]' --viewport 400x800 --dpr 3
+  check "capture: runs from the project dir and finds its playwright package, exit 0" 0 'Done! Screenshots saved'
+  [[ -f "$CS/shots dir/hero.png" ]] && ok "capture: wrote hero.png" || bad "capture: wrote hero.png" "stderr: $(printf '%s' "$ERR" | head -3)"
+  grep -Fxq 'goto http://localhost:5173/?q="x"&y=$(touch pwned)' "$TMP/pw-log" && ok "capture: a URL with quotes and \$(...) reaches the browser unchanged" || bad "capture: a URL with quotes reaches the browser unchanged" "$(cat "$TMP/pw-log")"
+  grep -Fxq 'hide .a,[data-x="1"]' "$TMP/pw-log" && ok "capture: selectors with quotes reach the page unchanged" || bad "capture: selectors with quotes reach the page unchanged" "$(cat "$TMP/pw-log")"
+  grep -Fq '"viewport":{"width":400,"height":800},"deviceScaleFactor":3' "$TMP/pw-log" && ok "capture: --viewport and --dpr set the browser context" || bad "capture: --viewport and --dpr set the browser context" "$(grep ctx "$TMP/pw-log")"
+  [[ ! -e "$CS/pwned" ]] && ok "capture: \$(...) in --url is not run" || bad "capture: \$(...) in --url is not run" "pwned exists"
+  : > "$TMP/pw-log"
+  run_in "$CS" env FAKE_PW_LOG="$TMP/pw-log" FAKE_PW_FAIL=1 "$PRO/capture-screenshots.sh" "shots2"
+  check "capture: a failure in the browser exits 1 with a message" 1 "" 'screenshot capture failed: fake goto failure'
+  [[ "$(tail -1 "$TMP/pw-log")" == close ]] && ok "capture: the browser is closed after a failure" || bad "capture: the browser is closed after a failure" "$(cat "$TMP/pw-log")"
+else
+  skip "capture-screenshots.sh capture program: node is not installed"
+fi
 
 echo "render-and-preview.sh (produce)"
 run_in "$PROJ" "$PRO/render-and-preview.sh" --output
