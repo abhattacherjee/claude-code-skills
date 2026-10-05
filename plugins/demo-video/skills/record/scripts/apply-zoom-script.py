@@ -194,6 +194,7 @@ def process_video(input_path, script_path, output_path, out_w, out_h):
     frame_idx = 0
     output_frame_count = 0
     hold_idx = 0  # next hold to process
+    holds_fired = 0
 
     while frame_idx < total_output_frames:
         ret, frame = cap.read()
@@ -225,20 +226,22 @@ def process_video(input_path, script_path, output_path, out_w, out_h):
         except BrokenPipeError:
             break
 
-        # Check if we need to hold (freeze) at this source time
-        if hold_idx < len(hold_frames):
+        # Hold (freeze) on this frame for every hold whose time falls before the next
+        # frame. A while loop, so two holds in one frame both fire, and a hold that
+        # falls between frames is not skipped.
+        while hold_idx < len(hold_frames) and hold_frames[hold_idx]["source_time"] < source_t + 0.5 / fps:
             hold = hold_frames[hold_idx]
-            if abs(source_t - hold["source_time"]) < 0.5 / fps:  # within half a frame
-                hold_frame_count = int(hold["hold_duration"] * fps)
-                desc = hold.get("description", "")
-                print(f"\n  HOLD at source t={source_t:.1f}s for {hold['hold_duration']:.1f}s ({hold_frame_count} frames) — {desc[:50]}", file=sys.stderr)
-                for _ in range(hold_frame_count):
-                    try:
-                        encoder.stdin.write(frame_bytes)
-                        output_frame_count += 1
-                    except BrokenPipeError:
-                        break
-                hold_idx += 1
+            hold_frame_count = int(hold["hold_duration"] * fps)
+            desc = hold.get("description", "")
+            print(f"\n  HOLD at source t={source_t:.1f}s for {hold['hold_duration']:.1f}s ({hold_frame_count} frames) — {desc[:50]}", file=sys.stderr)
+            for _ in range(hold_frame_count):
+                try:
+                    encoder.stdin.write(frame_bytes)
+                    output_frame_count += 1
+                except BrokenPipeError:
+                    break
+            hold_idx += 1
+            holds_fired += 1
 
         if frame_idx % max(1, int(fps)) == 0:
             est_total = total_output_frames + int(total_hold_duration * fps)
@@ -258,6 +261,19 @@ def process_video(input_path, script_path, output_path, out_w, out_h):
         sys.exit(1)
 
     print(f"\n  Done: {output_path} ({frame_idx} frames)", file=sys.stderr)
+    problems = []
+    if frame_idx < total_output_frames:
+        problems.append(f"read {frame_idx} of {total_output_frames} source frames "
+                        f"(the video ends at {(start_frame + frame_idx) / fps:.2f}s, before the trim end)")
+    if hold_frames:
+        print(f"  Holds: {holds_fired} of {len(hold_frames)} fired", file=sys.stderr)
+        for hold in hold_frames[hold_idx:]:
+            problems.append(f"hold at source t={hold['source_time']}s never fired (past the end of the video)")
+    if problems:
+        print("Error: the output does not match the zoom script:", file=sys.stderr)
+        for line in problems:
+            print(f"  - {line}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

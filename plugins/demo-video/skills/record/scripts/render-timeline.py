@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Render integrated timeline: alternates PLAY and HOLD segments with zoom."""
+"""Render integrated timeline: alternates PLAY and HOLD segments with zoom.
+
+Exits 1 if the video does not open, or if any frame the timeline needs cannot be
+read: then the output is shorter than the timeline and the narration, placed by
+output time, drifts. The file is still written so you can look at it.
+"""
 import json
 import os
 import subprocess
@@ -12,12 +17,23 @@ except ImportError:
     print("Missing: pip3 install opencv-python numpy", file=sys.stderr)
     sys.exit(1)
 
-# Load everything
-with open(os.path.expanduser("~/Desktop/zoom-analysis/integrated-timeline.json")) as f:
-    data = json.load(f)
 
-with open(os.path.expanduser("~/Desktop/zoom-analysis/zoom-script.json")) as f:
-    zoom_script = json.load(f)
+def load_json(path):
+    """Read one input file, or exit 1 with a one-line message."""
+    path = os.path.expanduser(path)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"Error: input not found: {path}", file=sys.stderr)
+    except ValueError as e:
+        print(f"Error: {path} is not valid JSON: {e}", file=sys.stderr)
+    sys.exit(1)
+
+
+# Load everything
+data = load_json("~/Desktop/zoom-analysis/integrated-timeline.json")
+zoom_script = load_json("~/Desktop/zoom-analysis/zoom-script.json")
 
 timeline = data["timeline"]
 tts_placement = data["tts_placement"]
@@ -95,6 +111,9 @@ def crop_and_resize(frame, source_t, in_w, in_h):
 
 # Open video
 cap = cv2.VideoCapture(RAW_VIDEO)
+if not cap.isOpened():
+    print(f"Error: cannot open the raw video {RAW_VIDEO}", file=sys.stderr)
+    sys.exit(1)
 in_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 in_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -135,6 +154,10 @@ def seek_and_read(source_time):
     ret, frame = cap.read()
     return frame if ret else None
 
+problems = []  # one line per segment that came out short
+holds_planned = sum(1 for seg in timeline if seg["type"] == "hold_narrate")
+holds_rendered = 0
+
 for seg_idx, seg in enumerate(timeline):
     pct = output_frame_count / total_est_frames * 100 if total_est_frames > 0 else 0
     print(f"\r  [{seg_idx+1}/{len(timeline)}] {seg['type']:12s} {pct:5.1f}%  frames={output_frame_count}", end="", file=sys.stderr)
@@ -147,6 +170,7 @@ for seg_idx, seg in enumerate(timeline):
         out_frames = int(out_duration * FPS)
         
         # Read source frames, mapping output frames to source times
+        written = 0
         for i in range(out_frames):
             # Map output frame to source time (may be compressed)
             t_ratio = i / max(1, out_frames - 1) if out_frames > 1 else 0
@@ -154,11 +178,15 @@ for seg_idx, seg in enumerate(timeline):
             
             frame = seek_and_read(source_t)
             if frame is None:
+                problems.append(f"segment {seg_idx + 1} (play): no frame at source t={source_t:.2f}s; "
+                                f"wrote {written} of {out_frames} frames")
                 break
             
             resized = crop_and_resize(frame, source_t, in_w, in_h)
             if not write_frame(resized.tobytes()):
+                problems.append(f"segment {seg_idx + 1} (play): the encoder stopped")
                 break
+            written += 1
     
     elif seg["type"] == "hold_narrate":
         source_t = seg["source_time"]
@@ -168,6 +196,8 @@ for seg_idx, seg in enumerate(timeline):
         # Read the single frame to hold on
         frame = seek_and_read(source_t)
         if frame is None:
+            problems.append(f"segment {seg_idx + 1}: hold at source t={source_t:.2f}s skipped, "
+                            f"the frame could not be read ({hold_duration:.1f}s missing)")
             continue
         
         resized = crop_and_resize(frame, source_t, in_w, in_h)
@@ -176,9 +206,13 @@ for seg_idx, seg in enumerate(timeline):
         # Write the same frame repeatedly
         for _ in range(hold_frames_count):
             if not write_frame(frame_bytes):
+                problems.append(f"segment {seg_idx + 1} (hold): the encoder stopped")
                 break
+        else:
+            holds_rendered += 1
 
 print(f"\n  Encoding complete: {output_frame_count} frames ({output_frame_count/FPS:.1f}s)", file=sys.stderr)
+print(f"  Holds: {holds_rendered} of {holds_planned} rendered", file=sys.stderr)
 
 encoder.stdin.close()
 encoder.wait()
@@ -189,3 +223,9 @@ if encoder.returncode != 0:
     sys.exit(1)
 
 print(f"  Video saved: {OUTPUT_VIDEO}", file=sys.stderr)
+if problems:
+    print(f"Error: the video is shorter than the timeline ({output_frame_count} of {total_est_frames} frames),"
+          " so the narration will drift:", file=sys.stderr)
+    for line in problems:
+        print(f"  - {line}", file=sys.stderr)
+    sys.exit(1)

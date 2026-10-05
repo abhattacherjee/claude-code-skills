@@ -512,9 +512,15 @@ file_json_is "a hold lasts as long as its speech: seg_00 is 4.0s plus a 0.3s buf
   'abs(d["timeline"][1]["hold_duration"] - 4.3) < 1e-6 and abs(d["timeline"][3]["hold_duration"] - 5.3) < 1e-6'
 file_json_is "all 4 TTS segments are placed, in time order, the first after the first play (1.5s) and a 0.3s lead-in" "$ZA/integrated-timeline.json" \
   'len(d["tts_placement"]) == 4 and [p["output_time"] for p in d["tts_placement"]] == sorted(p["output_time"] for p in d["tts_placement"]) and abs(d["tts_placement"][0]["output_time"] - 1.8) < 1e-6 and d["tts_placement"][0]["file"].endswith("seg_00.mp3")'
+# The fixed speech groups of the 3 holds used here need seg_00, seg_02-04, seg_06-07, seg_09
+# and seg_11. The fixture manifest lacks seg_02, seg_03, seg_04 and seg_11.
+n_warn="$(printf '%s\n' "$ERR" | grep -c 'is not in tts-manifest.json' || true)"
+missing_ids="$(printf '%s\n' "$ERR" | sed -n -E 's/^Warning: speech id ([a-z0-9_]+) is not in tts-manifest.json.*/\1/p' | tr '\n' ' ')"
+[[ "$n_warn" == 4 && "$missing_ids" == "seg_02 seg_03 seg_04 seg_11 " ]] && ok "a warning for each speech id the timeline needs but the manifest lacks (4)" || bad "a warning for each speech id the timeline needs but the manifest lacks (4)" "got $n_warn: $missing_ids"
 mv "$ZA/zoom-script.json" "$ZA/zoom-script.json.off"
 run_in "$PROJ" "$REC/build-timeline.py"
 check "a missing zoom-script.json exits non-zero with a message" nonzero "" 'zoom-script.json'
+no_traceback "a missing zoom-script.json gives a clean message, not a traceback"
 mv "$ZA/zoom-script.json.off" "$ZA/zoom-script.json"
 
 echo "generate-tts.py"
@@ -671,7 +677,51 @@ spec.loader.exec_module(ct)
 print(ct.get_active_window_bounds(2.0), ct.get_active_window_bounds(2.0))' "$REC/cursor-tracker.py" 2>"$TMP/ct-err")" || true
 n_warn="$(grep -c 'cannot read the active window bounds' "$TMP/ct-err" || true)"
 [[ "$res" == "None None" && "$n_warn" == 1 ]] && ok "cursor-tracker.py: a window-bounds failure is reported on stderr once" || bad "cursor-tracker.py: a window-bounds failure is reported on stderr once" "result '$res', warnings $n_warn: $(head -3 "$TMP/ct-err")"
-skip "render-timeline.py rendering: needs opencv, ffmpeg and a fixed raw-video path (a real recording)"
+skip "render-timeline.py with a real recording: needs opencv and ffmpeg"
+
+# The video scripts with the fake opencv (a 1 s, 30-frame "video") and a fake ffmpeg
+# encoder that reads the frames and writes the output file.
+echo "render-timeline.py and apply-zoom-script.py (fake opencv and encoder)"
+mkdir -p "$TMP/enc-bin"
+printf '#!/bin/sh\ncat > /dev/null\nfor a in "$@"; do last="$a"; done\necho video > "$last"\n' > "$TMP/enc-bin/ffmpeg"
+chmod +x "$TMP/enc-bin/ffmpeg"
+ENCENV="PATH=$TMP/enc-bin:$TMP/stubs:$PATH"
+RTH="$TMP/rt-home"
+RTZA="$RTH/Desktop/zoom-analysis"
+mkdir -p "$RTZA"
+printf '{"trim": {"start": 0, "end": 1}, "events": []}' > "$RTZA/zoom-script.json"
+printf '{"output_duration": 1.6, "tts_placement": [], "timeline": [{"type": "play", "source_start": 0, "source_end": 0.5, "duration": 0.5}, {"type": "hold_narrate", "source_time": 0.5, "hold_duration": 1.0}, {"type": "hold_narrate", "source_time": 5.0, "hold_duration": 2.0}]}' > "$RTZA/integrated-timeline.json"
+run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
+check "render-timeline.py: a raw video that does not open exits 1 with a message" 1 "" 'cannot open the raw video'
+printf 'FAKEVIDEO 30 40 20 30\n' > "$RTH/Desktop/screen-recording-20260315-084024-raw.mp4"
+run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
+check "render-timeline.py: a hold past the end of the video exits 1 and names it" 1 "" 'hold at source t=5.00s skipped'
+case "$ERR" in *"Holds: 1 of 2 rendered"*) ok "render-timeline.py: prints holds rendered of planned" ;; *) bad "render-timeline.py: prints holds rendered of planned" "$(printf '%s' "$ERR" | tail -4)" ;; esac
+printf '{"output_duration": 1.6, "tts_placement": [], "timeline": [{"type": "play", "source_start": 0, "source_end": 2.0, "duration": 0.5}]}' > "$RTZA/integrated-timeline.json"
+run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
+check "render-timeline.py: a play past the end of the video exits 1 with a short-read message" 1 "" 'no frame at source t=.*wrote [0-9]+ of 15 frames'
+printf '{"output_duration": 1.5, "tts_placement": [], "timeline": [{"type": "play", "source_start": 0, "source_end": 0.5, "duration": 0.5}, {"type": "hold_narrate", "source_time": 0.5, "hold_duration": 1.0}]}' > "$RTZA/integrated-timeline.json"
+run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
+check "render-timeline.py: a timeline inside the video exits 0" 0 "" 'Holds: 1 of 1 rendered'
+rm -f "$RTZA/integrated-timeline.json"
+run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
+check "render-timeline.py: a missing timeline exits 1 with a message" 1 "" 'input not found: .*integrated-timeline.json'
+no_traceback "render-timeline.py: a missing timeline gives no traceback"
+
+AZ="$TMP/az"
+mkdir -p "$AZ"
+printf 'FAKEVIDEO 30 40 20 30\n' > "$AZ/raw.mp4"
+printf 'junk\n' > "$AZ/bad.mp4"
+printf '{"trim": {"start": 0, "end": 1}, "events": [], "hold_frames": [{"source_time": 0.955, "hold_duration": 0.2}, {"source_time": 0.96, "hold_duration": 0.2}, {"source_time": 0.97, "hold_duration": 0.2}]}' > "$AZ/same-frame.json"
+run_in "$PROJ" env "$ENCENV" PYTHONPATH="$TMP/fakecv" "$REC/apply-zoom-script.py" "$AZ/raw.mp4" "$AZ/same-frame.json" -o "$AZ/out.mp4" --resolution 40x20
+check "apply-zoom-script.py: three holds in the last frame, none on a frame time, all fire, exit 0" 0 "" 'Holds: 3 of 3 fired'
+printf '{"trim": {"start": 0, "end": 2}, "events": [], "hold_frames": [{"source_time": 0.5, "hold_duration": 0.2}, {"source_time": 5.0, "hold_duration": 1.0}]}' > "$AZ/past-end.json"
+run_in "$PROJ" env "$ENCENV" PYTHONPATH="$TMP/fakecv" "$REC/apply-zoom-script.py" "$AZ/raw.mp4" "$AZ/past-end.json" -o "$AZ/out.mp4" --resolution 40x20
+check "apply-zoom-script.py: a hold past the end exits 1 and names it" 1 "" 'hold at source t=5.0s never fired'
+case "$ERR" in *"Holds: 1 of 2 fired"*) ok "apply-zoom-script.py: prints holds fired of planned" ;; *) bad "apply-zoom-script.py: prints holds fired of planned" "$(printf '%s' "$ERR" | tail -4)" ;; esac
+case "$ERR" in *"read 30 of 60 source frames"*) ok "apply-zoom-script.py: a trim end past the video is reported as a short read" ;; *) bad "apply-zoom-script.py: a trim end past the video is reported as a short read" "$(printf '%s' "$ERR" | tail -4)" ;; esac
+run_in "$PROJ" env "$ENCENV" PYTHONPATH="$TMP/fakecv" "$REC/apply-zoom-script.py" "$AZ/bad.mp4" "$AZ/same-frame.json" -o "$AZ/out.mp4"
+check "apply-zoom-script.py: a video that does not open exits 1 with a message" 1 "" 'cannot open'
 skip "record.sh with a real screen: needs a screen, ffmpeg and Screen Recording permission"
 
 echo "preview-timeline.py (fake opencv)"

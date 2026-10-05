@@ -6,16 +6,30 @@ Outputs an integrated timeline that the renderer uses to create the final video.
 """
 import json
 import os
+import sys
+
+
+def load_json(path):
+    """Read one input file, or exit 1 with a one-line message."""
+    path = os.path.expanduser(path)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"Error: input not found: {path}", file=sys.stderr)
+    except ValueError as e:
+        print(f"Error: {path} is not valid JSON: {e}", file=sys.stderr)
+    sys.exit(1)
+
 
 # Load inputs
-with open(os.path.expanduser("~/Desktop/zoom-analysis/zoom-script.json")) as f:
-    zoom = json.load(f)
-
-with open(os.path.expanduser("~/Desktop/zoom-analysis/tts/tts-manifest.json")) as f:
-    tts_segments = json.load(f)
-
-with open(os.path.expanduser("~/Desktop/zoom-analysis/voiceover-script.json")) as f:
-    voiceover = json.load(f)
+zoom = load_json("~/Desktop/zoom-analysis/zoom-script.json")
+tts_segments = load_json("~/Desktop/zoom-analysis/tts/tts-manifest.json")
+voiceover = load_json("~/Desktop/zoom-analysis/voiceover-script.json")
+if "hold_frames" not in zoom:
+    print("Error: zoom-script.json has no \"hold_frames\" list; this script reads the holds from there.",
+          file=sys.stderr)
+    sys.exit(1)
 
 trim_start = zoom["trim"]["start"]
 trim_end = zoom["trim"]["end"]
@@ -78,6 +92,26 @@ tts_placement = []  # {file, output_time, duration}
 output_time = 0.0
 last_source_time = 0.0
 
+# Each speech id the timeline needs but the manifest lacks gets one warning: nothing
+# is placed for it, so its narration is silently missing from the video otherwise.
+warned_missing = set()
+
+
+def warn_missing(seg_ids):
+    for sid in seg_ids:
+        if sid not in tts_by_id and sid not in warned_missing:
+            warned_missing.add(sid)
+            print(f"Warning: speech id {sid} is not in tts-manifest.json; no audio is placed for it.",
+                  file=sys.stderr)
+
+
+grouped_ids = {sid for group in speech_groups for sid in group["segments"]}
+for sid in tts_by_id:
+    if sid not in grouped_ids:
+        print(f"Warning: {sid} is in tts-manifest.json but in no speech group; it is not placed.",
+              file=sys.stderr)
+
+
 # Helper to get total duration of speech segments for a group
 def group_speech_duration(seg_ids):
     total = 0.0
@@ -107,6 +141,7 @@ for hold_idx, hold in enumerate(hold_frames):
                 break
         
         if play_speech:
+            warn_missing(play_speech["segments"])
             # Play with speech overlay — extend play to cover the speech
             speech_dur = group_speech_duration(play_speech["segments"])
             play_duration = max(play_duration, speech_dur)
@@ -138,6 +173,7 @@ for hold_idx, hold in enumerate(hold_frames):
             hold_speech_ids = group["segments"]
             break
     
+    warn_missing(hold_speech_ids)
     # Calculate hold duration based on actual TTS duration
     if hold_speech_ids:
         actual_speech_dur = group_speech_duration(hold_speech_ids)
@@ -176,6 +212,7 @@ if remaining_source > 0:
     # Check for outro speech
     for group in speech_groups:
         if group.get("play_after_hold") == len(hold_frames) - 1:
+            warn_missing(group["segments"])
             speech_dur = group_speech_duration(group["segments"])
             play_duration = max(play_duration, speech_dur)
             seg_offset = 0.0
