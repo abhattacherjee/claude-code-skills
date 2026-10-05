@@ -1,0 +1,5 @@
+{
+  "name": "demo-video",
+  "version": "1.0.0",
+  "description": "Record and produce demo videos. demo-video:record turns a macOS screen recording into a narrated demo with AI-written zoom scripts and voiceover. demo-video:produce builds a narrated product video in code with Remotion, from real app screenshots, TTS voiceover and background music. Ships the nine agents they use."
+}

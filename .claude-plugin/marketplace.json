@@ -45,6 +45,12 @@
       "version": "1.4.0"
     },
     {
+      "name": "demo-video",
+      "source": "./plugins/demo-video",
+      "description": "Record and produce demo videos. demo-video:record turns a macOS screen recording into a narrated demo with AI-written zoom scripts and voiceover. demo-video:produce builds a narrated product video in code with Remotion, from real app screenshots, TTS voiceover and background music. Ships the nine agents they use.",
+      "version": "1.0.0"
+    },
+    {
       "name": "dev-flow",
       "source": "./plugins/dev-flow",
       "description": "Two skills for the daily git loop. dev-flow:worktree creates isolated git worktrees so parallel Claude Code sessions each get their own directory and branch. dev-flow:changelog keeps CHANGELOG.md up to date by turning git commit history into categorized Keep-a-Changelog entries.",
@@ -65,7 +71,7 @@
     {
       "name": "product-video-creation",
       "source": "./plugins/product-video-creation",
-      "description": "Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.",
+      "description": "Deprecated: use the demo-video plugin (demo-video:produce). Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.",
       "version": "2.0.0"
     },
     {
@@ -95,7 +101,7 @@
     {
       "name": "smart-screen-recorder",
       "source": "./plugins/smart-screen-recorder",
-      "description": "AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.",
+      "description": "Deprecated: use the demo-video plugin (demo-video:record). AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.",
       "version": "4.3.0"
     },
     {
