@@ -624,19 +624,33 @@ skill_source_dir() {
 # with top-level skills, with or without plugins/) behaves as before. Sync for
 # plugin-only monorepos is being redesigned in #190.
 
-# True when <monorepo-dir> has at least one top-level skill directory: one that
-# holds a SKILL.md, or whose name has a SKILL.md under $SKILLS_HOME. That is the
-# test discovery applies (skill_source_dir), so a directory discovery would sync
-# is never called "not a skill" here. plugins/ and scripts/ are never skill
-# directories, and hidden directories are skipped by the glob.
+# Prints the basename of every top-level directory of <monorepo-dir> that
+# discovery may consider a skill: real directories only (find -type d does NOT
+# follow symlinks, so a symlink named foo -> elsewhere/foo is skipped), no
+# hidden directories, and never plugins/ or scripts/. This is the ONE candidate
+# list: sync-monorepo.sh discover_skills (both scans), validate-pre-sync.sh and
+# has_top_level_skill_dirs below all read it, so the plugin-only predicate and
+# discovery cannot disagree about what a candidate is (#167 review C-001). The
+# decision was symlinks are skipped, exactly as discovery always skipped them.
+list_top_level_candidates() {
+  find "$1" -maxdepth 1 -mindepth 1 -type d \
+    ! -name '.git' ! -name '.github' ! -name '.*' \
+    ! -name 'plugins' ! -name 'scripts' \
+    -exec basename {} \; 2>/dev/null
+}
+
+# True when <monorepo-dir> has at least one top-level skill directory: a
+# candidate (list_top_level_candidates) that holds a SKILL.md, or whose name has
+# a SKILL.md under $SKILLS_HOME. That is the test discovery applies
+# (skill_source_dir), over the same candidate list, so a directory discovery
+# would sync is never called "not a skill" here.
 has_top_level_skill_dirs() {
-  local d name
-  for d in "$1"/*/; do
-    name="$(basename "$d")"
-    case "$name" in plugins|scripts) continue ;; esac
-    [[ -f "${d}SKILL.md" ]] && return 0
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    [[ -f "$1/$name/SKILL.md" ]] && return 0
     [[ -n "${SKILLS_HOME:-}" && -f "$SKILLS_HOME/$name/SKILL.md" ]] && return 0
-  done
+  done < <(list_top_level_candidates "$1")
   return 1
 }
 

@@ -5934,6 +5934,36 @@ presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --ad
 assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
 assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
 
+# A top-level SYMLINK to a directory that holds a SKILL.md is not a candidate:
+# discovery (find -type d) skips symlinks. The plugin-only predicate used to walk
+# "$1"/*/, which follows them, so it called the monorepo "not plugin-only" while
+# discovery found 0 skills, and a dry run would have rewritten README.md,
+# CHANGELOG.md, validate-skill.yml and marketplace.json (#167 review C-001).
+# Predicate and discovery now share list_top_level_candidates() in _lib.sh.
+SYM_MONO="$SCRATCH_DIR/monorepo-symlink-skill"
+SYM_EXTERNAL="$SCRATCH_DIR/symlink-external/foo"
+mkdir -p "$SYM_EXTERNAL"
+printf -- '---\nname: foo\ndescription: External skill reached by a symlink. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# foo\n' \
+    > "$SYM_EXTERNAL/SKILL.md"
+cp -R "$NOSKILL_MONO" "$SYM_MONO"
+ln -s "$SYM_EXTERNAL" "$SYM_MONO/foo"
+SYM_DIGEST="$(tree_digest "$SYM_MONO")"
+_symlink_sync_case() {
+    local label="$1" rc=0
+    shift
+    run_sync "$SKILLS_HOME_FIXTURE" "$SYM_MONO" "$SCRATCH_DIR/sym-$label.stdout" "$SCRATCH_DIR/sym-$label.stderr" "$@" || rc=$?
+    assert_eq "sync-monorepo.sh $label on a plugin-only monorepo with a top-level skill symlink exits 1 (#167)" "1" "$rc"
+    assert_contains "…$label: the plugin-only message" "sync-monorepo.sh: $SYM_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/sym-$label.stderr")"
+    assert_eq "…$label: every file is byte-identical" "$SYM_DIGEST" "$(tree_digest "$SYM_MONO")"
+}
+_symlink_sync_case plain
+_symlink_sync_case dry-run --dry-run
+SYM_PRE_RC=0
+presync_run "$SCRATCH_DIR/sym-pre.stdout" "$SCRATCH_DIR/sym-pre.stderr" "$SYM_MONO" || SYM_PRE_RC=$?
+assert_eq "validate-pre-sync.sh on the symlink fixture exits 1 (#167)" "1" "$SYM_PRE_RC"
+assert_contains "…with the plugin-only message" "validate-pre-sync.sh: $SYM_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/sym-pre.stderr")"
+assert_eq "…and changed no file" "$SYM_DIGEST" "$(tree_digest "$SYM_MONO")"
+
 # prepare-plugin.sh fails closed on a plugin that fails validate-plugin.sh (#167).
 # It used to run the validator with `|| true`, print "Plugin assembled" and exit 0.
 mkdir -p "$PREPARE_FIXTURE_DIR/validate-good" "$PREPARE_FIXTURE_DIR/validate-bad"

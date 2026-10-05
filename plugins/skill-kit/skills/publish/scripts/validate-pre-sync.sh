@@ -114,10 +114,7 @@ fi
 # would not match any actual sync shape: a discovery run syncs the monorepo's
 # skills, `--skills` syncs exactly what is named, and `--add` syncs the
 # monorepo's plus what is named. This union is that third shape.
-SKILLS=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
-  ! -name '.git' ! -name '.github' ! -name '.*' \
-  ! -name 'plugins' ! -name 'scripts' \
-  -exec basename {} \; 2>/dev/null | sort)
+SKILLS=$(list_top_level_candidates "$MONOREPO_DIR" | sort)
 
 if $ADD_GIVEN; then
   # Only the user-typed value is comma-split; the discovered list stays

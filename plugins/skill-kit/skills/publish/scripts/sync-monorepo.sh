@@ -325,10 +325,7 @@ discover_skills() {
     # and any top-level directory that isn't a skill, e.g. docs/, build/)
     local existing=""
     if [[ -d "$MONOREPO_DIR" ]]; then
-      existing=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
-        ! -name '.git' ! -name '.github' ! -name '.*' \
-        ! -name 'plugins' ! -name 'scripts' \
-        -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort)
+      existing=$(list_top_level_candidates "$MONOREPO_DIR" | filter_skill_candidates | sort)
     fi
     # ADD_SKILL itself is a user-typed name, like --skills below — kept unfiltered
     # so a genuine typo still surfaces the loop's existing ERROR, not a silent SKIP.
@@ -448,10 +445,7 @@ discover_skills() {
   # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git,
   # .github, and any top-level directory that isn't a skill, e.g. docs/, build/)
   if [[ -d "$MONOREPO_DIR" ]]; then
-    find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
-      ! -name '.git' ! -name '.github' ! -name '.*' \
-      ! -name 'plugins' ! -name 'scripts' \
-      -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort
+    list_top_level_candidates "$MONOREPO_DIR" | filter_skill_candidates | sort
     return
   fi
 
