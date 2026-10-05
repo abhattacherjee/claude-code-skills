@@ -78,7 +78,7 @@ set -euo pipefail
 #      regenerate a catalogue describing a plugin it could not build.
 #
 # The whole run is hermetic: 18 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 34 throwaway monorepos, the syncs
+# that is deliberately never a SKILLS_HOME, a throwaway monorepo per scenario, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
