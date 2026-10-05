@@ -7,6 +7,8 @@ metadata:
 
 # Publish Skills & Plugins
 
+> **Deprecated (#161, #167).** Use `skill-kit:publish`. In this copy, `sync-monorepo.sh`, `validate-pre-sync.sh` and `release-monorepo.sh` refuse to run: they print `deprecated: use skill-kit:publish (#161)` and exit 1 without reading any argument or file. The rest of this page describes the old behaviour.
+
 **Plugin-first publishing** for Claude Code skills. Every skill with a `plugin-manifest.json`
 is automatically assembled and synced as an installable plugin. Bare skills (without manifests)
 are synced as standalone directories. Both live in the `claude-code-skills` monorepo.

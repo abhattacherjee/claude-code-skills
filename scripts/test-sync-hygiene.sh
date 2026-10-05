@@ -5926,6 +5926,26 @@ presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --ad
 assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
 assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
 
+# The deprecated plugins/skill-publishing copy refuses to run at all (#167): its
+# scripts still wrote the old layout, still ship in the marketplace until the next
+# release, and on a plugin-only monorepo said "Safe to sync" over nothing.
+DEPRECATED_SCRIPTS="$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/scripts"
+for _dep in "sync-monorepo.sh" "validate-pre-sync.sh" "release-monorepo.sh patch"; do
+    _dep_rc=0
+    # shellcheck disable=SC2086  # "release-monorepo.sh patch" splits into script + bump level
+    ( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" \
+        "$DEPRECATED_SCRIPTS/${_dep%% *}" $( [[ "$_dep" == *" "* ]] && echo "${_dep#* }" ) "$NOSKILL_MONO" ) \
+        >"$SCRATCH_DIR/deprecated.stdout" 2>"$SCRATCH_DIR/deprecated.stderr" || _dep_rc=$?
+    assert_eq "deprecated skill-publishing ${_dep%% *} exits 1" "1" "$_dep_rc"
+    assert_eq "…and prints only the deprecation line" "deprecated: use skill-kit:publish (#161)" \
+        "$(cat "$SCRATCH_DIR/deprecated.stderr")"
+    assert_eq "…and nothing on stdout" "" "$(cat "$SCRATCH_DIR/deprecated.stdout")"
+    assert_eq "…and changes no file" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+done
+_dep_rc=0
+"$DEPRECATED_SCRIPTS/sync-monorepo.sh" --help >/dev/null 2>&1 || _dep_rc=$?
+assert_eq "…even --help is refused" "1" "$_dep_rc"
+
 # release-monorepo.sh counts skills in both layouts (#167)
 #
 # A top-level <name>/SKILL.md (what sync-monorepo.sh writes into a consumer
