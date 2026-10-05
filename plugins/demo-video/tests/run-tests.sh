@@ -598,6 +598,40 @@ check "a timeline with no TTS placements exits 1 with a message" 1 "" 'No TTS se
 rm -f "$ZA/integrated-timeline.json"
 run_in "$PROJ" "$REC/mix-audio.py"
 check "a missing integrated-timeline.json exits non-zero with a message" nonzero "" 'integrated-timeline.json'
+no_traceback "a missing integrated-timeline.json gives a clean message, not a traceback"
+
+# The fallback path: a fake ffmpeg fails the one-pass mix (amix of 3), then makes each
+# fallback file, and fails the last step (merging audio and video, "-map 1:a") unless
+# FAKE_MERGE_OK is set. A demo-final.mp4 from an earlier run is there before each run.
+mkdir -p "$TMP/mix-bin"
+cat > "$TMP/mix-bin/ffmpeg" <<'SHEND'
+#!/bin/sh
+case "$*" in
+  *"amix=inputs=3"*) echo "fake: complex filter failed" >&2; exit 1 ;;
+  *"-map 1:a"*) [ -n "$FAKE_MERGE_OK" ] || { echo "fake: merge failed" >&2; exit 1; } ;;
+esac
+for a in "$@"; do last="$a"; done
+echo data > "$last"
+SHEND
+printf '#!/bin/sh\necho "{\\"format\\": {\\"duration\\": \\"9.5\\"}}"\n' > "$TMP/mix-bin/ffprobe"
+chmod +x "$TMP/mix-bin/ffmpeg" "$TMP/mix-bin/ffprobe"
+for i in 0 1 2; do echo mp3 > "$ZA/tts/mix-seg_$i.mp3"; done
+printf 'video' > "$HOME_DIR/Desktop/demo-video-only.mp4"
+cat > "$ZA/integrated-timeline.json" <<PYEND
+{"tts_placement": [{"file": "$ZA/tts/mix-seg_0.mp3", "output_time": 0.3, "duration": 1.0},
+                   {"file": "$ZA/tts/mix-seg_1.mp3", "output_time": 2.0, "duration": 1.0},
+                   {"file": "$ZA/tts/mix-seg_2.mp3", "output_time": 4.0, "duration": 1.0}]}
+PYEND
+printf 'stale' > "$HOME_DIR/Desktop/demo-final.mp4"
+run_in "$PROJ" env PATH="$TMP/mix-bin:$TMP/stubs:$PATH" "$REC/mix-audio.py"
+check "a failed fallback merge exits 1 with a message" 1 "" 'merging the audio with the video failed'
+case "$ERR" in *"Final output"*) bad "a failed fallback merge does not report a final output" "$ERR" ;; *) ok "a failed fallback merge does not report a final output" ;; esac
+[[ ! -e "$HOME_DIR/Desktop/demo-final.mp4" ]] && ok "the stale demo-final.mp4 from an earlier run is removed" || bad "the stale demo-final.mp4 from an earlier run is removed" "still there: $(cat "$HOME_DIR/Desktop/demo-final.mp4")"
+printf 'stale' > "$HOME_DIR/Desktop/demo-final.mp4"
+run_in "$PROJ" env PATH="$TMP/mix-bin:$TMP/stubs:$PATH" FAKE_MERGE_OK=1 "$REC/mix-audio.py"
+check "the fallback path with every step working: exit 0" 0 "" 'Final output'
+[[ "$(cat "$HOME_DIR/Desktop/demo-final.mp4" 2>/dev/null)" == data ]] && ok "the fallback path writes a new demo-final.mp4" || bad "the fallback path writes a new demo-final.mp4" "$(cat "$HOME_DIR/Desktop/demo-final.mp4" 2>&1)"
+rm -f "$HOME_DIR/Desktop/demo-final.mp4" "$HOME_DIR/Desktop/demo-video-only.mp4" "$ZA/integrated-timeline.json"
 
 echo "render-timeline.py and the opencv scripts"
 run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$REC/render-timeline.py"
