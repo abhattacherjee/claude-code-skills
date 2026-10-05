@@ -51,7 +51,7 @@ How the full workflow runs:
    | Test Plan Extractor | Acceptance criteria | Scenarios with no test, incomplete assertions |
 
    The first three agents need the separately installed `feature-dev` plugin. Without it, `review` uses a general-purpose agent in their place and says so.
-3. **Synthesis.** The results are merged and the changes are written into the spec file.
+3. **Synthesis and report.** The results are merged into one report: issues by severity, sections ready to add to the spec, the readiness score and next steps. `review` then asks what to do with it: update the spec file, save it as a companion document (for example `specs/reviews/review-X.Y.md`), or just report without changing any file.
 
 What `review` can add to the spec:
 
