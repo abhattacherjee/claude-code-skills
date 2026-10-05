@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - `validate-plugin.sh` now takes the skill validator's own exit code. It used to take `sed`'s, so a skill that failed validation was reported as PASS. A `skills/` directory with no skill subdirectory is now a FAIL, not a warning. The repo-root copy and this copy stay byte-identical (#167).
 - The README and `SKILL.md` GitHub link points at the `skill-kit` plugin. It named `tree/main/skill-publishing`, which no longer exists. The bundled `validate-skill.sh` usage example no longer names the deleted `changelog-keeper/` directory (#167).
 - `sync-monorepo.sh`, `validate-pre-sync.sh` and `release-monorepo.sh` refuse to run. Each prints `deprecated: use skill-kit:publish (#161)` and exits 1 before reading any argument or file. They wrote the old top-level skill layout: on this repo, with no top-level skills since #167, `validate-pre-sync.sh` said "Safe to sync" over nothing and a sync rewrote the README to 0 skills. Because `sync-monorepo.sh` no longer runs, it can no longer install `references/workflow-monorepo.yml`; that file is left as it was and nothing tests it (#167).
+- The README usage section opens with a deprecation notice pointing at `skill-kit:publish`, and the `SKILL.md` description starts with `Deprecated: use skill-kit:publish.`, as the other deprecated plugins do. Both still listed `sync-monorepo.sh`, `--add`, `--init` and release as working (#167).
 
 ## [4.5.0] - 2026-10-02
 
