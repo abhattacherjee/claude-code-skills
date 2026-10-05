@@ -126,7 +126,7 @@ Examples:
   sync-monorepo.sh --init ~/dev/claude-code-skills
   sync-monorepo.sh ~/dev/claude-code-skills
   sync-monorepo.sh --add my-new-skill ~/dev/claude-code-skills
-  sync-monorepo.sh --add-plugin obsidian-brain ~/dev/claude-code-skills
+  sync-monorepo.sh --add-plugin <plugin-name> ~/dev/claude-code-skills
   sync-monorepo.sh --dry-run ~/dev/claude-code-skills
 EOF
   exit 0

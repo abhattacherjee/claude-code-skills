@@ -2,6 +2,12 @@
 
 All notable changes to the **publish** skill (was `skill-publishing`) are documented here.
 
+## [1.0.1] - 2026-10-05
+
+### Fixed
+
+- `scripts/sync-monorepo.sh` usage example: `--add-plugin <plugin-name>` instead of `--add-plugin obsidian-brain` (#166).
+
 ## [1.0.0] - 2026-10-04
 
 ### Changed

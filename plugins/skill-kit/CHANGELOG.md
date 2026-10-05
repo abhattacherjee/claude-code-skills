@@ -2,6 +2,12 @@
 
 All notable changes to the **skill-kit** plugin are documented here.
 
+## [1.0.1] - 2026-10-05
+
+### Fixed
+
+- `publish`: the `--add-plugin` usage example named `obsidian-brain`, which is how a stale copy of that plugin got into this repo (#166). It now shows `<plugin-name>`.
+
 ## [1.0.0] - 2026-10-04
 
 ### Added
