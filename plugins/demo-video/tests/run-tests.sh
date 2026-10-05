@@ -641,6 +641,40 @@ run_in "$PROJ" "$PRO/render-and-preview.sh" --no-open
 check "no src/Root.tsx and no composition id exits 1 with a message, before lint" 1 "" 'Could not auto-detect composition ID'
 skip "render-and-preview.sh render: needs a Remotion project, npm install and ffmpeg"
 
+# A fake Remotion project: Root.tsx, and node_modules/.bin/eslint and tsc that exit with
+# $FAKE_ESLINT_RC and $FAKE_TSC_RC. Fake npx (remotion render writes the output), ffprobe
+# (prints nothing) and ffmpeg (exits $FAKE_FFMPEG_RC) come first on PATH.
+RP="$TMP/rp proj"
+mkdir -p "$RP/src" "$RP/node_modules/.bin" "$TMP/rp-bin"
+printf '#!/bin/sh\necho "eslint ran"\nexit "${FAKE_ESLINT_RC:-0}"\n' > "$RP/node_modules/.bin/eslint"
+printf '#!/bin/sh\nexit "${FAKE_TSC_RC:-0}"\n' > "$RP/node_modules/.bin/tsc"
+printf '#!/bin/sh\necho "npx $*" >> "$RP_LOG"\n[ "$1" = remotion ] && [ "$2" = render ] && : > "$4"\nexit 0\n' > "$TMP/rp-bin/npx"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/rp-bin/ffprobe"
+printf '#!/bin/sh\necho "ffmpeg: boom" >&2\nexit "${FAKE_FFMPEG_RC:-0}"\n' > "$TMP/rp-bin/ffmpeg"
+chmod +x "$RP/node_modules/.bin/eslint" "$RP/node_modules/.bin/tsc" "$TMP/rp-bin/npx" "$TMP/rp-bin/ffprobe" "$TMP/rp-bin/ffmpeg"
+RPENV="PATH=$TMP/rp-bin:$TMP/stubs:$PATH"
+printf '<Composition id="Main" />\n<Composition id="Teaser" />\n' > "$RP/src/Root.tsx"
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" "$PRO/render-and-preview.sh" --no-open
+check "two compositions and no id exits 1 and names both" 1 "" 'has 2 compositions: Main Teaser'
+printf '<Composition id="Main" />\n' > "$RP/src/Root.tsx"
+: > "$TMP/rp-log"
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" "$PRO/render-and-preview.sh" --no-open
+check "one composition is auto-detected and rendered, exit 0" 0 'Auto-detected composition: Main'
+grep -Fq 'npx remotion render Main out/video.mp4' "$TMP/rp-log" && ok "the render runs for the detected id" || bad "the render runs for the detected id" "$(cat "$TMP/rp-log")"
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" FAKE_ESLINT_RC=1 "$PRO/render-and-preview.sh" --no-open
+check "eslint exit 1 is reported as lint errors" 1 "" 'ESLint errors found'
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" FAKE_ESLINT_RC=2 "$PRO/render-and-preview.sh" --no-open
+check "eslint exit 2 is reported as eslint not able to run" 1 "" 'ESLint could not run \(exit 2\)'
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" FAKE_TSC_RC=2 "$PRO/render-and-preview.sh" --no-open
+check "tsc errors are reported as TypeScript errors" 1 "" 'TypeScript errors found'
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" FAKE_FFMPEG_RC=1 "$PRO/render-and-preview.sh" --no-open --contact-sheet
+check "a failed contact sheet exits 1 with a message and the ffmpeg output" 1 "" 'contact sheet failed'
+case "$ERR" in *"ffmpeg: boom"*) ok "a failed contact sheet shows the ffmpeg output" ;; *) bad "a failed contact sheet shows the ffmpeg output" "$ERR" ;; esac
+mv "$RP/node_modules" "$RP/node_modules.off"
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" "$PRO/render-and-preview.sh" --no-open
+check "no eslint in the project is reported as not installed, not as lint errors" 1 "" 'eslint is not installed in this project'
+mv "$RP/node_modules.off" "$RP/node_modules"
+
 # ---------------------------------------------------------------------------
 echo "nothing started an install or a request"
 # The stubs log each call. A script that reached brew, pip, npm, npx, curl or open ends up here.

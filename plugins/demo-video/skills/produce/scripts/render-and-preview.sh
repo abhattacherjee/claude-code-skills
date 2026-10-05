@@ -6,10 +6,12 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS] [composition-id]
 
-Render a Remotion video to MP4 and preview it.
+Render a Remotion video to MP4 and preview it. Run it from the Remotion
+project directory, after npm install.
 
 Arguments:
-  composition-id       Remotion composition ID (auto-detected if only one exists)
+  composition-id       Remotion composition ID. Optional when src/Root.tsx has
+                       exactly one; required when it has several.
 
 Options:
   --output <path>      Output file path (default: out/video.mp4)
@@ -59,30 +61,55 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Auto-detect composition ID if not provided
+# Auto-detect the composition ID when there is exactly one in src/Root.tsx
 if [[ -z "$COMP_ID" ]]; then
-  # Try to find composition IDs from Root.tsx
+  IDS=""
   if [[ -f src/Root.tsx ]]; then
-    COMP_ID=$(grep -o 'id="[^"]*"' src/Root.tsx | head -1 | sed 's/id="//;s/"//')
+    IDS=$(grep -o 'id="[^"]*"' src/Root.tsx | sed 's/id="//;s/"//' | sort -u || true)
   fi
-  if [[ -z "$COMP_ID" ]]; then
+  N_IDS=$(printf '%s' "$IDS" | grep -c . || true)
+  if [[ "$N_IDS" -eq 0 ]]; then
     echo "Error: Could not auto-detect composition ID. Pass it as an argument." >&2
     exit 1
   fi
+  if [[ "$N_IDS" -gt 1 ]]; then
+    echo "Error: src/Root.tsx has $N_IDS compositions: $(printf '%s' "$IDS" | tr '\n' ' ')" >&2
+    echo "Pass the one to render as an argument." >&2
+    exit 1
+  fi
+  COMP_ID="$IDS"
   echo "Auto-detected composition: $COMP_ID"
 fi
 
 # Ensure output directory exists
 mkdir -p "$(dirname "$OUTPUT")"
 
-# Lint check first
+# Lint check first. Run the project's own eslint and tsc, so a missing one is
+# reported as missing, not as lint errors, and npx never downloads anything.
 echo "Running lint checks..."
-if ! npx eslint src 2>/dev/null; then
+for tool in eslint tsc; do
+  if [[ ! -x "node_modules/.bin/$tool" ]]; then
+    echo "Error: $tool is not installed in this project (no node_modules/.bin/$tool)." >&2
+    echo "Run npm install in the project directory first." >&2
+    exit 1
+  fi
+done
+LINT_RC=0
+node_modules/.bin/eslint src || LINT_RC=$?
+if [[ "$LINT_RC" -eq 1 ]]; then
   echo "⚠ ESLint errors found. Fix them before rendering." >&2
   exit 1
+elif [[ "$LINT_RC" -ne 0 ]]; then
+  echo "Error: ESLint could not run (exit $LINT_RC): a config problem or a crash, see above." >&2
+  exit 1
 fi
-if ! npx tsc 2>/dev/null; then
+TSC_RC=0
+node_modules/.bin/tsc || TSC_RC=$?
+if [[ "$TSC_RC" -eq 1 || "$TSC_RC" -eq 2 ]]; then
   echo "⚠ TypeScript errors found. Fix them before rendering." >&2
+  exit 1
+elif [[ "$TSC_RC" -ne 0 ]]; then
+  echo "Error: tsc could not run (exit $TSC_RC), see above." >&2
   exit 1
 fi
 echo "✓ Lint passed"
@@ -129,10 +156,14 @@ if $CONTACT_SHEET; then
 
   echo ""
   echo "Generating contact sheet..."
-  ffmpeg -y -i "$OUTPUT" \
+  if ! FF_OUT=$(ffmpeg -y -i "$OUTPUT" \
     -vf "select='$SELECT_EXPR',scale=154:-1,tile=7x1" \
     -frames:v 1 -update 1 \
-    "$SHEET_PATH" 2>/dev/null
+    "$SHEET_PATH" 2>&1); then
+    printf '%s\n' "$FF_OUT" | tail -n 5 >&2
+    echo "Error: the contact sheet failed (ffmpeg, see above). The video is at $OUTPUT" >&2
+    exit 1
+  fi
 
   echo "✓ Contact sheet: $SHEET_PATH"
 fi

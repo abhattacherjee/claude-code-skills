@@ -271,8 +271,8 @@ Use the `render-and-preview.sh` script for the full render → verify → previe
 ```
 
 The script:
-1. Runs eslint + tsc (fails fast on errors)
-2. Auto-detects the composition ID from `Root.tsx`
+1. Runs the project's eslint + tsc (fails fast on errors; says so when they are not installed)
+2. Auto-detects the composition ID when `src/Root.tsx` has exactly one (pass the ID when it has several)
 3. Renders to MP4 via `npx remotion render`
 4. Prints video specs (resolution, duration, size, codec)
 5. Optionally generates a 7-frame contact sheet for visual verification
