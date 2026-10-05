@@ -18,7 +18,12 @@ All notable changes to the **record** skill (was `smart-screen-recorder`) are do
 ### Fixed
 
 - `install-deps.sh --help` (and any other argument) ran the installer, with its Homebrew and pip installs. `-h` and `--help` now print usage and exit 0, and an unknown option exits 2.
+- `extract-frames.py`, `preview-timeline.py` and `apply-zoom-script.py --help` exited 1 with "Missing: pip3 install opencv-python" when opencv was not installed, because they imported it before reading their arguments. `--help` works without it now. Running them for real still needs it.
 - `record.sh` with an option that needs a value and none given (`record.sh -o`) stopped with `unbound variable` (exit 1). It exits 2 and says which option needs a value.
+
+### Known limits
+
+- `generate-tts.py`, `build-timeline.py`, `render-timeline.py` and `mix-audio.py` are tied to one earlier recording. They read and write fixed paths under `~/Desktop/zoom-analysis`. `build-timeline.py` has a fixed list of speech segment ids and reads `hold_frames` from `zoom-script.json`, while the Demo Director agent writes `hold_frames` into the voiceover script. `render-timeline.py` has a fixed raw video name. The SKILL.md now says so. Making them take arguments needs a decision on how narration segments map to holds, so it is not part of this move.
 
 ## History before 1.0.0 (as `smart-screen-recorder`)
 

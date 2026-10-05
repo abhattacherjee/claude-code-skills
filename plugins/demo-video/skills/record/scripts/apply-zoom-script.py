@@ -17,8 +17,11 @@ try:
     import cv2
     import numpy as np
 except ImportError:
-    print("Missing: pip3 install opencv-python numpy", file=sys.stderr)
-    sys.exit(1)
+    if not {"-h", "--help"} & set(sys.argv[1:]):
+        print("Missing: pip3 install opencv-python numpy", file=sys.stderr)
+        sys.exit(1)
+    cv2 = None  # --help does not need it
+    np = None
 
 
 def smooth_step(t):

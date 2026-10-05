@@ -421,6 +421,8 @@ The Voiceover Timing Fixer and Post-Production Editor roles are handled by the l
 | `smart-zoom.py` | Legacy heuristic zoom modes (focus/click/velocity) |
 | `install-deps.sh` | Install ffmpeg, pyobjc, opencv, numpy |
 
+`generate-tts.py`, `build-timeline.py`, `render-timeline.py` and `mix-audio.py` read and write fixed paths under `~/Desktop/zoom-analysis`. `build-timeline.py` also has a fixed list of speech segment ids, and `render-timeline.py` a fixed raw video name. They are a worked example of Steps 6 and 7, not tools to run unchanged: copy one, edit those values, and run your copy.
+
 ## Dependencies
 
 | Dependency | Install | Purpose |

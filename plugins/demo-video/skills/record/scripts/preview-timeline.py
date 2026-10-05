@@ -24,8 +24,10 @@ from pathlib import Path
 try:
     import cv2
 except ImportError:
-    print("Missing: pip3 install opencv-python", file=sys.stderr)
-    sys.exit(1)
+    if not {"-h", "--help"} & set(sys.argv[1:]):
+        print("Missing: pip3 install opencv-python", file=sys.stderr)
+        sys.exit(1)
+    cv2 = None  # --help does not need it
 
 
 def extract_preview_frames(video_path, zoom_script, timeline, output_dir):
