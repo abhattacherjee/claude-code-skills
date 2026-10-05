@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - The doc tests (`scripts/test_skill_docs.py`) read the deprecated `deep-review` plugin's copy of the skill, not the top-level `deep-review/` directory, which is deleted (#167). The byte-identical-copy test is gone with it. The changelog check no longer depends on that directory to find the repo root.
+- In the monorepo checkout, `DeepReviewDocTests` fails instead of skipping when that copy is missing, so removing `plugins/deep-review` at the next release cannot silently turn the class off. These tests do not apply to the live `review:deep` skill, which was reworded; the `review` plugin's own doc tests check it (#167).
 
 ## [0.2.0] - 2026-09-25
 

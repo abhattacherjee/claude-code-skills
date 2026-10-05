@@ -262,15 +262,27 @@ class AgentNeverIdleOnOwnBackgroundRunTests(unittest.TestCase):
 
 
 REPO = HERE.parents[4]
-# The deprecated deep-review plugin's copy of the skill. The bare top-level deep-review/
-# directory it used to be compared with was deleted in #167.
+# The deprecated deep-review plugin's copy of the skill (the bare top-level
+# deep-review/ directory was deleted in #167). These tests do not apply to the
+# live skill, plugins/review/skills/deep: it was reworded (<ADVERSARY>
+# placeholders, a different recheck section), and the review plugin's own
+# test_skill_docs.py checks it. In the monorepo checkout the source must exist:
+# when the next release removes plugins/deep-review, this class fails rather than
+# skips, so whoever removes it also removes these tests. Outside the monorepo (an
+# installed copy of this plugin) the class is skipped.
 DR_SOURCE = REPO / "plugins" / "deep-review" / "skills" / "deep-review"
+IN_MONOREPO = (REPO / ".claude-plugin" / "marketplace.json").is_file()
 AR_SCRIPT_NAME = re.compile(
     r"\b((?:codex|gemini)-review\.sh|pick-adversary\.sh|ensure-(?:codex|gemini)\.sh|pr-audit\.py|synthesize\.py)\b")
 
 
-@unittest.skipUnless(DR_SOURCE.is_dir(), "not in the monorepo checkout")
+@unittest.skipUnless(IN_MONOREPO, "not in the monorepo checkout")
 class DeepReviewDocTests(unittest.TestCase):
+    def test_source_exists(self):
+        self.assertTrue(DR_SOURCE.is_dir(),
+                        "missing %s: remove DeepReviewDocTests with it (review:deep is "
+                        "tested in plugins/review)" % DR_SOURCE)
+
     def read(self, rel):
         return (DR_SOURCE / rel).read_text(encoding="utf-8")
 
