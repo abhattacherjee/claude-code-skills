@@ -15,19 +15,12 @@ jobs:
       - name: Detect changed skill directories
         id: changed
         run: |
-          # Find skill directories that changed in this PR
-          CHANGED_DIRS=$(git diff --name-only origin/main...HEAD | \
-            grep -E '^[a-z][a-z0-9-]+/SKILL\.md' | \
-            sed 's|/SKILL\.md||' | \
+          # Skills live at plugins/<group>/skills/<name>/ (#167). Any changed file
+          # inside one marks that skill directory as changed.
+          ALL_DIRS=$(git diff --name-only origin/main...HEAD | \
+            grep -E '^plugins/[a-z][a-z0-9-]+/skills/[a-z][a-z0-9-]+/' | \
+            cut -d/ -f1-4 | \
             sort -u || true)
-
-          # Also check for changes to scripts/ within skill dirs
-          SCRIPT_DIRS=$(git diff --name-only origin/main...HEAD | \
-            grep -E '^[a-z][a-z0-9-]+/(scripts|references)/' | \
-            sed 's|/scripts/.*||; s|/references/.*||' | \
-            sort -u || true)
-
-          ALL_DIRS=$(printf "%s\n%s" "$CHANGED_DIRS" "$SCRIPT_DIRS" | sort -u | grep -v '^$' || true)
 
           if [[ -z "$ALL_DIRS" ]]; then
             echo "No skill directories changed"
@@ -42,21 +35,33 @@ jobs:
 
       - name: Validate changed skills
         if: steps.changed.outputs.dirs != ''
+        env:
+          DIRS: ${{ steps.changed.outputs.dirs }}
         run: |
           chmod +x scripts/validate-skill.sh
           FAILED=0
 
           while IFS= read -r dir; do
-            if [[ -d "$dir" ]] && [[ -f "$dir/SKILL.md" ]]; then
-              echo ""
-              echo "=========================================="
-              echo "Validating: $dir"
-              echo "=========================================="
-              if ! scripts/validate-skill.sh "$dir"; then
-                FAILED=1
-              fi
+            [[ -z "$dir" ]] && continue
+            if [[ ! -d "$dir" ]]; then
+              # The whole skill directory was removed in this PR: nothing to validate.
+              echo "Skipping $dir: removed in this PR"
+              continue
             fi
-          done <<< "${{ steps.changed.outputs.dirs }}"
+            if [[ ! -f "$dir/SKILL.md" ]]; then
+              # The directory is still there but SKILL.md is not: that is an error.
+              echo "::error::$dir exists but has no SKILL.md"
+              FAILED=1
+              continue
+            fi
+            echo ""
+            echo "=========================================="
+            echo "Validating: $dir"
+            echo "=========================================="
+            if ! scripts/validate-skill.sh "$dir"; then
+              FAILED=1
+            fi
+          done <<< "$DIRS"
 
           if [[ $FAILED -ne 0 ]]; then
             echo ""
