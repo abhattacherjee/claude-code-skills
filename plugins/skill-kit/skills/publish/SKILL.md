@@ -9,6 +9,8 @@ metadata:
 
 > **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code fills in this skill's directory before the text reaches you, so the command works from the project directory. Values you only know at run time are `<NAME>` placeholders: write the real value in their place, for example `<MONOREPO_DIR>` (the monorepo checkout), `<SKILL_DIR>`, `<SKILL_NAME>`, `<GITHUB_USER>` and `<MANIFEST_PATH>`.
 
+> **Plugin-only monorepos are refused (#167).** `sync-monorepo.sh` and `validate-pre-sync.sh` write and check skills as top-level `<name>/` directories. A monorepo that has `plugins/*/.claude-plugin/plugin.json` and no top-level skill directory is refused in every mode (discovery, `--skills`, `--add`, `--add-plugin`, `--init`, `--dry-run`, `--json`): exit 1, one message, nothing changed. `claude-code-skills` itself is such a monorepo since #167: its skills live at `plugins/<plugin>/skills/<name>/` and are edited there directly. Sync still applies to a new or empty directory (name the skills with `--skills` or `--add`) and to a monorepo that has top-level skills. A sync for plugin-only monorepos is being designed in #190.
+
 **Plugin-first publishing** for Claude Code skills. Every skill with a `plugin-manifest.json`
 is automatically assembled and synced as an installable plugin. Bare skills (without manifests)
 are synced as standalone directories. Both live in the `claude-code-skills` monorepo.
@@ -24,8 +26,8 @@ are synced as standalone directories. Both live in the `claude-code-skills` mono
 # --- Monorepo (add a new skill) ---
 "${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --add my-new-skill "<MONOREPO_DIR>"
 
-# --- Monorepo (initialize) ---
-"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --init "<MONOREPO_DIR>"
+# --- Monorepo (initialize; there is no default skill set) ---
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --init --skills my-skill "<MONOREPO_DIR>"
 
 # --- Monorepo release (version tag) ---
 "${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" patch "<MONOREPO_DIR>"   # Bug fixes
@@ -48,23 +50,20 @@ are synced as standalone directories. Both live in the `claude-code-skills` mono
 
 ```
 ~/.claude/skills/              (SOURCE OF RECORD)
-├── git-flow/                  (has plugin-manifest.json → synced as PLUGIN)
+├── my-plugin-skill/           (has plugin-manifest.json → synced as PLUGIN)
 │   └── plugin-manifest.json
-├── context-shield/            (has plugin-manifest.json → synced as PLUGIN)
-│   └── plugin-manifest.json
-├── conversation-search/       (no manifest → synced as BARE SKILL)
+├── my-skill/                  (no manifest → synced as BARE SKILL)
 └── ...
 
-Monorepo:                      (all skills + plugins in one repo)
-└── github.com/USER/claude-code-skills
+Monorepo that sync writes:     (top-level skills, plus plugins)
+└── github.com/USER/<monorepo>
     ├── README.md              (auto-generated: skill table + plugin section)
-    ├── conversation-search/   (bare skill — flat at root)
+    ├── my-skill/              (bare skill — flat at root)
     ├── plugins/               (plugins — auto-assembled from manifests)
-    │   ├── git-flow/
-    │   │   ├── .claude-plugin/plugin.json
-    │   │   ├── commands/
-    │   │   └── skills/
-    │   └── context-shield/
+    │   └── my-plugin-skill/
+    │       ├── .claude-plugin/plugin.json
+    │       ├── commands/
+    │       └── skills/
     └── scripts/
         ├── validate-skill.sh
         ├── validate-plugin.sh
@@ -203,7 +202,9 @@ When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and publ
 "${CLAUDE_SKILL_DIR}/scripts/validate-pre-sync.sh" "<MONOREPO_DIR>"
 ```
 
-**If validation fails (exit code 1):** STOP. Do not proceed to sync. Fix each failing skill:
+**If it exits 1 with "is a plugin-only monorepo":** sync does not apply to this monorepo (see the note at the top). That is not a CHANGELOG failure, and there is nothing to sync; edit the plugin skills in place instead.
+
+**If validation fails (exit code 1) for any other reason:** STOP. Do not proceed to sync. Fix each failing skill:
 1. Open the skill's `CHANGELOG.md`
 2. Add a `## [X.Y.Z] - YYYY-MM-DD` entry describing what changed
 3. Re-run validation until it passes
@@ -339,10 +340,10 @@ After pushing:
 ### First Time: Initialize the Monorepo
 
 ```bash
-"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --init "<MONOREPO_DIR>"
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --init --skills my-skill,other-skill "<MONOREPO_DIR>"
 ```
 
-This creates the directory, syncs the default skills (conversation-search, skill-authoring, skill-publishing), generates the root README with a catalog table, and creates + pushes the GitHub repo.
+This creates the directory, syncs the skills you name with `--skills` (or `--add`), generates the root README with a catalog table, and creates + pushes the GitHub repo. There is no default skill set: the old one named top-level skills that #167 deleted, so `--init` with no skill named exits 1 before creating anything.
 
 ### Ongoing: Sync Changes
 
@@ -395,6 +396,8 @@ git push
 # 2. Create a versioned release
 "${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" minor "<MONOREPO_DIR>"
 ```
+
+`release-monorepo.sh` counts top-level `<name>/SKILL.md` and `plugins/<plugin>/skills/<name>/SKILL.md` skills, lists a plugin skill as `<plugin>:<name>`, and exits 1 without writing anything when it finds no skill in either layout.
 
 ### Bump Levels
 
