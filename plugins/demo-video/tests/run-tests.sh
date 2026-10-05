@@ -52,6 +52,73 @@ done
 for mod in cv2 numpy Quartz; do
   printf 'raise ImportError("blocked by run-tests.sh")\n' > "$TMP/nocv/$mod.py"
 done
+# A fake opencv (and an empty numpy), first on PYTHONPATH, so the scripts that read video run
+# without opencv or a real video. A "video" is a text file: line 1 is "FAKEVIDEO <frames>
+# <width> <height> <fps>". Any other file does not open. Frames are tiny byte strings.
+mkdir -p "$TMP/fakecv"
+: > "$TMP/fakecv/numpy.py"
+cat > "$TMP/fakecv/cv2.py" <<'PYEND'
+CAP_PROP_POS_FRAMES, CAP_PROP_FRAME_WIDTH, CAP_PROP_FRAME_HEIGHT, CAP_PROP_FPS, CAP_PROP_FRAME_COUNT = 1, 3, 4, 5, 7
+INTER_LANCZOS4 = 4
+IMWRITE_JPEG_QUALITY = 1
+
+
+class _Frame:
+    def __init__(self, w, h):
+        self.shape = (h, w, 3)
+        self.size = w * h * 3
+
+    def __getitem__(self, key):
+        return self
+
+    def tobytes(self):
+        return b"f"
+
+
+class VideoCapture:
+    def __init__(self, path):
+        self.pos = 0
+        self.ok = False
+        try:
+            head = open(path).readline().split()
+        except (OSError, UnicodeDecodeError):
+            return
+        if head[:1] == ["FAKEVIDEO"]:
+            self.n, self.w, self.h, self.fps = int(head[1]), int(head[2]), int(head[3]), float(head[4])
+            self.ok = True
+
+    def isOpened(self):
+        return self.ok
+
+    def get(self, prop):
+        if not self.ok:
+            return 0
+        return {CAP_PROP_FPS: self.fps, CAP_PROP_FRAME_COUNT: self.n,
+                CAP_PROP_FRAME_WIDTH: self.w, CAP_PROP_FRAME_HEIGHT: self.h}.get(prop, 0)
+
+    def set(self, prop, value):
+        if prop == CAP_PROP_POS_FRAMES:
+            self.pos = int(value)
+
+    def read(self):
+        if self.ok and 0 <= self.pos < self.n:
+            self.pos += 1
+            return True, _Frame(self.w, self.h)
+        return False, None
+
+    def release(self):
+        pass
+
+
+def resize(frame, size, interpolation=None):
+    return _Frame(size[0], size[1])
+
+
+def imwrite(path, frame, params=None):
+    with open(path, "wb") as f:
+        f.write(b"jpg")
+    return True
+PYEND
 
 PASS=0
 FAIL=0
@@ -352,6 +419,129 @@ run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$REC/extract-frames.py" video.mp4 cur
 check "extract-frames.py without opencv exits 1 and says what to install" 1 "" 'pip3 install opencv-python'
 skip "render-timeline.py rendering: needs opencv, ffmpeg and a fixed raw-video path (a real recording)"
 skip "record.sh recording: needs a screen and ffmpeg"
+
+echo "preview-timeline.py (fake opencv)"
+PV="$TMP/pv proj"
+mkdir -p "$PV/tts"
+printf 'FAKEVIDEO 30 40 20 30\n' > "$PV/raw.mp4"
+printf 'junk\n' > "$PV/bad.mp4"
+printf '{"trim": {"start": 0, "end": 1}, "events": []}' > "$PV/zoom.json"
+printf '{"timeline": [{"type": "play", "source_start": 0, "source_end": 0.5, "duration": 0.5}, {"type": "hold_narrate", "source_time": 9.0, "hold_duration": 1.0, "segments": [], "description": "late"}], "tts_placement": []}' > "$PV/timeline.json"
+run_in "$PV" env PYTHONPATH="$TMP/fakecv" "$REC/preview-timeline.py" bad.mp4 zoom.json timeline.json tts --no-serve
+check "a video that does not open exits 1 with a message" 1 "" 'cannot open the video bad.mp4'
+run_in "$PV" env PYTHONPATH="$TMP/fakecv" "$REC/preview-timeline.py" raw.mp4 zoom.json timeline.json tts --no-serve
+check "a hold past the end of the video: exit 0 with a warning" 0 "" '1 of 2 preview frames could not be read'
+run_in "$PV" env PYTHONPATH="$TMP/nocv" "$REC/preview-timeline.py" raw.mp4 zoom.json timeline.json tts --no-serve
+check "without opencv: exit 1 and says what to install" 1 "" 'pip3 install opencv-python'
+
+# The server, the HTML and the mp3 copy, driven through the module: a server on a free
+# 127.0.0.1 port in a thread, and requests with chosen Host and Origin headers.
+cat > "$TMP/pv-harness.py" <<'PYEND'
+import http.client, importlib.util, json, os, sys, threading, time
+spec = importlib.util.spec_from_file_location("pt", sys.argv[1])
+pt = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pt)
+work = sys.argv[2]
+out = os.path.join(work, "site")
+tts = os.path.join(work, "tts")
+os.makedirs(out, exist_ok=True)
+os.makedirs(tts, exist_ok=True)
+results = []
+def check(name, cond, detail=""):
+    results.append(("PASS " if cond else "FAIL ") + name + ("" if cond else " :: " + str(detail)))
+
+try:
+    server, token = pt.make_server(out, 0, "tok123")
+except Exception as e:
+    print("FAIL make_server exists and builds a server :: %r" % (e,))
+    sys.exit(0)
+host, port = server.server_address
+check("the server listens on 127.0.0.1 only", host == "127.0.0.1", host)
+open(os.path.join(out, "preview.html"), "w").write("<p>hi</p>")
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+def req(method, path, body=None, headers=None, host_header=None):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.putrequest(method, path, skip_host=True)
+    c.putheader("Host", host_header or ("127.0.0.1:%d" % port))
+    for k, v in (headers or {}).items():
+        c.putheader(k, v)
+    if body is not None:
+        c.putheader("Content-Length", str(len(body)))
+    c.endheaders()
+    if body is not None:
+        c.send(body)
+    r = c.getresponse()
+    data = r.read()
+    return r.status, dict(r.getheaders()), data
+
+st, h, d = req("GET", "/tok123/preview.html")
+check("GET with the token serves the page", st == 200 and d == b"<p>hi</p>", (st, d[:40]))
+st, _, _ = req("GET", "/preview.html")
+check("GET without the token is refused (403)", st == 403, st)
+st, _, _ = req("GET", "/wrong1/preview.html")
+check("GET with a wrong token is refused (403)", st == 403, st)
+st, _, _ = req("GET", "/tok123/preview.html", host_header="evil.example:%d" % port)
+check("GET with a foreign Host header is refused (403, DNS rebinding)", st == 403, st)
+fb = os.path.join(out, "feedback.json")
+good = json.dumps([{"section": 0, "label": "HOLD", "feedback": "too fast"}]).encode()
+jh = {"Content-Type": "application/json"}
+st, _, _ = req("POST", "/feedback", good, jh)
+check("POST without the token is refused (403)", st == 403, st)
+st, _, _ = req("POST", "/tok123/feedback", good, dict(jh, Origin="http://evil.example"))
+check("POST from another origin is refused (403)", st == 403, st)
+st, _, _ = req("POST", "/tok123/feedback", good, {"Content-Type": "text/plain"})
+check("POST that is not application/json is refused (415)", st == 415, st)
+st, _, _ = req("POST", "/tok123/feedback", b"not json", jh)
+check("POST of invalid JSON is refused (400)", st == 400, st)
+st, _, _ = req("POST", "/tok123/feedback", b'{"a": 1}', jh)
+check("POST of JSON that is not a list of objects is refused (400)", st == 400, st)
+c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+c.putrequest("POST", "/tok123/feedback", skip_host=True)
+c.putheader("Host", "127.0.0.1:%d" % port)
+c.putheader("Content-Type", "application/json")
+c.putheader("Content-Length", str(pt.MAX_FEEDBACK_BYTES + 1))
+c.endheaders()
+st = c.getresponse().status
+check("POST larger than the cap is refused (413) before reading it", st == 413, st)
+check("no refused POST wrote feedback.json", not os.path.exists(fb))
+st, h, _ = req("POST", "/tok123/feedback", good, dict(jh, Origin="http://127.0.0.1:%d" % port))
+check("POST with the token, JSON and our Origin is saved (200)", st == 200, st)
+check("the reply has no Access-Control-Allow-Origin header", not any(k.lower() == "access-control-allow-origin" for k in h), h)
+saved = json.load(open(fb)) if os.path.exists(fb) else None
+check("feedback.json holds the posted list", saved == json.loads(good), saved)
+server.shutdown()
+
+# HTML: text from the JSON files is escaped. A regenerated mp3 is copied again.
+open(os.path.join(tts, "seg_00.mp3"), "w").write("old")
+json.dump([{"file": os.path.join(tts, "seg_00.mp3"), "text": "</div><script>alert(1)</script>"}],
+          open(os.path.join(tts, "tts-manifest.json"), "w"))
+timeline = [{"type": "hold_narrate", "source_time": 1.0, "hold_duration": 2.0, "segments": ["seg_00"],
+             "description": "<img src=x onerror=alert(2)>"}]
+placement = [{"file": os.path.join(tts, "seg_00.mp3"), "output_time": 0.3, "duration": 1.0}]
+page = open(pt.generate_html(timeline, placement, ["frames/hold_00.jpg"], tts, out)).read()
+check("a description with markup is escaped in the page", "<img src=x" not in page and "&lt;img src=x" in page)
+check("narration text with markup is escaped in the page", "<script>alert(1)" not in page and "&lt;script&gt;alert(1)" in page)
+check("the page posts feedback to a relative URL (under the token)", "fetch('feedback'" in page)
+copy = os.path.join(out, "tts", "seg_00.mp3")
+check("the mp3 is copied into the preview", open(copy).read() == "old")
+time.sleep(0.05)
+open(os.path.join(tts, "seg_00.mp3"), "w").write("new")
+t = time.time() + 5
+os.utime(os.path.join(tts, "seg_00.mp3"), (t, t))
+pt.generate_html(timeline, placement, ["frames/hold_00.jpg"], tts, out)
+check("a regenerated (newer) mp3 replaces the old copy", open(copy).read() == "new", open(copy).read())
+print("\n".join(results))
+PYEND
+res="$(cd "$PV" && PYTHONPATH="$TMP/fakecv" python3 "$TMP/pv-harness.py" "$REC/preview-timeline.py" "$TMP/pv-work" 2>&1)" || true
+n=0
+while IFS= read -r line; do
+  case "$line" in
+    "PASS "*) ok "preview server: ${line#PASS }"; n=$((n + 1)) ;;
+    "FAIL "*) bad "preview server: ${line#FAIL }"; n=$((n + 1)) ;;
+  esac
+done <<< "$res"
+[[ "$n" -ge 20 ]] && ok "preview server: the harness ran all $n checks" || bad "preview server: the harness ran all checks" "ran $n; output: $(printf '%s' "$res" | tail -5)"
 
 # ---------------------------------------------------------------------------
 echo "task-manifest.sh (produce)"

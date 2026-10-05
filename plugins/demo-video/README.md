@@ -113,7 +113,7 @@ Your choice becomes the **narrative brief** that guides the Demo Director's tone
 
 #### Step 7.5: Interactive preview
 
-Before spending 5+ minutes on a full render, review everything in an interactive HTML preview at `http://localhost:8111`:
+Before spending 5+ minutes on a full render, review everything in an interactive HTML preview. It is served on 127.0.0.1 only, at a URL with a token made for each run (`http://127.0.0.1:8111/<token>/preview.html`):
 
 ```
 +---------------------------------------------------------------+
@@ -178,7 +178,7 @@ The skill runs them through `${CLAUDE_SKILL_DIR}`, so they work from your projec
 | `apply-zoom-script.py` | Apply a zoom script with trim, bounding boxes and 4K output |
 | `generate-tts.py` | Generate OpenAI/macOS TTS audio |
 | `build-timeline.py` | Build the integrated PLAY+HOLD timeline |
-| `preview-timeline.py` | Generate the interactive HTML preview (localhost:8111) |
+| `preview-timeline.py` | Generate the interactive HTML preview (127.0.0.1:8111, token in the URL) |
 | `render-timeline.py` | Render video from the timeline with zoom effects |
 | `mix-audio.py` | Mix TTS segments into the rendered video |
 | `smart-zoom.py` | Legacy heuristic zoom modes (focus/click/velocity) |
