@@ -38,6 +38,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 - `spec` 1.0.2 and `figma-ui-designer` 3.2.2: the See Also lines say `context:shield` (were `context-shield`). `spec:review` is at 1.0.1. The consolidation runbook's step 5 now says to run each new skill by explicit invocation before merge, to run the plain-language test only after the loose copies are removed, and to probe any skill that shows `${CLAUDE_SKILL_DIR}` as text (#176).
 - `spec` 1.0.3, `context` 1.0.1 and `github-board` 1.0.1: they name `ui-design:figma` (was `figma-ui-designer`) and `dev-flow:worktree` (was the bare `worktree` skill). `spec:create` is at 1.0.2, `context:shield` at 1.0.1 and `prune-branches` at 2.0.1.
 - The `worktree` row in the README says 1.0.1. It said 1.0.0.
+- `skill-kit` 1.0.1 (#166): `sync-monorepo.sh` skips `obsidian-brain` as a standalone plugin and `--add-plugin` refuses standalone plugins, with the names in one variable. The `--add-plugin` example shows `<plugin-name>`, and a regenerated README keeps the obsidian-brain install note.
 
 ### Deprecated
 
@@ -50,7 +51,7 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 
 ### Removed
 
-- Removed the stale `plugins/obsidian-brain` mirror (2.5.1) and its marketplace entry (#166). obsidian-brain ships from its own repo and marketplace `obsidian-brain-repo`. `skill-kit` 1.0.1: the `sync-monorepo.sh` `--add-plugin` example no longer names obsidian-brain.
+- The stale `plugins/obsidian-brain` mirror (2.5.1) and its marketplace entry (#166). obsidian-brain ships from its own repo and marketplace `obsidian-brain-repo`.
 
 ## [3.20.0] - 2026-10-02
 

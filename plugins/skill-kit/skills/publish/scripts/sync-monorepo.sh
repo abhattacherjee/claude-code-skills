@@ -170,6 +170,27 @@ if [[ -z "$MONOREPO_DIR" ]]; then
   exit 1
 fi
 
+# Standalone plugins: distributed via their own marketplace, not this monorepo.
+# THE one place to edit when migrating another plugin out (space-separated).
+# Both the discovery skip (SKIP line) and the --add-plugin refusal read it.
+# The SKIP message assumes the marketplace is abhattacherjee/<name>.
+STANDALONE_PLUGINS="git-flow obsidian-brain"
+
+is_standalone_plugin() {
+  local _p
+  for _p in $STANDALONE_PLUGINS; do
+    [[ "$_p" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+# --add-plugin must not put a standalone plugin back into the monorepo. Refused
+# before any build or copy; the gate sits ahead of every write.
+if [[ -n "$ADD_PLUGIN" ]] && is_standalone_plugin "$ADD_PLUGIN"; then
+  echo "Error: $ADD_PLUGIN ships from its own marketplace; not adding it to this monorepo" >&2
+  exit 1
+fi
+
 # skill_source_dir() now lives in _lib.sh (issue #78) — it is called from
 # validate-pre-sync.sh too, and having two definitions is exactly the
 # extract_field()-style duplication a fix once needed two rounds to fully close
@@ -673,7 +694,7 @@ while IFS= read -r SKILL_NAME <&3; do
     # SIX conditions leave prepare-plugin.sh un-run and would have bypassed the
     # claimed net identically, not the three an earlier draft of this comment
     # listed: --dry-run; a shadowed manifest; the standalone-marketplace skip
-    # (git-flow); --add-plugin targeting this same plugin; the skill having been
+    # (STANDALONE_PLUGINS); --add-plugin targeting this same plugin; the skill having been
     # refused by the reversion guard; and PREPARE_SCRIPT not being executable,
     # which skips the entire stage. The seventh is the one above — no drift, so
     # _NEEDS_BUILD is simply false.
@@ -904,14 +925,12 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     fi
     _SEEN_MANIFESTS="${_SEEN_MANIFESTS}${_MANIFEST_NAME}"$'\t'"${_MANIFEST}"$'\n'
 
-    # Standalone plugins — distributed via their own marketplace, not this monorepo.
-    # Add new entries here when migrating other plugins out.
-    case "$_MANIFEST_NAME" in
-      git-flow)
-        echo "  SKIP (standalone marketplace: abhattacherjee/git-flow)  $_MANIFEST_NAME"
-        continue
-        ;;
-    esac
+    # Standalone plugins — distributed via their own marketplace, not this
+    # monorepo. The list is STANDALONE_PLUGINS, defined near the top.
+    if is_standalone_plugin "$_MANIFEST_NAME"; then
+      echo "  SKIP (standalone marketplace: abhattacherjee/$_MANIFEST_NAME)  $_MANIFEST_NAME"
+      continue
+    fi
 
     # Skip if --add-plugin targets this same plugin (handled below)
     [[ "$ADD_PLUGIN" == "$_MANIFEST_NAME" ]] && continue
@@ -1488,6 +1507,8 @@ $PLUGIN_CATALOG_ROWS"
     PLUGIN_SECTION="## Plugins
 
 Plugins bundle skills, commands, agents, and hooks into a single installable package.
+
+obsidian-brain is not in this marketplace. It installs from its own: \`/plugin marketplace add abhattacherjee/obsidian-brain\`, then \`/plugin install obsidian-brain@obsidian-brain-repo\`.
 
 $PLUGIN_TABLE
 

@@ -6,7 +6,9 @@ All notable changes to the **publish** skill (was `skill-publishing`) are docume
 
 ### Fixed
 
-- `scripts/sync-monorepo.sh` usage example: `--add-plugin <plugin-name>` instead of `--add-plugin obsidian-brain` (#166).
+- `scripts/sync-monorepo.sh` usage example: `--add-plugin <plugin-name>` instead of `--add-plugin obsidian-brain`, a plugin this repo no longer carries (#166).
+- `scripts/sync-monorepo.sh`: `obsidian-brain` is on the standalone skip list with `git-flow`, and `--add-plugin` refuses standalone plugins (exit 1, nothing written). The names live in one variable, `STANDALONE_PLUGINS`.
+- `scripts/sync-monorepo.sh`: a regenerated root README keeps the note that obsidian-brain installs from its own marketplace.
 
 ## [1.0.0] - 2026-10-04
 

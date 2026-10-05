@@ -31,7 +31,7 @@ This repo's `.claude-plugin/marketplace.json` is named **`claude-code-skills`** 
 
 - **Branch matters.** A `directory` marketplace reflects your **currently checked-out branch / working tree**. A plugin only on a feature branch (e.g. `review` on `feature/159-review-plugin`) is only available while that branch is checked out. Switching branches changes what the marketplace exposes.
 - **Restart the session** after changing marketplaces/plugins if they don't appear.
-- **Re-point installed plugins.** Plugins previously installed from the remote (e.g. `<name>@claude-code-skills`) lose their source when you remove the remote; reinstall them from the local marketplace if you need them: `/plugin install <name>@claude-code-skills`.
+- **Re-point installed plugins.** Plugins previously installed from the remote (e.g. `skill-kit@claude-code-skills`) lose their source when you remove the remote; reinstall them from the local marketplace if you need them: `/plugin install <name>@claude-code-skills`.
 
 ## Restore the remote marketplace
 

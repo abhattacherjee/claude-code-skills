@@ -5620,6 +5620,76 @@ assert_contains "…naming the field, and suggesting > instead" \
 assert_not_contains "…and a folded (>) scalar is NOT announced, since folding is what it asked for" \
     "block scalar of" "$SCALAR_FOLDED_STDERR"
 
+# --- standalone plugins: skipped on a plain sync, refused by --add-plugin ---
+#
+# obsidian-brain and git-flow ship from their own marketplaces. A plain sync must
+# skip a manifest with either name, and --add-plugin must refuse either name
+# before it writes anything. Each case below fails against the e9d53b9 script,
+# which skipped only git-flow and had no --add-plugin guard.
+STANDALONE_SKILLS_HOME="$SCRATCH_DIR/skills-home-standalone"
+STANDALONE_MONOREPO="$SCRATCH_DIR/monorepo-standalone"
+mkdir -p "$STANDALONE_SKILLS_HOME/obsidian-brain" "$STANDALONE_MONOREPO"
+cat > "$STANDALONE_SKILLS_HOME/obsidian-brain/SKILL.md" <<'EOF'
+---
+name: obsidian-brain
+description: Throwaway fixture skill backing a standalone-plugin manifest.
+version: 0.1.0
+---
+
+# obsidian-brain
+
+Fixture content.
+EOF
+cat > "$STANDALONE_SKILLS_HOME/obsidian-brain/plugin-manifest.json" <<'EOF'
+{
+  "name": "obsidian-brain",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin; must be skipped as standalone.",
+  "skills": [
+    { "name": "obsidian-brain", "source": "." }
+  ],
+  "commands": []
+}
+EOF
+STANDALONE_RC=0
+run_sync "$STANDALONE_SKILLS_HOME" "$STANDALONE_MONOREPO" "$SCRATCH_DIR/standalone.stdout" "$SCRATCH_DIR/standalone.stderr" || STANDALONE_RC=$?
+assert_eq "plain sync with an obsidian-brain manifest exits 0" "0" "$STANDALONE_RC"
+assert_contains "…and says it skipped obsidian-brain as standalone" \
+    "SKIP (standalone marketplace: abhattacherjee/obsidian-brain)  obsidian-brain" "$(cat "$SCRATCH_DIR/standalone.stdout")"
+assert_eq "…and writes no plugins/obsidian-brain" "ABSENT" \
+    "$([[ -e "$STANDALONE_MONOREPO/plugins/obsidian-brain" ]] && echo PRESENT || echo ABSENT)"
+
+for _sp in obsidian-brain git-flow; do
+    # A valid-looking build dir, so a missing guard would copy it instead of
+    # failing on "build directory not found".
+    mkdir -p "$RUN_CWD/build/$_sp/.claude-plugin"
+    echo "{\"name\": \"$_sp\", \"version\": \"0.1.0\"}" > "$RUN_CWD/build/$_sp/.claude-plugin/plugin.json"
+    _sp_mono="$SCRATCH_DIR/monorepo-addplugin-$_sp"
+    mkdir -p "$_sp_mono"
+    _sp_rc=0
+    run_sync "$SKILLS_HOME_FIXTURE" "$_sp_mono" "$SCRATCH_DIR/addplugin-$_sp.stdout" "$SCRATCH_DIR/addplugin-$_sp.stderr" \
+        --add-plugin "$_sp" || _sp_rc=$?
+    assert_eq "--add-plugin $_sp exits 1" "1" "$_sp_rc"
+    assert_contains "…and names the reason on stderr" \
+        "$_sp ships from its own marketplace; not adding it to this monorepo" "$(cat "$SCRATCH_DIR/addplugin-$_sp.stderr")"
+    assert_eq "…and creates no plugins/$_sp in the target" "ABSENT" \
+        "$([[ -e "$_sp_mono/plugins/$_sp" ]] && echo PRESENT || echo ABSENT)"
+    rm -rf "$RUN_CWD/build/$_sp"
+done
+
+# Positive control: --add-plugin for a non-standalone plugin is not refused.
+mkdir -p "$RUN_CWD/build/ordinary-plugin/.claude-plugin"
+echo '{"name": "ordinary-plugin", "version": "0.1.0"}' > "$RUN_CWD/build/ordinary-plugin/.claude-plugin/plugin.json"
+ORD_MONO="$SCRATCH_DIR/monorepo-addplugin-ordinary"
+mkdir -p "$ORD_MONO"
+ORD_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$ORD_MONO" "$SCRATCH_DIR/addplugin-ord.stdout" "$SCRATCH_DIR/addplugin-ord.stderr" \
+    --add-plugin ordinary-plugin || ORD_RC=$?
+assert_eq "control: --add-plugin ordinary-plugin exits 0" "0" "$ORD_RC"
+assert_eq "control: …and copies plugins/ordinary-plugin" "PRESENT" \
+    "$([[ -f "$ORD_MONO/plugins/ordinary-plugin/.claude-plugin/plugin.json" ]] && echo PRESENT || echo ABSENT)"
+rm -rf "$RUN_CWD/build/ordinary-plugin"
+
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
     echo "All assertions passed."

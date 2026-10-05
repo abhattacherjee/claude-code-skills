@@ -6,7 +6,9 @@ All notable changes to the **skill-kit** plugin are documented here.
 
 ### Fixed
 
-- `publish`: the `--add-plugin` usage example named `obsidian-brain`, which is how a stale copy of that plugin got into this repo (#166). It now shows `<plugin-name>`.
+- `publish`: the `--add-plugin` usage example named `obsidian-brain`, a plugin this repo no longer carries (#166). It now shows `<plugin-name>`.
+- `publish`: `sync-monorepo.sh` skips `obsidian-brain` as a standalone plugin, as it already did `git-flow`. `--add-plugin` refuses any standalone plugin (exit 1, nothing written). The names live in one variable, `STANDALONE_PLUGINS`.
+- `publish`: a regenerated root README keeps the note that obsidian-brain installs from its own marketplace.
 
 ## [1.0.0] - 2026-10-04
 
