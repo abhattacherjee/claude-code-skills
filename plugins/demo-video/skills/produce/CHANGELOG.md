@@ -24,7 +24,17 @@ All notable changes to the **produce** skill (was `product-video-creation`) are 
 - `generate-voiceover.sh --list-voices --provider <unknown>` printed nothing and exited 0. An unknown provider exits 2 with a message, before anything else runs.
 - `scaffold-project.sh` printed "Project scaffolded" and exited 0 when `npm install` failed, because the install output went through a pipe to `tail`. It exits 1 and shows the end of the npm output.
 - An option that needs a value, given none (`scaffold-project.sh --name`), stopped with `unbound variable` (exit 1). The four scripts that take options (`scaffold-project.sh`, `generate-voiceover.sh`, `capture-screenshots.sh` and `render-and-preview.sh`) exit 2 and name the option.
-- `scaffold-project.sh --name` with a quote or backslash in the name wrote an invalid `package.json`. The name is escaped now. The generated `description` no longer names the old skill.
+- `scaffold-project.sh --name` with a quote, backslash, tab or other control character wrote an invalid `package.json`. The name is written with `JSON.stringify` now. The generated `description` no longer names the old skill.
+- `generate-voiceover.sh` and `capture-screenshots.sh` wrote their JavaScript to `/tmp/...XXXXXX.mjs`. ESM looks for `openai` and `playwright` next to that file, so the import failed (`ERR_MODULE_NOT_FOUND`) even after the script's own `npm install`, and BSD `mktemp` left the X's in the name, so runs collided. The program now runs with `node --input-type=module -e` from the project directory, with no temp file, and gets every value through environment variables, so a quote in `--instructions`, a URL or a selector cannot break it. A failed `npm install` exits 1 with its output.
+- `generate-voiceover.sh` checks the scene list before making audio: not a JSON array, or a scene with no `text` (which the macOS path spoke as "undefined"), exits 1. The macOS path exited 0 after a crash; it now runs `say` and `ffmpeg` from Node and exits 1 on any failure. An unknown macOS `--voice` exits 2, and a `--speed` that is not a number exits 2. Scene names become safe file names.
+- `capture-screenshots.sh` exited 0 when the capture failed. It exits 1 and closes the browser. A bad `--viewport` or `--dpr` exits 2.
+- `scaffold-project.sh` decided a project existed by `remotion.config.ts`, which is written before `npm install`, so a rerun after a failed install skipped it and exited 0. An existing project keeps its files and still runs `npm install` (unless `--skip-install`). SKILL.md said it checks the current directory; it checks `<PROJECT_DIR>`.
+- `render-and-preview.sh` reported a missing or crashing eslint or tsc as "errors found" (it ran them through `npx` with stderr hidden). It runs the project's own `node_modules/.bin/eslint` and `tsc` with their output, says when one is not installed, and reports eslint exit 2 as "could not run". A failed contact sheet exits 1 with the ffmpeg output. With several compositions in `src/Root.tsx` and no ID it took the first; it exits 1 and lists them.
+- Phase 6 downloaded the music to `bg-music.mp3` and then faded `bg-music-raw.mp3`. The download is `bg-music-raw.mp3`, the faded file `bg-music.mp3`, and the music curator agent agrees.
+
+### Removed
+
+- `capture-screenshots.sh --flow-script`. It was in the help and parsed, but never used. Write your own Playwright script for a custom flow.
 
 ## History before 1.0.0 (as `product-video-creation`)
 
