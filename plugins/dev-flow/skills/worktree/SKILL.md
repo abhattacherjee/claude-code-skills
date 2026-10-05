@@ -2,7 +2,7 @@
 name: worktree
 description: "Was the worktree skill (/worktree still works as a phrase). Creates isolated git worktrees for parallel Claude Code sessions, each on its own branch. Use when: (1) /worktree command, (2) user wants to work on multiple branches simultaneously, (3) user has multiple Claude Code sessions conflicting on the same branch, (4) user asks to set up parallel development."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Git Worktree for Parallel Sessions
