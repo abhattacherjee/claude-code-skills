@@ -404,6 +404,9 @@ check "an existing Remotion project is left alone, exit 0" 0 'already exists'
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/quoted" --skip-install --name 'a"b\c'
 check "a quote and a backslash in --name: exits 0" 0
 file_json_is "a quote and a backslash in --name still give valid JSON, with the name intact" "$TMP/work/quoted/package.json" 'd["name"] == "a\"b\\c"'
+run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/ctrl" --skip-install --name "$(printf 'a\tb\001c')"
+check "a tab and a control character in --name: exits 0" 0
+file_json_is "a tab and a control character in --name still give valid JSON, with the name intact" "$TMP/work/ctrl/package.json" 'd["name"] == "a\tb\x01c"'
 # Without --skip-install the script runs npm install. A failing install must fail the script
 # (a pipe to tail used to hide it), and a working one must be called once, in the project.
 mkdir -p "$TMP/npm-fail" "$TMP/npm-ok"
@@ -415,6 +418,17 @@ check "a failing npm install exits 1 and says so" 1 "" 'npm install failed'
 run_in "$PROJ" env PATH="$TMP/npm-ok:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-works"
 check "a working npm install exits 0" 0 'Project scaffolded'
 [[ "$(cat "$TMP/npm-ok-log" 2>/dev/null)" == "$TMP/work/npm-works: npm install" ]] && ok "npm install ran once, inside the new project" || bad "npm install ran once, inside the new project" "log: $(cat "$TMP/npm-ok-log" 2>/dev/null)"
+# A rerun after a failed install finishes the install (the files exist from the first run).
+rm -f "$TMP/npm-ok-log"
+run_in "$PROJ" env PATH="$TMP/npm-ok:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-fails"
+check "a rerun after a failed npm install exits 0" 0 'already exists'
+[[ "$(cat "$TMP/npm-ok-log" 2>/dev/null)" == "$TMP/work/npm-fails: npm install" ]] && ok "a rerun after a failed npm install runs npm install in the project" || bad "a rerun after a failed npm install runs npm install in the project" "log: $(cat "$TMP/npm-ok-log" 2>/dev/null)"
+rm -f "$TMP/npm-ok-log"
+run_in "$PROJ" env PATH="$TMP/npm-ok:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-fails" --skip-install
+check "a rerun with --skip-install exits 0" 0 'already exists'
+[[ ! -e "$TMP/npm-ok-log" ]] && ok "a rerun with --skip-install runs no npm install" || bad "a rerun with --skip-install runs no npm install" "log: $(cat "$TMP/npm-ok-log")"
+run_in "$PROJ" env PATH="$TMP/npm-fail:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-fails"
+check "a rerun whose npm install fails again exits 1" 1 "" 'npm install failed'
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/bad-aspect" --skip-install --aspect 4:3
 check "an unknown aspect ratio exits 2 with a message" 2 "" 'Unknown aspect ratio'
 [[ ! -e "$TMP/work/bad-aspect" ]] && ok "an unknown aspect ratio creates nothing" || bad "an unknown aspect ratio creates nothing" "directory exists"

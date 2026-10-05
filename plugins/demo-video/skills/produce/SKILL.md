@@ -63,7 +63,7 @@ If the user is NOT already in a Remotion project, scaffold one:
 cd <PROJECT_DIR>
 ```
 
-The script creates a complete Remotion + Tailwind + Lucide project with Google Fonts pre-configured. If `remotion.config.ts` already exists in the CWD, it skips scaffolding.
+The script creates a complete Remotion + Tailwind + Lucide project with Google Fonts pre-configured. If `<PROJECT_DIR>/remotion.config.ts` already exists, it leaves the files alone and only runs `npm install` (skipped with `--skip-install`), so running it again after a failed install finishes the install.
 
 ### Step 0b: Voice Selection Brainstorm (INTERACTIVE)
 
