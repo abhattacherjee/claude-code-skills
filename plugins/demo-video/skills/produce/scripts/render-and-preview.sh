@@ -81,8 +81,11 @@ if [[ -z "$COMP_ID" ]]; then
   echo "Auto-detected composition: $COMP_ID"
 fi
 
+# An --output that starts with "-" would be read as an option by dirname, ffprobe and ffmpeg.
+case "$OUTPUT" in -*) OUTPUT="./$OUTPUT" ;; esac
+
 # Ensure output directory exists
-mkdir -p "$(dirname "$OUTPUT")"
+mkdir -p -- "$(dirname -- "$OUTPUT")"
 
 # Lint check first. Run the project's own eslint and tsc, so a missing one is
 # reported as missing, not as lint errors, and npx never downloads anything.

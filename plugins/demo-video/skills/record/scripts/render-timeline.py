@@ -172,8 +172,12 @@ for seg_idx, seg in enumerate(timeline):
         # Read source frames, mapping output frames to source times
         written = 0
         for i in range(out_frames):
-            # Map output frame to source time (may be compressed)
-            t_ratio = i / max(1, out_frames - 1) if out_frames > 1 else 0
+            # Map output frame to source time (may be compressed). The end of the
+            # source interval is exclusive: the next segment starts there, so the
+            # last frame samples one step before it. With i / (out_frames - 1) the
+            # last frame sat on src_end, one frame past the video when the trim
+            # runs to the end of the recording.
+            t_ratio = i / out_frames
             source_t = src_start + t_ratio * src_duration
             
             frame = seek_and_read(source_t)

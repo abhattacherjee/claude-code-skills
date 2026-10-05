@@ -120,7 +120,9 @@ if [[ "$RAW_ONLY" == false ]]; then
 fi
 
 # --- Setup ---
-mkdir -p "$OUTPUT_DIR"
+# An output directory that starts with "-" would make every path below read as an option.
+case "$OUTPUT_DIR" in -*) OUTPUT_DIR="./$OUTPUT_DIR" ;; esac
+mkdir -p -- "$OUTPUT_DIR"
 
 RAW_FILE="$OUTPUT_DIR/${OUTPUT_NAME}-raw.mp4"
 CURSOR_FILE="$OUTPUT_DIR/${OUTPUT_NAME}-cursor.jsonl"

@@ -189,7 +189,8 @@ def process_video(input_path, cursor_path, output_path, config):
         "-i", "-",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
-        output_path,
+        # A path that starts with "-" would be read as an ffmpeg option.
+        "./" + output_path if output_path.startswith("-") else output_path,
     ]
     encoder = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 

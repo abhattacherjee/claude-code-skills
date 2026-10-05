@@ -471,6 +471,10 @@ RECENV="PATH=$TMP/rec-bin:$TMP/stubs:$PATH"
 run_in "$PROJ" env "$RECENV" REC_LOG="$TMP/rec-log" FAKE_FFMPEG=fail "$REC/record.sh" --raw-only -d 1 -o "$TMP/rec1" -n demo
 check "ffmpeg that records nothing: exit 1 with a message" 1 "" 'ffmpeg wrote no video'
 case "$OUT" in *"Recording complete"*) bad "ffmpeg that records nothing: no 'Recording complete' line" "$OUT" ;; *) ok "ffmpeg that records nothing: no 'Recording complete' line" ;; esac
+mkdir -p "$TMP/recdash"
+run_in "$TMP/recdash" env "$RECENV" REC_LOG="$TMP/rec-log" "$REC/record.sh" --raw-only -d 1 -o -recdash -n demo
+check "-o -recdash (a directory that starts with a dash): exit 0" 0 'Recording complete'
+[[ -f "$TMP/recdash/-recdash/demo-raw.mp4" ]] && ok "-o -recdash: the recording lands in ./-recdash" || bad "-o -recdash: the recording lands in ./-recdash" "$(ls "$TMP/recdash")"
 run_in "$PROJ" env "$RECENV" REC_LOG="$TMP/rec-log" "$REC/record.sh" -d 1 -o "$TMP/rec2" -n demo
 check "a cursor log with no positions (no --raw-only): exit 1 with a message" 1 "" 'wrote no positions'
 [[ -f "$TMP/rec2/demo-raw.mp4" ]] && ok "a cursor log with no positions: the raw recording is kept" || bad "a cursor log with no positions: the raw recording is kept" "$(ls "$TMP/rec2" 2>&1)"
@@ -715,7 +719,23 @@ spec.loader.exec_module(ct)
 print(ct.get_active_window_bounds(2.0), ct.get_active_window_bounds(2.0))' "$REC/cursor-tracker.py" 2>"$TMP/ct-err")" || true
 n_warn="$(grep -c 'cannot read the active window bounds' "$TMP/ct-err" || true)"
 [[ "$res" == "None None" && "$n_warn" == 1 ]] && ok "cursor-tracker.py: a window-bounds failure is reported on stderr once" || bad "cursor-tracker.py: a window-bounds failure is reported on stderr once" "result '$res', warnings $n_warn: $(head -3 "$TMP/ct-err")"
-skip "render-timeline.py with a real recording: needs opencv and ffmpeg"
+if python3 -c 'import cv2, numpy' >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
+  # A real 2 s, 60-frame clip. A timeline whose last play segment ends at the end of the
+  # trim (0 to 2.0 s) must render, not stop one frame short.
+  RRH="$TMP/real-home"
+  mkdir -p "$RRH/Desktop/zoom-analysis"
+  if ffmpeg -y -hide_banner -loglevel error -f lavfi -i testsrc=duration=2:size=64x48:rate=30 -pix_fmt yuv420p \
+      "$RRH/Desktop/screen-recording-20260315-084024-raw.mp4" </dev/null 2>/dev/null; then
+    printf '{"trim": {"start": 0, "end": 2.0}, "events": []}' > "$RRH/Desktop/zoom-analysis/zoom-script.json"
+    printf '{"output_duration": 2.0, "tts_placement": [], "timeline": [{"type": "play", "source_start": 0, "source_end": 2.0, "duration": 2.0}]}' > "$RRH/Desktop/zoom-analysis/integrated-timeline.json"
+    run_in "$PROJ" env HOME="$RRH" PYTHONPATH="$(python3 -c 'import cv2,os;print(os.path.dirname(os.path.dirname(cv2.__file__)))')" "$REC/render-timeline.py"
+    check "render-timeline.py with a real recording: a play that runs to the end of the trim exits 0" 0 "" 'Encoding complete: 60 frames'
+  else
+    skip "render-timeline.py with a real recording: ffmpeg could not make a test clip"
+  fi
+else
+  skip "render-timeline.py with a real recording: needs opencv and ffmpeg"
+fi
 
 # The video scripts with the fake opencv (a 1 s, 30-frame "video") and a fake ffmpeg
 # encoder that reads the frames and writes the output file.
@@ -741,6 +761,16 @@ check "render-timeline.py: a play past the end of the video exits 1 with a short
 printf '{"output_duration": 1.5, "tts_placement": [], "timeline": [{"type": "play", "source_start": 0, "source_end": 0.5, "duration": 0.5}, {"type": "hold_narrate", "source_time": 0.5, "hold_duration": 1.0}]}' > "$RTZA/integrated-timeline.json"
 run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
 check "render-timeline.py: a timeline inside the video exits 0" 0 "" 'Holds: 1 of 1 rendered'
+# A play segment that runs to the very end of the trim: the last frame must be a frame the video has.
+printf 'FAKEVIDEO 60 40 20 30\n' > "$RTH/Desktop/screen-recording-20260315-084024-raw.mp4"
+printf '{"trim": {"start": 0, "end": 2.0}, "events": []}' > "$RTZA/zoom-script.json"
+printf '{"output_duration": 2.0, "tts_placement": [], "timeline": [{"type": "play", "source_start": 0, "source_end": 2.0, "duration": 2.0}]}' > "$RTZA/integrated-timeline.json"
+run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
+check "render-timeline.py: a play to the end of a 60-frame video exits 0 with all 60 frames" 0 "" 'Encoding complete: 60 frames'
+printf '{"output_duration": 2.0, "tts_placement": [], "timeline": [{"type": "play", "source_start": 0, "source_end": 2.5, "duration": 2.0}]}' > "$RTZA/integrated-timeline.json"
+run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
+check "render-timeline.py: a play that reaches past the end of the video still exits 1 with a short read" 1 "" 'no frame at source t=.*wrote [0-9]+ of 60 frames'
+printf '{"trim": {"start": 0, "end": 1}, "events": []}' > "$RTZA/zoom-script.json"
 rm -f "$RTZA/integrated-timeline.json"
 run_in "$PROJ" env "$ENCENV" HOME="$RTH" PYTHONPATH="$TMP/fakecv" "$REC/render-timeline.py"
 check "render-timeline.py: a missing timeline exits 1 with a message" 1 "" 'input not found: .*integrated-timeline.json'
@@ -749,6 +779,14 @@ no_traceback "render-timeline.py: a missing timeline gives no traceback"
 AZ="$TMP/az"
 mkdir -p "$AZ"
 printf 'FAKEVIDEO 30 40 20 30\n' > "$AZ/raw.mp4"
+# An output name that starts with "-": ffmpeg must get it as ./-out.mp4, not as an option.
+mkdir -p "$TMP/dash-enc"
+printf '#!/bin/sh\ncat > /dev/null\nfor a in "$@"; do last="$a"; done\ncase "$last" in -*) echo "ffmpeg: Unrecognized option $last" >&2; exit 1;; esac\necho video > "$last"\n' > "$TMP/dash-enc/ffmpeg"
+chmod +x "$TMP/dash-enc/ffmpeg"
+printf '{"trim": {"start": 0, "end": 1}, "events": []}' > "$AZ/plain.json"
+run_in "$AZ" env "PATH=$TMP/dash-enc:$TMP/stubs:$PATH" PYTHONPATH="$TMP/fakecv" "$REC/apply-zoom-script.py" "$AZ/raw.mp4" "$AZ/plain.json" "-o=-out.mp4" --resolution 40x20
+check "apply-zoom-script.py: -o=-out.mp4 reaches ffmpeg as ./-out.mp4, exit 0" 0
+[[ -f "$AZ/-out.mp4" ]] && ok "apply-zoom-script.py: the video is written to ./-out.mp4" || bad "apply-zoom-script.py: the video is written to ./-out.mp4" "$(ls "$AZ")"
 printf 'junk\n' > "$AZ/bad.mp4"
 printf '{"trim": {"start": 0, "end": 1}, "events": [], "hold_frames": [{"source_time": 0.955, "hold_duration": 0.2}, {"source_time": 0.96, "hold_duration": 0.2}, {"source_time": 0.97, "hold_duration": 0.2}]}' > "$AZ/same-frame.json"
 run_in "$PROJ" env "$ENCENV" PYTHONPATH="$TMP/fakecv" "$REC/apply-zoom-script.py" "$AZ/raw.mp4" "$AZ/same-frame.json" -o "$AZ/out.mp4" --resolution 40x20
@@ -944,6 +982,17 @@ file_json_is "a quote and a backslash in --name still give valid JSON, with the 
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/ctrl" --skip-install --name "$(printf 'a\tb\001c')"
 check "a tab and a control character in --name: exits 0" 0
 file_json_is "a tab and a control character in --name still give valid JSON, with the name intact" "$TMP/work/ctrl/package.json" 'd["name"] == "a\tb\x01c"'
+# A name that starts with "-" must reach JSON.stringify as text. node used to read it as its own option.
+for nm in '--version' '--import=data:text/javascript,console.log("NAME_"+"EXECUTED")' '-launch reel-'; do
+  d="$TMP/work/dash-$(printf '%s' "$nm" | cksum | cut -d' ' -f1)"
+  run_in "$PROJ" "$PRO/scaffold-project.sh" "$d" --skip-install --name "$nm"
+  check "--name '$nm': exits 0" 0
+  NM="$nm" file_json_is "--name '$nm' gives valid JSON with the name intact" "$d/package.json" 'd["name"] == __import__("os").environ["NM"]'
+done
+# A directory whose name starts with "-" (given as ./-dir) gives a project name that starts with "-".
+(cd "$TMP/work" && cenv "$PRO/scaffold-project.sh" ./-dashdir --skip-install >/dev/null 2>&1) \
+  && file_json_is "a project directory named -dashdir: the name is -dashdir" "$TMP/work/-dashdir/package.json" 'd["name"] == "-dashdir"' \
+  || bad "a project directory named -dashdir: scaffolds" "exit non-zero"
 # Without --skip-install the script runs npm install. A failing install must fail the script
 # (a pipe to tail used to hide it), and a working one must be called once, in the project.
 mkdir -p "$TMP/npm-fail" "$TMP/npm-ok"
@@ -1216,6 +1265,10 @@ printf '<Composition id="Main" />\n' > "$RP/src/Root.tsx"
 run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" "$PRO/render-and-preview.sh" --no-open
 check "one composition is auto-detected and rendered, exit 0" 0 'Auto-detected composition: Main'
 grep -Fq 'npx remotion render Main out/video.mp4' "$TMP/rp-log" && ok "the render runs for the detected id" || bad "the render runs for the detected id" "$(cat "$TMP/rp-log")"
+: > "$TMP/rp-log"
+run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" "$PRO/render-and-preview.sh" --no-open --output -dash.mp4
+check "--output -dash.mp4 is not read as an option by dirname, exit 0" 0 'Rendering Main'
+grep -Fq 'npx remotion render Main ./-dash.mp4' "$TMP/rp-log" && ok "--output -dash.mp4 reaches the render as ./-dash.mp4" || bad "--output -dash.mp4 reaches the render as ./-dash.mp4" "$(cat "$TMP/rp-log")"
 run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" FAKE_ESLINT_RC=1 "$PRO/render-and-preview.sh" --no-open
 check "eslint exit 1 is reported as lint errors" 1 "" 'ESLint errors found'
 run_in "$RP" env "$RPENV" RP_LOG="$TMP/rp-log" FAKE_ESLINT_RC=2 "$PRO/render-and-preview.sh" --no-open

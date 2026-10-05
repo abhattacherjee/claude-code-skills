@@ -56,7 +56,7 @@ fi
 
 # Derive project name from directory
 if [[ -z "$PROJECT_NAME" ]]; then
-  PROJECT_NAME=$(basename "$PROJECT_DIR")
+  PROJECT_NAME=$(basename -- "$PROJECT_DIR")
 fi
 
 # Set dimensions from aspect ratio
@@ -102,11 +102,11 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$PROJECT_DIR"
-cd "$PROJECT_DIR"
+mkdir -p -- "$PROJECT_DIR"
+cd -- "$PROJECT_DIR"
 
-# The name goes into JSON. JSON.stringify escapes quotes, backslashes and control characters.
-JSON_NAME=$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$PROJECT_NAME")
+# The name goes into JSON. The `--` keeps a name like "--version" from being read as a node option. JSON.stringify escapes quotes, backslashes and control characters.
+JSON_NAME=$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' -- "$PROJECT_NAME")
 cat > package.json <<PJSON
 {
   "name": $JSON_NAME,
