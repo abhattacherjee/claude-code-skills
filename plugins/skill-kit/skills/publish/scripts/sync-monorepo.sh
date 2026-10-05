@@ -173,7 +173,9 @@ fi
 # Standalone plugins: distributed via their own marketplace, not this monorepo.
 # THE one place to edit when migrating another plugin out (space-separated).
 # Both the discovery skip (SKIP line) and the --add-plugin refusal read it.
-# The SKIP message assumes the marketplace is abhattacherjee/<name>.
+# Naming assumption: each plugin's repo is abhattacherjee/<name> and its
+# marketplace is <name>-repo. The SKIP message and the generated README note
+# both derive from that; a plugin that breaks it needs this code changed.
 STANDALONE_PLUGINS="git-flow obsidian-brain"
 
 is_standalone_plugin() {
@@ -186,6 +188,10 @@ is_standalone_plugin() {
 
 # --add-plugin must not put a standalone plugin back into the monorepo. Refused
 # before any build or copy; the gate sits ahead of every write.
+if [[ -n "$ADD_PLUGIN" ]] && ! [[ "$ADD_PLUGIN" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "Error: --add-plugin takes a bare plugin name (lowercase letters, digits, hyphens), got: $ADD_PLUGIN" >&2
+  exit 1
+fi
 if [[ -n "$ADD_PLUGIN" ]] && is_standalone_plugin "$ADD_PLUGIN"; then
   echo "Error: $ADD_PLUGIN ships from its own marketplace; not adding it to this monorepo" >&2
   exit 1
@@ -1187,6 +1193,19 @@ if [[ -n "$ADD_PLUGIN" ]]; then
     exit 1
   fi
 
+  # The build dir name is not the plugin's identity: plugin.json is. Refuse a
+  # standalone plugin built under any other directory name. Fails closed: an
+  # unreadable or empty name is refused too.
+  _BUILD_NAME=$(jq -r '.name // empty' "$PLUGIN_BUILD/.claude-plugin/plugin.json" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  if [[ -z "$_BUILD_NAME" ]]; then
+    echo "Error: $PLUGIN_BUILD/.claude-plugin/plugin.json has no readable name" >&2
+    exit 1
+  fi
+  if is_standalone_plugin "$_BUILD_NAME"; then
+    echo "Error: $PLUGIN_BUILD is the $_BUILD_NAME plugin, which ships from its own marketplace; not adding it to this monorepo" >&2
+    exit 1
+  fi
+
   PLUGIN_DST="$MONOREPO_DIR/plugins/$ADD_PLUGIN"
   echo "--- Plugin: $ADD_PLUGIN ---"
 
@@ -1500,6 +1519,12 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # Build plugin section (only if plugins exist)
   PLUGIN_SECTION=""
   if [[ $PLUGIN_COUNT -gt 0 ]]; then
+    STANDALONE_NOTE=""
+    for _sp in $STANDALONE_PLUGINS; do
+      STANDALONE_NOTE="${STANDALONE_NOTE}${_sp} is not in this marketplace. It installs from its own: \`/plugin marketplace add abhattacherjee/${_sp}\`, then \`/plugin install ${_sp}@${_sp}-repo\`.
+
+"
+    done
     PLUGIN_TABLE="| Plugin | Version | Skills | Commands | Description |
 |--------|---------|--------|----------|-------------|
 $PLUGIN_CATALOG_ROWS"
@@ -1508,9 +1533,7 @@ $PLUGIN_CATALOG_ROWS"
 
 Plugins bundle skills, commands, agents, and hooks into a single installable package.
 
-obsidian-brain is not in this marketplace. It installs from its own: \`/plugin marketplace add abhattacherjee/obsidian-brain\`, then \`/plugin install obsidian-brain@obsidian-brain-repo\`.
-
-$PLUGIN_TABLE
+${STANDALONE_NOTE}$PLUGIN_TABLE
 
 ### Install via Claude Code (Recommended)
 

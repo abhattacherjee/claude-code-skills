@@ -21,6 +21,8 @@ Claude Code, Cursor, Codex CLI, and Gemini CLI.
 
 Plugins bundle skills, commands, agents, and hooks into a single installable package.
 
+git-flow is not in this marketplace. It installs from its own: `/plugin marketplace add abhattacherjee/git-flow`, then `/plugin install git-flow@git-flow-repo`.
+
 obsidian-brain is not in this marketplace. It installs from its own: `/plugin marketplace add abhattacherjee/obsidian-brain`, then `/plugin install obsidian-brain@obsidian-brain-repo`.
 
 | Plugin | Version | Skills | Commands | Description |

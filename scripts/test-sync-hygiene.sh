@@ -5624,8 +5624,11 @@ assert_not_contains "…and a folded (>) scalar is NOT announced, since folding 
 #
 # obsidian-brain and git-flow ship from their own marketplaces. A plain sync must
 # skip a manifest with either name, and --add-plugin must refuse either name
-# before it writes anything. Each case below fails against the e9d53b9 script,
-# which skipped only git-flow and had no --add-plugin guard.
+# before it writes anything. Against the e9d53b9 script, the obsidian-brain
+# plain-sync skip and the --add-plugin refusals fail. The git-flow plain-sync
+# skip and the ordinary-plugin positive control pass there too; they guard
+# against over-reach, not against the old bug. Against b389895, the git-flow
+# README note and the spelling and build-dir-name bypasses fail.
 STANDALONE_SKILLS_HOME="$SCRATCH_DIR/skills-home-standalone"
 STANDALONE_MONOREPO="$SCRATCH_DIR/monorepo-standalone"
 mkdir -p "$STANDALONE_SKILLS_HOME/obsidian-brain" "$STANDALONE_MONOREPO"
@@ -5659,6 +5662,40 @@ assert_contains "…and says it skipped obsidian-brain as standalone" \
 assert_eq "…and writes no plugins/obsidian-brain" "ABSENT" \
     "$([[ -e "$STANDALONE_MONOREPO/plugins/obsidian-brain" ]] && echo PRESENT || echo ABSENT)"
 
+# Same shape for git-flow: a plain sync skips it too.
+mkdir -p "$STANDALONE_SKILLS_HOME/git-flow"
+cat > "$STANDALONE_SKILLS_HOME/git-flow/SKILL.md" <<'GFEOF'
+---
+name: git-flow
+description: Throwaway fixture skill backing a standalone-plugin manifest.
+version: 0.1.0
+---
+
+# git-flow
+
+Fixture content.
+GFEOF
+sed 's/obsidian-brain/git-flow/g' "$STANDALONE_SKILLS_HOME/obsidian-brain/plugin-manifest.json" \
+    > "$STANDALONE_SKILLS_HOME/git-flow/plugin-manifest.json"
+GF_MONOREPO="$SCRATCH_DIR/monorepo-standalone-gf"
+mkdir -p "$GF_MONOREPO"
+GF_RC=0
+run_sync "$STANDALONE_SKILLS_HOME" "$GF_MONOREPO" "$SCRATCH_DIR/standalone-gf.stdout" "$SCRATCH_DIR/standalone-gf.stderr" || GF_RC=$?
+assert_eq "plain sync with a git-flow manifest exits 0" "0" "$GF_RC"
+assert_contains "…and says it skipped git-flow as standalone" \
+    "SKIP (standalone marketplace: abhattacherjee/git-flow)  git-flow" "$(cat "$SCRATCH_DIR/standalone-gf.stdout")"
+assert_eq "…and writes no plugins/git-flow" "ABSENT" \
+    "$([[ -e "$GF_MONOREPO/plugins/git-flow" ]] && echo PRESENT || echo ABSENT)"
+
+# The regenerated root README carries one install note per standalone plugin,
+# generated from STANDALONE_PLUGINS (repo abhattacherjee/<name>, marketplace
+# <name>-repo).
+for _sp in git-flow obsidian-brain; do
+    assert_line_present "the regenerated README has the install note for $_sp" \
+        "$_sp is not in this marketplace. It installs from its own: \`/plugin marketplace add abhattacherjee/$_sp\`, then \`/plugin install $_sp@$_sp-repo\`." \
+        "$(cat "$MONOREPO_FIXTURE/README.md" 2>/dev/null || true)"
+done
+
 for _sp in obsidian-brain git-flow; do
     # A valid-looking build dir, so a missing guard would copy it instead of
     # failing on "build directory not found".
@@ -5676,6 +5713,33 @@ for _sp in obsidian-brain git-flow; do
         "$([[ -e "$_sp_mono/plugins/$_sp" ]] && echo PRESENT || echo ABSENT)"
     rm -rf "$RUN_CWD/build/$_sp"
 done
+
+# Bypass attempts: other spellings of a standalone name, and a build dir with a
+# different name whose plugin.json says it is a standalone plugin. Each must
+# exit non-zero, write nothing under plugins/, and add no marketplace entry.
+_bypass_case() {
+    # $1 label, $2 --add-plugin value, $3 build dir (relative to RUN_CWD), $4 plugin.json name
+    local label="$1" value="$2" bdir="$3" bname="$4"
+    local mono="$SCRATCH_DIR/monorepo-bypass-$label" rc=0
+    mkdir -p "$mono/.claude-plugin"
+    echo '{"name": "bypass-fixture", "plugins": []}' > "$mono/.claude-plugin/marketplace.json"
+    mkdir -p "$RUN_CWD/$bdir/.claude-plugin"
+    echo "{\"name\": \"$bname\", \"version\": \"0.1.0\"}" > "$RUN_CWD/$bdir/.claude-plugin/plugin.json"
+    run_sync "$SKILLS_HOME_FIXTURE" "$mono" "$SCRATCH_DIR/bypass-$label.stdout" "$SCRATCH_DIR/bypass-$label.stderr" \
+        --add-plugin "$value" || rc=$?
+    assert_eq "--add-plugin $value ($label) exits 1" "1" "$rc"
+    # The fixture home auto-builds its own plugins, so check the names in play,
+    # not an empty plugins/ dir.
+    assert_eq "…and creates no plugins/ dir for it" "ABSENT" \
+        "$([[ -e "$mono/plugins/$value" || -e "$mono/plugins/${value%/}" || -e "$mono/plugins/$(printf %s "$bname" | tr '[:upper:]' '[:lower:]')" ]] && echo PRESENT || echo ABSENT)"
+    assert_not_contains "…and adds no standalone marketplace entry" \
+        "$bname" "$(cat "$mono/.claude-plugin/marketplace.json")"
+    rm -rf "$RUN_CWD/$bdir"
+}
+_bypass_case trailing-slash "obsidian-brain/" "build/obsidian-brain" "obsidian-brain"
+_bypass_case uppercase "Obsidian-Brain" "build/Obsidian-Brain" "obsidian-brain"
+_bypass_case renamed-build-dir "ob2" "build/ob2" "obsidian-brain"
+_bypass_case renamed-build-dir-mixed-case-name "gf2" "build/gf2" "Git-Flow"
 
 # Positive control: --add-plugin for a non-standalone plugin is not refused.
 mkdir -p "$RUN_CWD/build/ordinary-plugin/.claude-plugin"
