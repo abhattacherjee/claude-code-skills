@@ -2,6 +2,12 @@
 
 All notable changes to this skill will be documented in this file.
 
+## [0.2.1] - 2026-10-05
+
+### Changed
+
+- The doc tests (`scripts/test_skill_docs.py`) read the deprecated `deep-review` plugin's copy of the skill, not the top-level `deep-review/` directory, which is deleted (#167). The byte-identical-copy test is gone with it. The changelog check no longer depends on that directory to find the repo root.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added

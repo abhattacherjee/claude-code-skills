@@ -2,6 +2,12 @@
 
 All notable changes to the **dev-flow** plugin are documented here.
 
+## [1.0.1] - 2026-10-05
+
+### Changed
+
+- The bundled `validate-skill.sh` usage example no longer names the deleted `changelog-keeper/` directory, and its NOTE says where the copies live now. Comment and help text only (#167).
+
 ## [1.0.0] - 2026-10-04
 
 ### Added

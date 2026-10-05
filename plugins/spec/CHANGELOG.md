@@ -2,6 +2,12 @@
 
 All notable changes to the **spec** plugin are documented here.
 
+## [1.0.4] - 2026-10-05
+
+### Changed
+
+- README: the `review` section now says how the four agents run, what each catches and what `review` adds to a spec. This came from the old `spec-review` README, which is deleted with the other bare skill directories (#167).
+
 ## [1.0.3] - 2026-10-04
 
 ### Changed

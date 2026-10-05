@@ -87,7 +87,7 @@ class AdversarialReviewDocTests(unittest.TestCase):
     def test_changelogs_list_the_passthrough_env_vars(self):
         paths = [HERE.parent / "CHANGELOG.md", HERE.parent.parent.parent / "CHANGELOG.md"]
         root = HERE.parents[4] / "CHANGELOG.md"
-        if (HERE.parents[4] / "deep-review").is_dir() and root.is_file():
+        if (HERE.parents[4] / "plugins").is_dir() and root.is_file():
             paths.append(root)  # the monorepo checkout only
         for path in paths:
             text = path.read_text(encoding="utf-8")
@@ -262,26 +262,17 @@ class AgentNeverIdleOnOwnBackgroundRunTests(unittest.TestCase):
 
 
 REPO = HERE.parents[4]
-DR_SOURCE = REPO / "deep-review"
-DR_COPY = REPO / "plugins" / "deep-review" / "skills" / "deep-review"
+# The deprecated deep-review plugin's copy of the skill. The bare top-level deep-review/
+# directory it used to be compared with was deleted in #167.
+DR_SOURCE = REPO / "plugins" / "deep-review" / "skills" / "deep-review"
 AR_SCRIPT_NAME = re.compile(
     r"\b((?:codex|gemini)-review\.sh|pick-adversary\.sh|ensure-(?:codex|gemini)\.sh|pr-audit\.py|synthesize\.py)\b")
 
 
-@unittest.skipUnless(DR_SOURCE.is_dir() and DR_COPY.is_dir(), "not in the monorepo checkout")
+@unittest.skipUnless(DR_SOURCE.is_dir(), "not in the monorepo checkout")
 class DeepReviewDocTests(unittest.TestCase):
     def read(self, rel):
         return (DR_SOURCE / rel).read_text(encoding="utf-8")
-
-    def test_published_copy_is_byte_identical(self):
-        for src in sorted(DR_SOURCE.rglob("*")):
-            if src.is_dir() or src.name == "plugin-manifest.json":
-                continue
-            rel = src.relative_to(DR_SOURCE)
-            self.assertEqual((DR_COPY / rel).read_bytes(), src.read_bytes(), str(rel))
-        for copy in sorted(DR_COPY.rglob("*")):
-            if copy.is_file():
-                self.assertTrue((DR_SOURCE / copy.relative_to(DR_COPY)).is_file(), str(copy))
 
     def test_named_adversarial_review_scripts_exist(self):
         text = self.read("SKILL.md") + self.read("references/audit-trail.md")

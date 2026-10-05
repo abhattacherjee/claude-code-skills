@@ -10,6 +10,7 @@ All notable changes to the **publish** skill (was `skill-publishing`) are docume
 - `publish`: `release-monorepo.sh` counts and lists `plugins/*/skills/*/SKILL.md`. It counted top-level `SKILL.md` files and printed "Skills: 0" once those were deleted (#167).
 - `publish`: the `workflow-monorepo.yml` template and this repo's own workflow match changed skills under `plugins/<group>/skills/<name>/`, not the old top-level directories. A skill directory removed in the PR is skipped. One that is still there without `SKILL.md` fails the job (#167).
 - `publish`: `validate-plugin.sh` takes the skill validator's own exit code (it used to take `sed`'s, so a failing skill passed), and a `skills/` directory with no skill in it is a FAIL (#167).
+- `publish`: the CONTRIBUTING text that `sync-monorepo.sh` writes into a monorepo says to create a skill at `plugins/<group>/skills/<name>/`, not a directory at the repo root. The bundled `validate-skill.sh` example no longer names the deleted `changelog-keeper/` directory (#167).
 
 ## [1.0.1] - 2026-10-05
 

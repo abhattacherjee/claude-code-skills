@@ -1815,7 +1815,7 @@ if [[ -f "$TEMPLATE_DIR/CONTRIBUTING-template.md" ]]; then
   cat > "$SCOPE_TMP" <<'SCOPE_EOF'
 ### Adding a new skill
 
-1. Create a new directory at the repo root (e.g., `my-skill/`)
+1. Create the skill at `plugins/<group>/skills/<name>/` (e.g., `plugins/dev-flow/skills/my-skill/`). A new plugin also needs `plugins/<group>/.claude-plugin/plugin.json`
 2. Add a `SKILL.md` with valid YAML frontmatter
 3. Optionally add `scripts/` and `references/` directories
 

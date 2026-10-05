@@ -501,4 +501,4 @@ rm -rf /tmp/ccs
 
 - `skill-authoring` — how to structure and write skills (the content)
 - This skill handles the distribution packaging (the container)
-- **GitHub**: https://github.com/abhattacherjee/claude-code-skills/tree/main/skill-publishing — install instructions, changelog, license
+- **GitHub**: https://github.com/abhattacherjee/claude-code-skills/tree/main/plugins/skill-kit — the skill-kit plugin that replaced this skill (`skill-kit:publish`): install instructions, changelog, license
