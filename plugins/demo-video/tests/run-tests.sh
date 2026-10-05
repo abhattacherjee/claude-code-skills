@@ -340,6 +340,22 @@ run_in "$PROJ" "$REC/install-deps.sh" --help
 check "--help exits 0 and shows usage" 0 'USAGE:'
 run_in "$PROJ" "$REC/install-deps.sh" --bogus
 check "an unknown option exits 2 with a message" 2 "" 'Unknown option: --bogus'
+# The installer with every Python module missing (blocked) and a fake python3 that passes
+# everything to the real one except `-m pip`, which it logs and answers per FAKE_PIP:
+# "pep668" refuses like a Homebrew Python, "ok" claims success but installs nothing.
+mkdir -p "$TMP/deps-bin"
+REAL_PY3="$(command -v python3)"
+printf '#!/bin/sh\nif [ "$1" = "-m" ] && [ "$2" = "pip" ]; then\n  echo "pip $*" >> "$DEPS_LOG"\n  if [ "$FAKE_PIP" = pep668 ]; then echo "error: externally-managed-environment" >&2; exit 1; fi\n  echo "Successfully installed $4"; exit 0\nfi\nexec "%s" "$@"\n' "$REAL_PY3" > "$TMP/deps-bin/python3"
+printf '#!/bin/sh\necho "ffmpeg version 9.9 fake"\n' > "$TMP/deps-bin/ffmpeg"
+chmod +x "$TMP/deps-bin/python3" "$TMP/deps-bin/ffmpeg"
+: > "$TMP/deps-log"
+run_in "$PROJ" env PATH="$TMP/deps-bin:$TMP/stubs:$PATH" PYTHONPATH="$TMP/nocv" DEPS_LOG="$TMP/deps-log" FAKE_PIP=pep668 "$REC/install-deps.sh"
+check "a Python that refuses pip (PEP 668): exit 1, pointing at a venv or --user" 1 "" 'python3 -m venv'
+case "$ERR" in *"--user pyobjc-framework-Quartz"*) ok "the PEP 668 message names the --user command" ;; *) bad "the PEP 668 message names the --user command" "$ERR" ;; esac
+grep -Fq 'pip -m pip install pyobjc-framework-Quartz' "$TMP/deps-log" && ok "the installer uses python3 -m pip" || bad "the installer uses python3 -m pip" "$(cat "$TMP/deps-log")"
+run_in "$PROJ" env PATH="$TMP/deps-bin:$TMP/stubs:$PATH" PYTHONPATH="$TMP/nocv" DEPS_LOG="$TMP/deps-log" FAKE_PIP=ok "$REC/install-deps.sh"
+check "pip says yes but the imports still fail: exit 1 and names them" 1 "" 'still missing after the install: pyobjc-framework-Quartz opencv-python numpy'
+case "$OUT" in *"All dependencies installed"*) bad "no 'All dependencies installed' when something is missing" "$OUT" ;; *) ok "no 'All dependencies installed' when something is missing" ;; esac
 
 echo "record.sh"
 run_in "$PROJ" "$REC/record.sh" --help
