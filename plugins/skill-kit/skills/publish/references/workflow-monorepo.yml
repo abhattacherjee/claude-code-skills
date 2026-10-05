@@ -15,12 +15,32 @@ jobs:
       - name: Detect changed skill directories
         id: changed
         run: |
-          # Skills live at plugins/<group>/skills/<name>/ (#167). Any changed file
-          # inside one marks that skill directory as changed.
-          ALL_DIRS=$(git diff --name-only origin/main...HEAD | \
-            grep -E '^plugins/[a-z][a-z0-9-]+/skills/[a-z][a-z0-9-]+/' | \
-            cut -d/ -f1-4 | \
-            sort -u || true)
+          # A failed diff (no origin/main, a shallow clone) must fail the step.
+          # It used to be hidden by `|| true` and read as "No skill directories changed".
+          if ! CHANGED_FILES=$(git diff --name-only origin/main...HEAD); then
+            echo "::error::git diff origin/main...HEAD failed, so the changed skills are unknown"
+            exit 1
+          fi
+
+          # Plugin skills: any changed file under plugins/<group>/skills/<name>/ (#167).
+          # sed -n …p prints only matching lines and exits 0 when none match.
+          PLUGIN_DIRS=$(printf '%s\n' "$CHANGED_FILES" | \
+            sed -n -E 's#^(plugins/[a-z][a-z0-9-]+/skills/[a-z][a-z0-9-]+)/.*#\1#p')
+
+          # Top-level skills: any changed file under <name>/ when <name>/SKILL.md
+          # exists now or existed at the merge base (a removed skill is listed,
+          # and the next step skips it). sync-monorepo.sh --skills/--add still
+          # writes skills there.
+          BASE=$(git merge-base origin/main HEAD)
+          TOP_DIRS=""
+          for d in $(printf '%s\n' "$CHANGED_FILES" | sed -n -E 's#^([a-z][a-z0-9-]+)/.*#\1#p' | sort -u); do
+            [[ "$d" == plugins ]] && continue
+            if [[ -f "$d/SKILL.md" ]] || git cat-file -e "$BASE:$d/SKILL.md" 2>/dev/null; then
+              TOP_DIRS=$(printf '%s\n%s' "$TOP_DIRS" "$d")
+            fi
+          done
+
+          ALL_DIRS=$(printf '%s\n%s\n' "$PLUGIN_DIRS" "$TOP_DIRS" | sed '/^$/d' | sort -u)
 
           if [[ -z "$ALL_DIRS" ]]; then
             echo "No skill directories changed"
@@ -83,11 +103,14 @@ jobs:
       - name: Detect changed plugin directories
         id: changed
         run: |
-          # Find plugin directories that changed in this PR
-          CHANGED_PLUGINS=$(git diff --name-only origin/main...HEAD | \
-            grep -E '^plugins/[a-z][a-z0-9-]+/' | \
-            sed 's|^plugins/||; s|/.*||' | \
-            sort -u || true)
+          # A failed diff must fail the step, not read as "No plugin directories changed".
+          if ! CHANGED_FILES=$(git diff --name-only origin/main...HEAD); then
+            echo "::error::git diff origin/main...HEAD failed, so the changed plugins are unknown"
+            exit 1
+          fi
+          CHANGED_PLUGINS=$(printf '%s\n' "$CHANGED_FILES" | \
+            sed -n -E 's#^plugins/([a-z][a-z0-9-]+)/.*#\1#p' | \
+            sort -u)
 
           if [[ -z "$CHANGED_PLUGINS" ]]; then
             echo "No plugin directories changed"
@@ -106,6 +129,8 @@ jobs:
 
       - name: Validate changed plugins
         if: steps.changed.outputs.plugins != ''
+        env:
+          PLUGINS: ${{ steps.changed.outputs.plugins }}
         run: |
           chmod +x scripts/validate-plugin.sh
           # validate-plugin.sh delegates to validate-skill.sh for embedded skills
@@ -113,17 +138,20 @@ jobs:
           FAILED=0
 
           while IFS= read -r plugin; do
+            [[ -z "$plugin" ]] && continue
             PLUGIN_DIR="plugins/$plugin"
-            if [[ -d "$PLUGIN_DIR" ]]; then
-              echo ""
-              echo "=========================================="
-              echo "Validating plugin: $plugin"
-              echo "=========================================="
-              if ! scripts/validate-plugin.sh "$PLUGIN_DIR"; then
-                FAILED=1
-              fi
+            if [[ ! -d "$PLUGIN_DIR" ]]; then
+              echo "Skipping $PLUGIN_DIR: removed in this PR"
+              continue
             fi
-          done <<< "${{ steps.changed.outputs.plugins }}"
+            echo ""
+            echo "=========================================="
+            echo "Validating plugin: $plugin"
+            echo "=========================================="
+            if ! scripts/validate-plugin.sh "$PLUGIN_DIR"; then
+              FAILED=1
+            fi
+          done <<< "$PLUGINS"
 
           if [[ $FAILED -ne 0 ]]; then
             echo ""
