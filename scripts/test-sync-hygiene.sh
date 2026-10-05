@@ -318,6 +318,14 @@ exit 1
 EOF
 chmod +x "$GH_SHIM_DIR/gh"
 
+# prepare-plugin.sh now stops with exit 1 when the plugin it assembled fails
+# validate-plugin.sh (#167). Most fixtures below test description parsing and
+# build mechanics with skills that validate-skill.sh rejects on purpose (no
+# description, a top-level `version:`), so validation is switched off for the
+# whole harness with the variable prepare-plugin.sh documents for this. The
+# "prepare-plugin.sh fails closed" cases in the #167 section unset it.
+export SKILL_KIT_NO_PLUGIN_VALIDATION=1
+
 # ============================================================
 # Fixtures
 # ============================================================
@@ -5925,6 +5933,37 @@ EMPTY_PRE_RC=0
 presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --add no-such-skill "$EMPTY_PRE_MONO" || EMPTY_PRE_RC=$?
 assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
 assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
+
+# prepare-plugin.sh fails closed on a plugin that fails validate-plugin.sh (#167).
+# It used to run the validator with `|| true`, print "Plugin assembled" and exit 0.
+mkdir -p "$PREPARE_FIXTURE_DIR/validate-good" "$PREPARE_FIXTURE_DIR/validate-bad"
+printf -- '---\nname: validate-good\ndescription: Fixture skill that passes validate-skill.sh. Use when: testing prepare-plugin.sh validation.\nmetadata:\n  version: 0.1.0\n---\n\n# validate-good\n' \
+    > "$PREPARE_FIXTURE_DIR/validate-good/SKILL.md"
+printf -- '---\nname: validate-bad\ndescription: Fixture skill with no trigger list.\nversion: 0.1.0\n---\n\n# validate-bad\n' \
+    > "$PREPARE_FIXTURE_DIR/validate-bad/SKILL.md"
+for _v in good bad; do
+    printf '{"name": "validate-%s", "version": "0.1.0", "description": "Fixture plugin for prepare-plugin.sh validation.", "skills": [{"name": "validate-%s", "source": "."}], "commands": []}\n' \
+        "$_v" "$_v" > "$PREPARE_FIXTURE_DIR/validate-$_v/plugin-manifest.json"
+done
+_prep_validated() {
+    local v="$1" rc=0
+    (
+        cd "$RUN_CWD"
+        env -u SKILL_KIT_NO_PLUGIN_VALIDATION PATH="$GH_SHIM_DIR:$PATH" TMPDIR="$PREPARE_TMPDIR" \
+            "$PREPARE_SCRIPT" --output-dir "$PREPARE_OUT_DIR/validate-$v" --github-user harness-fixture-user \
+            "$PREPARE_FIXTURE_DIR/validate-$v/plugin-manifest.json"
+    ) >"$SCRATCH_DIR/prep-validate-$v.stdout" 2>"$SCRATCH_DIR/prep-validate-$v.stderr" || rc=$?
+    return "$rc"
+}
+PREP_VBAD_RC=0
+_prep_validated bad || PREP_VBAD_RC=$?
+assert_eq "prepare-plugin.sh exits 1 when the assembled plugin fails validate-plugin.sh (#167)" "1" "$PREP_VBAD_RC"
+assert_contains "…and says so" "fails validation (see the FAIL lines above)" "$(cat "$SCRATCH_DIR/prep-validate-bad.stderr")"
+assert_not_contains "…and does not print \"Plugin assembled\"" "Plugin assembled" "$(cat "$SCRATCH_DIR/prep-validate-bad.stdout")"
+PREP_VGOOD_RC=0
+_prep_validated good || PREP_VGOOD_RC=$?
+assert_eq "control: prepare-plugin.sh with a valid skill still exits 0 with validation on" "0" "$PREP_VGOOD_RC"
+assert_contains "…and ran the validator" "--- Validation ---" "$(cat "$SCRATCH_DIR/prep-validate-good.stdout")"
 
 # The deprecated plugins/skill-publishing copy refuses to run at all (#167): its
 # scripts still wrote the old layout, still ship in the marketplace until the next
