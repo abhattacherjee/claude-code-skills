@@ -205,10 +205,9 @@ if [[ -d "$PLUGIN_DIR/skills" ]]; then
       else
         fail "skill $SKILL_NAME: fails validation"
       fi
-    elif [[ -f "$skill_dir/SKILL.md" ]]; then
-      pass "skill $SKILL_NAME: SKILL.md exists (validator not available for detailed check)"
     else
-      fail "skill $SKILL_NAME: missing SKILL.md"
+      # Fail closed: a skill nobody validated must not count as a pass.
+      fail "skill $SKILL_NAME: not validated: $VALIDATE_SKILL is missing or not executable"
     fi
   done < <(find "$PLUGIN_DIR/skills" -maxdepth 1 -mindepth 1 -type d | sort)
 

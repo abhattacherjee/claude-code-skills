@@ -70,6 +70,23 @@ printf -- '---\ndescription: Does a thing\n---\n\nBody\n' > "$P/commands/c.md"
 run "$P"
 [[ $RC -eq 0 ]] && ok "a commands-only plugin (no skills/ directory) still passes" || bad "a commands-only plugin (no skills/ directory) still passes" "rc=$RC: $OUT"
 
+# The skill validator cannot run: the skill must FAIL, not pass "SKILL.md exists".
+echo ""
+echo "validate-skill.sh missing or not executable"
+NOVAL="$TMP/noval"; mkdir -p "$NOVAL"
+cp "$VALIDATOR" "$NOVAL/validate-plugin.sh"
+P="$(new_plugin noval-plugin)"; add_skill "$P" s good
+OUT="$("$NOVAL/validate-plugin.sh" "$P" 2>&1)" && RC=0 || RC=$?
+[[ $RC -eq 1 ]] && ok "no validate-skill.sh next to it: a valid-looking skill fails the plugin (rc 1)" || bad "no validate-skill.sh next to it: a valid-looking skill fails the plugin (rc 1)" "rc=$RC: $OUT"
+[[ "$OUT" == *"FAIL  skill s: not validated: $NOVAL/validate-skill.sh is missing or not executable"* ]] && ok "…and the FAIL line names the validator" || bad "…and the FAIL line names the validator" "$OUT"
+[[ "$OUT" != *"PASS  skill s"* ]] && ok "…and there is no PASS line for the skill" || bad "…and there is no PASS line for the skill" "$OUT"
+cp "$(dirname "$VALIDATOR")/validate-skill.sh" "$NOVAL/validate-skill.sh"; chmod -x "$NOVAL/validate-skill.sh"
+OUT="$("$NOVAL/validate-plugin.sh" "$P" 2>&1)" && RC=0 || RC=$?
+[[ $RC -eq 1 && "$OUT" == *"FAIL  skill s: not validated:"* ]] && ok "a validate-skill.sh that is not executable fails the same way" || bad "a validate-skill.sh that is not executable fails the same way" "rc=$RC: $OUT"
+chmod +x "$NOVAL/validate-skill.sh"
+OUT="$("$NOVAL/validate-plugin.sh" "$P" 2>&1)" && RC=0 || RC=$?
+[[ $RC -eq 0 ]] && ok "control: with the validator back, the same plugin passes" || bad "control: with the validator back, the same plugin passes" "rc=$RC: $OUT"
+
 echo ""
 echo "copies of validate-plugin.sh"
 for c in plugins/skill-kit/skills/publish/scripts/validate-plugin.sh plugins/skill-publishing/skills/skill-publishing/scripts/validate-plugin.sh; do
