@@ -1,7 +1,28 @@
 #!/usr/bin/env bash
 set -eu
 
-echo "=== Smart Screen Recorder — Dependency Installer ==="
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    cat <<'HELP'
+Install the dependencies for demo-video:record: ffmpeg, python3 (checked),
+pyobjc-framework-Quartz, opencv-python and numpy.
+
+USAGE:
+    install-deps.sh [-h|--help]
+
+It installs ffmpeg with Homebrew and the Python packages with pip3. Anything
+already installed is left alone. macOS only.
+HELP
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    "") ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+esac
+
+echo "=== Demo Video (record) — Dependency Installer ==="
 echo ""
 
 # ffmpeg
@@ -53,8 +74,8 @@ echo ""
 echo "All dependencies installed."
 echo ""
 echo "Usage:"
-echo "  ~/.claude/skills/smart-screen-recorder/scripts/record.sh"
-echo "  ~/.claude/skills/smart-screen-recorder/scripts/record.sh --help"
+echo "  $SCRIPT_DIR/record.sh"
+echo "  $SCRIPT_DIR/record.sh --help"
 echo ""
 echo "Note: macOS will prompt for Screen Recording permission on first use."
 echo "Grant it in: System Settings > Privacy & Security > Screen & System Audio Recording"

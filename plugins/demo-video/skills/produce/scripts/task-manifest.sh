@@ -2,13 +2,14 @@
 set -eu
 
 usage() {
+  local rc="${1:-0}"
   cat <<EOF
 Usage: $(basename "$0") <workflow> | --list | --help
 
-Emit task manifest (JSON array) for product-video-creation workflows.
+Emit the task manifest (JSON array) for the workflows of the demo-video:produce skill.
 
 Workflows:
-  full-video      Full narrated product video (9 tasks)
+  full-video      Full narrated product video (10 tasks)
   visual-only     Video without voiceover (7 tasks)
   screenshots     Screenshot capture only (3 tasks)
   brand-update    Apply brand guidelines to existing video (3 tasks)
@@ -18,7 +19,7 @@ Options:
   --list          List available workflow names
   -h, --help      Show this help
 EOF
-  exit 0
+  exit "$rc"
 }
 
 case "${1:-}" in
@@ -33,13 +34,13 @@ case "${1:-}" in
     cat <<'JSON'
 [
   {"subject":"Voice selection brainstorm","activeForm":"Brainstorming voice options with user","description":"Present OpenAI TTS voices (13 options) vs macOS native voices. Wait for user selection."},
-  {"subject":"Craft narrative (Opus agent)","activeForm":"Storyteller agent crafting narrative arc","description":"Launch product-video-storyteller (Opus) to create emotional arc, scene scripts, and voiceover narration. Present to user for approval."},
+  {"subject":"Craft narrative (Opus agent)","activeForm":"Storyteller agent crafting narrative arc","description":"Launch demo-video:product-video-storyteller (Opus) to create emotional arc, scene scripts, and voiceover narration. Present to user for approval."},
   {"subject":"Setup Remotion project","activeForm":"Setting up Remotion project with Tailwind","description":"Initialize or verify Remotion project, install dependencies including lucide-react"},
   {"subject":"Capture app screenshots","activeForm":"Capturing mobile screenshots with Playwright","description":"Take hero, flow steps, and results page screenshots at mobile viewport. Full-page for scroll effects."},
   {"subject":"Generate voiceover audio","activeForm":"Generating TTS audio per scene","description":"Run generate-voiceover.sh with selected provider/voice. Save per-scene MP3 files to public/audio/."},
   {"subject":"Create scene components","activeForm":"Building animated scene components","description":"Create 7 scenes using storyteller's narrative — not templates. Include AnimatedPhone, ScrollingPhone."},
   {"subject":"Apply brand guidelines","activeForm":"Applying brand colors, fonts, and tone","description":"Extract from brand PDF, map to video palette and typography, apply across all scenes."},
-  {"subject":"Find background music","activeForm":"Music curator searching royalty-free tracks","description":"Launch product-video-music-curator to find tracks matching narrative arc and brand tone. Present options to user."},
+  {"subject":"Find background music","activeForm":"Music curator searching royalty-free tracks","description":"Launch demo-video:product-video-music-curator to find tracks matching narrative arc and brand tone. Present options to user."},
   {"subject":"Mix audio and wire composition","activeForm":"Mixing voiceover with background music","description":"Add background music Audio component, set volume ducking, wire Sequence timing from audio durations."},
   {"subject":"Lint and preview","activeForm":"Running lint checks and launching preview","description":"Run eslint + tsc, start Remotion studio for preview"}
 ]
@@ -48,7 +49,7 @@ JSON
   visual-only)
     cat <<'JSON'
 [
-  {"subject":"Craft narrative (Opus agent)","activeForm":"Storyteller agent crafting narrative arc","description":"Launch product-video-storyteller (Opus) to create emotional arc and scene scripts (no voiceover)."},
+  {"subject":"Craft narrative (Opus agent)","activeForm":"Storyteller agent crafting narrative arc","description":"Launch demo-video:product-video-storyteller (Opus) to create emotional arc and scene scripts (no voiceover)."},
   {"subject":"Setup Remotion project","activeForm":"Setting up Remotion project with Tailwind","description":"Initialize or verify Remotion project, install dependencies"},
   {"subject":"Capture app screenshots","activeForm":"Capturing mobile screenshots with Playwright","description":"Take hero, flow, and results page screenshots at mobile viewport"},
   {"subject":"Create scene components","activeForm":"Building animated scene components","description":"Create 7 scenes using storyteller's narrative output"},
@@ -85,6 +86,7 @@ JSON
 ]
 JSON
     ;;
-  -h|--help|"") usage ;;
+  -h|--help) usage 0 ;;
+  "") usage 2 >&2 ;;
   *) echo "Unknown workflow: $1" >&2; exit 2 ;;
 esac

@@ -7,6 +7,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
+  local rc="${1:-0}"
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS] <output-dir>
 
@@ -28,7 +29,7 @@ Examples:
   $(basename "$0") ./public/screenshots --fullpage --hide-selectors ".fixed,.theme-toggle"
 
 EOF
-  exit 0
+  exit "$rc"
 }
 
 # Defaults
@@ -43,6 +44,13 @@ OUTPUT_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --url|--shared-url|--viewport|--dpr|--hide-selectors|--flow-script)
+      if [[ $# -lt 2 ]]; then
+        echo "Option $1 needs a value" >&2
+        exit 2
+      fi ;;
+  esac
+  case "$1" in
     --url) APP_URL="$2"; shift 2 ;;
     --shared-url) SHARED_URL="$2"; shift 2 ;;
     --viewport) VIEWPORT="$2"; shift 2 ;;
@@ -50,7 +58,7 @@ while [[ $# -gt 0 ]]; do
     --hide-selectors) HIDE_SELECTORS="$2"; shift 2 ;;
     --flow-script) FLOW_SCRIPT="$2"; shift 2 ;;
     --fullpage) FULLPAGE=true; shift ;;
-    -h|--help) usage ;;
+    -h|--help) usage 0 ;;
     -*) echo "Unknown option: $1" >&2; exit 2 ;;
     *) OUTPUT_DIR="$1"; shift ;;
   esac
@@ -58,7 +66,7 @@ done
 
 if [[ -z "$OUTPUT_DIR" ]]; then
   echo "Error: output directory is required" >&2
-  usage
+  usage 2 >&2
 fi
 
 mkdir -p "$OUTPUT_DIR"

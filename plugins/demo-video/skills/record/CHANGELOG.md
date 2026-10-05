@@ -7,6 +7,18 @@ All notable changes to the **record** skill (was `smart-screen-recorder`) are do
 ### Changed
 
 - Moved into the `demo-video` plugin as `demo-video:record` (#162). Same pipeline as `smart-screen-recorder` 4.3.0. The old name and `/smart-screen-recorder` still match as trigger phrases.
+- Every script command is written to work from your project directory (checked statically by `check-skill-commands.py`): `"${CLAUDE_SKILL_DIR}/scripts/record.sh"` and so on. The old text used a path under the old skill's install folder, which exists only for a hand-copied skill.
+- The five agents are started by plugin agent type: `demo-video:demo-storyteller`, `demo-video:demo-director`, `demo-video:zoom-qa-verifier`, `demo-video:voiceover-timing-fixer` and `demo-video:demo-post-production-editor`. The old text started a general-purpose agent with a persona file from your `~/.claude` agents folder, a file that is not part of any install. The agent table names the agent type, not a file.
+- `record.sh` and `install-deps.sh` print the path they run from, not the old install path.
+
+### Added
+
+- Step 7b starts the Voiceover Timing Fixer. The agent registry listed it, but no step started it.
+
+### Fixed
+
+- `install-deps.sh --help` (and any other argument) ran the installer, with its Homebrew and pip installs. `-h` and `--help` now print usage and exit 0, and an unknown option exits 2.
+- `record.sh` with an option that needs a value and none given (`record.sh -o`) stopped with `unbound variable` (exit 1). It exits 2 and says which option needs a value.
 
 ## History before 1.0.0 (as `smart-screen-recorder`)
 

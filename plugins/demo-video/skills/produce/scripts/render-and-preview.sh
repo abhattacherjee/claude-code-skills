@@ -2,6 +2,7 @@
 set -eu
 
 usage() {
+  local rc="${1:-0}"
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS] [composition-id]
 
@@ -27,7 +28,7 @@ Examples:
   $(basename "$0") --output out/reel-v2.mp4           # Custom output path
 
 EOF
-  exit 0
+  exit "$rc"
 }
 
 COMP_ID=""
@@ -39,13 +40,20 @@ CUSTOM_FRAMES=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --output|--quality|--frames)
+      if [[ $# -lt 2 ]]; then
+        echo "Option $1 needs a value" >&2
+        exit 2
+      fi ;;
+  esac
+  case "$1" in
     --output) OUTPUT="$2"; shift 2 ;;
     --contact-sheet) CONTACT_SHEET=true; shift ;;
     --open) OPEN_VIDEO=true; shift ;;
     --no-open) OPEN_VIDEO=false; shift ;;
     --quality) QUALITY="--crf $2"; shift 2 ;;
     --frames) CUSTOM_FRAMES="$2"; shift 2 ;;
-    -h|--help) usage ;;
+    -h|--help) usage 0 ;;
     -*) echo "Unknown option: $1" >&2; exit 2 ;;
     *) COMP_ID="$1"; shift ;;
   esac

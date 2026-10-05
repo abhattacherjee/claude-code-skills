@@ -289,12 +289,12 @@ jobs:
 
       # Unconditional, like the other harness jobs: the checker reads plugin text and
       # the review plugin's analyzer, and neither is matched by the path filters above.
-      # Only `spec`, `review`, `skill-kit`, `context`, `dev-flow` and `ui-design` opt in so far. Other plugins are tracked in #151.
+      # Only `spec`, `review`, `skill-kit`, `context`, `dev-flow`, `ui-design` and `demo-video` opt in so far. Other plugins are tracked in #151.
       - name: Test the skill-command checker
         run: bash scripts/test-check-skill-commands.sh
 
       - name: Check that every skill command runs as written
-        run: python3 scripts/check-skill-commands.py plugins/spec plugins/review plugins/skill-kit plugins/context plugins/dev-flow plugins/ui-design
+        run: python3 scripts/check-skill-commands.py plugins/spec plugins/review plugins/skill-kit plugins/context plugins/dev-flow plugins/ui-design plugins/demo-video
 
   spec-tests:
     # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below

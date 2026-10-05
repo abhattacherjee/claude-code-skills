@@ -76,7 +76,7 @@ const eased = progress < 0.5
 ### Entry Animations
 - **spring()** for element entries — `damping: 14, mass: 0.8` for standard, lower damping for bouncier
 - **Staggered delays** — increment by 10-25 frames per element for cascade reveals
-- **translateY + opacity** for text entries: `translateY(${interpolate(spring, [0, 1], [30, 0])}px)`
+- **translateY + opacity** for text entries: map the spring from 30 to 0 with `interpolate(spring, [0, 1], [30, 0])` and use the result as the `translateY` offset in pixels
 
 ### Ambient Effects
 - **Floating phones**: `Math.sin(frame * 0.025) * 4` — 4px amplitude, slow oscillation

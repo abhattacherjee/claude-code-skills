@@ -2,6 +2,7 @@
 set -eu
 
 usage() {
+  local rc="${1:-0}"
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS] <script-file> <output-dir>
 
@@ -28,7 +29,7 @@ Examples:
   $(basename "$0") --list-voices --provider openai
 
 EOF
-  exit 0
+  exit "$rc"
 }
 
 PROVIDER=""
@@ -42,13 +43,20 @@ OUTPUT_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --provider|--voice|--model|--instructions|--speed)
+      if [[ $# -lt 2 ]]; then
+        echo "Option $1 needs a value" >&2
+        exit 2
+      fi ;;
+  esac
+  case "$1" in
     --provider) PROVIDER="$2"; shift 2 ;;
     --voice) VOICE="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
     --instructions) INSTRUCTIONS="$2"; shift 2 ;;
     --speed) SPEED="$2"; shift 2 ;;
     --list-voices) LIST_VOICES=true; shift ;;
-    -h|--help) usage ;;
+    -h|--help) usage 0 ;;
     -*) echo "Unknown option: $1" >&2; exit 2 ;;
     *)
       if [[ -z "$SCRIPT_FILE" ]]; then
@@ -69,6 +77,11 @@ if [[ -z "$PROVIDER" ]]; then
     PROVIDER="macos"
   fi
 fi
+
+case "$PROVIDER" in
+  openai|macos) ;;
+  *) echo "Unknown provider: $PROVIDER (use openai or macos)" >&2; exit 2 ;;
+esac
 
 # Set default voice per provider
 if [[ -z "$VOICE" ]]; then
@@ -109,7 +122,7 @@ fi
 
 if [[ -z "$SCRIPT_FILE" || -z "$OUTPUT_DIR" ]]; then
   echo "Error: script file and output directory are required" >&2
-  usage
+  usage 2 >&2
 fi
 
 if [[ ! -f "$SCRIPT_FILE" ]]; then

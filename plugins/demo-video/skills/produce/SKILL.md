@@ -22,32 +22,36 @@ Orchestrator (this skill — coordinates all phases)
 └── Composition wiring (Code — timing, audio sync, aspect ratio)
 ```
 
+Start each agent by its plugin agent type, `demo-video:<agent>` (for example `demo-video:product-video-storyteller`). Never start one by a file path.
+
 ## Quick Reference — Skill Scripts
 
-All scripts are in `~/.claude/skills/product-video-creation/scripts/` and are standalone:
+All scripts are in this skill's `scripts/` directory and are standalone. Run each command in a fresh shell from your Remotion project directory (the capture and render commands use paths relative to it):
 
 ```bash
-SKILL_DIR=~/.claude/skills/product-video-creation
-
 # Scaffold a new project (no existing project needed)
-$SKILL_DIR/scripts/scaffold-project.sh ~/dev/my-video --aspect 9:16
+"${CLAUDE_SKILL_DIR}/scripts/scaffold-project.sh" <PROJECT_DIR> --aspect 9:16
 
 # Capture screenshots
-$SKILL_DIR/scripts/capture-screenshots.sh ./public/screenshots --url https://myapp.com
+"${CLAUDE_SKILL_DIR}/scripts/capture-screenshots.sh" ./public/screenshots --url https://myapp.com
 
 # Generate voiceover
-$SKILL_DIR/scripts/generate-voiceover.sh narration.json ./public/audio --provider openai --voice ash
+"${CLAUDE_SKILL_DIR}/scripts/generate-voiceover.sh" narration.json ./public/audio --provider openai --voice ash
 
 # Render and preview
-$SKILL_DIR/scripts/render-and-preview.sh --contact-sheet
+"${CLAUDE_SKILL_DIR}/scripts/render-and-preview.sh" --contact-sheet
 
 # Task manifest
-$SKILL_DIR/scripts/task-manifest.sh full-video
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full-video
 ```
 
 ## Progress Tracking (MANDATORY)
 
-Create tasks from `scripts/task-manifest.sh full-video` before starting.
+Create tasks from the output of this command before starting:
+
+```bash
+"${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" full-video
+```
 
 ## Phase 0: Project Setup & Voice Selection
 
@@ -55,8 +59,8 @@ Create tasks from `scripts/task-manifest.sh full-video` before starting.
 
 If the user is NOT already in a Remotion project, scaffold one:
 ```bash
-~/.claude/skills/product-video-creation/scripts/scaffold-project.sh <project-dir> --aspect 9:16
-cd <project-dir>
+"${CLAUDE_SKILL_DIR}/scripts/scaffold-project.sh" <PROJECT_DIR> --aspect 9:16
+cd <PROJECT_DIR>
 ```
 
 The script creates a complete Remotion + Tailwind + Lucide project with Google Fonts pre-configured. If `remotion.config.ts` already exists in the CWD, it skips scaffolding.
@@ -69,10 +73,10 @@ The script creates a complete Remotion + Tailwind + Lucide project with Google F
 
 ```bash
 # Check for OpenAI API key
-echo "${OPENAI_API_KEY:+OpenAI TTS available}" || echo "No OpenAI key found"
+if [ -n "$(printenv OPENAI_API_KEY)" ]; then echo "OpenAI TTS available"; else echo "No OpenAI key found"; fi
 # List voices
-./scripts/generate-voiceover.sh --list-voices --provider openai
-./scripts/generate-voiceover.sh --list-voices --provider macos
+"${CLAUDE_SKILL_DIR}/scripts/generate-voiceover.sh" --list-voices --provider openai
+"${CLAUDE_SKILL_DIR}/scripts/generate-voiceover.sh" --list-voices --provider macos
 ```
 
 ### Step 2: Present options to the user
@@ -88,6 +92,7 @@ Ask the user to choose. Present it like this:
 | Voice | Character | Best for |
 |-------|-----------|----------|
 | **coral** | Clear, warm, natural | General product demos |
+| **alloy** | Neutral, balanced | Explainers, general use |
 | **nova** | Energetic, youthful | Tech/startup products |
 | **sage** | Calm, wise | Wellness, premium brands |
 | **fable** | Expressive, storytelling | Narrative-heavy videos |
@@ -119,7 +124,7 @@ Wait for user selection before proceeding.
 
 ## Phase 1: Story & Narrative (AI-Driven)
 
-**This is NOT a heuristic template fill.** Launch the `product-video-storyteller` agent (Opus model) to craft the narrative.
+**This is NOT a heuristic template fill.** Launch the `product-video-storyteller` agent (Opus model) with `subagent_type: "demo-video:product-video-storyteller"` to craft the narrative.
 
 ### What the Storyteller agent receives:
 - Product description and copy from the user
@@ -141,7 +146,7 @@ Allow them to revise tone, adjust copy, or change the story arc.
 ## Phase 2: Screenshot Capture (Script)
 
 ```bash
-./scripts/capture-screenshots.sh ./public/screenshots \
+"${CLAUDE_SKILL_DIR}/scripts/capture-screenshots.sh" ./public/screenshots \
   --url http://localhost:5173 \
   --shared-url https://app.example.com/shared/abc \
   --hide-selectors ".fixed,.theme-toggle" \
@@ -160,9 +165,11 @@ Save the storyteller's per-scene narration as JSON:
 ]
 ```
 
+Run the script below, or hand the job to the `product-video-narrator` agent with `subagent_type: "demo-video:product-video-narrator"` (pass it the narration JSON, the voice, the provider and the output directory).
+
 Generate audio:
 ```bash
-./scripts/generate-voiceover.sh narration.json ./public/audio \
+"${CLAUDE_SKILL_DIR}/scripts/generate-voiceover.sh" narration.json ./public/audio \
   --provider openai --voice coral \
   --instructions "Speak warmly and calmly, like a thoughtful host."
 ```
@@ -211,7 +218,7 @@ If brand guidelines provided, extract and apply:
 
 ## Phase 6: Background Music (AI-Curated)
 
-Launch `product-video-music-curator` agent to find royalty-free background music.
+Launch the `product-video-music-curator` agent with `subagent_type: "demo-video:product-video-music-curator"` to find royalty-free background music.
 
 **What the curator receives:** narrative arc, brand tone, video duration, voiceover characteristics
 **What it returns:** 3-5 track recommendations from Pixabay/Mixkit/FMA with download URLs
@@ -227,7 +234,7 @@ ffmpeg -i public/audio/bg-music-raw.mp3 \
 
 ## Phase 7: Audio Mixing & Composition
 
-Launch `product-video-audio-mixer` agent OR use Remotion-native mixing (recommended).
+Launch the `product-video-audio-mixer` agent with `subagent_type: "demo-video:product-video-audio-mixer"` OR use Remotion-native mixing (recommended).
 
 ### Remotion-Native Approach (simpler)
 Add background music as a separate `<Audio>` spanning the full video:
@@ -244,23 +251,23 @@ Wire scene `<Sequence>` timing from audio durations. Overlap by 10-15 frames for
 
 ## Phase 8: Render & Preview
 
-Use `scripts/render-and-preview.sh` for the full render → verify → preview pipeline:
+Use the `render-and-preview.sh` script for the full render → verify → preview pipeline:
 
 ```bash
 # Render, show specs, and open in video player
-./scripts/render-and-preview.sh
+"${CLAUDE_SKILL_DIR}/scripts/render-and-preview.sh"
 
 # Render with contact sheet for visual verification
-./scripts/render-and-preview.sh --contact-sheet
+"${CLAUDE_SKILL_DIR}/scripts/render-and-preview.sh" --contact-sheet
 
 # Custom output path
-./scripts/render-and-preview.sh --output out/reel-v2.mp4
+"${CLAUDE_SKILL_DIR}/scripts/render-and-preview.sh" --output out/reel-v2.mp4
 
 # Render without opening player (CI/headless)
-./scripts/render-and-preview.sh --no-open --contact-sheet
+"${CLAUDE_SKILL_DIR}/scripts/render-and-preview.sh" --no-open --contact-sheet
 
 # See all options
-./scripts/render-and-preview.sh --help
+"${CLAUDE_SKILL_DIR}/scripts/render-and-preview.sh" --help
 ```
 
 The script:
@@ -287,12 +294,12 @@ npx remotion studio  # Opens at http://localhost:3000
 
 ## Agent Definitions
 
-| Agent | Model | Role |
+| Agent type | Model | Role |
 |-------|-------|------|
-| `product-video-storyteller` | **Opus** | Crafts narrative arc, scene copy, voiceover scripts. Uses deep reasoning — not templates. |
-| `product-video-narrator` | Sonnet | Generates TTS audio files via OpenAI API or macOS `say` command. |
-| `product-video-music-curator` | Sonnet | Searches royalty-free music libraries, recommends tracks matching brand tone and narrative arc. |
-| `product-video-audio-mixer` | Sonnet | Mixes voiceover + background music with ducking, fades, and volume balancing. |
+| `demo-video:product-video-storyteller` | **Opus** | Crafts narrative arc, scene copy, voiceover scripts. Uses deep reasoning — not templates. |
+| `demo-video:product-video-narrator` | Sonnet | Generates TTS audio files via OpenAI API or macOS `say` command. |
+| `demo-video:product-video-music-curator` | Sonnet | Searches royalty-free music libraries, recommends tracks matching brand tone and narrative arc. |
+| `demo-video:product-video-audio-mixer` | Sonnet | Mixes voiceover + background music with ducking, fades, and volume balancing. |
 
 ## Critical Rules
 

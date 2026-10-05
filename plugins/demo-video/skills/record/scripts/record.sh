@@ -15,7 +15,7 @@ MOVE_THRESHOLD=800
 
 usage() {
     cat <<'HELP'
-Smart Screen Recorder — Record with intelligent cursor-following zoom
+demo-video:record — Record the screen and the cursor, with optional cursor-following zoom
 
 USAGE:
     record.sh [OPTIONS]
@@ -46,12 +46,20 @@ OUTPUT FILES:
     {name}-cursor.jsonl     Cursor position log (for re-processing)
 
 DEPENDENCIES:
-    Run: ~/.claude/skills/smart-screen-recorder/scripts/install-deps.sh
+    Run install-deps.sh from the same directory as this script.
 HELP
+    echo "    (here: $SCRIPT_DIR/install-deps.sh)"
 }
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|--output|-n|--name|-d|--duration|-f|--fps|--zoom-max|--zoom-min|--resolution|--dwell|--move)
+            if [[ $# -lt 2 ]]; then
+                echo "Option $1 needs a value" >&2
+                exit 2
+            fi ;;
+    esac
     case "$1" in
         -h|--help) usage; exit 0 ;;
         -o|--output) OUTPUT_DIR="$2"; shift 2 ;;
@@ -119,7 +127,7 @@ if [[ -z "$SCREEN_INDEX" ]]; then
     SCREEN_INDEX=1
 fi
 
-echo "=== Smart Screen Recorder ==="
+echo "=== Demo Video (record) ==="
 echo "  Output:     $OUTPUT_DIR/$OUTPUT_NAME.*"
 echo "  FPS:        $FPS"
 echo "  Resolution: $OUTPUT_RES"

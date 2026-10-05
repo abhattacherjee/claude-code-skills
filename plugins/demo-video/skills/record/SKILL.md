@@ -17,10 +17,10 @@ description of what they're demoing and the AI crafts the narrative around it.
 
 ```bash
 # Install dependencies
-~/.claude/skills/smart-screen-recorder/scripts/install-deps.sh
+"${CLAUDE_SKILL_DIR}/scripts/install-deps.sh"
 
 # Record (Ctrl+C to stop) — captures screen + cursor + window bounds
-~/.claude/skills/smart-screen-recorder/scripts/record.sh
+"${CLAUDE_SKILL_DIR}/scripts/record.sh"
 
 # Then tell Claude: "process my recording into a demo video"
 ```
@@ -83,7 +83,7 @@ Use `TaskCreate` at the start to create these tasks. Mark each `in_progress` whe
 ### Step 1: Record
 
 ```bash
-~/.claude/skills/smart-screen-recorder/scripts/record.sh --raw-only -o ~/Desktop
+"${CLAUDE_SKILL_DIR}/scripts/record.sh" --raw-only -o ~/Desktop
 ```
 
 Output: `{name}-raw.mp4` + `{name}-cursor.jsonl`. Uses MKV internally (survives
@@ -92,7 +92,7 @@ Ctrl+C interruption), then remuxes to MP4.
 ### Step 2: Extract Key Frames
 
 ```bash
-python3 ~/.claude/skills/smart-screen-recorder/scripts/extract-frames.py \
+python3 "${CLAUDE_SKILL_DIR}/scripts/extract-frames.py" \
   recording-raw.mp4 cursor.jsonl -o ~/Desktop/zoom-analysis
 ```
 
@@ -150,8 +150,8 @@ This is a two-part step: the AI proposes, the user chooses.
 
 **Part 1: Launch Demo Storyteller agent**
 
-Launch a `general-purpose` sub-agent using the **Demo Storyteller** persona
-(`~/.claude/agents/demo-storyteller.md`). Pass it:
+Launch the **Demo Storyteller** agent with `subagent_type: "demo-video:demo-storyteller"`.
+Pass it:
 - The extracted frames directory
 - The manifest.json
 - The product context from Step 3.5
@@ -189,8 +189,9 @@ of a code editor gets different themes than a recording of a vacation planner.
 
 ### Step 4: AI Analysis (Demo Director)
 
-Launch a `general-purpose` sub-agent as a **Senior Product Demo Director** persona.
-Pass the user's product description as context.
+Launch the **Demo Director** agent (a Senior Product Demo Director) with
+`subagent_type: "demo-video:demo-director"`.
+Pass the user's product description and the narrative brief as context.
 The agent must read ALL extracted frames and produce `zoom-script.json` + `voiceover-script.json`.
 
 **zoom-script.json** format:
@@ -227,8 +228,8 @@ The agent must read ALL extracted frames and produce `zoom-script.json` + `voice
 **The Demo Director's bounding boxes are estimates from thumbnail-sized frames.
 They are often wrong. This verification step is mandatory.**
 
-Launch a second `general-purpose` sub-agent as a **Zoom QA Verifier**. For each
-zoom event in the script:
+Launch the **Zoom QA Verifier** agent with `subagent_type: "demo-video:zoom-qa-verifier"`.
+For each zoom event in the script:
 
 1. Extract the ACTUAL video frame at that event's timestamp (at full resolution)
 2. Read the frame image with Claude vision
@@ -288,12 +289,20 @@ Generate TTS segments (OpenAI or macOS), then render the integrated timeline:
 The renderer tracks `tts_placement` — a list of `{file, output_time, duration}` entries
 that tell ffmpeg where to place each audio segment in the final mix.
 
+### Step 7b: Fix Voiceover Timing
+
+After the TTS clips exist, launch the **Voiceover Timing Fixer** agent with
+`subagent_type: "demo-video:voiceover-timing-fixer"`. Pass it the TTS audio directory,
+the voiceover manifest with the measured durations, the trimmed video duration and
+`zoom-script.json`. It rebuilds the segment timestamps one after another so no two
+clips overlap, and returns the fixed manifest. Use that manifest when you build the timeline.
+
 ### Step 7.5: Preview Before Rendering (MANDATORY)
 
 **Before spending 5+ minutes on a full render, generate an HTML preview.**
 
 ```bash
-python3 ~/.claude/skills/smart-screen-recorder/scripts/preview-timeline.py \
+python3 "${CLAUDE_SKILL_DIR}/scripts/preview-timeline.py" \
   raw.mp4 zoom-script.json integrated-timeline.json tts/ -o preview/
 ```
 
@@ -311,8 +320,8 @@ voiceover-script.json based on feedback, then rebuild the timeline and re-previe
 
 ### Step 8: Post-Production Review (Quality Gate)
 
-**Launch the Post-Production Editor agent** (`demo-post-production-editor`) to review
-the final output. The editor:
+**Launch the Post-Production Editor agent** with
+`subagent_type: "demo-video:demo-post-production-editor"` to review the final output. The editor:
 
 1. Samples frames from the OUTPUT video at each zoom event's midpoint
 2. Verifies the zoomed UI element is centered and fully visible
@@ -336,21 +345,21 @@ re-record with guidance on what to demo differently.
 Both scripts are editable JSON. To re-process without re-recording:
 ```bash
 # Edit zoom-script.json or voiceover-script.json
-python3 ~/.claude/skills/smart-screen-recorder/scripts/apply-zoom-script.py \
+python3 "${CLAUDE_SKILL_DIR}/scripts/apply-zoom-script.py" \
   raw.mp4 zoom-script.json -o output.mp4 --resolution 3840x2160
 ```
 
 ## Agent Definitions
 
-| Agent | File | Model | Purpose |
-|-------|------|-------|---------|
-| Demo Storyteller | `~/.claude/agents/demo-storyteller.md` | sonnet | Analyzes frames, proposes 3 narrative themes for user to choose from |
-| Demo Director | `~/.claude/agents/demo-director.md` | opus | Analyzes all frames + narrative brief, creates zoom-script.json + voiceover-script.json |
-| Zoom QA Verifier | `~/.claude/agents/zoom-qa-verifier.md` | opus | Extracts full-res frames at zoom timestamps, corrects bounding boxes |
-| Voiceover Timing Fixer | `~/.claude/agents/voiceover-timing-fixer.md` | sonnet | Detects TTS audio overlaps, rebuilds sequential timestamps |
-| Post-Production Editor | `~/.claude/agents/demo-post-production-editor.md` | opus | Reviews final output for quality, requests re-cuts if needed |
+| Agent | Agent type | Model | Purpose |
+|-------|------------|-------|---------|
+| Demo Storyteller | `demo-video:demo-storyteller` | sonnet | Analyzes frames, proposes 3 narrative themes for user to choose from |
+| Demo Director | `demo-video:demo-director` | opus | Analyzes all frames + narrative brief, creates zoom-script.json + voiceover-script.json |
+| Zoom QA Verifier | `demo-video:zoom-qa-verifier` | opus | Extracts full-res frames at zoom timestamps, corrects bounding boxes |
+| Voiceover Timing Fixer | `demo-video:voiceover-timing-fixer` | sonnet | Detects TTS audio overlaps, rebuilds sequential timestamps |
+| Post-Production Editor | `demo-video:demo-post-production-editor` | opus | Reviews final output for quality, requests re-cuts if needed |
 
-All agents are NOT user-invocable — spawned by the skill orchestrator.
+All agents are NOT user-invocable — spawned by the skill orchestrator. Always start them by the agent type in the table; never by a file path.
 
 **Sub-Agent Registry:**
 
