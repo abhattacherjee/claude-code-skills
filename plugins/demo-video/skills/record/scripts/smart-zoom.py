@@ -26,8 +26,8 @@ try:
     import cv2
     import numpy as np
 except ImportError:
-    print("Missing dependencies: pip3 install opencv-python numpy", file=sys.stderr)
-    sys.exit(1)
+    cv2 = None  # the __main__ block reports it; --help does not need it
+    np = None
 
 
 class ZoomState(Enum):
@@ -38,7 +38,11 @@ class ZoomState(Enum):
 
 
 def load_cursor_log(path):
-    """Load cursor positions and click events from JSONL file."""
+    """Load cursor positions and click events from JSONL file.
+
+    cursor-tracker.py also writes {"type": "window", ...} lines with the active
+    window's bounds. They are not cursor positions, so they are skipped.
+    """
     header = None
     positions = []
     clicks = []
@@ -48,12 +52,35 @@ def load_cursor_log(path):
             if not line:
                 continue
             data = json.loads(line)
-            if data.get("type") == "header":
+            kind = data.get("type")
+            if kind == "header":
                 header = data
+            elif kind == "window":
+                continue
             elif "click" in data:
                 clicks.append(data)
             else:
                 positions.append(data)
+    return header, positions, clicks
+
+
+def check_cursor_log(path):
+    """Load the log, or exit 1 when it cannot drive a zoom (no header, no positions)."""
+    try:
+        header, positions, clicks = load_cursor_log(path)
+    except FileNotFoundError:
+        print(f"Error: cursor log not found: {path}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Error: cursor log {path} has a line that is not JSON: {e}", file=sys.stderr)
+        sys.exit(1)
+    if not header:
+        print("Error: cursor log missing header line", file=sys.stderr)
+        sys.exit(1)
+    if not positions:
+        print(f"Error: cursor log {path} has no cursor positions (only a header?), "
+              "so there is nothing to follow. Was the cursor tracker running?", file=sys.stderr)
+        sys.exit(1)
     return header, positions, clicks
 
 
@@ -111,10 +138,7 @@ def smooth_step(t):
 
 def process_video(input_path, cursor_path, output_path, config):
     """Process video with intelligent cursor-following zoom."""
-    header, positions, clicks = load_cursor_log(cursor_path)
-    if not header:
-        print("Error: cursor log missing header line", file=sys.stderr)
-        sys.exit(1)
+    header, positions, clicks = check_cursor_log(cursor_path)
 
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
@@ -439,6 +463,10 @@ EXAMPLES:
 
     args = parser.parse_args()
     out_w, out_h = map(int, args.resolution.split("x"))
+    check_cursor_log(args.cursor_log)  # before opencv, so a bad log is reported either way
+    if cv2 is None:
+        print("Missing dependencies: pip3 install opencv-python numpy", file=sys.stderr)
+        sys.exit(1)
 
     config = {
         "mode": args.mode,

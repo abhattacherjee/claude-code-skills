@@ -638,6 +638,39 @@ run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$REC/render-timeline.py"
 check "render-timeline.py without opencv exits 1 and says what to install" 1 "" 'pip3 install opencv-python numpy'
 run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$REC/extract-frames.py" video.mp4 cursor.jsonl
 check "extract-frames.py without opencv exits 1 and says what to install" 1 "" 'pip3 install opencv-python'
+
+echo "smart-zoom.py and cursor-tracker.py (opencv and Quartz blocked)"
+# Not named as commands in SKILL.md (record.sh runs them), so their --help is checked here.
+for name in smart-zoom.py cursor-tracker.py; do
+  run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$REC/$name" --help
+  check "$name --help exits 0 without opencv or Quartz" 0 'usage:'
+done
+SZ="$TMP/sz"
+mkdir -p "$SZ"
+printf '{"type": "header", "screen_w": 40, "screen_h": 20, "scale": 1, "fps": 30}\n' > "$SZ/header-only.jsonl"
+run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$REC/smart-zoom.py" video.mp4 "$SZ/header-only.jsonl" -o out.mp4
+check "smart-zoom.py: a cursor log with only a header exits 1 with a message" 1 "" 'has no cursor positions'
+cat > "$SZ/mixed.jsonl" <<'PYEND'
+{"type": "header", "screen_w": 40, "screen_h": 20, "scale": 1, "fps": 30}
+{"t": 0.0, "x": 10, "y": 10}
+{"app": "Safari", "x": 0, "y": 0, "w": 40, "h": 20, "type": "window", "t": 0.01}
+{"t": 0.5, "x": 12, "y": 11, "click": "left"}
+{"t": 1.0, "x": 20, "y": 15}
+PYEND
+res="$(PYTHONPATH="$TMP/nocv" python3 -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sz", sys.argv[1])
+sz = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sz)
+h, pos, clicks = sz.load_cursor_log(sys.argv[2])
+print([(p["x"], p["y"]) for p in pos], len(clicks))' "$REC/smart-zoom.py" "$SZ/mixed.jsonl" 2>&1)" || true
+[[ "$res" == "[(10, 10), (20, 15)] 1" ]] && ok "smart-zoom.py: window lines are not read as cursor positions" || bad "smart-zoom.py: window lines are not read as cursor positions" "$res"
+res="$(PYTHONPATH="$TMP/nocv" python3 -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ct", sys.argv[1])
+ct = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ct)
+print(ct.get_active_window_bounds(2.0), ct.get_active_window_bounds(2.0))' "$REC/cursor-tracker.py" 2>"$TMP/ct-err")" || true
+n_warn="$(grep -c 'cannot read the active window bounds' "$TMP/ct-err" || true)"
+[[ "$res" == "None None" && "$n_warn" == 1 ]] && ok "cursor-tracker.py: a window-bounds failure is reported on stderr once" || bad "cursor-tracker.py: a window-bounds failure is reported on stderr once" "result '$res', warnings $n_warn: $(head -3 "$TMP/ct-err")"
 skip "render-timeline.py rendering: needs opencv, ffmpeg and a fixed raw-video path (a real recording)"
 skip "record.sh with a real screen: needs a screen, ffmpeg and Screen Recording permission"
 

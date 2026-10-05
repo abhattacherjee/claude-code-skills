@@ -32,8 +32,16 @@ def get_display_info():
     return pixel_w, pixel_h, scale
 
 
+_window_error_reported = False
+
+
 def get_active_window_bounds(scale):
-    """Get the frontmost application's main window bounds (in pixels)."""
+    """Get the frontmost application's main window bounds (in pixels).
+
+    Returns None when they cannot be read. This runs every 0.5 s, so a failure
+    is reported on stderr once, not every time.
+    """
+    global _window_error_reported
     try:
         from Quartz import (
             CGWindowListCopyWindowInfo,
@@ -77,8 +85,11 @@ def get_active_window_bounds(scale):
                 "w": round(best["Width"] * scale),
                 "h": round(best["Height"] * scale),
             }
-    except Exception:
-        pass
+    except Exception as e:
+        if not _window_error_reported:
+            _window_error_reported = True
+            print(f"Warning: cannot read the active window bounds ({type(e).__name__}: {e}). "
+                  "The log will have no window lines. Reported once.", file=sys.stderr)
     return None
 
 
