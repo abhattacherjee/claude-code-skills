@@ -78,7 +78,7 @@ set -euo pipefail
 #      regenerate a catalogue describing a plugin it could not build.
 #
 # The whole run is hermetic: 18 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 34 throwaway monorepos, the syncs
+# that is deliberately never a SKILLS_HOME, a throwaway monorepo per scenario, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
@@ -317,6 +317,14 @@ printf '%s\n' "\$*" >> "$GH_SHIM_LOG"
 exit 1
 EOF
 chmod +x "$GH_SHIM_DIR/gh"
+
+# prepare-plugin.sh now stops with exit 1 when the plugin it assembled fails
+# validate-plugin.sh (#167). Most fixtures below test description parsing and
+# build mechanics with skills that validate-skill.sh rejects on purpose (no
+# description, a top-level `version:`), so validation is switched off for the
+# whole harness with the variable prepare-plugin.sh documents for this. The
+# "prepare-plugin.sh fails closed" cases in the #167 section unset it.
+export SKILL_KIT_NO_PLUGIN_VALIDATION=1
 
 # ============================================================
 # Fixtures
@@ -1177,6 +1185,25 @@ run_sync() {
     return "$rc"
 }
 
+# seed_top_level_skill <monorepo-dir>: gives a fixture monorepo one top-level skill.
+# Since #167 sync-monorepo.sh refuses a plugin-only monorepo (plugins/*/.claude-plugin/
+# plugin.json and no top-level skill directory; see "Issue #167" at the end of this
+# file). A first sync into an empty directory that only auto-builds plugins leaves
+# exactly that, so fixtures that sync the same monorepo a second time (the hooks
+# and legacy-manifest rebuild runs) get one seed skill to stay on the old layout.
+seed_top_level_skill() {
+    mkdir -p "$1/seed-skill"
+    cat > "$1/seed-skill/SKILL.md" <<'SEEDEOF'
+---
+name: seed-skill
+description: Throwaway fixture skill that keeps a second sync from being refused as plugin-only (#167).
+version: 1.0.0
+---
+
+# seed-skill
+SEEDEOF
+}
+
 # Snapshot the directory mktemp -d actually writes into, so the auto-build
 # temp-stage cleanup can be asserted behaviourally. The parent is probed at
 # runtime rather than assumed to be ${TMPDIR:-/tmp}: BSD mktemp on macOS ignores
@@ -1419,6 +1446,7 @@ GITIGNORE_STDOUT="$(cat "$GITIGNORE_STDOUT_LOG")"
 HOOKS_STDOUT_LOG="$SCRATCH_DIR/hooks.stdout"
 HOOKS_STDERR_LOG="$SCRATCH_DIR/hooks.stderr"
 HOOKS_RC=0
+seed_top_level_skill "$MONOREPO_HOOKS_FIXTURE"
 run_sync "$SKILLS_HOME_HOOKS_FIXTURE" "$MONOREPO_HOOKS_FIXTURE" "$HOOKS_STDOUT_LOG" "$HOOKS_STDERR_LOG" || HOOKS_RC=$?
 HOOKS_STDOUT="$(cat "$HOOKS_STDOUT_LOG")"
 HOOKS_STDERR="$(cat "$HOOKS_STDERR_LOG")"
@@ -1474,6 +1502,7 @@ HOOKS2_STDERR="$(cat "$HOOKS2_STDERR_LOG")"
 LEGACY_STDOUT_LOG="$SCRATCH_DIR/legacy.stdout"
 LEGACY_STDERR_LOG="$SCRATCH_DIR/legacy.stderr"
 LEGACY_RC=0
+seed_top_level_skill "$MONOREPO_LEGACY_FIXTURE"
 run_sync "$SKILLS_HOME_LEGACY_FIXTURE" "$MONOREPO_LEGACY_FIXTURE" "$LEGACY_STDOUT_LOG" "$LEGACY_STDERR_LOG" || LEGACY_RC=$?
 LEGACY_STDOUT="$(cat "$LEGACY_STDOUT_LOG")"
 
@@ -5750,9 +5779,304 @@ ORD_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$ORD_MONO" "$SCRATCH_DIR/addplugin-ord.stdout" "$SCRATCH_DIR/addplugin-ord.stderr" \
     --add-plugin ordinary-plugin || ORD_RC=$?
 assert_eq "control: --add-plugin ordinary-plugin exits 0" "0" "$ORD_RC"
+# #167: an empty directory is not a plugin-only monorepo, so it is not refused.
+# The run also reaches the empty-skill-list printing that defect 5 fixed.
+assert_eq "…into an empty directory, which is not plugin-only (#167), with 0 skills listed" "0" \
+    "$(printed_skill_count "$(cat "$SCRATCH_DIR/addplugin-ord.stdout")")"
+assert_not_contains "…and prints no bare \"  - \" bullet" \
+    "$(printf '\n  - \n')" "$(cat "$SCRATCH_DIR/addplugin-ord.stdout")"
 assert_eq "control: …and copies plugins/ordinary-plugin" "PRESENT" \
     "$([[ -f "$ORD_MONO/plugins/ordinary-plugin/.claude-plugin/plugin.json" ]] && echo PRESENT || echo ABSENT)"
 rm -rf "$RUN_CWD/build/ordinary-plugin"
+
+# ============================================================
+# Issue #167 — a plugin-only monorepo is refused in every mode
+# ============================================================
+#
+# The bare top-level skill directories are deleted; skills live under
+# plugins/<group>/skills/<name>/. sync-monorepo.sh and validate-pre-sync.sh only
+# understand top-level skill directories. A first fix refused only a discovery
+# run that found nothing, and --add-plugin got past it: on a copy of this repo
+# it rewrote README.md ("0 reusable Agent Skills"), added a "Synced 0 skills"
+# CHANGELOG entry, rewrote the marketplace catalogue and replaced the 516-line
+# CI workflow with the template, at exit 0. Now both scripts refuse, in every
+# mode, a monorepo that has plugins/*/.claude-plugin/plugin.json and no
+# top-level skill directory, before writing anything. Any other monorepo
+# behaves as before.
+
+# tree_digest <dir>: one hash over every path and every file's bytes.
+tree_digest() {
+    (
+        cd "$1"
+        find . -print | LC_ALL=C sort
+        find . -type f -exec shasum {} + | LC_ALL=C sort
+    ) | shasum | cut -d' ' -f1
+}
+
+# Plugin-only fixture shaped like this repo after #167: README, CHANGELOG,
+# marketplace catalogue, a long CI workflow (the repo's own), one plugin with a
+# skill, docs/, and a .git directory (so --init takes its "existing repo" path).
+NOSKILL_MONO="$SCRATCH_DIR/monorepo-noskills"
+mkdir -p "$NOSKILL_MONO/plugins/pg/.claude-plugin" "$NOSKILL_MONO/plugins/pg/skills/inner" "$NOSKILL_MONO/docs" \
+         "$NOSKILL_MONO/.claude-plugin" "$NOSKILL_MONO/.github/workflows"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$NOSKILL_MONO/plugins/pg/.claude-plugin/plugin.json"
+printf -- '---\nname: inner\ndescription: Fixture skill inside a plugin. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# inner\n' \
+    > "$NOSKILL_MONO/plugins/pg/skills/inner/SKILL.md"
+echo "fixture" > "$NOSKILL_MONO/docs/notes.md"
+printf '# Fixture monorepo\n\n39 skills in 23 plugins. Deprecated: old-plugin.\n' > "$NOSKILL_MONO/README.md"
+printf '# Changelog\n\n## [Unreleased]\n\n- NOSKILL-CHANGELOG-MARKER\n' > "$NOSKILL_MONO/CHANGELOG.md"
+echo '{"name": "fixture-marketplace", "plugins": [{"name": "pg", "source": "./plugins/pg"}]}' \
+    > "$NOSKILL_MONO/.claude-plugin/marketplace.json"
+cp "$REPO_ROOT/.github/workflows/validate-skill.yml" "$NOSKILL_MONO/.github/workflows/validate-skill.yml"
+git -C "$NOSKILL_MONO" init -q
+NOSKILL_DIGEST="$(tree_digest "$NOSKILL_MONO")"
+NOSKILL_MSG="is a plugin-only monorepo (skills under plugins/<group>/skills/, none at the top level). This script only handles top-level skill directories (#167); sync for plugins is being redesigned in #190. Nothing was changed."
+
+# A plugin build dir so --add-plugin has something to copy (it would on beddd96).
+mkdir -p "$RUN_CWD/build/noskill-addplug/.claude-plugin"
+echo '{"name": "noskill-addplug", "version": "0.1.0"}' > "$RUN_CWD/build/noskill-addplug/.claude-plugin/plugin.json"
+
+# _noskill_sync_case <label> [sync args…]: refused, one message, tree unchanged.
+_noskill_sync_case() {
+    local label="$1" rc=0
+    shift
+    run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_MONO" "$SCRATCH_DIR/noskill-$label.stdout" "$SCRATCH_DIR/noskill-$label.stderr" "$@" || rc=$?
+    assert_eq "sync-monorepo.sh $label on a plugin-only monorepo exits 1 (#167)" "1" "$rc"
+    assert_contains "…$label: the message on stderr" "sync-monorepo.sh: $NOSKILL_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-$label.stderr")"
+    assert_eq "…$label: the message is one line" "1" "$(grep -c 'plugin-only monorepo' "$SCRATCH_DIR/noskill-$label.stderr")"
+    assert_eq "…$label: every file is byte-identical" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+}
+_noskill_sync_case discovery
+_noskill_sync_case dry-run --dry-run
+_noskill_sync_case add-plugin --add-plugin noskill-addplug
+_noskill_sync_case skills --skills demo-skill
+_noskill_sync_case add --add demo-skill
+_noskill_sync_case init --init --skills demo-skill
+rm -rf "$RUN_CWD/build/noskill-addplug"
+
+# Controls: the rule is about layout, not about whether skills were named.
+# A new empty directory with --skills still runs (a consumer monorepo built this way).
+NOSKILL_NAMED_MONO="$SCRATCH_DIR/monorepo-noskills-named"
+mkdir -p "$NOSKILL_NAMED_MONO"
+NOSKILL_NAMED_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_NAMED_MONO" "$SCRATCH_DIR/noskill-named.stdout" "$SCRATCH_DIR/noskill-named.stderr" \
+    --skills demo-skill || NOSKILL_NAMED_RC=$?
+assert_eq "control: --skills demo-skill into an empty directory still runs" "0" "$NOSKILL_NAMED_RC"
+assert_not_contains "…and is not refused" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/noskill-named.stderr")"
+assert_file_exists "…and writes the skill at the top level" "$NOSKILL_NAMED_MONO/demo-skill/SKILL.md"
+# The CONTRIBUTING.md it writes must describe that layout, not plugins/ only.
+assert_contains "…and its CONTRIBUTING.md says to add a skill at the repo root" \
+    'Create a new directory at the repo root (e.g., `my-skill/`)' "$(cat "$NOSKILL_NAMED_MONO/CONTRIBUTING.md" 2>/dev/null || true)"
+assert_contains "…and where a plugin skill goes" \
+    'A skill that ships inside a plugin goes at `plugins/<plugin>/skills/<name>/` instead' "$(cat "$NOSKILL_NAMED_MONO/CONTRIBUTING.md" 2>/dev/null || true)"
+
+# A monorepo with a top-level skill AND plugins/ is not plugin-only: discovery runs.
+MIXED_MONO="$SCRATCH_DIR/monorepo-mixed"
+mkdir -p "$MIXED_MONO/plugins/pg/.claude-plugin" "$MIXED_MONO/mixed-top"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$MIXED_MONO/plugins/pg/.claude-plugin/plugin.json"
+printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' \
+    > "$MIXED_MONO/mixed-top/SKILL.md"
+printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$MIXED_MONO/mixed-top/CHANGELOG.md"
+MIXED_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_MONO" "$SCRATCH_DIR/mixed.stdout" "$SCRATCH_DIR/mixed.stderr" --dry-run || MIXED_RC=$?
+assert_eq "control: discovery on a monorepo with a top-level skill and plugins/ runs" "0" "$MIXED_RC"
+assert_line_present "…and lists the top-level skill" "  - mixed-top" "$(cat "$SCRATCH_DIR/mixed.stdout")"
+
+# --init with no skill named: there is no default set any more (the old one named
+# deleted skills). Refused before the directory is created.
+INIT_NEW_MONO="$SCRATCH_DIR/monorepo-init-new"
+INIT_NEW_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$INIT_NEW_MONO" "$SCRATCH_DIR/init-new.stdout" "$SCRATCH_DIR/init-new.stderr" --init || INIT_NEW_RC=$?
+assert_eq "--init with no --skills or --add exits 1" "1" "$INIT_NEW_RC"
+assert_contains "…and says to name the skills" "--init needs the skills to publish, named with --skills or --add" "$(cat "$SCRATCH_DIR/init-new.stderr")"
+assert_eq "…and does not create the directory" "ABSENT" "$([[ -e "$INIT_NEW_MONO" ]] && echo PRESENT || echo ABSENT)"
+NODIR_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$INIT_NEW_MONO" "$SCRATCH_DIR/nodir.stdout" "$SCRATCH_DIR/nodir.stderr" || NODIR_RC=$?
+assert_eq "a monorepo directory that does not exist, with no skill named, exits 1" "1" "$NODIR_RC"
+assert_eq "…and is not created" "ABSENT" "$([[ -e "$INIT_NEW_MONO" ]] && echo PRESENT || echo ABSENT)"
+
+# validate-pre-sync.sh
+presync_run() {
+    local out="$1" err="$2" rc=0
+    shift 2
+    ( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$PRESYNC_SCRIPT" "$@" ) >"$out" 2>"$err" || rc=$?
+    return "$rc"
+}
+NOSKILL_PRE_RC=0
+presync_run "$SCRATCH_DIR/noskill-pre.stdout" "$SCRATCH_DIR/noskill-pre.stderr" "$NOSKILL_MONO" || NOSKILL_PRE_RC=$?
+assert_eq "validate-pre-sync.sh on a plugin-only monorepo exits 1 (#167)" "1" "$NOSKILL_PRE_RC"
+assert_contains "…with the same message on stderr" "validate-pre-sync.sh: $NOSKILL_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-pre.stderr")"
+assert_not_contains "…and never says \"Safe to sync\"" "Safe to sync" "$(cat "$SCRATCH_DIR/noskill-pre.stdout")"
+
+NOSKILL_PREJ_RC=0
+presync_run "$SCRATCH_DIR/noskill-prej.stdout" "$SCRATCH_DIR/noskill-prej.stderr" "$NOSKILL_MONO" --json || NOSKILL_PREJ_RC=$?
+assert_eq "…--json is refused the same way" "1" "$NOSKILL_PREJ_RC"
+assert_eq "…and prints a JSON error object on stdout" "plugin_only_monorepo" \
+    "$(jq -r '.error' < "$SCRATCH_DIR/noskill-prej.stdout" 2>/dev/null || echo NOT-JSON)"
+assert_contains "…whose message is the stderr message" "$NOSKILL_MSG" \
+    "$(jq -r '.message' < "$SCRATCH_DIR/noskill-prej.stdout" 2>/dev/null || echo NOT-JSON)"
+
+NOSKILL_PREA_RC=0
+presync_run "$SCRATCH_DIR/noskill-prea.stdout" "$SCRATCH_DIR/noskill-prea.stderr" --add demo-skill "$NOSKILL_MONO" || NOSKILL_PREA_RC=$?
+assert_eq "…--add of a real skill is refused too" "1" "$NOSKILL_PREA_RC"
+assert_contains "…with the same message" "$NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-prea.stderr")"
+assert_eq "…and validate-pre-sync.sh changed no file" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+
+# Controls: not plugin-only, so not refused (as on develop).
+MIXED_PRE_RC=0
+presync_run "$SCRATCH_DIR/mixed-pre.stdout" "$SCRATCH_DIR/mixed-pre.stderr" "$MIXED_MONO" || MIXED_PRE_RC=$?
+assert_eq "control: validate-pre-sync.sh on a monorepo with a top-level skill and plugins/ passes" "0" "$MIXED_PRE_RC"
+assert_contains "…and checks the top-level skill" "PASS  mixed-top v1.0.0" "$(cat "$SCRATCH_DIR/mixed-pre.stdout")"
+EMPTY_PRE_MONO="$SCRATCH_DIR/monorepo-presync-empty"
+mkdir -p "$EMPTY_PRE_MONO"
+EMPTY_PRE_RC=0
+presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --add no-such-skill "$EMPTY_PRE_MONO" || EMPTY_PRE_RC=$?
+assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
+assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
+
+# A top-level SYMLINK to a directory that holds a SKILL.md is not a candidate:
+# discovery (find -type d) skips symlinks. The plugin-only predicate used to walk
+# "$1"/*/, which follows them, so it called the monorepo "not plugin-only" while
+# discovery found 0 skills, and a dry run would have rewritten README.md,
+# CHANGELOG.md, validate-skill.yml and marketplace.json (#167 review C-001).
+# Predicate and discovery now share list_top_level_candidates() in _lib.sh.
+SYM_MONO="$SCRATCH_DIR/monorepo-symlink-skill"
+SYM_EXTERNAL="$SCRATCH_DIR/symlink-external/foo"
+mkdir -p "$SYM_EXTERNAL"
+printf -- '---\nname: foo\ndescription: External skill reached by a symlink. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# foo\n' \
+    > "$SYM_EXTERNAL/SKILL.md"
+cp -R "$NOSKILL_MONO" "$SYM_MONO"
+ln -s "$SYM_EXTERNAL" "$SYM_MONO/foo"
+SYM_DIGEST="$(tree_digest "$SYM_MONO")"
+_symlink_sync_case() {
+    local label="$1" rc=0
+    shift
+    run_sync "$SKILLS_HOME_FIXTURE" "$SYM_MONO" "$SCRATCH_DIR/sym-$label.stdout" "$SCRATCH_DIR/sym-$label.stderr" "$@" || rc=$?
+    assert_eq "sync-monorepo.sh $label on a plugin-only monorepo with a top-level skill symlink exits 1 (#167)" "1" "$rc"
+    assert_contains "…$label: the plugin-only message" "sync-monorepo.sh: $SYM_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/sym-$label.stderr")"
+    assert_eq "…$label: every file is byte-identical" "$SYM_DIGEST" "$(tree_digest "$SYM_MONO")"
+}
+_symlink_sync_case plain
+_symlink_sync_case dry-run --dry-run
+SYM_PRE_RC=0
+presync_run "$SCRATCH_DIR/sym-pre.stdout" "$SCRATCH_DIR/sym-pre.stderr" "$SYM_MONO" || SYM_PRE_RC=$?
+assert_eq "validate-pre-sync.sh on the symlink fixture exits 1 (#167)" "1" "$SYM_PRE_RC"
+assert_contains "…with the plugin-only message" "validate-pre-sync.sh: $SYM_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/sym-pre.stderr")"
+assert_eq "…and changed no file" "$SYM_DIGEST" "$(tree_digest "$SYM_MONO")"
+
+# prepare-plugin.sh fails closed on a plugin that fails validate-plugin.sh (#167).
+# It used to run the validator with `|| true`, print "Plugin assembled" and exit 0.
+mkdir -p "$PREPARE_FIXTURE_DIR/validate-good" "$PREPARE_FIXTURE_DIR/validate-bad"
+printf -- '---\nname: validate-good\ndescription: Fixture skill that passes validate-skill.sh. Use when: testing prepare-plugin.sh validation.\nmetadata:\n  version: 0.1.0\n---\n\n# validate-good\n' \
+    > "$PREPARE_FIXTURE_DIR/validate-good/SKILL.md"
+printf -- '---\nname: validate-bad\ndescription: Fixture skill with no trigger list.\nversion: 0.1.0\n---\n\n# validate-bad\n' \
+    > "$PREPARE_FIXTURE_DIR/validate-bad/SKILL.md"
+for _v in good bad; do
+    printf '{"name": "validate-%s", "version": "0.1.0", "description": "Fixture plugin for prepare-plugin.sh validation.", "skills": [{"name": "validate-%s", "source": "."}], "commands": []}\n' \
+        "$_v" "$_v" > "$PREPARE_FIXTURE_DIR/validate-$_v/plugin-manifest.json"
+done
+_prep_validated() {
+    local v="$1" rc=0
+    (
+        cd "$RUN_CWD"
+        env -u SKILL_KIT_NO_PLUGIN_VALIDATION PATH="$GH_SHIM_DIR:$PATH" TMPDIR="$PREPARE_TMPDIR" \
+            "$PREPARE_SCRIPT" --output-dir "$PREPARE_OUT_DIR/validate-$v" --github-user harness-fixture-user \
+            "$PREPARE_FIXTURE_DIR/validate-$v/plugin-manifest.json"
+    ) >"$SCRATCH_DIR/prep-validate-$v.stdout" 2>"$SCRATCH_DIR/prep-validate-$v.stderr" || rc=$?
+    return "$rc"
+}
+PREP_VBAD_RC=0
+_prep_validated bad || PREP_VBAD_RC=$?
+assert_eq "prepare-plugin.sh exits 1 when the assembled plugin fails validate-plugin.sh (#167)" "1" "$PREP_VBAD_RC"
+assert_contains "…and says so" "fails validation (see the FAIL lines above)" "$(cat "$SCRATCH_DIR/prep-validate-bad.stderr")"
+assert_not_contains "…and does not print \"Plugin assembled\"" "Plugin assembled" "$(cat "$SCRATCH_DIR/prep-validate-bad.stdout")"
+PREP_VGOOD_RC=0
+_prep_validated good || PREP_VGOOD_RC=$?
+assert_eq "control: prepare-plugin.sh with a valid skill still exits 0 with validation on" "0" "$PREP_VGOOD_RC"
+assert_contains "…and ran the validator" "--- Validation ---" "$(cat "$SCRATCH_DIR/prep-validate-good.stdout")"
+
+# The deprecated plugins/skill-publishing copy refuses to run at all (#167): its
+# scripts still wrote the old layout, still ship in the marketplace until the next
+# release, and on a plugin-only monorepo said "Safe to sync" over nothing.
+DEPRECATED_SCRIPTS="$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/scripts"
+for _dep in "sync-monorepo.sh" "validate-pre-sync.sh" "release-monorepo.sh patch"; do
+    _dep_rc=0
+    # shellcheck disable=SC2086  # "release-monorepo.sh patch" splits into script + bump level
+    ( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" \
+        "$DEPRECATED_SCRIPTS/${_dep%% *}" $( [[ "$_dep" == *" "* ]] && echo "${_dep#* }" ) "$NOSKILL_MONO" ) \
+        >"$SCRATCH_DIR/deprecated.stdout" 2>"$SCRATCH_DIR/deprecated.stderr" || _dep_rc=$?
+    assert_eq "deprecated skill-publishing ${_dep%% *} exits 1" "1" "$_dep_rc"
+    assert_eq "…and prints only the deprecation line" "deprecated: use skill-kit:publish (#161)" \
+        "$(cat "$SCRATCH_DIR/deprecated.stderr")"
+    assert_eq "…and nothing on stdout" "" "$(cat "$SCRATCH_DIR/deprecated.stdout")"
+    assert_eq "…and changes no file" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+done
+_dep_rc=0
+"$DEPRECATED_SCRIPTS/sync-monorepo.sh" --help >/dev/null 2>&1 || _dep_rc=$?
+assert_eq "…even --help is refused" "1" "$_dep_rc"
+
+# release-monorepo.sh counts skills in both layouts (#167)
+#
+# A top-level <name>/SKILL.md (what sync-monorepo.sh writes into a consumer
+# monorepo) and a plugins/<group>/skills/<name>/SKILL.md (this repo) are both
+# skills. A plugin skill is listed as <group>:<name>, so two plugins' skills
+# with the same short name stay apart. Zero skills is refused: the release used
+# to go out with "Skills: 0" and an empty inventory at exit 0.
+NOSKILL_REL="$SCRATCH_DIR/release-plugin-only"
+mkdir -p "$NOSKILL_REL/plugins/pg/.claude-plugin" "$NOSKILL_REL/plugins/pg/skills/inner" "$NOSKILL_REL/plugins/pg/skills/second" \
+         "$NOSKILL_REL/plugins/pg/skills/inner/references/deep/skills/x" "$NOSKILL_REL/plugins/pg/other/y"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$NOSKILL_REL/CHANGELOG.md"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$NOSKILL_REL/plugins/pg/.claude-plugin/plugin.json"
+for _sk in inner second; do
+    printf -- '---\nname: %s\ndescription: RELPLUG-%s-MARKER fixture skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' \
+        "$_sk" "$_sk" "$_sk" > "$NOSKILL_REL/plugins/pg/skills/$_sk/SKILL.md"
+done
+# A SKILL.md nested deeper inside a skill is a reference, not a skill: it must not be counted.
+echo "# nested" > "$NOSKILL_REL/plugins/pg/skills/inner/references/deep/skills/x/SKILL.md"
+# Same depth as a plugin skill but not under skills/: pins the -path filter.
+echo "# not a skill" > "$NOSKILL_REL/plugins/pg/other/y/SKILL.md"
+init_release_fixture "$NOSKILL_REL"
+NOSKILL_REL_RC=0
+run_release "$NOSKILL_REL" "$SCRATCH_DIR/release-plugin-only.stdout" "$SCRATCH_DIR/release-plugin-only.stderr" patch || NOSKILL_REL_RC=$?
+assert_line_present "release-monorepo.sh counts the plugin skills, not zero (#167)" \
+    "Skills:          2" "$(cat "$SCRATCH_DIR/release-plugin-only.stdout")"
+assert_contains "…and lists them in the CHANGELOG inventory as plugin:skill" \
+    '- `pg:second` v1.0.0 — RELPLUG-second-MARKER fixture skill.' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_not_contains "…without the nested reference SKILL.md" ':x` v' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_not_contains "…or a SKILL.md at skill depth outside skills/" ':y` v' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+
+# Both layouts in one monorepo, and the same short name in two plugins.
+BOTH_REL="$SCRATCH_DIR/release-both-layouts"
+mkdir -p "$BOTH_REL/topskill" "$BOTH_REL/plugins/pa/skills/create" "$BOTH_REL/plugins/pb/skills/create" "$BOTH_REL/docs"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$BOTH_REL/CHANGELOG.md"
+echo "# docs" > "$BOTH_REL/docs/notes.md"
+for _p in topskill plugins/pa/skills/create plugins/pb/skills/create; do
+    printf -- '---\nname: x\ndescription: RELBOTH fixture skill at %s. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# x\n' \
+        "$_p" > "$BOTH_REL/$_p/SKILL.md"
+done
+init_release_fixture "$BOTH_REL"
+run_release "$BOTH_REL" "$SCRATCH_DIR/release-both.stdout" "$SCRATCH_DIR/release-both.stderr" patch || true
+BOTH_CL="$(cat "$BOTH_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_line_present "release-monorepo.sh counts top-level and plugin skills together (#167)" \
+    "Skills:          3" "$(cat "$SCRATCH_DIR/release-both.stdout")"
+assert_contains "…lists the top-level skill by its bare name" '- `topskill` v1.0.0 — RELBOTH fixture skill at topskill.' "$BOTH_CL"
+assert_contains "…and the two plugin skills named create apart" '- `pa:create` v1.0.0 — RELBOTH fixture skill at plugins/pa/skills/create.' "$BOTH_CL"
+assert_contains "…(the second one)" '- `pb:create` v1.0.0 — RELBOTH fixture skill at plugins/pb/skills/create.' "$BOTH_CL"
+assert_contains "…with the count in the inventory heading" "### Skill Inventory (3 skills)" "$BOTH_CL"
+
+# Zero skills: refused before anything is written.
+ZERO_REL="$SCRATCH_DIR/release-zero"
+mkdir -p "$ZERO_REL/docs" "$ZERO_REL/plugins/pg/.claude-plugin"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$ZERO_REL/CHANGELOG.md"
+echo "# docs" > "$ZERO_REL/docs/notes.md"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$ZERO_REL/plugins/pg/.claude-plugin/plugin.json"
+init_release_fixture "$ZERO_REL"
+ZERO_REL_RC=0
+run_release "$ZERO_REL" "$SCRATCH_DIR/release-zero.stdout" "$SCRATCH_DIR/release-zero.stderr" patch || ZERO_REL_RC=$?
+assert_eq "release-monorepo.sh with no skill in either layout exits 1 (#167)" "1" "$ZERO_REL_RC"
+assert_contains "…and says why" "no skills found in $ZERO_REL" "$(cat "$SCRATCH_DIR/release-zero.stderr")"
+assert_eq "…and leaves CHANGELOG.md alone" "$(printf '%s' "$RELEASE_BASE_CHANGELOG" | shasum)" "$(shasum < "$ZERO_REL/CHANGELOG.md")"
+assert_eq "…and creates no tag" "" "$(git -C "$ZERO_REL" tag -l)"
 
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then

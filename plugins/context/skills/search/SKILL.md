@@ -2,7 +2,7 @@
 name: search
 description: "Was the conversation-search skill. Searches Claude Code conversation history in ~/.claude/projects/ by topic, date, branch, or project. Provides verbatim conversation content and AI-generated summaries. Use when: (1) user asks to find a past conversation, (2) user wants to recall what was discussed on a topic or date, (3) user asks to search conversation history, (4) /conversation-search command."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Conversation Search

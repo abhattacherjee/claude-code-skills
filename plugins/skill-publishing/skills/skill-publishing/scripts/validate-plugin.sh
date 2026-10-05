@@ -196,20 +196,23 @@ if [[ -d "$PLUGIN_DIR/skills" ]]; then
     if [[ -f "$VALIDATE_SKILL" ]] && [[ -x "$VALIDATE_SKILL" ]]; then
       echo ""
       echo "  Validating skill: $SKILL_NAME"
-      if "$VALIDATE_SKILL" "$skill_dir" 2>&1 | sed 's/^/    /'; then
+      # Capture the exit code: in a pipe, `if` would see sed's status, not the validator's.
+      SKILL_RC=0
+      SKILL_OUT="$("$VALIDATE_SKILL" "$skill_dir" 2>&1)" || SKILL_RC=$?
+      printf '%s\n' "$SKILL_OUT" | sed 's/^/    /'
+      if [[ $SKILL_RC -eq 0 ]]; then
         pass "skill $SKILL_NAME: passes validation"
       else
         fail "skill $SKILL_NAME: fails validation"
       fi
-    elif [[ -f "$skill_dir/SKILL.md" ]]; then
-      pass "skill $SKILL_NAME: SKILL.md exists (validator not available for detailed check)"
     else
-      fail "skill $SKILL_NAME: missing SKILL.md"
+      # Fail closed: a skill nobody validated must not count as a pass.
+      fail "skill $SKILL_NAME: not validated: $VALIDATE_SKILL is missing or not executable"
     fi
   done < <(find "$PLUGIN_DIR/skills" -maxdepth 1 -mindepth 1 -type d | sort)
 
   if [[ $SKILL_COUNT -eq 0 ]]; then
-    warn "skills/ directory exists but contains no skill subdirectories"
+    fail "skills/ directory exists but contains no skill subdirectories"
   fi
 fi
 

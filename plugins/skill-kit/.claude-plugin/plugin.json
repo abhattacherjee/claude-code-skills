@@ -1,5 +1,5 @@
 {
   "name": "skill-kit",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Three skills for building and sharing Claude Code skills in one plugin. skill-kit:author writes and optimizes skills to Anthropic's best practices, with parallel sub-agents and script-first determinism. skill-kit:publish packages skills as plugins and syncs them to a GitHub monorepo. skill-kit:extract turns what a work session just taught you into a new or updated skill."
 }

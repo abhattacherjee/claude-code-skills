@@ -123,7 +123,7 @@ rm -rf /tmp/ccs
 ## Companion Skills
 
 - **[skill-publishing](../skill-publishing/)** — package and distribute skills as plugins to GitHub
-- **[claudeception](../../claudeception/)** — extracts reusable knowledge from work sessions into skills (uses skill-authoring for structure)
+- **[skill-kit](../skill-kit/)** — the plugin that replaced this one. `skill-kit:extract` (was claudeception) extracts reusable knowledge from work sessions into skills
 
 ## Compatibility
 

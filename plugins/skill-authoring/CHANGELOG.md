@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.2] - 2026-10-05
+
+### Changed
+
+- The "Companion Skills" link and the GitHub link now point at the `skill-kit` plugin, which replaced this one. They named the bare `claudeception/` and `skill-authoring/` directories, which are deleted (#167).
+- The bundled `validate-skill.sh` usage example no longer names the deleted `changelog-keeper/` directory.
+
 ## [2.6.1] - 2026-10-02
 
 ### Changed

@@ -24,7 +24,7 @@ Options:
 Examples:
   validate-skill.sh ~/.claude/skills/my-skill    # Individual skill
   validate-skill.sh .                            # Current directory as skill
-  validate-skill.sh changelog-keeper/            # Monorepo subdirectory
+  validate-skill.sh plugins/dev-flow/skills/changelog/   # Skill inside a plugin
 
 Exit codes:
   0  All checks passed

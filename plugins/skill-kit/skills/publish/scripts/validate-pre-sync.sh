@@ -39,8 +39,16 @@ Options:
 
 Exit codes:
   0  All skills have matching CHANGELOG entries
-  1  One or more skills have version/CHANGELOG mismatches
+  1  One or more skills have version/CHANGELOG mismatches, or the monorepo is
+     plugin-only (see below)
   2  Usage error
+
+Plugin-only monorepo (#167):
+  This gate checks top-level <name>/ skill directories, the layout
+  sync-monorepo.sh writes. A monorepo that has plugins/*/.claude-plugin/plugin.json
+  and no top-level skill directory is refused in every mode: exit 1 and one
+  message on stderr (with --json, also a JSON object with an "error" key on
+  stdout). Sync for plugin-only monorepos is being redesigned in #190.
 
 Examples:
   validate-pre-sync.sh ~/dev/claude-code-skills
@@ -83,6 +91,13 @@ if [[ ! -d "$MONOREPO_DIR" ]]; then
   exit 2
 fi
 
+# #167: same layout rule as sync-monorepo.sh (see the note in _lib.sh).
+if $JSON_MODE; then
+  refuse_if_plugin_only_monorepo "$MONOREPO_DIR" "validate-pre-sync.sh" json
+else
+  refuse_if_plugin_only_monorepo "$MONOREPO_DIR" "validate-pre-sync.sh"
+fi
+
 # --- Discover skills to validate ---
 # The monorepo scan alone is blind to any skill that does not have a directory
 # there yet — which is every `sync-monorepo.sh --add <new-skill>`, the single
@@ -99,10 +114,7 @@ fi
 # would not match any actual sync shape: a discovery run syncs the monorepo's
 # skills, `--skills` syncs exactly what is named, and `--add` syncs the
 # monorepo's plus what is named. This union is that third shape.
-SKILLS=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
-  ! -name '.git' ! -name '.github' ! -name '.*' \
-  ! -name 'plugins' ! -name 'scripts' \
-  -exec basename {} \; 2>/dev/null | sort)
+SKILLS=$(list_top_level_candidates "$MONOREPO_DIR" | sort)
 
 if $ADD_GIVEN; then
   # Only the user-typed value is comma-split; the discovered list stays

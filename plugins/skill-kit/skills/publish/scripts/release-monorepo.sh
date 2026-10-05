@@ -127,8 +127,40 @@ if git tag -l "$TAG_NAME" | grep -q "$TAG_NAME"; then
 fi
 
 # --- Collect release info ---
-# Count skills
-SKILL_COUNT=$(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" -not -path "./plugins/*" | wc -l | tr -d ' ')
+# Count skills, in both layouts (#167):
+#   top-level  ./<name>/SKILL.md                    (what sync-monorepo.sh writes)
+#   plugin     ./plugins/<group>/skills/<name>/SKILL.md
+# A monorepo may hold either or both. Counting only one layout gave "Skills: 0"
+# for the other, and the release went out with an empty inventory at exit 0.
+# list_release_skills prints one "<display name><TAB><path to SKILL.md>" line
+# per skill, sorted: a top-level skill is shown as <name>, a plugin skill as
+# <group>:<name>, so two plugins' skills with the same short name stay apart.
+list_release_skills() {
+  local f d
+  {
+    find . -mindepth 2 -maxdepth 2 -name "SKILL.md" \
+      -not -path "./.*" -not -path "./plugins/*" -not -path "./scripts/*" \
+      | while IFS= read -r f; do
+          d="${f#./}"; printf '%s\t%s\n' "${d%/SKILL.md}" "$f"
+        done
+    if [[ -d "./plugins" ]]; then
+      find ./plugins -mindepth 4 -maxdepth 4 -name "SKILL.md" -path "./plugins/*/skills/*/SKILL.md" \
+        | while IFS= read -r f; do
+            d="${f#./plugins/}"; d="${d%/SKILL.md}"
+            printf '%s:%s\t%s\n' "${d%%/*}" "${d##*/}" "$f"
+          done
+    fi
+  } | LC_ALL=C sort
+}
+RELEASE_SKILLS="$(list_release_skills)"
+SKILL_COUNT=0
+if [[ -n "$RELEASE_SKILLS" ]]; then
+  SKILL_COUNT=$(printf '%s\n' "$RELEASE_SKILLS" | wc -l | tr -d ' ')
+fi
+if [[ $SKILL_COUNT -eq 0 ]]; then
+  echo "Error: no skills found in $MONOREPO_DIR (looked for <name>/SKILL.md and plugins/<group>/skills/<name>/SKILL.md). Not releasing an empty inventory. Nothing was changed." >&2
+  exit 1
+fi
 
 # Count plugins
 PLUGIN_COUNT=0
@@ -149,9 +181,8 @@ echo ""
 SKILLS_HOME="${SKILLS_HOME:-$HOME/.claude/skills}"
 
 SKILL_INVENTORY=""
-while IFS= read -r skill_md; do
-  skill_dir=$(dirname "$skill_md")
-  skill_name=$(basename "$skill_dir")
+# fd 3 and </dev/null, as in sync-monorepo.sh's loops: no child can read the list.
+while IFS=$'\t' read -r skill_name skill_md <&3; do
   version=$(extract_version "$skill_md")
   # TWO statements, and short_desc() rather than an inline copy of its sed —
   # see the long note at sync-monorepo.sh's matching inventory loop. Short
@@ -173,7 +204,7 @@ while IFS= read -r skill_md; do
   skill_short_desc=$(short_desc "$skill_desc")
   SKILL_INVENTORY="${SKILL_INVENTORY}
 - \`$skill_name\` v${version:-?.?.?} — $skill_short_desc"
-done < <(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" -not -path "./plugins/*" | sort)
+done 3<<< "$RELEASE_SKILLS" </dev/null
 
 # --- Build plugin inventory ---
 PLUGIN_INVENTORY=""

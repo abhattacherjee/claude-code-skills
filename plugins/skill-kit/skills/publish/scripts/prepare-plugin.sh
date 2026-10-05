@@ -664,12 +664,30 @@ This plugin follows the **Claude Code Plugin** format. Skills use the **Agent Sk
 
 write_file "$OUTPUT_DIR/README.md" "$README_CONTENT" "README.md"
 
-# --- 7. Validate if possible ---
+# --- 7. Validate ---
+# A plugin that fails validate-plugin.sh stops here with exit 1. It used to be
+# `|| true`: the FAIL lines scrolled past, "Plugin assembled" printed, and the
+# caller (sync-monorepo.sh's auto-build) published it at exit 0.
+#
+# SKILL_KIT_NO_PLUGIN_VALIDATION=1 skips this step and says so. It exists for
+# scripts/test-sync-hygiene.sh, whose fixtures test description parsing with
+# skills validate-skill.sh rejects on purpose (no description, top-level
+# version:). Nothing else sets it.
 echo ""
 VALIDATE_SCRIPT="$SCRIPT_DIR/validate-plugin.sh"
-if [[ -x "$VALIDATE_SCRIPT" ]] && ! $DRY_RUN; then
+if [[ "${SKILL_KIT_NO_PLUGIN_VALIDATION:-}" == 1 ]] && ! $DRY_RUN; then
+  echo "--- Validation skipped (SKILL_KIT_NO_PLUGIN_VALIDATION=1) ---"
+elif ! $DRY_RUN; then
+  if [[ ! -x "$VALIDATE_SCRIPT" ]]; then
+    echo "Error: cannot validate the assembled plugin: $VALIDATE_SCRIPT is missing or not executable" >&2
+    exit 1
+  fi
   echo "--- Validation ---"
-  "$VALIDATE_SCRIPT" "$OUTPUT_DIR" || true
+  if ! "$VALIDATE_SCRIPT" "$OUTPUT_DIR"; then
+    echo "" >&2
+    echo "Error: the plugin assembled at $OUTPUT_DIR fails validation (see the FAIL lines above). Fix it before publishing." >&2
+    exit 1
+  fi
 fi
 
 echo ""

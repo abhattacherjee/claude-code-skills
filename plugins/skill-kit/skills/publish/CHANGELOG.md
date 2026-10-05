@@ -2,6 +2,20 @@
 
 All notable changes to the **publish** skill (was `skill-publishing`) are documented here.
 
+## [1.0.2] - 2026-10-05
+
+### Fixed
+
+- `publish`: `sync-monorepo.sh` and `validate-pre-sync.sh` refuse a plugin-only monorepo in every mode (discovery, `--skills`, `--add`, `--add-plugin`, `--init`, `--dry-run`, `--json`): one that has `plugins/*/.claude-plugin/plugin.json` and no top-level skill directory, like this repo since #167. They exit 1 with one message before writing anything; `validate-pre-sync.sh --json` also prints a JSON error object. Before, an `--add-plugin` run on a copy of this repo rewrote its README, CHANGELOG, marketplace catalogue and CI workflow at exit 0. Any other monorepo is handled as before. Sync for plugin-only monorepos is being redesigned in #190. A top-level symlink to a skill directory does not count as a top-level skill, because discovery skips symlinks; the refusal test and discovery now read one shared candidate list (`list_top_level_candidates` in `_lib.sh`). Before, such a symlink let a sync of an otherwise plugin-only monorepo through, and it rewrote README.md, CHANGELOG.md, validate-skill.yml and marketplace.json.
+- `publish`: `--init`, or a monorepo directory that does not exist, with no skill named exits 1. The old default set (`conversation-search`, `skill-authoring`, `skill-publishing`) named top-level skills that #167 deleted (#167).
+- `publish`: `release-monorepo.sh` counts and lists skills in both layouts, top-level `<name>/SKILL.md` and `plugins/<plugin>/skills/<name>/SKILL.md`, and lists a plugin skill as `<plugin>:<name>`. With no skill in either layout it exits 1 without writing anything. It counted only top-level files and released "Skills: 0" once those were deleted (#167).
+- `publish`: the `workflow-monorepo.yml` template detects changed skills both under `plugins/<group>/skills/<name>/` and in top-level `<name>/` directories (sync still writes those). A failing `git diff origin/main...HEAD` fails the job instead of reading as "no skill changed". A removed skill or plugin directory is skipped with a note; a skill directory still there without `SKILL.md` fails (#167).
+- `publish`: `validate-plugin.sh` takes the skill validator's own exit code (it used to take `sed`'s, so a failing skill passed). A `skills/` directory with no skill in it is a FAIL, and so is a skill when `validate-skill.sh` is missing or not executable (it passed as "SKILL.md exists") (#167).
+- `publish`: `prepare-plugin.sh` exits 1 when the plugin it assembled fails `validate-plugin.sh`, or when the validator is missing. It used to run it with `|| true`, print "Plugin assembled" and let sync publish the plugin. `SKILL_KIT_NO_PLUGIN_VALIDATION=1` skips the step and says so; only the sync-hygiene test harness sets it (#167).
+- `publish`: the CONTRIBUTING text that `sync-monorepo.sh` writes says to add a skill at the repo root, and where a skill that ships inside a plugin goes (#167).
+- `publish`: `SKILL.md` states the plugin-only refusal and when sync still applies, tells that refusal apart from a CHANGELOG failure at the pre-sync gate, and drops deleted skills from the architecture diagram and `--init` examples (#167).
+- The bundled `validate-skill.sh` changed in comments and help text only: the usage example no longer names the deleted `changelog-keeper/` directory, and the NOTE names the skills that ship a copy and the frozen exception (#167).
+
 ## [1.0.1] - 2026-10-05
 
 ### Fixed

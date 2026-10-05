@@ -38,6 +38,29 @@ The usual order is `create`, then `review`, then `implement`.
 
 `review` has two parts. Part 1 is a codebase verification checklist you can use on its own. Part 2 is the full planning workflow: discover and extract (scripts), parallel analysis by four agents, synthesis, and a report.
 
+How the full workflow runs:
+
+1. **Discover and extract.** Two scripts find the project's architecture and pull out the spec sections the agents need.
+2. **Four agents run at once**, all launched in a single message:
+
+   | Agent | Looks at | Catches |
+   |---|---|---|
+   | Codebase Verifier | File paths, function names, data shapes | Made-up module names, wrong line numbers, missing exports |
+   | Architecture Reviewer | Layer boundaries found in your project | Layer violations, data flowing the wrong way, missing steps |
+   | Design Simplifier | The spec's technical design (checked against `references/design-simplification-checklist.md`) | Over-engineering, needless abstractions, redundant wrappers |
+   | Test Plan Extractor | Acceptance criteria | Scenarios with no test, incomplete assertions |
+
+   The first three agents need the separately installed `feature-dev` plugin. Without it, `review` uses a general-purpose agent in their place and says so.
+3. **Synthesis and report.** The results are merged into one report: issues by severity, sections ready to add to the spec, the readiness score and next steps. `review` then asks what to do with it: update the spec file, save it as a companion document (for example `specs/reviews/review-X.Y.md`), or just report without changing any file.
+
+What `review` can add to the spec:
+
+- a "Current Codebase State" section: what exists, what to change and what to create, with verified paths,
+- detailed sub-tasks (file, function, change, verification command, dependencies, size),
+- "Design Simplification Notes", each with the current approach, the simpler one and why,
+- an API test plan in the format your project already uses (Bruno `.bru` files, Postman collections, plain HTTP files or unit-test specs), shown only when the spec touches an API,
+- an implementation readiness score out of 25.
+
 ### Use `implement` when
 
 - you say `/spec:implement` or "implement this spec",

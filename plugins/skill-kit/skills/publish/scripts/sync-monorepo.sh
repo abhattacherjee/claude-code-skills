@@ -52,6 +52,20 @@ Options:
                          skill is refused and skipped, see "Reversion guard")
   -h, --help             Show this help
 
+Plugin-only monorepo (#167):
+  This script writes skills as top-level <name>/ directories. A monorepo that
+  has plugins/*/.claude-plugin/plugin.json and no top-level skill directory is
+  refused in every mode (discovery, --skills, --add, --add-plugin, --init,
+  --dry-run): it exits 1 with one message before writing anything. Any other
+  monorepo (a new or empty directory, or one with top-level skills) is synced
+  as before. Sync for plugin-only monorepos is being redesigned in #190.
+
+--init and a new directory:
+  --init, or a monorepo directory that does not exist yet, needs the skills
+  named with --skills or --add. The old default set (conversation-search,
+  skill-authoring, skill-publishing) named top-level skills that no longer
+  exist, so there is no default; a run that names none exits 1.
+
 Reversion guard:
   A skill's source is the local ~/.claude/skills copy when one exists, else the
   in-repo directory. If a stale local copy lingers after the skill has moved
@@ -170,6 +184,12 @@ if [[ -z "$MONOREPO_DIR" ]]; then
   exit 1
 fi
 
+# #167: refuse a plugin-only monorepo in every mode, before anything is written
+# (see the note in _lib.sh). --add-plugin used to get past a discovery-only
+# refusal and rewrote README.md, CHANGELOG.md, the marketplace catalogue and
+# the CI workflow of such a repo.
+refuse_if_plugin_only_monorepo "$MONOREPO_DIR" "sync-monorepo.sh"
+
 # Standalone plugins: distributed via their own marketplace, not this monorepo.
 # THE one place to edit when migrating another plugin out (space-separated).
 # Both the discovery skip (SKIP line) and the --add-plugin refusal read it.
@@ -253,6 +273,12 @@ if $INIT_MODE; then
     echo "Warning: $MONOREPO_DIR already has a .git directory. Skipping init."
     INIT_MODE=false
   else
+    # No default skill set any more (see the end of discover_skills): stop
+    # before mkdir.
+    if ! $ADD_GIVEN && [[ -z "$SKILLS_LIST" ]]; then
+      echo "Error: --init needs the skills to publish, named with --skills or --add" >&2
+      exit 1
+    fi
     echo "Initializing monorepo at $MONOREPO_DIR..."
     if ! $DRY_RUN; then
       mkdir -p "$MONOREPO_DIR"
@@ -299,10 +325,7 @@ discover_skills() {
     # and any top-level directory that isn't a skill, e.g. docs/, build/)
     local existing=""
     if [[ -d "$MONOREPO_DIR" ]]; then
-      existing=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
-        ! -name '.git' ! -name '.github' ! -name '.*' \
-        ! -name 'plugins' ! -name 'scripts' \
-        -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort)
+      existing=$(list_top_level_candidates "$MONOREPO_DIR" | filter_skill_candidates | sort)
     fi
     # ADD_SKILL itself is a user-typed name, like --skills below — kept unfiltered
     # so a genuine typo still surfaces the loop's existing ERROR, not a silent SKIP.
@@ -419,29 +442,19 @@ discover_skills() {
     return
   fi
 
-  # For --init with no --skills, default to the initial set
-  # (Must check INIT_MODE before directory existence — init creates the dir first)
-  if $INIT_MODE; then
-    echo "conversation-search"
-    echo "skill-authoring"
-    echo "skill-publishing"
-    return
-  fi
-
   # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git,
   # .github, and any top-level directory that isn't a skill, e.g. docs/, build/)
   if [[ -d "$MONOREPO_DIR" ]]; then
-    find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
-      ! -name '.git' ! -name '.github' ! -name '.*' \
-      ! -name 'plugins' ! -name 'scripts' \
-      -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort
+    list_top_level_candidates "$MONOREPO_DIR" | filter_skill_candidates | sort
     return
   fi
 
-  # Fallback: default set
-  echo "conversation-search"
-  echo "skill-authoring"
-  echo "skill-publishing"
+  # The monorepo directory does not exist and no skill was named. There is no
+  # default set any more: the old one (conversation-search, skill-authoring,
+  # skill-publishing) named top-level skills that #167 deleted. A fresh --init
+  # with no names is stopped earlier, before it creates the directory.
+  echo "Error: $MONOREPO_DIR does not exist; name the skills to publish with --skills or --add" >&2
+  exit 1
 }
 
 SKILLS_TO_SYNC=$(discover_skills)
@@ -1805,7 +1818,7 @@ if [[ -f "$TEMPLATE_DIR/CONTRIBUTING-template.md" ]]; then
   cat > "$SCOPE_TMP" <<'SCOPE_EOF'
 ### Adding a new skill
 
-1. Create a new directory at the repo root (e.g., `my-skill/`)
+1. Create a new directory at the repo root (e.g., `my-skill/`). A skill that ships inside a plugin goes at `plugins/<plugin>/skills/<name>/` instead
 2. Add a `SKILL.md` with valid YAML frontmatter
 3. Optionally add `scripts/` and `references/` directories
 

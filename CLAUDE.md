@@ -1,7 +1,7 @@
 # claude-code-skills
 
 A monorepo of reusable Agent Skills and Plugins for Claude Code. Each skill lives
-in its own top-level directory (and is also published as a plugin under `plugins/`).
+in a plugin, at `plugins/<group>/skills/<name>/`.
 
 ## Git Flow Rules
 

@@ -2,6 +2,12 @@
 
 All notable changes to the **changelog** skill (was `changelog-keeper`) are documented here.
 
+## [1.0.1] - 2026-10-05
+
+### Changed
+
+- The bundled `scripts/validate-skill.sh` changed in comments and help text only: its usage example names a plugin skill path instead of the deleted `changelog-keeper/` directory, and its NOTE names the skills that ship a byte-identical copy and the frozen `skill-authoring` copy as the exception (#167).
+
 ## [1.0.0] - 2026-10-04
 
 ### Changed

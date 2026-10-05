@@ -111,12 +111,11 @@ def test_marketplace_lists_the_plugin():
 REPO = PLUGIN.parent.parent
 # skill-authoring used to name github-issue-triage; it was renamed once its SKILL.md was
 # trimmed under validate-skill.sh's 500-line limit (2.6.1).
-CALLERS = ["skill-authoring/SKILL.md", "skill-authoring/references/task-tracking-pattern.md",
-           "plugins/skill-authoring/skills/skill-authoring/SKILL.md",
+CALLERS = ["plugins/skill-authoring/skills/skill-authoring/SKILL.md",
            "plugins/skill-authoring/skills/skill-authoring/references/task-tracking-pattern.md"]
 CALLERS += ["plugins/skill-publishing/skills/skill-publishing/scripts/validate-pre-sync.sh",
             "README.md"]
-# The same files in the skill-kit plugin. The old paths stay until #167 removes them.
+# The same files in the skill-kit plugin.
 CALLERS += ["plugins/skill-kit/skills/author/SKILL.md",
             "plugins/skill-kit/skills/author/references/task-tracking-pattern.md",
             "plugins/skill-kit/skills/publish/scripts/validate-pre-sync.sh"]
@@ -135,15 +134,6 @@ def test_root_readme_lists_the_plugin():
     text = (REPO / "README.md").read_text()
     assert "[github-board](./plugins/github-board/)" in text
     assert "/github-board-move" not in text
-
-
-def test_the_two_skill_authoring_copies_are_identical():
-    import filecmp
-    root, plugin = REPO / "skill-authoring", REPO / "plugins" / "skill-authoring" / "skills" / "skill-authoring"
-    for rel in ("SKILL.md", "CHANGELOG.md", "references/agent-teams.md",
-                "references/skill-templates.md", "references/task-tracking-pattern.md",
-                "references/quality-checklist.md"):
-        assert filecmp.cmp(root / rel, plugin / rel, shallow=False), rel
 
 
 def test_old_root_skill_dir_is_gone():

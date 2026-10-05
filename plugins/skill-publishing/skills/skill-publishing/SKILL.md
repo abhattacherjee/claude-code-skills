@@ -1,11 +1,13 @@
 ---
 name: skill-publishing
-description: "Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos. Use when: (1) user says 'publish', 'share', or 'sync' a skill, (2) a skill needs to be made installable by others, (3) syncing skills/plugins to the monorepo, (4) creating a versioned monorepo release, (5) assembling a plugin from skills + commands, (6) user says 'publish plugin' or 'package plugin'."
+description: "Deprecated: use skill-kit:publish. Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos. Use when: (1) user says 'publish', 'share', or 'sync' a skill, (2) a skill needs to be made installable by others, (3) syncing skills/plugins to the monorepo, (4) creating a versioned monorepo release, (5) assembling a plugin from skills + commands, (6) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 4.5.0
+  version: 4.5.1
 ---
 
 # Publish Skills & Plugins
+
+> **Deprecated (#161, #167).** Use `skill-kit:publish`. In this copy, `sync-monorepo.sh`, `validate-pre-sync.sh` and `release-monorepo.sh` refuse to run: they print `deprecated: use skill-kit:publish (#161)` and exit 1 without reading any argument or file. The rest of this page describes the old behaviour.
 
 **Plugin-first publishing** for Claude Code skills. Every skill with a `plugin-manifest.json`
 is automatically assembled and synced as an installable plugin. Bare skills (without manifests)
@@ -501,4 +503,4 @@ rm -rf /tmp/ccs
 
 - `skill-authoring` — how to structure and write skills (the content)
 - This skill handles the distribution packaging (the container)
-- **GitHub**: https://github.com/abhattacherjee/claude-code-skills/tree/main/skill-publishing — install instructions, changelog, license
+- **GitHub**: https://github.com/abhattacherjee/claude-code-skills/tree/main/plugins/skill-kit — the skill-kit plugin that replaced this skill (`skill-kit:publish`): install instructions, changelog, license

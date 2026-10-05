@@ -2,7 +2,7 @@
 name: extract
 description: "Was the claudeception skill. Extracts reusable knowledge from work sessions and codifies it into Claude Code skills. Use when: (1) /skill-kit:extract (was /claudeception) to review session learnings, (2) save this as a skill or extract a skill from this, (3) what did we learn?, (4) after non-obvious debugging, workarounds, or trial-and-error discovery. Evaluates whether current work contains extractable knowledge, checks for existing skills, and creates or updates skills following the skill-kit:author best practices."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Claudeception

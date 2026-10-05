@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# DEPRECATED (#161, #167): this plugin is replaced by skill-kit:publish and this
+# copy refuses to run. It still wrote the old top-level skill layout, so on a
+# monorepo whose skills live under plugins/ it reported success over nothing and
+# rewrote the README. It stops here, before reading any argument or file.
+echo "deprecated: use skill-kit:publish (#161)" >&2
+exit 1
+
 # validate-pre-sync.sh — Pre-sync gate: verify each skill's CHANGELOG matches its version
 # Catches the common failure where SKILL.md version is bumped but CHANGELOG.md is not updated.
 #

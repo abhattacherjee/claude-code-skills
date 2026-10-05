@@ -26,6 +26,8 @@ Publishes Claude Code skills as installable plugins and syncs them to a GitHub m
 
 ## Usage
 
+> **Deprecated.** Use `skill-kit:publish` (the `skill-kit` plugin). The scripts below no longer run: `sync-monorepo.sh`, `validate-pre-sync.sh` and `release-monorepo.sh` print `deprecated: use skill-kit:publish (#161)` and exit 1. The listing is kept as history only.
+
 ```bash
 SCRIPTS=~/.claude/skills/skill-publishing/scripts
 
@@ -109,7 +111,7 @@ rm -rf /tmp/ccs
 
 - `skill-authoring` — how to structure and write skills (the content)
 - This skill handles the distribution packaging (the container)
-- **GitHub**: https://github.com/abhattacherjee/claude-code-skills/tree/main/skill-publishing — install instructions, changelog, license
+- **GitHub**: https://github.com/abhattacherjee/claude-code-skills/tree/main/plugins/skill-kit — the skill-kit plugin that replaced this one (`skill-kit:publish`): install instructions, changelog, license
 
 ## Compatibility
 

@@ -2,6 +2,12 @@
 
 All notable changes to the **context** plugin are documented here.
 
+## [1.0.2] - 2026-10-05
+
+### Changed
+
+- The bundled `validate-skill.sh` usage example no longer names the deleted `changelog-keeper/` directory, and its NOTE names the skills that ship a copy and the frozen exception. Comment and help text only (#167). `search` is at 1.0.1.
+
 ## [1.0.1] - 2026-10-04
 
 ### Changed

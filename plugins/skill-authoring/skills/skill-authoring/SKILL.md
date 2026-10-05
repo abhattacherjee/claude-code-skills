@@ -2,7 +2,7 @@
 name: skill-authoring
 description: "Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 2.6.1
+  version: 2.6.2
 ---
 
 # Skill Authoring
@@ -471,4 +471,4 @@ When a skill exceeds 500 lines, has poor structure, or runs slowly:
 ## See Also
 - `claudeception` — when to extract knowledge into skills (the WHY/WHEN)
 - Anthropic docs: [Skill authoring best practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)
-- GitHub: [skill-authoring](https://github.com/abhattacherjee/claude-code-skills/tree/main/skill-authoring) — install instructions, changelog, and releases
+- GitHub: [skill-kit](https://github.com/abhattacherjee/claude-code-skills/tree/main/plugins/skill-kit) — the plugin that replaced this skill (`skill-kit:author`): install instructions, changelog, and releases
