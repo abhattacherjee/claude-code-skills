@@ -2,6 +2,15 @@
 
 All notable changes to the **skill-kit** plugin are documented here.
 
+## [1.0.2] - 2026-10-05
+
+### Fixed
+
+- `publish`: `sync-monorepo.sh` in discovery mode (no `--skills`, no `--add`) and `validate-pre-sync.sh` now exit 1 with one message when the monorepo has no top-level skill directory. Skills live under `plugins/` now (#167), and sync is being redesigned in #190. Before, both reported success over nothing. `--skills`, `--add` and `--add-plugin` runs are not refused.
+- `publish`: `release-monorepo.sh` counts and lists `plugins/*/skills/*/SKILL.md`. It counted top-level `SKILL.md` files and printed "Skills: 0" once those were deleted (#167).
+- `publish`: the `workflow-monorepo.yml` template and this repo's own workflow match changed skills under `plugins/<group>/skills/<name>/`, not the old top-level directories. A skill directory removed in the PR is skipped. One that is still there without `SKILL.md` fails the job (#167).
+- `publish`: `validate-plugin.sh` takes the skill validator's own exit code (it used to take `sed`'s, so a failing skill passed), and a `skills/` directory with no skill in it is a FAIL (#167).
+
 ## [1.0.1] - 2026-10-05
 
 ### Fixed

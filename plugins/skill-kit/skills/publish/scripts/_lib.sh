@@ -612,6 +612,36 @@ skill_source_dir() {
   fi
 }
 
+# --- No top-level skills (issue #167) ----------------------------------------
+#
+# Skills live in plugins/<group>/skills/<name>/ now, and the bare top-level skill
+# directories are gone. sync-monorepo.sh and validate-pre-sync.sh scan only the
+# top level, so on such a monorepo they find zero skills and used to report
+# success over nothing. Both now stop with refuse_no_top_level_skills() when
+# their scan comes up empty. Redesigning the sync for plugins is tracked in
+# #190; nothing here does that, and runs that name skills explicitly
+# (--skills, --add) still work as before.
+
+# True when <monorepo-dir> has at least one top-level directory holding a SKILL.md.
+# plugins/ and scripts/ are never skill directories, and hidden directories are
+# skipped by the glob.
+has_top_level_skill_dirs() {
+  local d name
+  for d in "$1"/*/; do
+    name="$(basename "$d")"
+    case "$name" in plugins|scripts) continue ;; esac
+    [[ -f "${d}SKILL.md" ]] && return 0
+  done
+  return 1
+}
+
+# Usage: refuse_no_top_level_skills <monorepo-dir> <script-name>
+# Prints one message and exits 1.
+refuse_no_top_level_skills() {
+  echo "Error: $2: $1 has no top-level skill directories. Plugins under plugins/ are the source now (#167), and sync is being redesigned in #190. Nothing was changed." >&2
+  exit 1
+}
+
 # --- Manifest shape (issue #73) ----------------------------------------------
 #
 # A legacy plugin-manifest.json declares skills as bare strings:

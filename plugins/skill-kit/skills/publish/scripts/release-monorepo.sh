@@ -128,7 +128,13 @@ fi
 
 # --- Collect release info ---
 # Count skills
-SKILL_COUNT=$(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" -not -path "./plugins/*" | wc -l | tr -d ' ')
+# Skills live at plugins/<group>/skills/<name>/SKILL.md (#167); the bare top-level
+# skill directories are gone, so counting them gave "Skills: 0".
+PLUGIN_SKILLS_FIND_ARGS=(-mindepth 4 -maxdepth 4 -name "SKILL.md" -path "./plugins/*/skills/*/SKILL.md")
+SKILL_COUNT=0
+if [[ -d "./plugins" ]]; then
+  SKILL_COUNT=$(find ./plugins "${PLUGIN_SKILLS_FIND_ARGS[@]}" | wc -l | tr -d ' ')
+fi
 
 # Count plugins
 PLUGIN_COUNT=0
@@ -173,7 +179,7 @@ while IFS= read -r skill_md; do
   skill_short_desc=$(short_desc "$skill_desc")
   SKILL_INVENTORY="${SKILL_INVENTORY}
 - \`$skill_name\` v${version:-?.?.?} — $skill_short_desc"
-done < <(find . -maxdepth 2 -name "SKILL.md" -not -path "./.git/*" -not -path "./plugins/*" | sort)
+done < <(if [[ -d "./plugins" ]]; then find ./plugins "${PLUGIN_SKILLS_FIND_ARGS[@]}" | sort; fi)
 
 # --- Build plugin inventory ---
 PLUGIN_INVENTORY=""

@@ -219,6 +219,13 @@ while IFS= read -r SKILL_NAME <&3; do
   fi
 done 3<<< "$SKILLS" </dev/null
 
+# #167: skills live under plugins/ now and the scan above covers only top-level
+# skill directories. Zero skills examined used to print "Safe to sync" over
+# nothing; refuse instead.
+if [[ $TOTAL -eq 0 ]]; then
+  refuse_no_top_level_skills "$MONOREPO_DIR" "validate-pre-sync.sh"
+fi
+
 # --- Output ---
 if $JSON_MODE; then
   # Remove trailing comma from JSON items

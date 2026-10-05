@@ -431,10 +431,20 @@ discover_skills() {
   # If monorepo exists, sync skills already in it (exclude plugins/, scripts/, .git,
   # .github, and any top-level directory that isn't a skill, e.g. docs/, build/)
   if [[ -d "$MONOREPO_DIR" ]]; then
-    find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
+    local discovered
+    discovered=$(find "$MONOREPO_DIR" -maxdepth 1 -mindepth 1 -type d \
       ! -name '.git' ! -name '.github' ! -name '.*' \
       ! -name 'plugins' ! -name 'scripts' \
-      -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort
+      -exec basename {} \; 2>/dev/null | filter_skill_candidates | sort)
+    # #167: the bare top-level skill directories are gone and skills live under
+    # plugins/. A discovery run that finds none would sync nothing, rewrite the
+    # catalogue and exit 0. Refuse instead. A run that names skills with --skills
+    # or --add returns above and is not affected. --add-plugin is exempt too: it
+    # copies the plugin it names and does not depend on top-level skills.
+    if [[ -z "$discovered" && -z "$ADD_PLUGIN" ]]; then
+      refuse_no_top_level_skills "$MONOREPO_DIR" "sync-monorepo.sh"
+    fi
+    printf '%s\n' "$discovered"
     return
   fi
 
