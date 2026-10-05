@@ -192,6 +192,16 @@ print("yes" if eval(sys.argv[2]) else "no")' "$file" "$expr" 2>&1)" && [[ "$res"
 has()   { grep -Fq -- "$3" "$2" && ok "$1" || bad "$1" "no '$3' in $2"; }
 # lacks <label> <file> <fixed-string>: the file does not contain the text.
 lacks() { grep -Fq -- "$3" "$2" && bad "$1" "found '$3' in $2" || ok "$1"; }
+# usage_on_stderr <label>: the last run printed its usage to stderr and nothing to stdout.
+usage_on_stderr() {
+  if ! printf '%s' "$ERR" | grep -Eq '(Usage|USAGE):'; then
+    bad "$1" "no Usage: in stderr: $(printf '%s' "$ERR" | head -2)"
+  elif [[ -n "$OUT" ]]; then
+    bad "$1" "stdout is not empty: $(printf '%s' "$OUT" | head -2)"
+  else
+    ok "$1"
+  fi
+}
 # no_traceback <label>: the last run's stderr has no Python traceback.
 no_traceback() { case "$ERR" in *Traceback*) bad "$1" "$(printf '%s' "$ERR" | tail -3)" ;; *) ok "$1" ;; esac; }
 
@@ -254,7 +264,9 @@ PYEND
     run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$SKILLS/$skill/scripts/$name" --help
     check "$skill SKILL.md command runs: scripts/$name --help (no opencv)" 0
   done <<< "$names"
-  [[ "$n" -ge 1 ]] && ok "$skill SKILL.md: found $n script command(s) to run" || bad "$skill SKILL.md: found no script commands to run" "the extractor matched nothing"
+  # Each SKILL.md names 5 scripts as commands. A count that drops means the extractor or the
+  # text broke, and the commands it lost would go unchecked.
+  [[ "$n" -eq 5 ]] && ok "$skill SKILL.md: found the 5 script commands to run" || bad "$skill SKILL.md: found the 5 script commands to run" "found $n"
 done
 
 echo "SKILL.md never shows the substituted path tokens in prose"
@@ -360,6 +372,7 @@ run_in "$PROJ" "$REC/install-deps.sh" --help
 check "--help exits 0 and shows usage" 0 'USAGE:'
 run_in "$PROJ" "$REC/install-deps.sh" --bogus
 check "an unknown option exits 2 with a message" 2 "" 'Unknown option: --bogus'
+usage_on_stderr "an unknown option prints the usage on stderr, nothing on stdout"
 # The installer with every Python module missing (blocked) and a fake python3 that passes
 # everything to the real one except `-m pip`, which it logs and answers per FAKE_PIP:
 # "pep668" refuses like a Homebrew Python, "ok" claims success but installs nothing.
@@ -385,7 +398,12 @@ case "$OUT" in
   *) bad "--help names the install-deps.sh path next to the script" "got: $(printf '%s' "$OUT" | tail -2)" ;;
 esac
 run_in "$PROJ" "$REC/record.sh" --bogus
-check "an unknown option exits 2" 2
+check "an unknown option exits 2" 2 "" 'Unknown option: --bogus'
+usage_on_stderr "an unknown option prints the usage on stderr, nothing on stdout"
+for opt in -o --output -n --name -d --duration -f --fps --zoom-max --zoom-min --resolution --zoom-mode --dwell --move; do
+  run_in "$PROJ" "$REC/record.sh" "$opt"
+  check "$opt with no value exits 2 with a message" 2 "" "Option $opt needs a value"
+done
 run_in "$PROJ" "$REC/record.sh" -o
 check "an option with no value exits 2 with a message" 2 "" 'Option -o needs a value'
 run_in "$PROJ" "$REC/record.sh" --fps
@@ -883,6 +901,10 @@ for wf in full-video visual-only screenshots brand-update voiceover-only; do
   run_in "$PROJ" "$PRO/task-manifest.sh" "$wf"
   bare="$(printf '%s' "$OUT" | grep -oE 'Launch [A-Za-z:_-]+' | grep -v 'Launch demo-video:' || true)"
   [[ -z "$bare" ]] && ok "$wf: every Launch line names demo-video:<agent>" || bad "$wf: every Launch line names demo-video:<agent>" "$bare"
+  # An empty match passes the check above, so pin how many Launch lines each workflow has.
+  n_launch="$(printf '%s' "$OUT" | grep -oE 'Launch demo-video:[A-Za-z-]+' | grep -c . || true)"
+  case "$wf" in full-video) want_launch=2 ;; visual-only) want_launch=1 ;; *) want_launch=0 ;; esac
+  [[ "$n_launch" == "$want_launch" ]] && ok "$wf: $want_launch Launch demo-video: line(s)" || bad "$wf: $want_launch Launch demo-video: line(s)" "found $n_launch"
   for t in $(printf '%s' "$OUT" | grep -oE 'Launch demo-video:[A-Za-z-]+' | sed 's/Launch demo-video://' | sort -u); do
     [[ -f "$AGENTS/$t.md" ]] && ok "$wf: agent $t exists" || bad "$wf: agent $t exists" "no agents/$t.md"
   done
@@ -894,6 +916,7 @@ run_in "$PROJ" "$PRO/task-manifest.sh" nope
 check "an unknown workflow exits 2 with a message" 2 "" 'Unknown workflow: nope'
 run_in "$PROJ" "$PRO/task-manifest.sh"
 check "no workflow exits 2 with the usage" 2 "" 'Usage: task-manifest.sh'
+usage_on_stderr "no workflow prints the usage on stderr, nothing on stdout"
 run_in "$PROJ" "$PRO/task-manifest.sh" --help
 check "--help exits 0 and shows usage" 0 'Usage: task-manifest.sh'
 
@@ -929,6 +952,7 @@ printf '#!/bin/sh\necho "$PWD: npm $*" >> "%s/npm-ok-log"\necho added 1 package\
 chmod +x "$TMP/npm-fail/npm" "$TMP/npm-ok/npm"
 run_in "$PROJ" env PATH="$TMP/npm-fail:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-fails"
 check "a failing npm install exits 1 and says so" 1 "" 'npm install failed'
+case "$ERR" in *"npm ERR! boom"*) ok "a failing npm install shows the end of the npm output on stderr" ;; *) bad "a failing npm install shows the end of the npm output on stderr" "$ERR" ;; esac
 run_in "$PROJ" env PATH="$TMP/npm-ok:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-works"
 check "a working npm install exits 0" 0 'Project scaffolded'
 [[ "$(cat "$TMP/npm-ok-log" 2>/dev/null)" == "$TMP/work/npm-works: npm install" ]] && ok "npm install ran once, inside the new project" || bad "npm install ran once, inside the new project" "log: $(cat "$TMP/npm-ok-log" 2>/dev/null)"
@@ -948,6 +972,11 @@ check "an unknown aspect ratio exits 2 with a message" 2 "" 'Unknown aspect rati
 [[ ! -e "$TMP/work/bad-aspect" ]] && ok "an unknown aspect ratio creates nothing" || bad "an unknown aspect ratio creates nothing" "directory exists"
 run_in "$PROJ" "$PRO/scaffold-project.sh" --skip-install
 check "no project directory exits 2 with a message" 2 "" 'project directory is required'
+usage_on_stderr "no project directory prints the usage on stderr, nothing on stdout"
+for opt in --name --aspect; do
+  run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/x" "$opt"
+  check "$opt with no value exits 2 with a message" 2 "" "Option $opt needs a value"
+done
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/x" --name
 check "--name with no value exits 2 with a message" 2 "" 'Option --name needs a value'
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/x" --bogus
@@ -967,6 +996,11 @@ run_in "$PROJ" "$PRO/generate-voiceover.sh" --provider nope narration.json out
 check "an unknown provider exits 2" 2 "" 'Unknown provider: nope'
 run_in "$PROJ" "$PRO/generate-voiceover.sh" --provider openai
 check "no script file and output dir exits 2 with a message" 2 "" 'script file and output directory are required'
+usage_on_stderr "no script file prints the usage on stderr, nothing on stdout"
+for opt in --provider --voice --model --instructions --speed; do
+  run_in "$PROJ" "$PRO/generate-voiceover.sh" "$opt"
+  check "$opt with no value exits 2 with a message" 2 "" "Option $opt needs a value"
+done
 run_in "$PROJ" "$PRO/generate-voiceover.sh" --provider openai missing.json "$TMP/work/audio"
 check "a missing script file exits 1 with a message" 1 "" 'script file not found'
 printf '[{"scene":"hook","text":"Hi."}]' > "$TMP/work/narration.json"
@@ -1098,6 +1132,11 @@ fi
 echo "capture-screenshots.sh (produce)"
 run_in "$PROJ" "$PRO/capture-screenshots.sh"
 check "no output directory exits 2 with a message" 2 "" 'output directory is required'
+usage_on_stderr "no output directory prints the usage on stderr, nothing on stdout"
+for opt in --url --shared-url --viewport --dpr --hide-selectors; do
+  run_in "$PROJ" "$PRO/capture-screenshots.sh" "$opt"
+  check "$opt with no value exits 2 with a message" 2 "" "Option $opt needs a value"
+done
 run_in "$PROJ" "$PRO/capture-screenshots.sh" --url
 check "--url with no value exits 2 with a message" 2 "" 'Option --url needs a value'
 run_in "$PROJ" "$PRO/capture-screenshots.sh" --bogus out
@@ -1147,8 +1186,10 @@ else
 fi
 
 echo "render-and-preview.sh (produce)"
-run_in "$PROJ" "$PRO/render-and-preview.sh" --output
-check "--output with no value exits 2 with a message" 2 "" 'Option --output needs a value'
+for opt in --output --quality --frames; do
+  run_in "$PROJ" "$PRO/render-and-preview.sh" "$opt"
+  check "$opt with no value exits 2 with a message" 2 "" "Option $opt needs a value"
+done
 run_in "$PROJ" "$PRO/render-and-preview.sh" --bogus
 check "an unknown option exits 2" 2 "" 'Unknown option: --bogus'
 run_in "$PROJ" "$PRO/render-and-preview.sh" --no-open
