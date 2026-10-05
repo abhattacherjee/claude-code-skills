@@ -52,6 +52,11 @@ Options:
                          skill is refused and skipped, see "Reversion guard")
   -h, --help             Show this help
 
+No top-level skills (#167):
+  Skills live under plugins/ now. A discovery run (none of --skills, --add,
+  --add-plugin or --init) on a monorepo with no top-level skill directory exits 1
+  with one message instead of syncing nothing. Sync is being redesigned in #190.
+
 Reversion guard:
   A skill's source is the local ~/.claude/skills copy when one exists, else the
   in-repo directory. If a stale local copy lingers after the skill has moved

@@ -55,10 +55,14 @@ Format: Monorepo-level events only. For per-skill change details, see `<skill>/C
 ### Removed
 
 - The stale `plugins/obsidian-brain` mirror (2.5.1) and its marketplace entry (#166). obsidian-brain ships from its own repo and marketplace `obsidian-brain-repo`.
+- The 11 bare top-level skill directories (75 files) and their README install steps (#167, epic #156): `changelog-keeper`, `claudeception`, `context-shield`, `conversation-search`, `deep-review`, `figma-ui-designer`, `skill-authoring`, `spec-creator`, `spec-implement`, `spec-review` and `worktree`. Every one has a plugin home and none had a commit after that home was created. The README "Skills" section and its count are gone, and CONTRIBUTING, `AGENTS.md` and `CLAUDE.md` now say skills live at `plugins/<group>/skills/<name>/`. The README facts the `spec` plugin lacked moved into `plugins/spec/README.md` (`spec` 1.0.4).
 
 ### Fixed
 
 - `skill-kit` 1.0.1 (#166): `sync-monorepo.sh` skips `obsidian-brain` as a standalone plugin and `--add-plugin` refuses standalone plugins, with the names in one variable. `--add-plugin` takes a bare lowercase name only, and it also checks the `name` in the built `plugin.json`, so `obsidian-brain/`, `Obsidian-Brain` or another build dir name cannot get past it. The README install note is generated from that variable, one line per standalone plugin (`git-flow` and `obsidian-brain`). The `--add-plugin` example shows `<plugin-name>`.
+- `validate-plugin.sh` no longer hides a failing skill (#167). It took the exit code of `sed` at the end of a pipe, so a skill that failed `validate-skill.sh` printed PASS and the plugin passed. It takes the skill's own exit code now, and a `skills/` directory with no skill in it is a FAIL. Two deprecated plugins had been hiding real frontmatter failures: `context-bar` 1.0.1 and `custom-statusline` 1.3.1 are fixed. New tests: `scripts/test-validate-plugin.sh`.
+- CI scans plugin skills (#167). The validate-skills job matched only top-level `<name>/SKILL.md`, so it never saw `plugins/*/skills/*` and printed "No skill directories changed". It takes changed files under `plugins/<group>/skills/<name>/` now: a removed skill directory is skipped, one that is still there without `SKILL.md` fails. The `workflow-monorepo.yml` template got the same change. New tests: `scripts/test-ci-skill-detect.sh`.
+- `skill-kit` 1.0.2 (#167): `sync-monorepo.sh` (discovery mode) and `validate-pre-sync.sh` exit 1 with one message when the monorepo has no top-level skill directory, instead of reporting success over nothing. `release-monorepo.sh` counts `plugins/*/skills/*/SKILL.md`, not top-level files. Sync is being redesigned in #190.
 
 ## [3.20.0] - 2026-10-02
 

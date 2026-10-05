@@ -39,7 +39,8 @@ Options:
 
 Exit codes:
   0  All skills have matching CHANGELOG entries
-  1  One or more skills have version/CHANGELOG mismatches
+  1  One or more skills have version/CHANGELOG mismatches, or the monorepo has
+     no top-level skill directory to check (skills live under plugins/ now, #167)
   2  Usage error
 
 Examples:
