@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # validate-skill.sh — Validate a Claude Code skill directory against quality rules
-# NOTE: This validator is duplicated across skills (the monorepo root scripts/ and each
-# plugin skill's scripts/). Keep all copies byte-identical when editing.
+# NOTE: Copies of this validator ship in the monorepo root scripts/ and in the scripts/
+# of these plugin skills: context:search, dev-flow:changelog, dev-flow:worktree,
+# skill-kit:author, skill-kit:extract, skill-kit:publish, and the deprecated
+# skill-publishing. Keep those copies byte-identical when editing. The exception is
+# the deprecated skill-authoring plugin's copy: it is older, frozen, and not kept in step.
 # Exit codes: 0 = pass, 1 = fail, 2 = usage error
 set -eu
 
