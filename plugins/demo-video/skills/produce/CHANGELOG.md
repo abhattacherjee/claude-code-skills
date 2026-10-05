@@ -11,6 +11,7 @@ All notable changes to the **produce** skill (was `product-video-creation`) are 
 - The four agents are started by plugin agent type: `demo-video:product-video-storyteller`, `demo-video:product-video-narrator`, `demo-video:product-video-music-curator` and `demo-video:product-video-audio-mixer`. The old text named them with no type. `task-manifest.sh` task descriptions say the same.
 - The OpenAI key check in Step 1 now works. The old `echo "${OPENAI_API_KEY:+...}" || echo "No OpenAI key found"` could never print the second line, because `echo` always succeeds. It is an `if` on `printenv OPENAI_API_KEY` now, and an empty key counts as not set.
 - `references/scene-architecture.md`: the entry-animation tip had a JavaScript template literal in an inline code span, which the command checker read as a shell variable. It is plain words now.
+- The scaffold command in `SKILL.md` shows `--name "<NAME>"` and `--skip-install`, with when to use each. A live run said the script takes no name. The text says to pass a lowercase hyphenated name (`launch-reel`), because npm rejects spaces and capitals.
 
 ### Added
 

@@ -959,6 +959,13 @@ run_in "$PROJ" "$PRO/task-manifest.sh" --help
 check "--help exits 0 and shows usage" 0 'Usage: task-manifest.sh'
 
 echo "scaffold-project.sh (produce)"
+# The produce SKILL.md must show --name and --skip-install on scaffold-project.sh. A live run read the old text
+# and told the user the script takes no name.
+for opt in --name --skip-install; do
+  grep -E 'scripts/scaffold-project\.sh' "$SKILLS/produce/SKILL.md" | grep -qF -- "$opt" \
+    && ok "produce SKILL.md shows $opt on the scaffold-project.sh command" \
+    || bad "produce SKILL.md shows $opt on the scaffold-project.sh command" "no scaffold-project.sh line in SKILL.md has $opt"
+done
 SP="$TMP/work/my video"
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$SP" --skip-install --aspect 16:9
 check "scaffolds into a directory with a space (--skip-install)" 0 'Project scaffolded'

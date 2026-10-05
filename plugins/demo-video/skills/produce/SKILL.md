@@ -30,7 +30,7 @@ All scripts are in this skill's `scripts/` directory and are standalone. Run eac
 
 ```bash
 # Scaffold a new project (no existing project needed)
-"${CLAUDE_SKILL_DIR}/scripts/scaffold-project.sh" <PROJECT_DIR> --aspect 9:16
+"${CLAUDE_SKILL_DIR}/scripts/scaffold-project.sh" <PROJECT_DIR> --name "<NAME>" --aspect 9:16 --skip-install
 
 # Capture screenshots
 "${CLAUDE_SKILL_DIR}/scripts/capture-screenshots.sh" ./public/screenshots --url https://myapp.com
@@ -59,9 +59,13 @@ Create tasks from the output of this command before starting:
 
 If the user is NOT already in a Remotion project, scaffold one:
 ```bash
-"${CLAUDE_SKILL_DIR}/scripts/scaffold-project.sh" <PROJECT_DIR> --aspect 9:16
+"${CLAUDE_SKILL_DIR}/scripts/scaffold-project.sh" <PROJECT_DIR> --name "<NAME>" --aspect 9:16
 cd <PROJECT_DIR>
 ```
+
+Options:
+- `--name "<NAME>"` sets the `name` in `package.json`. Without it, the name is the directory name. Use it when the user gave a project name. npm only accepts lowercase letters, digits and hyphens, so for "Launch Reel" pass `launch-reel` and keep "Launch Reel" as the title inside the video.
+- `--skip-install` writes the files and does not run `npm install`. Use it when there is no network or you want to install later.
 
 The script creates a complete Remotion + Tailwind + Lucide project with Google Fonts pre-configured. If `<PROJECT_DIR>/remotion.config.ts` already exists, it leaves the files alone and only runs `npm install` (skipped with `--skip-install`), so running it again after a failed install finishes the install.
 
