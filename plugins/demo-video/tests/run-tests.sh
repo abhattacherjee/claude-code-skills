@@ -354,6 +354,109 @@ run_in "$PROJ" "$REC/record.sh" -o
 check "an option with no value exits 2 with a message" 2 "" 'Option -o needs a value'
 run_in "$PROJ" "$REC/record.sh" --fps
 check "--fps with no value exits 2 with a message" 2 "" 'Option --fps needs a value'
+run_in "$PROJ" "$REC/record.sh" --zoom-mode spiral
+check "an unknown --zoom-mode exits 2 with a message" 2 "" 'Unknown --zoom-mode: spiral'
+
+# Recording with fakes: python3 passes the dependency checks, runs a fake cursor tracker
+# (header, plus a position when FAKE_TRACKER_POSITIONS is set) and a fake smart-zoom (logs
+# its arguments, writes the output). ffmpeg is a fake that lists one screen, records until
+# SIGINT (or exits at once with -t, or fails with FAKE_FFMPEG=fail) and remuxes by copying.
+echo "record.sh recording (fake ffmpeg, tracker and smart-zoom)"
+REAL_PY="$(command -v python3)"
+mkdir -p "$TMP/rec-bin"
+cat > "$TMP/rec-bin/python3" <<'SHEND'
+#!/bin/sh
+case "$1" in
+  -c) exit 0 ;;
+  *cursor-tracker.py)
+    out=""
+    while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done
+    echo '{"type": "header", "screen_w": 40, "screen_h": 20, "scale": 1, "fps": 30}' > "$out"
+    [ -n "$FAKE_TRACKER_POSITIONS" ] && echo '{"t": 0.0, "x": 1, "y": 1}' >> "$out"
+    trap 'exit 0' TERM
+    while :; do sleep 0.1; done ;;
+  *smart-zoom.py)
+    echo "smart-zoom $*" >> "$REC_LOG"
+    out=""
+    while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done
+    echo zoomed > "$out"
+    exit 0 ;;
+esac
+echo "unexpected python3 call: $*" >&2
+exit 3
+SHEND
+{ printf '#!%s\n' "$REAL_PY"; cat <<'PYEND'
+import os, shutil, signal, sys, time
+args = sys.argv[1:]
+if "-list_devices" in args:
+    sys.stderr.write("[AVFoundation indev @ 0x1] [1] Capture screen 0\n")
+    sys.exit(1)
+out = args[-1]
+if "copy" in args:
+    shutil.copy(args[args.index("-i") + 1], out)
+    sys.exit(0)
+if os.environ.get("FAKE_FFMPEG") == "fail":
+    sys.stderr.write("fake ffmpeg: cannot open the screen\n")
+    sys.exit(1)
+open(out, "w").write("mkv")
+if "-t" in args:
+    sys.exit(0)
+stop = []
+signal.signal(signal.SIGINT, lambda *a: stop.append(1))
+open(os.environ["REC_READY"], "w").write("1")
+for _ in range(400):
+    if stop:
+        sys.exit(255)
+    time.sleep(0.05)
+sys.exit(9)
+PYEND
+} > "$TMP/rec-bin/ffmpeg"
+chmod +x "$TMP/rec-bin/python3" "$TMP/rec-bin/ffmpeg"
+RECENV="PATH=$TMP/rec-bin:$TMP/stubs:$PATH"
+: > "$TMP/rec-log"
+run_in "$PROJ" env "$RECENV" REC_LOG="$TMP/rec-log" FAKE_FFMPEG=fail "$REC/record.sh" --raw-only -d 1 -o "$TMP/rec1" -n demo
+check "ffmpeg that records nothing: exit 1 with a message" 1 "" 'ffmpeg wrote no video'
+case "$OUT" in *"Recording complete"*) bad "ffmpeg that records nothing: no 'Recording complete' line" "$OUT" ;; *) ok "ffmpeg that records nothing: no 'Recording complete' line" ;; esac
+run_in "$PROJ" env "$RECENV" REC_LOG="$TMP/rec-log" "$REC/record.sh" -d 1 -o "$TMP/rec2" -n demo
+check "a cursor log with no positions (no --raw-only): exit 1 with a message" 1 "" 'wrote no positions'
+[[ -f "$TMP/rec2/demo-raw.mp4" ]] && ok "a cursor log with no positions: the raw recording is kept" || bad "a cursor log with no positions: the raw recording is kept" "$(ls "$TMP/rec2" 2>&1)"
+[[ ! -s "$TMP/rec-log" ]] && ok "a cursor log with no positions: smart-zoom is not run" || bad "a cursor log with no positions: smart-zoom is not run" "$(cat "$TMP/rec-log")"
+run_in "$PROJ" env "$RECENV" REC_LOG="$TMP/rec-log" FAKE_TRACKER_POSITIONS=1 "$REC/record.sh" -d 1 -o "$TMP/rec3" -n demo \
+  --zoom-mode velocity --dwell 100 --move 500
+check "--zoom-mode velocity with --dwell and --move: exit 0" 0 'Recording complete'
+grep -Fq -- '--mode velocity' "$TMP/rec-log" && grep -Fq -- '--dwell-threshold 100 --move-threshold 500' "$TMP/rec-log" \
+  && ok "--zoom-mode, --dwell and --move reach smart-zoom.py" || bad "--zoom-mode, --dwell and --move reach smart-zoom.py" "$(cat "$TMP/rec-log")"
+# Ctrl+C: SIGINT to the whole process group, the way a terminal sends it. The script must
+# let ffmpeg finish, remux, and print its summary.
+cat > "$TMP/rec-int.py" <<'PYEND'
+import os, signal, subprocess, sys, time
+script, outdir, ready, env_path, home = sys.argv[1:6]
+env = {"PATH": env_path, "HOME": home, "REC_READY": ready, "REC_LOG": os.devnull}
+p = subprocess.Popen([script, "--raw-only", "-o", outdir, "-n", "demo"], env=env, start_new_session=True,
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                     preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+for _ in range(200):
+    if os.path.exists(ready):
+        break
+    time.sleep(0.05)
+time.sleep(0.2)
+os.killpg(p.pid, signal.SIGINT)
+try:
+    out, err = p.communicate(timeout=30)
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    out, err = p.communicate()
+print("RC=%d" % p.returncode)
+print(out)
+print(err, file=sys.stderr)
+PYEND
+rm -f "$TMP/rec-ready"
+RC=0
+OUT="$("$REAL_PY" "$TMP/rec-int.py" "$REC/record.sh" "$TMP/rec4" "$TMP/rec-ready" "$TMP/rec-bin:$TMP/stubs:$PATH" "$HOME_DIR" 2>"$TMP/err")" || RC=$?
+ERR="$(cat "$TMP/err")"
+case "$OUT" in RC=0*) ok "Ctrl+C stops the recording and the script exits 0" ;; *) bad "Ctrl+C stops the recording and the script exits 0" "$(printf '%s' "$OUT" | head -3) / $(printf '%s' "$ERR" | tail -3)" ;; esac
+[[ -f "$TMP/rec4/demo-raw.mp4" && ! -e "$TMP/rec4/demo-raw.mkv" ]] && ok "Ctrl+C: the MKV is remuxed to demo-raw.mp4" || bad "Ctrl+C: the MKV is remuxed to demo-raw.mp4" "$(ls "$TMP/rec4" 2>&1)"
+case "$OUT" in *"Recording complete (raw only)"*) ok "Ctrl+C: the summary is printed" ;; *) bad "Ctrl+C: the summary is printed" "$OUT" ;; esac
 
 # ---------------------------------------------------------------------------
 # build-timeline.py, generate-tts.py, render-timeline.py and mix-audio.py read and write
@@ -486,7 +589,7 @@ check "render-timeline.py without opencv exits 1 and says what to install" 1 "" 
 run_in "$PROJ" env PYTHONPATH="$TMP/nocv" "$REC/extract-frames.py" video.mp4 cursor.jsonl
 check "extract-frames.py without opencv exits 1 and says what to install" 1 "" 'pip3 install opencv-python'
 skip "render-timeline.py rendering: needs opencv, ffmpeg and a fixed raw-video path (a real recording)"
-skip "record.sh recording: needs a screen and ffmpeg"
+skip "record.sh with a real screen: needs a screen, ffmpeg and Screen Recording permission"
 
 echo "preview-timeline.py (fake opencv)"
 PV="$TMP/pv proj"

@@ -10,6 +10,7 @@ ZOOM_MAX=3.0
 ZOOM_MIN=1.0
 OUTPUT_RES="1920x1080"
 RAW_ONLY=false
+ZOOM_MODE=focus
 DWELL_THRESHOLD=200
 MOVE_THRESHOLD=800
 
@@ -29,8 +30,9 @@ OPTIONS:
     --zoom-min FLOAT       Minimum zoom level (default: 1.0)
     --resolution WxH       Output resolution (default: 1920x1080)
     --raw-only             Save raw recording without zoom processing
-    --dwell PIXELS/S       Cursor speed to trigger zoom-in (default: 200)
-    --move PIXELS/S        Cursor speed to trigger zoom-out (default: 800)
+    --zoom-mode MODE       smart-zoom.py mode: focus, click or velocity (default: focus)
+    --dwell PIXELS/S       velocity mode only: cursor speed below which it zooms in (default: 200)
+    --move PIXELS/S        velocity mode only: cursor speed above which it zooms out (default: 800)
     -h, --help             Show this help
 
 EXAMPLES:
@@ -38,7 +40,10 @@ EXAMPLES:
     record.sh -d 60 -o ~/Videos               # Record 60 seconds
     record.sh --zoom-max 4.0 --fps 60         # Higher zoom, 60fps
     record.sh --raw-only                       # Just record, skip zoom
-    record.sh --dwell 100 --move 500          # More aggressive zoom
+    record.sh --zoom-mode velocity --dwell 100 --move 500   # Speed-based zoom
+
+Ctrl+C stops the recording; the video is still saved and processed.
+It exits 1 if ffmpeg wrote no video, or (without --raw-only) no cursor log.
 
 OUTPUT FILES:
     {name}.mp4              Zoomed/processed video (main output)
@@ -54,7 +59,7 @@ HELP
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -o|--output|-n|--name|-d|--duration|-f|--fps|--zoom-max|--zoom-min|--resolution|--dwell|--move)
+        -o|--output|-n|--name|-d|--duration|-f|--fps|--zoom-max|--zoom-min|--resolution|--zoom-mode|--dwell|--move)
             if [[ $# -lt 2 ]]; then
                 echo "Option $1 needs a value" >&2
                 exit 2
@@ -70,40 +75,46 @@ while [[ $# -gt 0 ]]; do
         --zoom-min) ZOOM_MIN="$2"; shift 2 ;;
         --resolution) OUTPUT_RES="$2"; shift 2 ;;
         --raw-only) RAW_ONLY=true; shift ;;
+        --zoom-mode) ZOOM_MODE="$2"; shift 2 ;;
         --dwell) DWELL_THRESHOLD="$2"; shift 2 ;;
         --move) MOVE_THRESHOLD="$2"; shift 2 ;;
-        *) echo "Unknown option: $1"; usage; exit 2 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
+
+case "$ZOOM_MODE" in
+    focus|click|velocity) ;;
+    *) echo "Unknown --zoom-mode: $ZOOM_MODE (use focus, click or velocity)" >&2; exit 2 ;;
+esac
 
 # --- Dependency checks ---
 MISSING=0
 check_dep() {
     if ! command -v "$1" &>/dev/null; then
-        echo "Missing: $1 — $2"
+        echo "Missing: $1 — $2" >&2
         MISSING=1
     fi
 }
 check_dep ffmpeg "brew install ffmpeg"
 check_dep python3 "install Python 3"
 if [[ $MISSING -eq 1 ]]; then
-    echo ""
-    echo "Install missing dependencies:"
-    echo "  $SCRIPT_DIR/install-deps.sh"
+    echo "" >&2
+    echo "Install missing dependencies:" >&2
+    echo "  $SCRIPT_DIR/install-deps.sh" >&2
     exit 1
 fi
 
 if ! python3 -c "from Quartz import CGEventCreate" 2>/dev/null; then
-    echo "Missing: pyobjc-framework-Quartz"
-    echo "  pip3 install pyobjc-framework-Quartz"
+    echo "Missing: pyobjc-framework-Quartz" >&2
+    echo "  $SCRIPT_DIR/install-deps.sh" >&2
     exit 1
 fi
 
 if [[ "$RAW_ONLY" == false ]]; then
     if ! python3 -c "import cv2" 2>/dev/null; then
-        echo "Missing: opencv-python (needed for zoom processing)"
-        echo "  pip3 install opencv-python"
-        echo "  Or use --raw-only to skip zoom processing"
+        echo "Missing: opencv-python (needed for zoom processing)" >&2
+        echo "  $SCRIPT_DIR/install-deps.sh" >&2
+        echo "  Or use --raw-only to skip zoom processing" >&2
         exit 1
     fi
 fi
@@ -163,6 +174,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Ctrl+C (SIGINT) is how the user stops the recording. Without a trap the shell
+# would die inside `wait` below, and never remux or process the video. The trap
+# passes the stop on to ffmpeg, which finishes its file, and the script carries on.
+STOP_REQUESTED=false
+on_stop() {
+    STOP_REQUESTED=true
+    if [[ -n "$FFMPEG_PID" ]]; then
+        kill -INT "$FFMPEG_PID" 2>/dev/null || true
+    fi
+}
+trap on_stop INT TERM
+
 # Start cursor tracker in background
 python3 "$SCRIPT_DIR/cursor-tracker.py" -o "$CURSOR_FILE" -f "$FPS" &
 TRACKER_PID=$!
@@ -182,13 +205,29 @@ ffmpeg -y -hide_banner -loglevel error \
     -c:v libx264 -preset ultrafast -crf 18 \
     "$MKV_FILE" &
 FFMPEG_PID=$!
+if $STOP_REQUESTED; then
+    kill -INT "$FFMPEG_PID" 2>/dev/null || true
+fi
 
-# Wait for ffmpeg to finish (Ctrl+C or duration limit)
-wait "$FFMPEG_PID" 2>/dev/null || true
+# Wait for ffmpeg to finish (Ctrl+C or duration limit). A trapped signal ends
+# `wait` early, so wait again until ffmpeg has really exited.
+while kill -0 "$FFMPEG_PID" 2>/dev/null; do
+    WAIT_RC=0
+    wait "$FFMPEG_PID" 2>/dev/null || WAIT_RC=$?
+    [[ "$WAIT_RC" -eq 127 ]] && break  # not our child any more
+done
 FFMPEG_PID=""
+# A second Ctrl+C from here on stops the script as usual.
+trap - INT TERM
 
 echo ""
 echo "  Recording stopped."
+
+if [[ ! -s "$MKV_FILE" ]]; then
+    echo "Error: ffmpeg wrote no video ($MKV_FILE is missing or empty)." >&2
+    echo "  Check the ffmpeg message above, and that Terminal has Screen Recording permission." >&2
+    exit 1
+fi
 
 # Remux MKV to MP4 (fast, no re-encoding)
 if [[ -f "$MKV_FILE" ]]; then
@@ -213,18 +252,30 @@ TRACKER_PID=""
 echo "  Raw recording: $RAW_FILE"
 echo "  Cursor log:    $CURSOR_FILE"
 
+# The cursor log needs more than its header line to drive the zoom.
+if [[ "$RAW_ONLY" == false ]] && [[ "$(grep -c . "$CURSOR_FILE" 2>/dev/null || true)" -lt 2 ]]; then
+    echo "Error: the cursor tracker wrote no positions to $CURSOR_FILE, so the zoom cannot run." >&2
+    echo "  The raw recording is kept: $RAW_FILE" >&2
+    echo "  Check the tracker message above (pyobjc, Accessibility permission)." >&2
+    exit 1
+fi
+
 # --- Post-process with smart zoom ---
-if [[ "$RAW_ONLY" == false ]] && [[ -f "$RAW_FILE" ]] && [[ -f "$CURSOR_FILE" ]]; then
+if [[ "$RAW_ONLY" == false ]]; then
     echo ""
-    echo "  Post-processing with smart zoom..."
-    python3 "$SCRIPT_DIR/smart-zoom.py" \
+    echo "  Post-processing with smart zoom ($ZOOM_MODE mode)..."
+    if ! python3 "$SCRIPT_DIR/smart-zoom.py" \
         "$RAW_FILE" "$CURSOR_FILE" \
         -o "$OUTPUT_FILE" \
+        --mode "$ZOOM_MODE" \
         --zoom-min "$ZOOM_MIN" \
         --zoom-max "$ZOOM_MAX" \
         --resolution "$OUTPUT_RES" \
         --dwell-threshold "$DWELL_THRESHOLD" \
-        --move-threshold "$MOVE_THRESHOLD"
+        --move-threshold "$MOVE_THRESHOLD"; then
+        echo "Error: zoom processing failed. The raw recording is kept: $RAW_FILE" >&2
+        exit 1
+    fi
 
     echo ""
     echo "=== Recording complete ==="
