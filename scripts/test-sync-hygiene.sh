@@ -5387,8 +5387,6 @@ assert_not_contains "…and no CHANGELOG inventory row either" \
 # on disk is the evidence; the run then dies at `git push origin main --tags`
 # (the fixture has no remote), which is why rc is only asserted for the arm
 # where it is the discriminator.
-# The skills sit at plugins/relplug/skills/<name>/ because release-monorepo.sh only
-# reads plugin skills since #167; the top-level skill directories no longer exist.
 RELEASE_GOOD_FIXTURE="$SCRATCH_DIR/release-good"
 RELEASE_BAD_FIXTURE="$SCRATCH_DIR/release-bad"
 
@@ -5427,10 +5425,10 @@ RELEASE_BASE_CHANGELOG='# Changelog
 Baseline entry, so the header/entry split has something to work with.
 '
 
-mkdir -p "$RELEASE_GOOD_FIXTURE/plugins/relplug/skills/relgood-skill" "$RELEASE_BAD_FIXTURE/plugins/relplug/skills/badrel-skill"
+mkdir -p "$RELEASE_GOOD_FIXTURE/relgood-skill" "$RELEASE_BAD_FIXTURE/badrel-skill"
 printf '%s' "$RELEASE_BASE_CHANGELOG" > "$RELEASE_GOOD_FIXTURE/CHANGELOG.md"
 printf '%s' "$RELEASE_BASE_CHANGELOG" > "$RELEASE_BAD_FIXTURE/CHANGELOG.md"
-cat > "$RELEASE_GOOD_FIXTURE/plugins/relplug/skills/relgood-skill/SKILL.md" <<'EOF'
+cat > "$RELEASE_GOOD_FIXTURE/relgood-skill/SKILL.md" <<'EOF'
 ---
 name: relgood-skill
 description: RELGOOD-MARKER — a throwaway release fixture whose description carries a use-when clause. Use when: (1) the release inventory keeps the period.
@@ -5439,7 +5437,7 @@ version: 1.0.0
 
 # relgood-skill
 EOF
-cat > "$RELEASE_BAD_FIXTURE/plugins/relplug/skills/badrel-skill/SKILL.md" <<'EOF'
+cat > "$RELEASE_BAD_FIXTURE/badrel-skill/SKILL.md" <<'EOF'
 ---
 name: badrel-skill
 description: >10
@@ -5923,10 +5921,16 @@ presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --ad
 assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
 assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
 
-# release-monorepo.sh counts plugin skills
+# release-monorepo.sh counts skills in both layouts (#167)
+#
+# A top-level <name>/SKILL.md (what sync-monorepo.sh writes into a consumer
+# monorepo) and a plugins/<group>/skills/<name>/SKILL.md (this repo) are both
+# skills. A plugin skill is listed as <group>:<name>, so two plugins' skills
+# with the same short name stay apart. Zero skills is refused: the release used
+# to go out with "Skills: 0" and an empty inventory at exit 0.
 NOSKILL_REL="$SCRATCH_DIR/release-plugin-only"
 mkdir -p "$NOSKILL_REL/plugins/pg/.claude-plugin" "$NOSKILL_REL/plugins/pg/skills/inner" "$NOSKILL_REL/plugins/pg/skills/second" \
-         "$NOSKILL_REL/plugins/pg/skills/inner/references/deep/skills/x"
+         "$NOSKILL_REL/plugins/pg/skills/inner/references/deep/skills/x" "$NOSKILL_REL/plugins/pg/other/y"
 printf '%s' "$RELEASE_BASE_CHANGELOG" > "$NOSKILL_REL/CHANGELOG.md"
 echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$NOSKILL_REL/plugins/pg/.claude-plugin/plugin.json"
 for _sk in inner second; do
@@ -5935,14 +5939,50 @@ for _sk in inner second; do
 done
 # A SKILL.md nested deeper inside a skill is a reference, not a skill: it must not be counted.
 echo "# nested" > "$NOSKILL_REL/plugins/pg/skills/inner/references/deep/skills/x/SKILL.md"
+# Same depth as a plugin skill but not under skills/: pins the -path filter.
+echo "# not a skill" > "$NOSKILL_REL/plugins/pg/other/y/SKILL.md"
 init_release_fixture "$NOSKILL_REL"
 NOSKILL_REL_RC=0
 run_release "$NOSKILL_REL" "$SCRATCH_DIR/release-plugin-only.stdout" "$SCRATCH_DIR/release-plugin-only.stderr" patch || NOSKILL_REL_RC=$?
 assert_line_present "release-monorepo.sh counts the plugin skills, not zero (#167)" \
     "Skills:          2" "$(cat "$SCRATCH_DIR/release-plugin-only.stdout")"
-assert_contains "…and lists them in the CHANGELOG inventory" \
-    '- `second` v1.0.0 — RELPLUG-second-MARKER fixture skill.' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
-assert_not_contains "…without the nested reference SKILL.md" '`x` v' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_contains "…and lists them in the CHANGELOG inventory as plugin:skill" \
+    '- `pg:second` v1.0.0 — RELPLUG-second-MARKER fixture skill.' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_not_contains "…without the nested reference SKILL.md" ':x` v' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_not_contains "…or a SKILL.md at skill depth outside skills/" ':y` v' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+
+# Both layouts in one monorepo, and the same short name in two plugins.
+BOTH_REL="$SCRATCH_DIR/release-both-layouts"
+mkdir -p "$BOTH_REL/topskill" "$BOTH_REL/plugins/pa/skills/create" "$BOTH_REL/plugins/pb/skills/create" "$BOTH_REL/docs"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$BOTH_REL/CHANGELOG.md"
+echo "# docs" > "$BOTH_REL/docs/notes.md"
+for _p in topskill plugins/pa/skills/create plugins/pb/skills/create; do
+    printf -- '---\nname: x\ndescription: RELBOTH fixture skill at %s. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# x\n' \
+        "$_p" > "$BOTH_REL/$_p/SKILL.md"
+done
+init_release_fixture "$BOTH_REL"
+run_release "$BOTH_REL" "$SCRATCH_DIR/release-both.stdout" "$SCRATCH_DIR/release-both.stderr" patch || true
+BOTH_CL="$(cat "$BOTH_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_line_present "release-monorepo.sh counts top-level and plugin skills together (#167)" \
+    "Skills:          3" "$(cat "$SCRATCH_DIR/release-both.stdout")"
+assert_contains "…lists the top-level skill by its bare name" '- `topskill` v1.0.0 — RELBOTH fixture skill at topskill.' "$BOTH_CL"
+assert_contains "…and the two plugin skills named create apart" '- `pa:create` v1.0.0 — RELBOTH fixture skill at plugins/pa/skills/create.' "$BOTH_CL"
+assert_contains "…(the second one)" '- `pb:create` v1.0.0 — RELBOTH fixture skill at plugins/pb/skills/create.' "$BOTH_CL"
+assert_contains "…with the count in the inventory heading" "### Skill Inventory (3 skills)" "$BOTH_CL"
+
+# Zero skills: refused before anything is written.
+ZERO_REL="$SCRATCH_DIR/release-zero"
+mkdir -p "$ZERO_REL/docs" "$ZERO_REL/plugins/pg/.claude-plugin"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$ZERO_REL/CHANGELOG.md"
+echo "# docs" > "$ZERO_REL/docs/notes.md"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$ZERO_REL/plugins/pg/.claude-plugin/plugin.json"
+init_release_fixture "$ZERO_REL"
+ZERO_REL_RC=0
+run_release "$ZERO_REL" "$SCRATCH_DIR/release-zero.stdout" "$SCRATCH_DIR/release-zero.stderr" patch || ZERO_REL_RC=$?
+assert_eq "release-monorepo.sh with no skill in either layout exits 1 (#167)" "1" "$ZERO_REL_RC"
+assert_contains "…and says why" "no skills found in $ZERO_REL" "$(cat "$SCRATCH_DIR/release-zero.stderr")"
+assert_eq "…and leaves CHANGELOG.md alone" "$(printf '%s' "$RELEASE_BASE_CHANGELOG" | shasum)" "$(shasum < "$ZERO_REL/CHANGELOG.md")"
+assert_eq "…and creates no tag" "" "$(git -C "$ZERO_REL" tag -l)"
 
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
