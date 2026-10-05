@@ -241,23 +241,6 @@ assert_eq "node_modules-only project (negative control): dataFlow empty" "" "$NO
 assert_eq "node_modules-only project (negative control): i18n empty" "" "$NODE_MODULES_ONLY_I18N"
 assert_eq "node_modules-only project (negative control): security empty" "" "$NODE_MODULES_ONLY_SECURITY"
 
-# ============================================================
-# plugin copies
-# ============================================================
-
-# The assertions above exercise the copies in plugins/spec, which are what ships.
-# The deprecated spec-creator and spec-review plugins are still published for one
-# more release, each from a bare skill dir plus a plugins/ copy. Keep those two
-# pairs identical, so a guard fix never reaches only one of them. Remove this loop
-# when #167 deletes the old dirs.
-for _rel in spec-review/scripts/discover-project-architecture.sh \
-            spec-creator/scripts/discover-conventions.sh; do
-    _skill="${_rel%%/*}"
-    _plugin_copy="$REPO_ROOT/plugins/$_skill/skills/$_skill/${_rel#*/}"
-    assert_eq "plugin copy in sync: $_rel" "" \
-        "$(diff -q "$REPO_ROOT/$_rel" "$_plugin_copy" >/dev/null 2>&1 || echo DIFFERS)"
-done
-
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
     echo "All assertions passed."
