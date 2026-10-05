@@ -212,7 +212,13 @@ COMP
 # Install dependencies
 if ! $SKIP_INSTALL; then
   echo "Installing dependencies..."
-  npm install 2>&1 | tail -3
+  # Keep the output so a failed install is not hidden by the pipe to tail.
+  NPM_OUT=$(npm install 2>&1) || {
+    printf '%s\n' "$NPM_OUT" | tail -n 5 >&2
+    echo "Error: npm install failed in $PROJECT_DIR" >&2
+    exit 1
+  }
+  printf '%s\n' "$NPM_OUT" | tail -n 3
 fi
 
 echo ""

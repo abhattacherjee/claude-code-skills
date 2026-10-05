@@ -404,6 +404,17 @@ check "an existing Remotion project is left alone, exit 0" 0 'already exists'
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/quoted" --skip-install --name 'a"b\c'
 check "a quote and a backslash in --name: exits 0" 0
 file_json_is "a quote and a backslash in --name still give valid JSON, with the name intact" "$TMP/work/quoted/package.json" 'd["name"] == "a\"b\\c"'
+# Without --skip-install the script runs npm install. A failing install must fail the script
+# (a pipe to tail used to hide it), and a working one must be called once, in the project.
+mkdir -p "$TMP/npm-fail" "$TMP/npm-ok"
+printf '#!/bin/sh\necho "npm ERR! boom"\nexit 1\n' > "$TMP/npm-fail/npm"
+printf '#!/bin/sh\necho "$PWD: npm $*" >> "%s/npm-ok-log"\necho added 1 package\n' "$TMP" > "$TMP/npm-ok/npm"
+chmod +x "$TMP/npm-fail/npm" "$TMP/npm-ok/npm"
+run_in "$PROJ" env PATH="$TMP/npm-fail:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-fails"
+check "a failing npm install exits 1 and says so" 1 "" 'npm install failed'
+run_in "$PROJ" env PATH="$TMP/npm-ok:$PATH" "$PRO/scaffold-project.sh" "$TMP/work/npm-works"
+check "a working npm install exits 0" 0 'Project scaffolded'
+[[ "$(cat "$TMP/npm-ok-log" 2>/dev/null)" == "$TMP/work/npm-works: npm install" ]] && ok "npm install ran once, inside the new project" || bad "npm install ran once, inside the new project" "log: $(cat "$TMP/npm-ok-log" 2>/dev/null)"
 run_in "$PROJ" "$PRO/scaffold-project.sh" "$TMP/work/bad-aspect" --skip-install --aspect 4:3
 check "an unknown aspect ratio exits 2 with a message" 2 "" 'Unknown aspect ratio'
 [[ ! -e "$TMP/work/bad-aspect" ]] && ok "an unknown aspect ratio creates nothing" || bad "an unknown aspect ratio creates nothing" "directory exists"

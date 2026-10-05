@@ -22,6 +22,7 @@ All notable changes to the **produce** skill (was `product-video-creation`) are 
 - `generate-voiceover.sh`, `scaffold-project.sh` and `capture-screenshots.sh` printed "Error: ... is required" and then exited 0, so a missing argument looked like success. They exit 2.
 - `task-manifest.sh` with no workflow printed the usage and exited 0. It exits 2. Its help said `full-video` has 9 tasks; it has 10.
 - `generate-voiceover.sh --list-voices --provider <unknown>` printed nothing and exited 0. An unknown provider exits 2 with a message, before anything else runs.
+- `scaffold-project.sh` printed "Project scaffolded" and exited 0 when `npm install` failed, because the install output went through a pipe to `tail`. It exits 1 and shows the end of the npm output.
 - An option that needs a value, given none (`scaffold-project.sh --name`), stopped with `unbound variable` (exit 1). The four scripts that take options (`scaffold-project.sh`, `generate-voiceover.sh`, `capture-screenshots.sh` and `render-and-preview.sh`) exit 2 and name the option.
 - `scaffold-project.sh --name` with a quote or backslash in the name wrote an invalid `package.json`. The name is escaped now. The generated `description` no longer names the old skill.
 
