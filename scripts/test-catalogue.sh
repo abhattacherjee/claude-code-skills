@@ -288,6 +288,93 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["plugins"]
   && ok "marketplace.json round-trips it" || bad "marketplace.json round-trips it" "$(cat "$R/.claude-plugin/marketplace.json")"
 run --check "$R"; expect "and check is clean" 0
 
+echo "12. commands are counted (T2)"
+fresh; fixture "$R"; mkdir -p "$R/plugins/beta/commands"; printf '# go\n' > "$R/plugins/beta/commands/go.md"
+run "$R"; expect "a write with a command exits 0" 0
+grep -qxF '| [beta](./plugins/beta/) | 1.0.0 | 1 | 1 | The beta plugin — does things. |' "$R/README.md" \
+  && ok "the row counts the command" || bad "the row counts the command" "$(grep beta "$R/README.md")"
+grep -qF '**1** command' "$R/plugins/beta/README.md" && ok "the meta line says **1** command" || bad "the meta line says **1** command" "$(cat "$R/plugins/beta/README.md")"
+
+echo "13. install lines (T7)"
+fresh; written "$R"; printf '/plugin install git-flow@wrong-market\n' >> "$R/README.md"
+run --check "$R"; expect "a standalone plugin installed from the wrong marketplace is drift" 1 "README.md: /plugin install git-flow@wrong-market"
+
+echo "14. writes are all or nothing (F4)"
+fresh; written "$R"; cp "$R/README.md" "$TMP/readme.before"; cp "$R/.claude-plugin/marketplace.json" "$TMP/market.before"
+setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="5.0.0"'
+chmod 444 "$R/plugins/beta/README.md"; chmod 555 "$R/plugins/beta"
+setjson "$R/plugins/beta/.claude-plugin/plugin.json" 'd["version"]="5.0.0"' 2>/dev/null || true
+run "$R"; chmod 755 "$R/plugins/beta"; chmod 644 "$R/plugins/beta/README.md"
+expect "a write that cannot write one file exits 2" 2 "nothing was written"
+cmp -s "$TMP/readme.before" "$R/README.md" && cmp -s "$TMP/market.before" "$R/.claude-plugin/marketplace.json" \
+  && ok "and leaves every other file as it was" || bad "and leaves every other file as it was" "$(diff "$TMP/readme.before" "$R/README.md")"
+[[ -z "$(find "$R" -name '.catalogue-*')" ]] && ok "and leaves no temp file behind" || bad "and leaves no temp file behind" "$(find "$R" -name '.catalogue-*')"
+
+echo "15. unreadable skills/, agents/, commands/ (F5)"
+for sub in skills agents; do
+  fresh; written "$R"; chmod 000 "$R/plugins/beta/$sub"
+  run --check "$R"; chmod 755 "$R/plugins/beta/$sub"
+  expect "an unreadable $sub/ directory is exit 2, not a count of 0" 2 "plugins/beta/$sub"
+done
+fresh; written "$R"; mkdir -p "$R/plugins/beta/commands"; chmod 000 "$R/plugins/beta/commands"
+run --check "$R"; chmod 755 "$R/plugins/beta/commands"
+expect "an unreadable commands/ directory is exit 2" 2 "plugins/beta/commands"
+fresh; written "$R"; chmod 000 "$R/plugins/beta/skills/beta-one"
+run --check "$R"; chmod 755 "$R/plugins/beta/skills/beta-one"
+expect "an unreadable skill directory is exit 2" 2 "plugins/beta/skills/beta-one"
+
+echo "16. names and descriptions that would break the markers (F7)"
+for bad_desc in 'has <!-- in it' 'has --> in it' 'x <!-- catalogue:end --> y' 'x <!-- plugin-meta:start --> y'; do
+  fresh; written "$R"; setjson "$R/plugins/alpha/.claude-plugin/plugin.json" "d['description']='$bad_desc'"
+  run "$R"; expect "a description [$bad_desc] is refused" 2 "plugins/alpha/.claude-plugin/plugin.json: description contains an HTML comment marker"
+done
+fresh; written "$R"; mv "$R/plugins/alpha" "$R/plugins/Alpha"; setjson "$R/plugins/Alpha/.claude-plugin/plugin.json" 'd["name"]="Alpha"'
+run --check "$R"; expect "a plugin name with a capital letter is refused" 2 "name 'Alpha' is not lower-case letters, digits and hyphens"
+fresh; written "$R"; mv "$R/plugins/alpha" "$R/plugins/al_pha"; setjson "$R/plugins/al_pha/.claude-plugin/plugin.json" 'd["name"]="al_pha"'
+run --check "$R"; expect "a plugin name with an underscore is refused" 2 "name 'al_pha' is not"
+
+echo "17. check reports every change a write would make (F8)"
+fresh; written "$R"; perl -pi -e 's/^(\*\*Version:\*\*.*)$/$1  /' "$R/plugins/alpha/README.md"
+run --check "$R"; expect "trailing spaces on the meta line are drift" 1 "plugins/alpha/README.md: meta line differs"
+fresh; written "$R"; perl -0pi -e 's/(<!-- plugin-meta:start -->)\n/$1\n\n/' "$R/plugins/alpha/README.md"
+run --check "$R"; expect "a blank line inside the meta block is drift" 1 "plugins/alpha/README.md"
+run "$R"; run --check "$R"; expect "and a write makes it clean" 0
+fresh; written "$R"; printf '%s\n' '```bash' '# not a heading' '```' '' '# alpha' '' 'Skill `alpha-one`.' > "$R/plugins/alpha/README.md"
+run "$R"; expect "a write inserts the meta block into a README that opens with a fence" 0
+[[ "$(sed -n '5,8p' "$R/plugins/alpha/README.md")" == "$(printf '# alpha\n\n<!-- plugin-meta:start -->\n**Version:** 1.0.0 · **1** skill · **0** agents · **0** commands')" ]] \
+  && ok "the block goes after the real heading, not a # line in a fence" || bad "the block goes after the real heading, not a # line in a fence" "$(cat "$R/plugins/alpha/README.md")"
+
+echo "18. a README names a skill or agent only as code, plugin:name or /name (F9)"
+# name_ok <label> <README line> <0|1>: beta's README has only that naming line.
+name_case() {
+  fresh; written "$R"
+  printf '%s\n' '# beta' '' '<!-- plugin-meta:start -->' '**Version:** 1.0.0 · **1** skill · **1** agent · **0** commands' '<!-- plugin-meta:end -->' '' 'Skill `beta-one`.' "$2" > "$R/plugins/beta/README.md"
+  run --check "$R"
+  if [[ "$3" == 0 ]]; then expect "$1" 0; else expect "$1" 1 "plugins/beta/README.md: does not name agent beta-helper"; fi
+}
+name_case "inline code names it" 'Agent `beta-helper`.' 0
+name_case "plugin:name names it" 'Agent beta:beta-helper.' 0
+name_case "/name names it" 'Run /beta-helper.' 0
+name_case "a plain word does not" 'Agent beta-helper does things.' 1
+name_case "a longer name does not (beta-helpers)" 'Agent `beta-helpers`.' 1
+name_case "a prefixed name does not (xbeta-helper)" 'Agent `xbeta-helper`.' 1
+name_case "a path segment does not" 'See agents/beta-helper.md.' 1
+fresh; written "$R"; mkdir -p "$R/plugins/beta/skills/install"; printf -- '---\nname: install\n---\n' > "$R/plugins/beta/skills/install/SKILL.md"
+printf '\nRun /plugin install beta@demo-market.\n' >> "$R/plugins/beta/README.md"
+run --check "$R"; expect "'/plugin install' does not name a skill called install" 1 "plugins/beta/README.md: does not name skill install"
+
+echo "19. --validate-plugins (F3)"
+fresh; written "$R"; perl -ni -e 'print unless /catalogue:/' "$R/README.md"
+run --validate-plugins "$R"; expect "--validate-plugins passes without README markers" 0
+fresh; written "$R"; setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["description"]="a | b"'
+cp -R "$R" "$TMP/vp-snap"
+run --validate-plugins "$R"; expect "--validate-plugins refuses a bad plugin.json" 2 "description contains '|'"
+diff -r "$TMP/vp-snap" "$R" >/dev/null && ok "and writes nothing" || bad "and writes nothing"
+fresh; written "$R"; mv "$R/plugins/alpha/README.md" "$TMP/alpha-readme.md"; ln -s "$TMP/alpha-readme.md" "$R/plugins/alpha/README.md"
+run --validate-plugins "$R"; expect "--validate-plugins refuses a symlinked plugin README" 2 "is a symlink"
+fresh; written "$R"
+run --check --validate-plugins "$R"; expect "--check and --validate-plugins together is a usage error" 2 "not allowed with"
+
 echo ""
 echo "PASS: $PASS  FAIL: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

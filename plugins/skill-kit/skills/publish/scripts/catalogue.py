@@ -12,26 +12,39 @@ agents/ and commands/ directories, this writes:
     <!-- plugin-meta:start --> and <!-- plugin-meta:end --> (a README with
     no markers gets them after its first "# " heading).
 
---check writes nothing and reports every difference. It also checks what
-cannot be generated: each plugin README must name each of its skills and
-agents, and the root README's install commands must use this marketplace.
+--check writes nothing and reports every difference, including any change
+a write would make. Both modes also check what cannot be generated: each
+plugin README must name each of its skills and agents (as `name`,
+plugin:name or /name), and the root README's install commands must use this
+marketplace. A write fixes what it can and reports the rest.
+
+--validate-plugins only loads and checks every plugin (plugin.json, the
+skills/, agents/ and commands/ directories, and the write targets), without
+needing the README markers. sync-monorepo.sh runs it before its first write.
 
 Plugins listed in standalone-plugins.txt (next to this file) are skipped.
 
 Exit: 0 clean (or written), 1 drift (or, after a write, drift left that
 needs a hand edit), 2 cannot run. It fails closed: a missing or repeated
-marker, a bad plugin.json or version, a stray plugins/ directory, a file it
-cannot read, or a write target or plugin directory that is a symlink or
-resolves outside the repo is exit 2, never a skip. A write only starts
-once every file has been read and checked, so exit 2 means nothing was
-written.
+marker, a bad plugin.json, name or version, a stray plugins/ directory, a
+file or directory it cannot read, or a write target or plugin directory
+that is a symlink or resolves outside the repo is exit 2, never a skip.
 
-Usage: catalogue.py [--check] [--json] [--marketplace-name NAME --owner OWNER] <repo>
+A write reads and checks every file first, then writes each changed file to
+a temp file beside it, and only then renames them all into place. If a temp
+write fails, nothing was written. If a rename fails part way, the error
+names the files already replaced.
+
+Usage: catalogue.py [--check | --validate-plugins] [--json]
+                    [--marketplace-name NAME --owner OWNER] <repo>
 """
 import argparse
 import json
+import os
 import re
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 CAT_START, CAT_END = "<!-- catalogue:start -->", "<!-- catalogue:end -->"
@@ -41,12 +54,16 @@ HEADER = ("| Plugin | Version | Skills | Commands | Description |",
 ROW_RE = re.compile(r"^\| \[([^\]]+)\]\(\./plugins/[^)]*\) \| ([^|]*) \| ([^|]*) \| ([^|]*) \| (.*) \|$")
 INSTALL_RE = re.compile(r"/plugin (?:un)?install ([A-Za-z0-9_.-]+)@([A-Za-z0-9_.-]+)")
 INSTALL_SCRIPT = "scripts/install-plugin.sh"
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$")
 DEFAULT_MARKET_DESC = "Reusable Agent Skills and Plugins for Claude Code"
 
 
 class CannotRun(Exception):
-    pass
+    def __init__(self, msg, written=()):
+        super().__init__(msg)
+        self.written = list(written)
 
 
 def read(path, rel):
@@ -72,15 +89,87 @@ def guard(repo, path, rel):
         raise CannotRun(f"{rel}: is outside the repo (resolves to {path.resolve()})")
 
 
-def write(path, text):
-    # Bytes, not write_text(newline=""): that argument needs Python 3.10.
-    path.write_bytes(text.encode("utf-8"))
+def write_all(writes):
+    """writes: [(path, text, rel)]. All or nothing as far as the OS allows:
+    every new text goes to a temp file in the target's own directory first,
+    and only when all of them are written are they renamed into place."""
+    temps = []
+    try:
+        for path, text, rel in writes:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".catalogue-")
+            temps.append(tmp)
+            # Bytes, not write_text(newline=""): that argument needs Python 3.10.
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(text.encode("utf-8"))
+            if path.exists():
+                os.chmod(tmp, path.stat().st_mode & 0o7777)
+            else:
+                os.chmod(tmp, 0o644)
+    except OSError as e:
+        for t in temps:
+            try:
+                os.unlink(t)
+            except OSError:
+                pass
+        raise CannotRun(f"{rel}: {e}; nothing was written")
+    done = []
+    for i, ((path, _, rel), tmp) in enumerate(zip(writes, temps)):
+        try:
+            os.replace(tmp, str(path))
+        except OSError as e:
+            for t in temps[i:]:
+                try:
+                    os.unlink(t)
+                except OSError:
+                    pass
+            already = ", ".join(done) or "none"
+            raise CannotRun(f"{rel}: {e}; already written: {already}", written=done)
+        done.append(rel)
+    return done
 
 
 def standalone_plugins():
     f = Path(__file__).with_name("standalone-plugins.txt")
     lines = read(f, str(f)).splitlines()
     return {l.strip() for l in lines if l.strip() and not l.strip().startswith("#")}
+
+
+def list_dir(d, rel):
+    """The entries of directory d (none when it does not exist). An unreadable
+    directory is CannotRun: glob() would skip it and count 0."""
+    if not d.exists() and not d.is_symlink():
+        return []
+    try:
+        if not d.is_dir():
+            raise CannotRun(f"{rel}: is not a directory")
+        with os.scandir(str(d)) as it:
+            return sorted((e for e in it if not e.name.startswith(".")), key=lambda e: e.name)
+    except OSError as e:
+        raise CannotRun(f"{rel}: {e}")
+
+
+def plugin_parts(d, rel):
+    """(skills, agents, commands) of plugin directory d, read strictly."""
+    skills = []
+    for e in list_dir(d / "skills", f"{rel}/skills"):
+        try:
+            if e.is_dir() and stat.S_ISREG(os.stat(os.path.join(e.path, "SKILL.md")).st_mode):
+                skills.append(e.name)
+        except FileNotFoundError:
+            continue
+        except OSError as err:
+            raise CannotRun(f"{rel}/skills/{e.name}: {err}")
+    def md_files(sub):
+        out = []
+        for e in list_dir(d / sub, f"{rel}/{sub}"):
+            try:
+                if e.name.endswith(".md") and e.is_file():
+                    out.append(e.name[:-3])
+            except OSError as err:
+                raise CannotRun(f"{rel}/{sub}/{e.name}: {err}")
+        return out
+    return skills, md_files("agents"), md_files("commands")
 
 
 def plural(n, word):
@@ -111,6 +200,11 @@ def load_plugins(repo, skip):
                 raise CannotRun(f"{rel}: '{k}' missing or empty")
         if m["name"] != d.name:
             raise CannotRun(f"{rel}: name {m['name']} does not match directory {d.name}")
+        if not NAME_RE.match(m["name"]):
+            raise CannotRun(f"{rel}: name {m['name']!r} is not lower-case letters, digits and hyphens")
+        for k in ("name", "description"):
+            if "<!--" in m[k] or "-->" in m[k]:
+                raise CannotRun(f"{rel}: {k} contains an HTML comment marker (<!-- or -->); it would break the catalogue markers")
         if not VERSION_RE.match(m["version"]):
             raise CannotRun(f"{rel}: version {m['version']!r} is not X.Y.Z (with an optional -pre or +build part)")
         for k in ("version", "description"):
@@ -118,12 +212,10 @@ def load_plugins(repo, skip):
                 raise CannotRun(f"{rel}: {k} contains '|' or a newline; it cannot sit in a table row")
             if m[k] != m[k].strip():
                 raise CannotRun(f"{rel}: {k} has spaces before or after it; a table row cannot keep them")
+        skills, agents, commands = plugin_parts(d, f"plugins/{d.name}")
         plugins.append({
             "name": m["name"], "version": m["version"], "description": m["description"],
-            "skills": sorted(s.parent.name for s in d.glob("skills/*/SKILL.md")),
-            "agents": sorted(a.stem for a in d.glob("agents/*.md")),
-            "commands": sorted(c.stem for c in d.glob("commands/*.md")),
-            "dir": d,
+            "skills": skills, "agents": agents, "commands": commands, "dir": d,
         })
     return plugins
 
@@ -232,12 +324,21 @@ def install_drift(readme, names, market, repo, skip):
 
 
 def name_drift(p, text):
-    """Drift a write cannot fix: a skill or agent the plugin README never names."""
+    """Drift a write cannot fix: a skill or agent the plugin README never names.
+
+    A name counts only as inline code (`name`), as <plugin>:name or as /name.
+    A plain word does not: a skill called "install" is not named by the
+    words "/plugin install"."""
     out = []
     rel = f"plugins/{p['name']}/README.md"
+    end = r"(?![A-Za-z0-9_-])"
     for kind, names in (("skill", p["skills"]), ("agent", p["agents"])):
         for n in names:
-            if not re.search(r"(?<![A-Za-z0-9-])" + re.escape(n) + r"(?![A-Za-z0-9-])", text):
+            e = re.escape(n)
+            pat = (r"`" + e + r"`"
+                   + r"|(?<![A-Za-z0-9_-])" + re.escape(p["name"]) + r":" + e + end
+                   + r"|(?<![A-Za-z0-9_.:/-])/" + e + end)
+            if not re.search(pat, text):
                 out.append(f"{rel}: does not name {kind} {n}")
     return out
 
@@ -246,7 +347,17 @@ def insert_meta(text, p):
     """Put a meta block after the first '# ' heading (or at the top)."""
     nl = newline_of(text)
     lines = text.split(nl)
-    at = next((i + 1 for i, l in enumerate(lines) if l.startswith("# ")), 0)
+    at, fence = 0, None
+    for i, l in enumerate(lines):
+        fm = FENCE_RE.match(l)
+        if fence is None and fm:
+            fence = fm.group(1)
+        elif fence is not None:
+            if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence):
+                fence = None
+        elif l.startswith("# "):
+            at = i + 1
+            break
     block = [META_START, meta(p), META_END]
     if at > 0:
         block = [""] + block
@@ -256,17 +367,23 @@ def insert_meta(text, p):
     return nl.join(lines)
 
 
-def run(repo, check, market_name, owner):
-    """Return (written, drift). In write mode drift is only what a write cannot fix."""
+def load_checked(repo):
+    """Load every plugin and check every write target; nothing is written."""
     skip = standalone_plugins()
-    rp = repo / "README.md"
-    mp = repo / ".claude-plugin" / "marketplace.json"
-    # Every write target is checked before anything is read or written.
-    guard(repo, rp, "README.md")
-    guard(repo, mp, ".claude-plugin/marketplace.json")
+    guard(repo, repo / "README.md", "README.md")
+    guard(repo, repo / ".claude-plugin" / "marketplace.json", ".claude-plugin/marketplace.json")
     plugins = load_plugins(repo, skip)
     for p in plugins:
         guard(repo, p["dir"] / "README.md", f"plugins/{p['name']}/README.md")
+    return skip, plugins
+
+
+def run(repo, check, market_name, owner):
+    """Return (written, drift). In write mode drift is only what a write cannot fix."""
+    rp = repo / "README.md"
+    mp = repo / ".claude-plugin" / "marketplace.json"
+    # Every write target is checked before anything is read or written.
+    skip, plugins = load_checked(repo)
     names = {p["name"] for p in plugins}
     fixable, manual = [], []
 
@@ -321,9 +438,9 @@ def run(repo, check, market_name, owner):
             new = insert_meta(text, p)
         else:
             h, b, t = split(text, META_START, META_END, rel)
-            if b.strip() != meta(p):
-                fixable.append(f"{rel}: meta line differs ({meta(p)})")
             pnl = newline_of(text)
+            if b != pnl + meta(p) + pnl:
+                fixable.append(f"{rel}: meta line differs ({meta(p)})")
             new = h + pnl + meta(p) + pnl + t
         manual += name_drift(p, new)
         if new != text:
@@ -331,21 +448,25 @@ def run(repo, check, market_name, owner):
 
     manual += install_drift(new_readme, names, new_market["name"], repo, skip)
 
-    if check:
-        return [], fixable + manual
-
-    written = []
+    writes = []
     if new_readme != readme:
-        write(rp, new_readme)
-        written.append("README.md")
+        writes.append((rp, new_readme, "README.md"))
     if mp_text != dump(new_market):
-        mp.parent.mkdir(parents=True, exist_ok=True)
-        write(mp, dump(new_market))
-        written.append(".claude-plugin/marketplace.json")
-    for f, new, rel in plugin_writes:
-        write(f, new)
-        written.append(rel)
-    return written, manual
+        writes.append((mp, dump(new_market), ".claude-plugin/marketplace.json"))
+    writes += plugin_writes
+
+    if check:
+        # --check must fail whenever a write would change a file. Every change
+        # a write makes today is already named by a rule above; this is a net
+        # so a future rule cannot leave a change unreported.
+        drift = fixable + manual
+        for _, _, rel in writes:
+            key = "marketplace.json" if rel.endswith("marketplace.json") else rel
+            if not any(d.startswith(key + ":") for d in drift):
+                drift.append(f"{key}: differs from catalogue.py output")
+        return [], drift
+
+    return write_all(writes), manual
 
 
 def main(argv=None):
@@ -354,16 +475,23 @@ def main(argv=None):
                     "marketplace.json, plugin README meta lines) from each plugin.json.",
         epilog="Exit: 0 clean or written, 1 drift, 2 cannot run.")
     ap.add_argument("repo", type=Path, help="the monorepo root")
-    ap.add_argument("--check", action="store_true", help="write nothing; report every difference")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="write nothing; report every difference")
+    mode.add_argument("--validate-plugins", action="store_true",
+                      help="write nothing; only load and check every plugin and write target (exit 0 or 2)")
     ap.add_argument("--json", action="store_true", help='print {"written", "drift", "errors"} as JSON')
     ap.add_argument("--marketplace-name", help="marketplace name, used only when marketplace.json is missing")
     ap.add_argument("--owner", help="marketplace owner, used only when marketplace.json is missing")
     a = ap.parse_args(argv)
     written, drift, errors = [], [], []
     try:
-        written, drift = run(a.repo.resolve(), a.check, a.marketplace_name, a.owner)
+        if a.validate_plugins:
+            load_checked(a.repo.resolve())
+        else:
+            written, drift = run(a.repo.resolve(), a.check, a.marketplace_name, a.owner)
     except CannotRun as e:
         errors = [str(e)]
+        written = e.written
     except Exception as e:  # fail closed: an unexpected error is "cannot run", never "drift"
         errors = [f"{type(e).__name__}: {e}"]
     if a.json:
