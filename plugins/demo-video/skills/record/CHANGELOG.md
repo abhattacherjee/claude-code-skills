@@ -2,6 +2,12 @@
 
 All notable changes to the **record** skill (was `smart-screen-recorder`) are documented here.
 
+## [1.0.1] - 2026-10-06
+
+### Changed
+
+- No change to the skill itself. Its version moves with the plugin's, which now states its version and its skill, agent and command counts in the README (#190).
+
 ## [1.0.0] - 2026-10-05
 
 ### Changed

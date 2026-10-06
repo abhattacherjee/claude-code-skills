@@ -2,7 +2,7 @@
 name: spec-implement
 description: "Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Optionally delegates to separately-installed brainstorming, frontend-design, and ui-from-requirements skills for complex UI work. Use when: (1) user says /spec-implement or 'implement this spec', (2) a story spec has been created and reviewed and is ready for implementation, (3) user provides a spec file path to implement."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Spec Implement

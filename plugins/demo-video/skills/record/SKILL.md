@@ -2,7 +2,7 @@
 name: record
 description: "Was the smart-screen-recorder skill (/smart-screen-recorder still works as a phrase). AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor + window bounds, then uses AI vision to analyze the recording, create a zoom script targeting specific UI elements, generate voiceover narration, and produce a polished demo video. Use when: (1) creating product demo videos, (2) recording and polishing UI walkthroughs, (3) turning raw screen recordings into narrated presentations, (4) re-processing existing recordings with different zoom/voiceover."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Record a Demo Video

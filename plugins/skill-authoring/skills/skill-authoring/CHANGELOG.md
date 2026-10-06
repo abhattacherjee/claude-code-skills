@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.3] - 2026-10-06
+
+### Changed
+
+- The plugin version jumps from 2.3.2 to 2.6.3, so it matches the version line of this CHANGELOG, and the skill moves to 2.6.3 with it (#190).
+- The README states the plugin version and its skill, agent and command counts, written by `catalogue.py` (#190).
+- plugin.json carries the "Deprecated: …" description that only marketplace.json had (#190).
+
 ## [2.6.2] - 2026-10-05
 
 ### Changed
