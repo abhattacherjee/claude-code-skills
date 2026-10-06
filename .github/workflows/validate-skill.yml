@@ -180,6 +180,24 @@ jobs:
       - name: Test the changed-skill detection steps
         run: ./scripts/test-ci-skill-detect.sh
 
+  docs-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional: any plugin.json, plugin directory or doc can cause drift (#190).
+      # The README plugin table, marketplace.json and plugin README meta lines must
+      # match every plugin.json, and every link, repo path and plugin:skill name in
+      # the current docs must exist.
+      - name: Docs drift guard
+        run: ./scripts/check-docs.sh
+
+      - name: catalogue.py tests
+        run: bash scripts/test-catalogue.sh
+
+      - name: check-doc-refs.py tests
+        run: bash scripts/test-check-doc-refs.sh
+
   sync-hygiene:
     runs-on: ubuntu-latest
     steps:

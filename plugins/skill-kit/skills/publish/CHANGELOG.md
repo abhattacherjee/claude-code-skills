@@ -2,6 +2,21 @@
 
 All notable changes to the **publish** skill (was `skill-publishing`) are documented here.
 
+## [1.1.0] - 2026-10-06
+
+### Added
+
+- `publish`: `scripts/catalogue.py` writes the plugin catalogue from each `plugin.json`: the root README plugin table (between `<!-- catalogue:start -->` and `<!-- catalogue:end -->`), `.claude-plugin/marketplace.json` and one meta line in each plugin README. `--check` writes nothing and reports drift (exit 0 clean, 1 drift, 2 cannot run). It also checks that each plugin README names its skills and agents, and that the README's install lines use this marketplace. It fails closed: a missing marker, a bad `plugin.json` or version, a stray `plugins/` directory, or a write target that is a symlink is exit 2 (#190).
+- `publish`: `scripts/standalone-plugins.txt` lists the standalone plugins (`git-flow`, `obsidian-brain`). `catalogue.py` and `sync-monorepo.sh` both read it; it replaces the `STANDALONE_PLUGINS` line in `sync-monorepo.sh` (#190).
+- `publish`: `references/plugin-only-monorepo.md` describes the plugin-only mode and the catalogue (#190).
+
+### Changed
+
+- `publish`: `sync-monorepo.sh` syncs a plugin-only monorepo instead of refusing it. A plain sync runs `validate-plugin.sh` on every plugin (any failure: exit 1, nothing written) and then `catalogue.py`, and writes nothing else. `--dry-run` validates and prints the drift. `--add-plugin` validates the build and every plugin before it copies. `--skills`, `--add` and `--init` are refused. The new `--json` prints `{"layout", "validated", "catalogue"}` (#190).
+- `publish`: `validate-pre-sync.sh` on a plugin-only monorepo validates every plugin and runs `catalogue.py --check`; exit 1 if either fails. `--json` keeps its shape and adds `layout`, `catalogue` and `catalogue_lines` (#190).
+- `publish`: in every other layout, `catalogue.py` writes the README plugin table and `marketplace.json`, so one tool writes them. The old `marketplace.json` was built as a string and broke on a description with a quote or a backslash. `marketplace.json` keeps its `owner` and `metadata`; a sync no longer rewrites `metadata.version` with the date. `catalogue.py` and `standalone-plugins.txt` are copied into the monorepo's `scripts/`, and the `workflow-monorepo.yml` template runs `catalogue.py --check` (#190).
+- `publish`: `SKILL.md` describes the plugin-only mode in place of the #167 refusal (#190).
+
 ## [1.0.2] - 2026-10-05
 
 ### Fixed

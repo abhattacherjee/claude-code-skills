@@ -87,6 +87,20 @@ if [ "$AUTO_DETECT" = true ]; then
     echo ""
 fi
 
+# ── Docs drift guard (always runs, --docs-only and --skip-tests too) ──
+# The catalogue must match every plugin.json, and every link, repo path and
+# plugin:skill name in the current docs must exist (#190). It checks the
+# working tree, so unstaged edits count too.
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📚 Running docs drift guard..."
+if ! ./scripts/check-docs.sh; then
+    echo "❌ Docs drift guard failed. Fix the lines above; for catalogue drift run:"
+    echo "   python3 plugins/skill-kit/skills/publish/scripts/catalogue.py ."
+    rm -f "$TOKEN_FILE"
+    exit 1
+fi
+echo ""
+
 # Handle skip tests mode
 if [ "$SKIP_TESTS" = true ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
