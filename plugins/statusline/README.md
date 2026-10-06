@@ -1,5 +1,9 @@
 # statusline
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.1 · **3** skills · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Claude Code statusline skills in one install: install a ready-made adaptive statusline, build your own from composable items, or check how full the context window is.
 
 ```shell

@@ -1,5 +1,9 @@
 # ui-design
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.1 · **1** skill · **1** agent · **0** commands
+<!-- plugin-meta:end -->
+
 Interactive Figma UI design in one install: a skill that brainstorms with you, tracks progress and delivers Figma-native mockups through the Figma MCP, and the UX-expert agent it uses.
 
 ```shell

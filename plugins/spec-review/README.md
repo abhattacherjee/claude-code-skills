@@ -1,5 +1,9 @@
 # spec-review
 
+<!-- plugin-meta:start -->
+**Version:** 2.2.3 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.
 
 ## What It Does

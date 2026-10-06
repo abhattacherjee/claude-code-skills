@@ -2,6 +2,12 @@
 
 All notable changes to the **statusline** plugin are documented here.
 
+## [1.0.1] - 2026-10-06
+
+### Changed
+
+- The README states the plugin version and its skill, agent and command counts, written by `catalogue.py` (#190).
+
 ## [1.0.0] - 2026-10-03
 
 ### Added

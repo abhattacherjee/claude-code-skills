@@ -1,5 +1,9 @@
 # github-board
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.2 · **7** skills · **4** agents · **0** commands
+<!-- plugin-meta:end -->
+
 GitHub workflow skills in one install: create a board from a template, triage issues, plan milestones, plan the week, move cards, promote shipped work to Done, and prune stale branches.
 
 ```shell

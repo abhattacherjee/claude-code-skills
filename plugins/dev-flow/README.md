@@ -1,5 +1,9 @@
 # dev-flow
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.2 · **2** skills · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Two skills for the daily git loop, in one install. `worktree` gives each parallel Claude Code session its own directory and branch, and `changelog` writes CHANGELOG.md entries from your commit history.
 
 ```shell

@@ -19,7 +19,7 @@ Thank you for your interest in contributing! This guide covers the workflow for 
 
 ### Adding a new skill
 
-1. Create the skill at `plugins/<group>/skills/<name>/` (e.g., `plugins/dev-flow/skills/my-skill/`). A new plugin also needs `plugins/<group>/.claude-plugin/plugin.json`
+1. Create the skill at `plugins/<group>/skills/<name>/` (for example, a new dev-flow skill goes in `plugins/dev-flow/skills/<name>/`). A new plugin also needs `plugins/<group>/.claude-plugin/plugin.json`
 2. Add a `SKILL.md` with valid YAML frontmatter
 3. Optionally add `scripts/` and `references/` directories
 

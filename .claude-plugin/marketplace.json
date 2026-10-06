@@ -11,80 +11,80 @@
     {
       "name": "adversarial-review",
       "source": "./plugins/adversarial-review",
-      "description": "Deprecated: use the review plugin (review:deep / review:adversarial). Adversarial PR review \u2014 Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if no adversary is available.",
-      "version": "0.2.1"
+      "description": "Deprecated: use the review plugin (review:deep / review:adversarial). Adversarial PR review — Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if no adversary is available.",
+      "version": "0.2.2"
     },
     {
       "name": "context",
       "source": "./plugins/context",
       "description": "Two skills for working with large content and past sessions, plus the agents they use. context:shield keeps the context window from overflowing by delegating token-heavy reads (URLs, Figma frames, wiki pages, code directories) to isolated sub-agents that return short summaries, and hands multi-batch work to ralph-loop. context:search finds past Claude Code conversations by topic, date, branch or project, shows them verbatim, and can summarize them.",
-      "version": "1.0.2"
+      "version": "1.0.3"
     },
     {
       "name": "context-bar",
       "source": "./plugins/context-bar",
       "description": "Deprecated: use the statusline plugin (statusline:install / statusline:create / statusline:context-bar). Color-coded context window usage bar for Claude Code statusline and /context-bar command",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     {
       "name": "context-shield",
       "source": "./plugins/context-shield",
       "description": "Deprecated: use the context plugin (context:shield). Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.",
-      "version": "1.3.2"
+      "version": "1.3.3"
     },
     {
       "name": "custom-statusline",
       "source": "./plugins/custom-statusline",
       "description": "Deprecated: use the statusline plugin (statusline:install / statusline:create / statusline:context-bar). 4-tier adaptive statusline with icons for folder, git branch, and context usage",
-      "version": "1.3.1"
+      "version": "1.3.2"
     },
     {
       "name": "deep-review",
       "source": "./plugins/deep-review",
       "description": "Deprecated: use the review plugin (review:deep / review:adversarial). Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a multi-round adversarial cross-examination with Codex, else Gemini, as the opposing model (it finds -> Claude judges -> it counters -> it re-checks fixes), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.",
-      "version": "1.4.0"
+      "version": "1.4.1"
     },
     {
       "name": "demo-video",
       "source": "./plugins/demo-video",
       "description": "Record and produce demo videos. demo-video:record turns a macOS screen recording into a narrated demo with AI-written zoom scripts and voiceover. demo-video:produce builds a narrated product video in code with Remotion, from real app screenshots, TTS voiceover and background music. Ships the nine agents they use.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "name": "dev-flow",
       "source": "./plugins/dev-flow",
       "description": "Two skills for the daily git loop. dev-flow:worktree creates isolated git worktrees so parallel Claude Code sessions each get their own directory and branch. dev-flow:changelog keeps CHANGELOG.md up to date by turning git commit history into categorized Keep-a-Changelog entries.",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     {
       "name": "figma-ui-designer",
       "source": "./plugins/figma-ui-designer",
       "description": "Deprecated: use the ui-design plugin (ui-design:figma). Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP",
-      "version": "3.2.2"
+      "version": "3.2.3"
     },
     {
       "name": "github-board",
       "source": "./plugins/github-board",
       "description": "GitHub workflow skills in one install: create-board, triage-issues, plan-milestones, plan-week, move-card, promote-shipped and prune-branches, plus the four agents create-board dispatches. Per-user settings live in ~/.config/github-board/config.json.",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     {
       "name": "product-video-creation",
       "source": "./plugins/product-video-creation",
       "description": "Deprecated: use the demo-video plugin (demo-video:produce). Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.",
-      "version": "2.0.0"
+      "version": "2.0.1"
     },
     {
       "name": "review",
       "source": "./plugins/review",
       "description": "Two review skills in one plugin. review:deep is a two-phase convergence harness: iterative multi-reviewer fix and re-review until a round finds nothing actionable, then a multi-round cross-examination with an opposing model (Codex, else Gemini). review:adversarial is the single-pass version: Claude and the opposing model find issues independently, cross-examine each other, and only findings the other side confirms are reported. Both save an audit trail on the PR (or a local file with no PR) and degrade loudly to Claude-only when no adversary is available.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "name": "skill-authoring",
       "source": "./plugins/skill-authoring",
       "description": "Deprecated: use the skill-kit plugin (skill-kit:author). Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism",
-      "version": "2.3.2"
+      "version": "2.6.3"
     },
     {
       "name": "skill-kit",
@@ -96,55 +96,55 @@
       "name": "skill-publishing",
       "source": "./plugins/skill-publishing",
       "description": "Deprecated: use the skill-kit plugin (skill-kit:publish). Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos",
-      "version": "4.5.1"
+      "version": "4.5.2"
     },
     {
       "name": "smart-screen-recorder",
       "source": "./plugins/smart-screen-recorder",
       "description": "Deprecated: use the demo-video plugin (demo-video:record). AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos.",
-      "version": "4.3.0"
+      "version": "4.3.1"
     },
     {
       "name": "spec",
       "source": "./plugins/spec",
       "description": "Three skills for story specs in one plugin. spec:create writes a template-compliant story spec from a plan, requirements file, prompt or GitHub issue, with TDD implementation steps, success metrics, a Figma mockup gate for UI stories and vertical splitting for large stories. spec:review checks a spec against the real codebase and architecture and adds verified sub-tasks, an API test plan and design simplification notes. spec:implement builds a reviewed spec end-to-end: feature branch, sub-tasks, acceptance checks and a PR.",
-      "version": "1.0.4"
+      "version": "1.0.5"
     },
     {
       "name": "spec-creator",
       "source": "./plugins/spec-creator",
       "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).",
-      "version": "2.4.2"
+      "version": "2.4.3"
     },
     {
       "name": "spec-implement",
       "source": "./plugins/spec-implement",
       "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "name": "spec-review",
       "source": "./plugins/spec-review",
       "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans.",
-      "version": "2.2.2"
+      "version": "2.2.3"
     },
     {
       "name": "statusline",
       "source": "./plugins/statusline",
       "description": "Claude Code statusline in one install: install the 3-tier adaptive statusline, create your own from 20 composable items, or check context usage with context-bar. Never replaces a statusline script it did not write unless you pass --force, and backs up every file it replaces.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "name": "statusline-creator",
       "source": "./plugins/statusline-creator",
       "description": "Deprecated: use the statusline plugin (statusline:install / statusline:create / statusline:context-bar). Creates and customizes Claude Code statusline scripts from composable items",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "name": "ui-design",
       "source": "./plugins/ui-design",
       "description": "Interactive Figma UI design, with the UX-expert agent it uses. ui-design:figma brainstorms with you, tracks progress, builds Figma-native mockups through the Figma MCP, and extracts existing Figma designs as input for specs, plans and code. It starts the figma-ux-expert agent (ui-design:figma-ux-expert) to research real-world references before it proposes design directions.",
-      "version": "1.0.0"
+      "version": "1.0.1"
     }
   ]
 }

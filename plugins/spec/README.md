@@ -1,5 +1,9 @@
 # spec
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.5 · **3** skills · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Three skills for story specs in one install. `create` writes the spec, `review` checks it against the real code, and `implement` builds it.
 
 ```shell

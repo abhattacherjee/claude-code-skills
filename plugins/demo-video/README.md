@@ -1,5 +1,9 @@
 # demo-video
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.1 · **2** skills · **9** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Demo videos in one install: **2** skills and **9** agents. `record` turns a macOS screen recording into a narrated demo. `produce` builds a narrated product video in code with Remotion. Version 1.0.0 | **License:** MIT
 
 ```shell

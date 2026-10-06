@@ -1,5 +1,9 @@
 # product-video-creation
 
+<!-- plugin-meta:start -->
+**Version:** 2.0.1 · **1** skill · **4** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Creates polished, narrated product demo videos using Remotion with AI-crafted storytelling, real app screenshots, animated phone mockups, brand-aligned styling, TTS voiceover, and background music.
 
 ## What It Does
@@ -86,7 +90,7 @@ rm -rf /tmp/ccs
 
 - `remotion-best-practices` — general Remotion coding patterns
 - `smart-screen-recorder` — alternative: record real screen + AI post-processing
-- **[references/scene-architecture.md](references/scene-architecture.md)** — scene templates, animation patterns, phone mockups
+- **[references/scene-architecture.md](skills/product-video-creation/references/scene-architecture.md)** — scene templates, animation patterns, phone mockups
 
 ## Compatibility
 

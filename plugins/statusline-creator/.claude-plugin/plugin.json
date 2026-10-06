@@ -1,5 +1,5 @@
 {
   "name": "statusline-creator",
-  "version": "1.0.0",
-  "description": "Creates and customizes Claude Code statusline scripts from composable items"
+  "version": "1.0.1",
+  "description": "Deprecated: use the statusline plugin (statusline:install / statusline:create / statusline:context-bar). Creates and customizes Claude Code statusline scripts from composable items"
 }

@@ -1,5 +1,9 @@
 # context-bar
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.2 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Color-coded context window usage bar for Claude Code statusline and `/context-bar` command.
 
 ## What You Get

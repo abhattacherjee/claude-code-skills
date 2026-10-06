@@ -2,6 +2,12 @@
 
 All notable changes to the **spec** plugin are documented here.
 
+## [1.0.5] - 2026-10-06
+
+### Changed
+
+- The README states the plugin version and its skill, agent and command counts, written by `catalogue.py` (#190).
+
 ## [1.0.4] - 2026-10-05
 
 ### Changed

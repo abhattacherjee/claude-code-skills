@@ -1,5 +1,5 @@
 {
   "name": "adversarial-review",
-  "version": "0.2.1",
-  "description": "Adversarial PR review — Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if no adversary is available."
+  "version": "0.2.2",
+  "description": "Deprecated: use the review plugin (review:deep / review:adversarial). Adversarial PR review — Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm. Auto-detects PR vs local (working-tree) mode; degrades loudly to Claude-only if no adversary is available."
 }

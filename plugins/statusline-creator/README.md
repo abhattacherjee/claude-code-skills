@@ -1,5 +1,9 @@
 # statusline-creator
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.1 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Creates and customizes Claude Code statusline scripts from composable items
 
 ## What It Does

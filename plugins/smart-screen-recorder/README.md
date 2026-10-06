@@ -1,8 +1,12 @@
 # Smart Screen Recorder
 
+<!-- plugin-meta:start -->
+**Version:** 4.3.1 · **1** skill · **5** agents · **0** commands
+<!-- plugin-meta:end -->
+
 AI-driven screen recording and demo production pipeline for macOS. Records your screen, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos with a narration-first integrated timeline.
 
-**Version:** 4.2.0 | **1** skill, **6** agents | **License:** MIT
+**License:** MIT
 
 ## What It Does
 
@@ -137,11 +141,11 @@ Reference specific clips by number in your feedback: *"Audio #14 doesn't match t
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
-| **Demo Storyteller** | sonnet | Analyzes frames, proposes 3 narrative themes for user brainstorming |
-| **Demo Director** | opus | Creates zoom-script.json + voiceover-script.json from frames + narrative brief |
-| **Zoom QA Verifier** | opus | Extracts full-res frames at zoom timestamps, corrects bounding boxes |
-| **Voiceover Timing Fixer** | sonnet | Detects TTS audio overlaps, rebuilds sequential timestamps |
-| **Post-Production Editor** | opus | Reviews final output for quality, can request re-cuts |
+| **Demo Storyteller** (`demo-storyteller`) | sonnet | Analyzes frames, proposes 3 narrative themes for user brainstorming |
+| **Demo Director** (`demo-director`) | opus | Creates zoom-script.json + voiceover-script.json from frames + narrative brief |
+| **Zoom QA Verifier** (`zoom-qa-verifier`) | opus | Extracts full-res frames at zoom timestamps, corrects bounding boxes |
+| **Voiceover Timing Fixer** (`voiceover-timing-fixer`) | sonnet | Detects TTS audio overlaps, rebuilds sequential timestamps |
+| **Post-Production Editor** (`demo-post-production-editor`) | opus | Reviews final output for quality, can request re-cuts |
 
 ## Quick Start
 
