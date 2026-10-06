@@ -31,7 +31,7 @@ refuses that layout (#167), so recent edits were made by hand. This design:
 | skill / command / agent counts and names | `plugins/<name>/skills/*/SKILL.md`, `commands/*.md`, `agents/*.md` |
 | marketplace owner and `metadata` | the existing `marketplace.json` (kept as is) |
 
-Migration: the "Deprecated: …" prefixes now only in `marketplace.json` move into the 13
+Migration: the "Deprecated: …" prefixes now only in `marketplace.json` move into the 14
 plugin.json files. Each of those plugins gets a patch bump and a CHANGELOG line.
 
 ## 2. `catalogue.py`
@@ -61,6 +61,9 @@ a plugin in the catalogue; every `scripts/install-plugin.sh` path it names must 
 
 `--check` also fails when a plugin README does not name each of its skill and agent directory
 names (as a whole word), since that cannot be generated without rewriting hand-written prose.
+
+A plugin README with no meta markers is drift under `--check`; a write inserts the block after the
+README's first `# ` heading, so existing READMEs adopt the line without a hand edit.
 
 Exit codes: 0 clean (or written); 1 drift found (`--check`), one line per difference
 (`README.md: row context: version 1.0.1 != plugin.json 1.0.2`); 2 cannot run, fail closed:
