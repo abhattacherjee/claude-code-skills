@@ -26,13 +26,33 @@ for f in "$CAT" "$REFS"; do
   [[ -f "$f" ]] || { echo "check-docs.sh: $f is missing" >&2; exit 2; }
 done
 
+# run_check <name> <command...>: runs one checker, passes its output through,
+# and returns its exit code. Both checkers exit 0, 1 or 2 and write to stderr
+# only with exit 2, so any other exit, or exit 1 with something on stderr (a
+# Python crash: a syntax or import error also exits 1), means "could not run"
+# (2), never drift (#190).
+run_check() {
+  local name="$1" err r=0
+  shift
+  err="$(mktemp)"
+  "$@" 2>"$err" || r=$?
+  cat "$err" >&2
+  if (( r > 2 )); then
+    echo "check-docs.sh: $name exited $r; treated as: could not run" >&2
+    r=2
+  elif (( r == 1 )) && [[ -s "$err" ]]; then
+    echo "check-docs.sh: $name exited 1 with output on stderr (a crash); treated as: could not run" >&2
+    r=2
+  fi
+  rm -f "$err"
+  return "$r"
+}
+
 rc=0
-r=0; python3 "$CAT" --check "$ROOT" || r=$?
+r=0; run_check catalogue.py python3 "$CAT" --check "$ROOT" || r=$?
 (( r > rc )) && rc=$r
-r=0; python3 "$REFS" "$ROOT" || r=$?
+r=0; run_check check-doc-refs.py python3 "$REFS" "$ROOT" || r=$?
 (( r > rc )) && rc=$r
-# An exit above 2 (a crash, a signal, python3 missing) still means "could not run".
-(( rc > 2 )) && rc=2
 if (( rc == 0 )); then
   echo "check-docs.sh: catalogue and doc references are clean"
 fi

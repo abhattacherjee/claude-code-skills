@@ -89,13 +89,29 @@ fi
 
 # ── Docs drift guard (always runs, --docs-only and --skip-tests too) ──
 # The catalogue must match every plugin.json, and every link, repo path and
-# plugin:skill name in the current docs must exist (#190). It checks the
-# working tree, so unstaged edits count too.
+# plugin:skill name in the current docs must exist (#190). It checks what is
+# being committed: the index, exported to a temp directory, with the
+# check-docs.sh and checkers from that export. A fix left unstaged in the
+# working tree does not hide drift in the commit.
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📚 Running docs drift guard..."
-if ! ./scripts/check-docs.sh; then
-    echo "❌ Docs drift guard failed. Fix the lines above; for catalogue drift run:"
-    echo "   python3 plugins/skill-kit/skills/publish/scripts/catalogue.py ."
+echo "📚 Running docs drift guard on the staged tree..."
+DOCS_EXPORT="$(mktemp -d)"
+DOCS_RC=0
+if ! git checkout-index -a --prefix="$DOCS_EXPORT/"; then
+    echo "❌ Could not export the index for the docs drift guard"
+    DOCS_RC=2
+elif [ ! -f "$DOCS_EXPORT/scripts/check-docs.sh" ]; then
+    echo "❌ scripts/check-docs.sh is not in the index"
+    DOCS_RC=2
+else
+    bash "$DOCS_EXPORT/scripts/check-docs.sh" || DOCS_RC=$?
+fi
+if [ -n "$DOCS_EXPORT" ] && [ -d "$DOCS_EXPORT" ]; then
+    rm -rf "$DOCS_EXPORT"
+fi
+if [ "$DOCS_RC" -ne 0 ]; then
+    echo "❌ Docs drift guard failed on the staged tree. Fix the lines above and stage the fix;"
+    echo "   for catalogue drift run: python3 plugins/skill-kit/skills/publish/scripts/catalogue.py ."
     rm -f "$TOKEN_FILE"
     exit 1
 fi

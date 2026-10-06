@@ -198,6 +198,9 @@ jobs:
       - name: check-doc-refs.py tests
         run: bash scripts/test-check-doc-refs.sh
 
+      - name: check-docs.sh tests
+        run: bash scripts/test-check-docs.sh
+
   sync-hygiene:
     runs-on: ubuntu-latest
     steps:

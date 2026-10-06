@@ -101,6 +101,28 @@ with x README.md "$(printf '~~~\n```\n`scripts/gone.sh`\n~~~\n`scripts/gone2.sh`
 with x README.md "$(printf '````markdown\n```\n`scripts/gone.sh`\n```\n````\n`scripts/gone3.sh`')"; reported "a longer fence holds shorter ones" "scripts/gone3.sh"
 [[ "$OUT" != *"gone.sh:"* ]] && ok "and the nested fence's text is not reported" || bad "and the nested fence's text is not reported" "$OUT"
 
+echo "6b. unclosed fence (F6)"
+with x README.md "$(printf '```bash\n`scripts/gone.sh`')"; reported "an unclosed fence is reported" "README.md:4: unclosed fence; rest of file not checked"
+
+echo "6c. every root doc is in scope (T4)"
+for d in README.md CONTRIBUTING.md LOCAL-TESTING.md AGENTS.md CLAUDE.md; do
+  with x "$d" 'See `scripts/gone-'"${d%%.*}"'.sh`.'; reported "a broken path in $d is reported" "$d:4: scripts/gone-${d%%.*}.sh: no such path"
+done
+
+echo "6d. more link forms (F10, T7)"
+with x README.md 'See `./scripts/gone.sh`.'; reported "a ./ path that does not exist is reported" "./scripts/gone.sh: no such path"
+with x README.md '[ref]: ./docs/gone.md'; reported "a reference-style link definition is checked" "README.md:4: ./docs/gone.md: link target does not exist"
+with x README.md '[ref]: ./docs/x.md "Title"'; clean "a good reference-style definition with a title passes"
+with x README.md '  [ref]: https://example.com'; clean "a web reference definition is skipped"
+with x README.md 'A [link](<./docs/gone file.md>).'; reported "an angle-bracket link target is checked" "./docs/gone file.md: link target does not exist"
+with x README.md 'A [link](<./docs/x.md>).'; clean "a good angle-bracket target passes"
+with x README.md '<a href="./docs/gone.md">x</a>'; reported "an HTML href is checked" "./docs/gone.md: link target does not exist"
+with x README.md "<img src='./docs/gone.png'>"; reported "an HTML src is checked" "./docs/gone.png: link target does not exist"
+with x README.md '<a href="https://example.com">x</a> <img src="./docs/x.md">'; clean "a web href and a good src pass"
+mkdir -p "$TMP/outside-target"; printf 'x\n' > "$TMP/outside-target/f.md"
+with x README.md "[out](../outside-target/f.md)"; reported "a link that leaves the repo is reported" "../outside-target/f.md: link target is outside the repo"
+with x README.md 'See `docs/../../outside-target/f.md`.'; reported "a repo path that leaves the repo is reported" "outside the repo"
+
 echo "7. cannot run (exit 2)"
 n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; rm "$R/LOCAL-TESTING.md"; run "$R"
 [[ $RC -eq 2 && "$OUT" == *"LOCAL-TESTING.md: missing"* ]] && ok "a missing root doc" || bad "a missing root doc" "rc=$RC: $OUT"
@@ -110,6 +132,10 @@ n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; printf '\xff\xfe\n' >> "$R/plugins/kit
 [[ $RC -eq 2 && "$OUT" == *"plugins/kit/README.md"* ]] && ok "a doc that is not UTF-8" || bad "a doc that is not UTF-8" "rc=$RC: $OUT"
 n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; chmod 000 "$R/plugins/kit"; run "$R"; chmod 755 "$R/plugins/kit"
 [[ $RC -eq 2 ]] && ok "an unreadable plugin directory is exit 2, not 0 or 1" || bad "an unreadable plugin directory is exit 2, not 0 or 1" "rc=$RC: $OUT"
+for sub in skills agents commands; do
+  n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; chmod 000 "$R/plugins/kit/$sub"; run "$R"; chmod 755 "$R/plugins/kit/$sub"
+  [[ $RC -eq 2 && "$OUT" == *"plugins/kit/$sub"* ]] && ok "an unreadable $sub/ directory is exit 2 (F5)" || bad "an unreadable $sub/ directory is exit 2 (F5)" "rc=$RC: $OUT"
+done
 n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; run "$R/nope"
 [[ $RC -eq 2 ]] && ok "a repo path that does not exist" || bad "a repo path that does not exist" "rc=$RC: $OUT"
 
