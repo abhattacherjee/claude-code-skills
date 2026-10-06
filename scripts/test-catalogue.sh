@@ -233,6 +233,10 @@ run --check "$R"; expect "a two-part version is refused" 2 "version '1.0' is not
 fresh; written "$R"; setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="1.2.3-rc.1+b5"'
 run "$R"; expect "a pre-release version with build metadata is accepted" 0 "WROTE README.md"
 
+mkdir -p "$TMP/lonecat"; cp "$CAT" "$TMP/lonecat/catalogue.py"
+fresh; written "$R"; OUT="$(python3 "$TMP/lonecat/catalogue.py" --check "$R" 2>&1)" && RC=0 || RC=$?
+expect "no standalone-plugins.txt next to catalogue.py is exit 2, not an empty skip list" 2 "standalone-plugins.txt"
+
 echo "6b. a plugin README with no meta markers"
 fresh; written "$R"; perl -ni -e 'print unless /plugin-meta:/ || /^\*\*Version:\*\*/' "$R/plugins/alpha/README.md"
 run --check "$R"; expect "check reports a missing meta line (rc 1)" 1 "plugins/alpha/README.md: no meta line"

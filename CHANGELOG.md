@@ -44,7 +44,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 - The `worktree` row in the README was corrected from 1.0.0 to 1.0.1. The row went with the README "Skills" section in #167.
 - `skill-kit` 1.1.0 (#190): `sync-monorepo.sh` syncs a plugin-only monorepo instead of refusing it: it validates every plugin, then `catalogue.py` writes the catalogue, and nothing else is written. `--skills`, `--add` and `--init` are refused there. `validate-pre-sync.sh` validates every plugin and runs `catalogue.py --check`. In every layout `catalogue.py` now writes `marketplace.json`.
 - The 14 deprecated plugins carry their "Deprecated: …" description in `plugin.json`; only `marketplace.json` had it (#190). The other 22 plugins (all but `skill-kit`) get a patch bump and a CHANGELOG line for the README meta line. `skill-authoring` goes from 2.3.2 to 2.6.3, to match the version line of its CHANGELOG.
-- Docs fixed by the new checks (#190): the README plugin table has catalogue markers; `smart-screen-recorder`'s README names its five agents; broken references in `CONTRIBUTING.md`, `LOCAL-TESTING.md` and the `product-video-creation` and `skill-kit` READMEs point at real paths.
+- Docs fixed by the new checks (#190): the README plugin table has catalogue markers; `smart-screen-recorder`'s README names its five agents; broken references in `CONTRIBUTING.md` and the `product-video-creation` and `skill-kit` READMEs point at real paths. `LOCAL-TESTING.md` no longer names an old feature branch as its example.
 
 ### Deprecated
 
