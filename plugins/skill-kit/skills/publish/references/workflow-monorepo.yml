@@ -100,6 +100,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The README plugin table, marketplace.json and each plugin README's meta
+      # line must match every plugin.json. Fix drift with: python3 scripts/catalogue.py .
+      - name: Catalogue drift guard
+        run: python3 scripts/catalogue.py --check .
+
       - name: Detect changed plugin directories
         id: changed
         run: |
