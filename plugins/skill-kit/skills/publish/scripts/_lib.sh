@@ -672,15 +672,51 @@ is_plugin_only_monorepo() {
 # Sets STANDALONE_PLUGINS (space-separated) from <scripts-dir>/standalone-plugins.txt,
 # the one list catalogue.py reads too: plugins that ship from their own
 # marketplace, with no catalogue row here. # comments and blank lines are
-# ignored. A missing file is an error (return 1), never an empty list: an
-# empty list would let a standalone plugin back into the catalogue.
+# ignored. A missing or unreadable file is an error (return 1), never an
+# empty list: an empty list would let a standalone plugin back into the
+# catalogue, or let --add-plugin copy one.
 load_standalone_plugins() {
-  local f="$1/standalone-plugins.txt"
+  local f="$1/standalone-plugins.txt" content
   if [[ ! -f "$f" ]]; then
     echo "Error: $f is missing; it lists the standalone plugins (#190)" >&2
     return 1
   fi
-  STANDALONE_PLUGINS="$(grep -v '^[[:space:]]*#' "$f" | grep -v '^[[:space:]]*$' | tr '\n' ' ' | sed 's/ *$//' || true)"
+  if [[ ! -r "$f" ]] || ! content="$(cat "$f" 2>/dev/null)"; then
+    echo "Error: $f cannot be read; it lists the standalone plugins (#190)" >&2
+    return 1
+  fi
+  # The text is already in memory, so these filters cannot fail on a read; an
+  # all-comment file is a real empty list (grep -v exits 1 on no output).
+  STANDALONE_PLUGINS="$(printf '%s\n' "$content" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | tr '\n' ' ' | sed 's/ *$//' || true)"
+}
+
+# Usage: run_catalogue <catalogue.py> [args...]
+# Runs catalogue.py and sets CAT_RC and CAT_OUT (stdout and stderr together).
+# catalogue.py exits 0, 1 or 2, and prints to stderr only with exit 2. So any
+# other exit, or exit 1 with something on stderr (a Python crash such as a
+# syntax or import error, which exits 1 too), is turned into CAT_RC=2:
+# "cannot run", never drift (#190).
+run_catalogue() {
+  local py="$1" err
+  shift
+  err="$(mktemp)"
+  CAT_RC=0
+  CAT_OUT="$(python3 "$py" "$@" 2>"$err")" || CAT_RC=$?
+  if [[ -s "$err" ]]; then
+    CAT_OUT="${CAT_OUT:+$CAT_OUT
+}$(cat "$err")"
+    if [[ $CAT_RC -eq 1 ]]; then
+      CAT_OUT="$CAT_OUT
+catalogue.py crashed (exit 1 with output on stderr); treated as: catalogue.py cannot run"
+      CAT_RC=2
+    fi
+  fi
+  rm -f "$err"
+  if [[ $CAT_RC -gt 2 ]]; then
+    CAT_OUT="${CAT_OUT:+$CAT_OUT
+}catalogue.py exited $CAT_RC; treated as: catalogue.py cannot run"
+    CAT_RC=2
+  fi
 }
 
 # Usage: validate_all_plugins <monorepo-dir> <validate-plugin.sh>

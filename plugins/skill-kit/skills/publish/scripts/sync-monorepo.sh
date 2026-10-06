@@ -53,7 +53,9 @@ Options:
                          skill is refused and skipped, see "Reversion guard")
   --json                 Plugin-only monorepo only: print one JSON object on
                          stdout, {"layout","validated","catalogue"} (plus
-                         "error" on failure); the log goes to stderr
+                         "error" on failure); the log goes to stderr.
+                         "catalogue" is "written", "clean", "drift", or
+                         "not-run" when the run stopped before catalogue.py
   -h, --help             Show this help
 
 Plugin-only monorepo (#190):
@@ -64,8 +66,9 @@ Plugin-only monorepo (#190):
                   marketplace.json and each plugin README's meta line
     --dry-run     the same validation, then catalogue.py --check; prints the
                   drift and writes nothing (exit 0 unless validation fails)
-    --add-plugin  validates ./build/<name>/ and every plugin, copies the build
-                  to plugins/<name>/, then runs catalogue.py
+    --add-plugin  validates ./build/<name>/ and every plugin, and checks the
+                  catalogue in a staging copy with the build in it; only then
+                  copies the build to plugins/<name>/ and runs catalogue.py
     --skills, --add, --init   refused, exit 1, nothing written
   Exit 1 also when catalogue.py cannot run (for example, the README has no
   catalogue markers), or when it wrote the catalogue but found drift only a
@@ -208,8 +211,22 @@ fi
 # Naming assumption: each plugin's repo is abhattacherjee/<name> and its
 # marketplace is <name>-repo. The SKIP message and the generated README note
 # both derive from that; a plugin that breaks it needs this code changed.
+# early_fail <message>: an error before the plugin-only mode starts. With
+# --json it also prints the JSON error object, so a caller that parses stdout
+# never gets nothing (#190).
+early_fail() {
+  echo "Error: $1" >&2
+  if $JSON_MODE; then
+    local layout=other
+    is_plugin_only_monorepo "$MONOREPO_DIR" && layout=plugin-only
+    python3 -c 'import json, sys; print(json.dumps({"layout": sys.argv[1], "validated": 0, "catalogue": "not-run", "error": sys.argv[2]}))' \
+      "$layout" "$1"
+  fi
+  exit 1
+}
+
 STANDALONE_PLUGINS=""
-load_standalone_plugins "$SCRIPT_DIR" || exit 1
+load_standalone_plugins "$SCRIPT_DIR" || early_fail "standalone-plugins.txt could not be loaded (see above). Nothing was changed."
 
 is_standalone_plugin() {
   local _p
@@ -222,12 +239,10 @@ is_standalone_plugin() {
 # --add-plugin must not put a standalone plugin back into the monorepo. Refused
 # before any build or copy; the gate sits ahead of every write.
 if [[ -n "$ADD_PLUGIN" ]] && ! [[ "$ADD_PLUGIN" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-  echo "Error: --add-plugin takes a bare plugin name (lowercase letters, digits, hyphens), got: $ADD_PLUGIN" >&2
-  exit 1
+  early_fail "--add-plugin takes a bare plugin name (lowercase letters, digits, hyphens), got: $ADD_PLUGIN"
 fi
 if [[ -n "$ADD_PLUGIN" ]] && is_standalone_plugin "$ADD_PLUGIN"; then
-  echo "Error: $ADD_PLUGIN ships from its own marketplace; not adding it to this monorepo" >&2
-  exit 1
+  early_fail "$ADD_PLUGIN ships from its own marketplace; not adding it to this monorepo"
 fi
 
 # check_plugin_build: the checks --add-plugin makes on ./build/$ADD_PLUGIN/
@@ -257,50 +272,98 @@ check_plugin_build() {
     echo "Error: $PLUGIN_BUILD is the $build_name plugin, which ships from its own marketplace; not adding it to this monorepo" >&2
     return 1
   fi
+  # It is copied to plugins/$ADD_PLUGIN/, and catalogue.py requires a plugin's
+  # name to match its directory, so a different name is refused here (#190).
+  local raw_name
+  raw_name=$(jq -r '.name // empty' "$PLUGIN_BUILD/.claude-plugin/plugin.json" 2>/dev/null)
+  if [[ "$raw_name" != "$ADD_PLUGIN" ]]; then
+    echo "Error: $PLUGIN_BUILD is the $raw_name plugin, not $ADD_PLUGIN; its plugin.json name must match the --add-plugin name" >&2
+    return 1
+  fi
+}
+
+# copy_build_into <plugins-dir>: copy ./build/$ADD_PLUGIN/ to
+# <plugins-dir>/$ADD_PLUGIN/, keeping a README.md already there. Used for the
+# real copy and for the staging view below.
+copy_build_into() {
+  local dst="$1/$ADD_PLUGIN" preserved=""
+  # Preserve hand-written README if it exists in the destination.
+  if [[ -f "$dst/README.md" ]]; then
+    preserved=$(mktemp)
+    cp "$dst/README.md" "$preserved"
+  fi
+  mkdir -p "$dst"
+  rsync -a --delete --exclude='.DS_Store' "$PLUGIN_BUILD/" "$dst/" || { rm -f "$preserved"; return 1; }
+  # Restore preserved README (overwrite auto-generated template)
+  if [[ -n "$preserved" ]]; then
+    cp "$preserved" "$dst/README.md"
+    rm -f "$preserved"
+    COPY_PRESERVED="README"
+  else
+    COPY_PRESERVED=""
+  fi
+  # Preserve execute permissions on scripts
+  find "$dst" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
 }
 
 # add_plugin_from_build: --add-plugin's copy of ./build/$ADD_PLUGIN/ into
 # plugins/$ADD_PLUGIN/ (WOULD COPY under --dry-run). Both layouts call it.
 add_plugin_from_build() {
   check_plugin_build || return 1
-  local dst="$MONOREPO_DIR/plugins/$ADD_PLUGIN" preserved="" preserved_files=""
   echo "--- Plugin: $ADD_PLUGIN ---"
-
   if $DRY_RUN; then
     echo "  WOULD COPY  plugins/$ADD_PLUGIN/"
     return 0
   fi
-  # Preserve hand-written README if it exists in the destination.
-  if [[ -f "$dst/README.md" ]]; then
-    preserved=$(mktemp)
-    cp "$dst/README.md" "$preserved"
-  fi
-
-  mkdir -p "$dst"
-  rsync -a --delete --exclude='.DS_Store' "$PLUGIN_BUILD/" "$dst/"
-
-  # Restore preserved README (overwrite auto-generated template)
-  if [[ -n "$preserved" ]]; then
-    cp "$preserved" "$dst/README.md"
-    rm -f "$preserved"
-    preserved_files="README"
-  fi
-  if [[ -n "$preserved_files" ]]; then
-    echo "  SYNCED  plugins/$ADD_PLUGIN/ ($preserved_files preserved)"
+  copy_build_into "$MONOREPO_DIR/plugins" || return 1
+  if [[ -n "$COPY_PRESERVED" ]]; then
+    echo "  SYNCED  plugins/$ADD_PLUGIN/ ($COPY_PRESERVED preserved)"
   else
     echo "  SYNCED  plugins/$ADD_PLUGIN/"
   fi
+}
 
-  # Preserve execute permissions on scripts
-  find "$dst" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
+# make_staging_view: a temp copy of what catalogue.py reads (plugins/, README.md,
+# .claude-plugin/ and scripts/install-plugin.sh), with ./build/$ADD_PLUGIN/
+# copied in. --add-plugin validates and checks this view before it copies
+# anything, so a build catalogue.py would refuse never lands in plugins/.
+# Symlinks are copied as symlinks, so catalogue.py's symlink checks still see
+# them. Sets STAGE_DIR; remove it with drop_staging_view.
+make_staging_view() {
+  STAGE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+  mkdir -p "$STAGE_DIR/plugins"
+  if [[ -d "$MONOREPO_DIR/plugins" ]]; then
+    cp -R "$MONOREPO_DIR/plugins/." "$STAGE_DIR/plugins/" || return 1
+  fi
+  local f
+  for f in README.md .claude-plugin; do
+    if [[ -e "$MONOREPO_DIR/$f" || -L "$MONOREPO_DIR/$f" ]]; then
+      cp -R "$MONOREPO_DIR/$f" "$STAGE_DIR/$f" || return 1
+    fi
+  done
+  if [[ -e "$MONOREPO_DIR/scripts/install-plugin.sh" ]]; then
+    mkdir -p "$STAGE_DIR/scripts"
+    : > "$STAGE_DIR/scripts/install-plugin.sh"
+  fi
+  copy_build_into "$STAGE_DIR/plugins"
+}
+
+drop_staging_view() {
+  if [[ -n "${STAGE_DIR:-}" && -d "$STAGE_DIR" ]]; then
+    rm -rf "$STAGE_DIR"
+  fi
+  STAGE_DIR=""
 }
 
 # --- Plugin-only monorepo (#190) ---------------------------------------------
 # A monorepo with plugins/*/.claude-plugin/plugin.json and no top-level skill
 # directory (is_plugin_only_monorepo in _lib.sh). sync_plugin_only validates,
 # then lets catalogue.py write the catalogue, and always exits: nothing below
-# its call runs for this layout. Every refusal and every validation failure
-# happens before the first write, so exit 1 from those means nothing changed.
+# its call runs for this layout. Every refusal, validation and catalogue check
+# runs before the first write (with an --add-plugin build, on a staging copy),
+# so exit 1 from those means nothing changed. Only a failure while writing
+# itself can leave a partial result, and then catalogue.py names what it
+# already replaced.
 
 # po_json <catalogue-state> [error]: the --json object, on the saved stdout (fd 3).
 po_json() {
@@ -316,9 +379,23 @@ PY
 
 # po_fail <message> [catalogue-state]: say why on stderr, print the --json error, exit 1.
 po_fail() {
+  drop_staging_view
   echo "Error: sync-monorepo.sh: $1" >&2
   po_json "${2:-not-run}" "$1"
   exit 1
+}
+
+# report_hand_edits <catalogue output>: on stderr, the drift catalogue.py could
+# not fix, headed by whether it wrote anything first (#190 F14).
+report_hand_edits() {
+  {
+    if printf '%s\n' "$1" | grep -q '^WROTE '; then
+      echo "catalogue written; these need a hand edit:"
+    else
+      echo "the catalogue is up to date; these need a hand edit:"
+    fi
+    printf '%s\n' "$1" | grep -v '^WROTE ' | sed 's/^/  /'
+  } >&2
 }
 
 sync_plugin_only() {
@@ -339,6 +416,7 @@ sync_plugin_only() {
   fi
   [[ -f "$cat" ]] || po_fail "$cat is missing. Nothing was changed."
 
+  local view="$MONOREPO_DIR"
   if [[ -n "$ADD_PLUGIN" ]]; then
     check_plugin_build || po_fail "--add-plugin: ./build/$ADD_PLUGIN cannot be added (see above). Nothing was changed."
     echo "--- Validating ./build/$ADD_PLUGIN ---"
@@ -346,10 +424,13 @@ sync_plugin_only() {
       printf '%s\n' "$out" | grep -E '^ *FAIL|^Error' >&2 || true
       po_fail "--add-plugin: build/$ADD_PLUGIN fails validate-plugin.sh. Nothing was changed."
     fi
+    # Everything below is checked on a staging copy with the build in it.
+    make_staging_view || po_fail "--add-plugin: could not make a staging copy to check the build. Nothing was changed."
+    view="$STAGE_DIR"
   fi
 
   echo "--- Validating plugins ---"
-  if ! validate_all_plugins "$MONOREPO_DIR" "$SCRIPT_DIR/validate-plugin.sh"; then
+  if ! validate_all_plugins "$view" "$SCRIPT_DIR/validate-plugin.sh"; then
     for n in $PLUGINS_FAILED; do names="${names:+$names, }plugins/$n"; done
     po_fail "these plugins fail validate-plugin.sh: $names. Nothing was changed."
   fi
@@ -358,8 +439,13 @@ sync_plugin_only() {
   # written (exit 2: no markers, a bad plugin.json, a symlink) stops the run
   # with nothing changed, --add-plugin's copy included.
   echo "--- Catalogue ---"
-  rc=0
-  out="$(python3 "$cat" --check "$MONOREPO_DIR" 2>&1)" || rc=$?
+  run_catalogue "$cat" --check "$view"
+  out="$CAT_OUT"
+  rc=$CAT_RC
+  if [[ -n "${STAGE_DIR:-}" ]]; then
+    out="${out//$STAGE_DIR/$MONOREPO_DIR}"
+  fi
+  drop_staging_view
   if [[ $rc -ge 2 ]]; then
     printf '%s\n' "$out" >&2
     po_fail "catalogue.py cannot run (see above). Nothing was changed."
@@ -382,8 +468,9 @@ sync_plugin_only() {
   if [[ -n "$ADD_PLUGIN" ]]; then
     add_plugin_from_build || po_fail "--add-plugin: copying ./build/$ADD_PLUGIN failed."
   fi
-  rc=0
-  out="$(python3 "$cat" "$MONOREPO_DIR" 2>&1)" || rc=$?
+  run_catalogue "$cat" "$MONOREPO_DIR"
+  out="$CAT_OUT"
+  rc=$CAT_RC
   case $rc in
     0)
       if [[ -n "$out" ]]; then
@@ -401,15 +488,12 @@ sync_plugin_only() {
       ;;
     1)
       printf '%s\n' "$out" | grep '^WROTE ' | sed 's/^WROTE /  SYNCED  /' || true
-      {
-        echo "catalogue written; these need a hand edit:"
-        printf '%s\n' "$out" | grep -v '^WROTE ' | sed 's/^/  /'
-      } >&2
+      report_hand_edits "$out"
       po_fail "the catalogue has drift only a hand edit can fix (listed above)." drift
       ;;
     *)
       printf '%s\n' "$out" >&2
-      po_fail "catalogue.py cannot run (see above)."
+      po_fail "catalogue.py cannot run (see above). It names any file it already replaced; nothing else was written."
       ;;
   esac
 }
@@ -420,6 +504,36 @@ fi
 if $JSON_MODE; then
   echo "Error: --json is only supported for a plugin-only monorepo" >&2
   exit 1
+fi
+
+# validate_catalogue_inputs <message> [no-build]: catalogue.py --validate-plugins on the
+# monorepo (with an --add-plugin build, on a staging copy). It loads and checks
+# every plugin and write target without needing README markers, so a plugin
+# catalogue.py would refuse stops the sync before a write, not after the README,
+# CHANGELOG and workflow were rewritten (#190 F3). Exit 2 stops the run.
+validate_catalogue_inputs() {
+  local view="$MONOREPO_DIR" any=false f
+  for f in "$MONOREPO_DIR"/plugins/*/.claude-plugin/plugin.json; do
+    [[ -f "$f" ]] && any=true
+  done
+  if [[ "${2:-}" != no-build && -n "$ADD_PLUGIN" ]] && check_plugin_build 2>/dev/null; then
+    make_staging_view || { drop_staging_view; echo "Error: could not make a staging copy to check ./build/$ADD_PLUGIN. $1" >&2; exit 1; }
+    view="$STAGE_DIR"
+    any=true
+  fi
+  $any || return 0
+  run_catalogue "$SCRIPT_DIR/catalogue.py" --validate-plugins "$view"
+  local out="$CAT_OUT"
+  [[ -n "${STAGE_DIR:-}" ]] && out="${out//$STAGE_DIR/$MONOREPO_DIR}"
+  drop_staging_view
+  if [[ $CAT_RC -ne 0 ]]; then
+    printf '%s\n' "$out" >&2
+    echo "Error: catalogue.py cannot use these plugins (see above). $1" >&2
+    exit 1
+  fi
+}
+if [[ -d "$MONOREPO_DIR" ]]; then
+  validate_catalogue_inputs "Nothing was changed."
 fi
 
 # skill_source_dir() now lives in _lib.sh (issue #78) — it is called from
@@ -1621,6 +1735,13 @@ if [[ -n "$PLUGINS_TO_LIST" ]]; then
   done 3<<< "$PLUGINS_TO_LIST" </dev/null
 fi
 
+# The plugins may have changed since the check at the start (auto-builds,
+# --add-plugin, resyncs): check them again before the README, CHANGELOG and
+# workflow are written (#190 F3).
+if [[ $PLUGIN_COUNT -gt 0 ]]; then
+  validate_catalogue_inputs "The skills and plugins synced above are already written; README.md, CHANGELOG.md and the other root files were not." no-build
+fi
+
 # --- Generate root README ---
 echo "--- Root files ---"
 
@@ -2059,6 +2180,7 @@ for _cat_file in catalogue.py standalone-plugins.txt; do
 done
 
 # --- The catalogue: README plugin table, marketplace.json, plugin README meta lines ---
+CAT_HAND_EDITS=""
 # catalogue.py is the one writer of these in every layout (#190). It keeps
 # marketplace.json's other keys (owner, metadata) as they are; --marketplace-name
 # and --owner are used only when the file does not exist yet. Under --dry-run
@@ -2068,16 +2190,14 @@ if [[ $PLUGIN_COUNT -gt 0 ]]; then
   if $DRY_RUN; then
     echo "  WOULD UPDATE  README plugin table, .claude-plugin/marketplace.json and plugin README meta lines (catalogue.py)"
   else
-    _CAT_RC=0
-    _CAT_OUT="$(python3 "$SCRIPT_DIR/catalogue.py" --marketplace-name claude-code-skills --owner "$AUTHOR" "$MONOREPO_DIR" 2>&1)" || _CAT_RC=$?
-    printf '%s\n' "$_CAT_OUT" | grep '^WROTE ' | sed 's/^WROTE /  SYNCED  /' || true
-    if [[ $_CAT_RC -eq 1 ]]; then
-      echo "Error: catalogue written; these need a hand edit:" >&2
-      printf '%s\n' "$_CAT_OUT" | grep -v '^WROTE ' | sed 's/^/  /' >&2
-      exit 1
-    elif [[ $_CAT_RC -ne 0 ]]; then
-      printf '%s\n' "$_CAT_OUT" >&2
-      echo "Error: catalogue.py cannot run (see above); README plugin table and marketplace.json not written." >&2
+    run_catalogue "$SCRIPT_DIR/catalogue.py" --marketplace-name claude-code-skills --owner "$AUTHOR" "$MONOREPO_DIR"
+    printf '%s\n' "$CAT_OUT" | grep '^WROTE ' | sed 's/^WROTE /  SYNCED  /' || true
+    if [[ $CAT_RC -eq 1 ]]; then
+      # Reported at the end, so a REFUSED skill (exit 3) is not hidden by it.
+      CAT_HAND_EDITS="$CAT_OUT"
+    elif [[ $CAT_RC -ne 0 ]]; then
+      printf '%s\n' "$CAT_OUT" >&2
+      echo "Error: catalogue.py cannot run (see above). It names any catalogue file it already replaced; README.md, CHANGELOG.md and the other root files above were already written by this sync." >&2
       exit 1
     fi
   fi
@@ -2086,7 +2206,9 @@ fi
 echo ""
 
 # --- Init mode: git init + create repo ---
-if $INIT_MODE && ! $DRY_RUN; then
+if $INIT_MODE && ! $DRY_RUN && [[ -n "$CAT_HAND_EDITS" ]]; then
+  echo "Not initialising the git repository: the catalogue needs the hand edits listed below first. Fix them, then re-run with --init."
+elif $INIT_MODE && ! $DRY_RUN; then
   echo "Initializing git repository..."
   cd "$MONOREPO_DIR"
   git init
@@ -2139,10 +2261,20 @@ fi
 # A run that declined to sync part of its input has not succeeded, so exit
 # non-zero (3, distinct from the exit-1 usage/setup errors) after doing all the
 # work it safely could. Callers and CI then see the skip instead of a clean 0.
+if [[ -n "$CAT_HAND_EDITS" ]]; then
+  echo ""
+  report_hand_edits "$CAT_HAND_EDITS"
+fi
 if [[ "$REFUSED_COUNT" -gt 0 ]]; then
   echo ""
   echo "REFUSED $REFUSED_COUNT skill(s) — stale local source would have reverted newer in-repo content:"
   printf '%s' "$REFUSED_SKILLS" | sed 's/^/  - /'
   echo "Remove the stale local copies, or re-run with --force-local to override."
   exit 3
+fi
+
+# Catalogue drift only a hand edit can fix (listed above). Checked after the
+# REFUSED exit, so exit 3 wins and both are reported (#190).
+if [[ -n "$CAT_HAND_EDITS" ]]; then
+  exit 1
 fi

@@ -104,8 +104,8 @@ if is_plugin_only_monorepo "$MONOREPO_DIR"; then
   STANDALONE_PLUGINS=""
   load_standalone_plugins "$SCRIPT_DIR" || exit 1
   PO_LINES="$(validate_all_plugins "$MONOREPO_DIR" "$SCRIPT_DIR/validate-plugin.sh" || true)"
-  CAT_RC=0
-  CAT_OUT="$(python3 "$SCRIPT_DIR/catalogue.py" --check "$MONOREPO_DIR" 2>&1)" || CAT_RC=$?
+  # run_catalogue (_lib.sh) turns a crash into exit 2, never drift.
+  run_catalogue "$SCRIPT_DIR/catalogue.py" --check "$MONOREPO_DIR"
   if $JSON_MODE; then
     python3 - "$CAT_RC" "$CAT_OUT" "$PO_LINES" <<'PY'
 import json, sys

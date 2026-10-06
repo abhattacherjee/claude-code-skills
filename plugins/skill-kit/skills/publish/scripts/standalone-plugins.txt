@@ -1,5 +1,5 @@
 # Plugins that ship from their own marketplace (abhattacherjee/<name>, installed as
 # <name>@<name>-repo). They get no catalogue row or marketplace entry here.
-# Read by catalogue.py and sync-monorepo.sh.
+# Read by catalogue.py, sync-monorepo.sh and validate-pre-sync.sh.
 git-flow
 obsidian-brain
