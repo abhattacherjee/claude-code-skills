@@ -1,5 +1,9 @@
 # skill-publishing
 
+<!-- plugin-meta:start -->
+**Version:** 4.5.2 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Plugin-first publishing for Claude Code skills. Auto-assembles and syncs plugins from plugin-manifest.json files. Also supports bare skills and individual repos
 
 ## What It Does

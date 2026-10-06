@@ -1,5 +1,9 @@
 # spec-creator
 
+<!-- plugin-meta:start -->
+**Version:** 2.4.3 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Creates detailed story specifications with TDD implementation steps, success metrics, Figma UX design gates, and vertical splitting from various inputs (plans, requirements, GitHub issues).
 
 ## What It Does

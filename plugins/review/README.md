@@ -1,5 +1,9 @@
 # review
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.1 · **2** skills · **3** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Two review skills in one install. `deep` converges a changeset to zero actionable issues in two phases. `adversarial` is the single-pass version: Claude and an opposing model (Codex, else Gemini) find issues independently, cross-examine each other, and only findings the other side confirms are reported.
 
 ```shell

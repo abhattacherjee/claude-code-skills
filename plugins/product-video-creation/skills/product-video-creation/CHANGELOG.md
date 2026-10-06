@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.1] - 2026-10-06
+
+### Changed
+- The README states the plugin version and its skill, agent and command counts, written by `catalogue.py` (#190).
+- plugin.json carries the "Deprecated: …" description that only marketplace.json had (#190).
+
 ## [2.0.0] - 2026-03-15
 
 ### Added

@@ -1,5 +1,9 @@
 # figma-ui-designer
 
+<!-- plugin-meta:start -->
+**Version:** 3.2.3 · **1** skill · **1** agent · **0** commands
+<!-- plugin-meta:end -->
+
 Interactive Figma UI design skill with brainstorming, progress tracking, and design-to-code bridging via Figma MCP
 
 ## What It Does

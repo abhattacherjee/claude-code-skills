@@ -1,5 +1,9 @@
 # skill-authoring
 
+<!-- plugin-meta:start -->
+**Version:** 2.6.3 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism.
 
 ## What It Does

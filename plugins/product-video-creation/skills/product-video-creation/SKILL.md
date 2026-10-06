@@ -2,7 +2,7 @@
 name: product-video-creation
 description: "Creates polished, narrated product demo videos using Remotion (React) with AI-crafted storytelling (Opus 4.6), real app screenshots, animated phone mockups, brand-aligned styling, and TTS voiceover (OpenAI or macOS). Use when: (1) user asks to create a product video or demo reel, (2) user wants an Instagram Reel or YouTube video showcasing their app, (3) user has a running web app and wants animated marketing content, (4) user provides brand guidelines to apply to a video project."
 metadata:
-  version: 2.0.0
+  version: 2.0.1
 ---
 
 # Remotion Product Video Generator

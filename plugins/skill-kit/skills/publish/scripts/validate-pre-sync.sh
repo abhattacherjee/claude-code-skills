@@ -39,16 +39,18 @@ Options:
 
 Exit codes:
   0  All skills have matching CHANGELOG entries
-  1  One or more skills have version/CHANGELOG mismatches, or the monorepo is
-     plugin-only (see below)
+  1  One or more skills have version/CHANGELOG mismatches; on a plugin-only
+     monorepo, a plugin fails validation or the catalogue has drift (see below)
   2  Usage error
 
-Plugin-only monorepo (#167):
-  This gate checks top-level <name>/ skill directories, the layout
-  sync-monorepo.sh writes. A monorepo that has plugins/*/.claude-plugin/plugin.json
-  and no top-level skill directory is refused in every mode: exit 1 and one
-  message on stderr (with --json, also a JSON object with an "error" key on
-  stdout). Sync for plugin-only monorepos is being redesigned in #190.
+Plugin-only monorepo (#190):
+  A monorepo that has plugins/*/.claude-plugin/plugin.json and no top-level
+  skill directory has no top-level skills to check. There this gate runs
+  validate-plugin.sh on every plugin (standalone ones skipped) and then
+  catalogue.py --check, and exits 1 if either fails. --add is refused (exit 1).
+  --json keeps its shape (total, pass and fail count plugins; results has one
+  {"plugin","status"} item each) and adds "layout": "plugin-only",
+  "catalogue": "clean|drift|error" and "catalogue_lines".
 
 Examples:
   validate-pre-sync.sh ~/dev/claude-code-skills
@@ -91,11 +93,63 @@ if [[ ! -d "$MONOREPO_DIR" ]]; then
   exit 2
 fi
 
-# #167: same layout rule as sync-monorepo.sh (see the note in _lib.sh).
-if $JSON_MODE; then
-  refuse_if_plugin_only_monorepo "$MONOREPO_DIR" "validate-pre-sync.sh" json
-else
-  refuse_if_plugin_only_monorepo "$MONOREPO_DIR" "validate-pre-sync.sh"
+# #190: a plugin-only monorepo (see the note in _lib.sh) is checked plugin by
+# plugin, then with catalogue.py --check, the same checks sync-monorepo.sh runs
+# before it writes. It always exits here.
+if is_plugin_only_monorepo "$MONOREPO_DIR"; then
+  if $ADD_GIVEN; then
+    echo "Error: validate-pre-sync.sh: --add: plugin-only monorepo has no top-level skills; edit plugins/<group>/skills/<name>/ and run sync" >&2
+    exit 1
+  fi
+  STANDALONE_PLUGINS=""
+  load_standalone_plugins "$SCRIPT_DIR" || exit 1
+  PO_LINES="$(validate_all_plugins "$MONOREPO_DIR" "$SCRIPT_DIR/validate-plugin.sh" || true)"
+  # run_catalogue (_lib.sh) turns a crash into exit 2, never drift.
+  run_catalogue "$SCRIPT_DIR/catalogue.py" --check "$MONOREPO_DIR"
+  if $JSON_MODE; then
+    python3 - "$CAT_RC" "$CAT_OUT" "$PO_LINES" <<'PY'
+import json, sys
+rc, cat_out, lines = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+results = []
+for l in lines.splitlines():
+    parts = l.split()
+    if len(parts) == 2 and parts[0] in ("PASS", "FAIL") and parts[1].startswith("plugins/"):
+        results.append({"plugin": parts[1][len("plugins/"):], "status": parts[0].lower()})
+fail = sum(1 for r in results if r["status"] == "fail")
+print(json.dumps({
+    "layout": "plugin-only",
+    "total": len(results), "pass": len(results) - fail, "fail": fail,
+    "missing_changelog": 0,
+    "results": results,
+    "catalogue": {0: "clean", 1: "drift"}.get(rc, "error"),
+    "catalogue_lines": [l for l in cat_out.splitlines() if l],
+}, indent=2))
+PY
+  else
+    echo "=== Pre-Sync Validation (plugin-only monorepo) ==="
+    echo ""
+    printf '%s\n' "$PO_LINES"
+    echo ""
+    if [[ $CAT_RC -eq 0 ]]; then
+      echo "catalogue.py --check: clean"
+    else
+      echo "catalogue.py --check: $([[ $CAT_RC -eq 1 ]] && echo drift || echo "cannot run")"
+      printf '%s\n' "$CAT_OUT" | sed 's/^/  /'
+    fi
+  fi
+  if printf '%s\n' "$PO_LINES" | grep -q '^  FAIL  plugins/' || [[ $CAT_RC -ne 0 ]]; then
+    if ! $JSON_MODE; then
+      echo ""
+      echo "BLOCKED: fix the plugins and the catalogue above before syncing."
+      echo "Run catalogue.py <monorepo> to write the catalogue; a skill or agent a plugin README does not name needs a hand edit."
+    fi
+    exit 1
+  fi
+  if ! $JSON_MODE; then
+    echo ""
+    echo "Every plugin passes and the catalogue is clean. Safe to sync."
+  fi
+  exit 0
 fi
 
 # --- Discover skills to validate ---

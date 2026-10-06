@@ -1,5 +1,9 @@
 # deep-review
 
+<!-- plugin-meta:start -->
+**Version:** 1.4.1 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Two-phase convergence harness for high-assurance review of a changeset (PR or working-tree diff). Phase 1 loops iterative multi-reviewer fix->re-review until a round finds zero actionable issues; Phase 2 runs a multi-round adversarial cross-examination with Codex, else Gemini, as the opposing model (it finds -> Claude judges -> it counters -> it re-checks fixes), fixing every confirmed finding. Soft-depends on pr-review-toolkit and adversarial-review plugins with documented fallbacks.
 
 ## What It Does

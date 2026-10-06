@@ -33,7 +33,8 @@ def _skill_docs():
 def test_plugin_manifest():
     data = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
     assert data["name"] == "statusline"
-    assert data["version"] == "1.0.0"
+    # The version this release ships (1.0.1 since #190 added the README meta line).
+    assert data["version"] == "1.0.1"
 
 
 def test_exactly_the_three_skills():
@@ -142,7 +143,7 @@ def test_marketplace_lists_the_plugin():
     row = _market()["statusline"]
     plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
     assert row["source"] == "./plugins/statusline"
-    assert row["version"] == plugin["version"] == "1.0.0"
+    assert row["version"] == plugin["version"]
     assert row["description"] == plugin["description"]
 
 
@@ -164,7 +165,8 @@ def _readme_row(name):
 def test_readme_catalogue_row_counts_match_the_plugin():
     cells = _readme_row("statusline")
     skills = [p for p in (PLUGIN / "skills").iterdir() if (p / "SKILL.md").is_file()]
-    assert cells[1:4] == ["1.0.0", str(len(skills)), "0"]
+    plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    assert cells[1:4] == [plugin["version"], str(len(skills)), "0"]
 
 
 @pytest.mark.parametrize("old", OLD_PLUGINS)

@@ -287,6 +287,27 @@ skill_catalog_row_count() {
     grep -cE '^\| \[[^]]+\]\(\./[^/]+/\) \|' "$1" 2>/dev/null || true
 }
 
+# tree_digest <dir>: one hash over every path and every file's bytes.
+tree_digest() {
+    (
+        cd "$1"
+        find . -print | LC_ALL=C sort
+        find . -type f -exec shasum {} + | LC_ALL=C sort
+    ) | shasum | cut -d' ' -f1
+}
+
+# tree_digest_except_catalogue <dir>: tree_digest without the files catalogue.py
+# owns (README.md, .claude-plugin/marketplace.json, plugins/*/README.md). Their
+# paths still count, so a created or deleted catalogue file still changes it.
+tree_digest_except_catalogue() {
+    (
+        cd "$1"
+        find . -print | LC_ALL=C sort
+        find . -type f ! -path ./README.md ! -path ./.claude-plugin/marketplace.json \
+            ! -path './plugins/*/README.md' -exec shasum {} + | LC_ALL=C sort
+    ) | shasum | cut -d' ' -f1
+}
+
 # ============================================================
 # gh shim — keeps the run genuinely offline
 # ============================================================
@@ -2802,7 +2823,7 @@ mkdir -p "$SKILLS_HOME_SPACE_FIXTURE/my skill/scripts" \
          "$SKILLS_HOME_SPACE_FIXTURE/space-plain-skill" \
          "$MONOREPO_SPACE_FIXTURE/my skill" \
          "$MONOREPO_SPACE_FIXTURE/space-plain-skill" \
-         "$MONOREPO_SPACE_FIXTURE/plugins/my plugin/.claude-plugin" \
+         "$SCRATCH_DIR/monorepo-space-plugin-name/plugins/my plugin/.claude-plugin" \
          "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE/my skill" \
          "$MONOREPO_SPACE_PLUGIN_FIXTURE/my skill" \
          "$MONOREPO_MIXEDSKILLS_FIXTURE"
@@ -2837,20 +2858,26 @@ Fixture content.
 EOF
 
 # An already-published plugin whose directory (and manifest `name`) contains a
-# space — seeded directly rather than through prepare-plugin.sh, since the
-# PLUGINS_TO_LIST catalogue loop only reads what is already on disk under
-# plugins/. Guards `for PLUGIN_NAME in $PLUGINS_TO_LIST`: word-split into "my"
-# and "plugin", plugins/my/.claude-plugin/plugin.json and
-# plugins/plugin/.claude-plugin/plugin.json both resolve to nothing, and the
-# plugin silently drops out of PLUGIN_COUNT and the catalogue table with no
-# error at all.
-cat > "$MONOREPO_SPACE_FIXTURE/plugins/my plugin/.claude-plugin/plugin.json" <<'EOF'
+# space. Until #190 this sat in MONOREPO_SPACE_FIXTURE and guarded
+# `for PLUGIN_NAME in $PLUGINS_TO_LIST` (word-splitting dropped it from the
+# catalogue). Since #190 catalogue.py refuses any plugin name that is not
+# lower-case letters, digits and hyphens, so such a plugin can never be in the
+# catalogue; it now sits in its own monorepo and the sync must refuse it
+# before writing anything (asserted below, at site 3/5).
+SPACE_PLUGIN_NAME_MONO="$SCRATCH_DIR/monorepo-space-plugin-name"
+mkdir -p "$SPACE_PLUGIN_NAME_MONO/top-skill"
+printf -- '---\nname: top-skill\ndescription: Fixture top-level skill. Use when: testing.\nversion: 1.0.0\n---\n\n# top-skill\n' > "$SPACE_PLUGIN_NAME_MONO/top-skill/SKILL.md"
+printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$SPACE_PLUGIN_NAME_MONO/top-skill/CHANGELOG.md"
+cat > "$SPACE_PLUGIN_NAME_MONO/plugins/my plugin/.claude-plugin/plugin.json" <<'EOF'
 {
   "name": "my plugin",
   "version": "1.0.0",
   "description": "Throwaway fixture plugin with a space in its name, guarding the PLUGINS_TO_LIST catalogue loop (#81)."
 }
 EOF
+# catalogue.py writes the plugin catalogue since #190, and a plugin with no
+# README is drift it cannot fix (the sync would exit 1), so the fixture has one.
+printf '# my plugin\n' > "$SPACE_PLUGIN_NAME_MONO/plugins/my plugin/README.md"
 
 # --- The reversion-guard-in-plugin fixture: a plugin manifest whose sole
 # skill has a space in its name, and IS refused. A stale local source (v1.0.0)
@@ -2986,13 +3013,15 @@ SPACE_CHANGELOG="$(cat "$MONOREPO_SPACE_FIXTURE/CHANGELOG.md" 2>/dev/null || tru
 assert_contains "the CHANGELOG skill inventory carries the space-named skill's own entry" \
     "- \`my skill\` v1.0.0" "$SPACE_CHANGELOG"
 
-# --- Assertion: published-plugin catalogue (site 3/5). Verified by hand
-# against a scratch revert of this loop alone: PLUGIN_COUNT stays 0 (the
-# split "my"/"plugin" fragments each fail the plugin.json existence check),
-# the "## Plugins" section never renders, and "my plugin" is invisible in the
-# generated README with no error at all. ---
-assert_contains "the space-named already-published plugin keeps its catalogue row" \
-    "| [my plugin](./plugins/my plugin/) |" "$SPACE_README"
+# --- Assertion: published-plugin catalogue (site 3/5). Before #190 this
+# asserted the space-named plugin kept its row. catalogue.py now refuses such
+# a name, so the sync must stop before its first write and say why. ---
+SPACE_PLUGIN_NAME_ALL="$(tree_digest "$SPACE_PLUGIN_NAME_MONO")"
+SPACE_PLUGIN_NAME_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$SPACE_PLUGIN_NAME_MONO" "$SCRATCH_DIR/space-plugin-name.stdout" "$SCRATCH_DIR/space-plugin-name.stderr" || SPACE_PLUGIN_NAME_RC=$?
+assert_eq "a space-named already-published plugin stops the sync (exit 1, #190)" "1" "$SPACE_PLUGIN_NAME_RC"
+assert_contains "…and says why" "name 'my plugin' is not lower-case letters, digits and hyphens" "$(cat "$SCRATCH_DIR/space-plugin-name.stderr")"
+assert_eq "…and writes nothing" "$SPACE_PLUGIN_NAME_ALL" "$(tree_digest "$SPACE_PLUGIN_NAME_MONO")"
 
 # --- Assertion: manifest-skill-names loop inside the reversion guard (site
 # 2/5). Verified by hand against a scratch revert of this loop alone:
@@ -5772,7 +5801,10 @@ _bypass_case renamed-build-dir-mixed-case-name "gf2" "build/gf2" "Git-Flow"
 
 # Positive control: --add-plugin for a non-standalone plugin is not refused.
 mkdir -p "$RUN_CWD/build/ordinary-plugin/.claude-plugin"
-echo '{"name": "ordinary-plugin", "version": "0.1.0"}' > "$RUN_CWD/build/ordinary-plugin/.claude-plugin/plugin.json"
+# A description and a README: catalogue.py (#190) refuses a plugin.json with no
+# description (exit 2) and reports a plugin with no README as drift (exit 1).
+echo '{"name": "ordinary-plugin", "version": "0.1.0", "description": "fixture"}' > "$RUN_CWD/build/ordinary-plugin/.claude-plugin/plugin.json"
+printf '# ordinary-plugin\n' > "$RUN_CWD/build/ordinary-plugin/README.md"
 ORD_MONO="$SCRATCH_DIR/monorepo-addplugin-ordinary"
 mkdir -p "$ORD_MONO"
 ORD_RC=0
@@ -5790,32 +5822,19 @@ assert_eq "control: …and copies plugins/ordinary-plugin" "PRESENT" \
 rm -rf "$RUN_CWD/build/ordinary-plugin"
 
 # ============================================================
-# Issue #167 — a plugin-only monorepo is refused in every mode
+# Issue #190 — a plugin-only monorepo is synced: validate, then the catalogue
 # ============================================================
 #
 # The bare top-level skill directories are deleted; skills live under
-# plugins/<group>/skills/<name>/. sync-monorepo.sh and validate-pre-sync.sh only
-# understand top-level skill directories. A first fix refused only a discovery
-# run that found nothing, and --add-plugin got past it: on a copy of this repo
-# it rewrote README.md ("0 reusable Agent Skills"), added a "Synced 0 skills"
-# CHANGELOG entry, rewrote the marketplace catalogue and replaced the 516-line
-# CI workflow with the template, at exit 0. Now both scripts refuse, in every
-# mode, a monorepo that has plugins/*/.claude-plugin/plugin.json and no
-# top-level skill directory, before writing anything. Any other monorepo
-# behaves as before.
+# plugins/<group>/skills/<name>/. #167 made both scripts refuse such a monorepo
+# in every mode, because the old flow found no skills there and still rewrote
+# README.md, CHANGELOG.md, the marketplace catalogue and the CI workflow. #190
+# replaces that refusal with a plugin-only mode: validate every plugin, then
+# catalogue.py writes the README table, marketplace.json and the plugin README
+# meta lines. Nothing else is written. --skills, --add and --init are refused.
 
-# tree_digest <dir>: one hash over every path and every file's bytes.
-tree_digest() {
-    (
-        cd "$1"
-        find . -print | LC_ALL=C sort
-        find . -type f -exec shasum {} + | LC_ALL=C sort
-    ) | shasum | cut -d' ' -f1
-}
-
-# Plugin-only fixture shaped like this repo after #167: README, CHANGELOG,
-# marketplace catalogue, a long CI workflow (the repo's own), one plugin with a
-# skill, docs/, and a .git directory (so --init takes its "existing repo" path).
+# The #167 fixture, kept as it was: README with no catalogue markers. The
+# deprecated-copy cases further down also use it, and it is never synced into.
 NOSKILL_MONO="$SCRATCH_DIR/monorepo-noskills"
 mkdir -p "$NOSKILL_MONO/plugins/pg/.claude-plugin" "$NOSKILL_MONO/plugins/pg/skills/inner" "$NOSKILL_MONO/docs" \
          "$NOSKILL_MONO/.claude-plugin" "$NOSKILL_MONO/.github/workflows"
@@ -5830,31 +5849,472 @@ echo '{"name": "fixture-marketplace", "plugins": [{"name": "pg", "source": "./pl
 cp "$REPO_ROOT/.github/workflows/validate-skill.yml" "$NOSKILL_MONO/.github/workflows/validate-skill.yml"
 git -C "$NOSKILL_MONO" init -q
 NOSKILL_DIGEST="$(tree_digest "$NOSKILL_MONO")"
-NOSKILL_MSG="is a plugin-only monorepo (skills under plugins/<group>/skills/, none at the top level). This script only handles top-level skill directories (#167); sync for plugins is being redesigned in #190. Nothing was changed."
 
-# A plugin build dir so --add-plugin has something to copy (it would on beddd96).
-mkdir -p "$RUN_CWD/build/noskill-addplug/.claude-plugin"
-echo '{"name": "noskill-addplug", "version": "0.1.0"}' > "$RUN_CWD/build/noskill-addplug/.claude-plugin/plugin.json"
+# PO_BASE: the same plugin-only shape, ready for catalogue.py: README markers and
+# an install line, a plugin README that names its skill, and a marketplace
+# with an owner and metadata (kept as they are by a sync).
+PO_BASE="$SCRATCH_DIR/monorepo-po-base"
+cp -R "$NOSKILL_MONO" "$PO_BASE"
+printf '# Fixture monorepo\n\nPO-INTRO-MARKER\n\n<!-- catalogue:start -->\n<!-- catalogue:end -->\n\n/plugin install PLUGIN_NAME@fixture-marketplace\n' > "$PO_BASE/README.md"
+printf '# pg\n\nThe `inner` skill.\n' > "$PO_BASE/plugins/pg/README.md"
+printf '{\n  "name": "fixture-marketplace",\n  "owner": {"name": "Fixture Owner"},\n  "metadata": {"description": "d", "version": "2026.01.01"},\n  "plugins": []\n}\n' \
+    > "$PO_BASE/.claude-plugin/marketplace.json"
 
-# _noskill_sync_case <label> [sync args…]: refused, one message, tree unchanged.
-_noskill_sync_case() {
+# po_fixture <name>: a fresh copy of PO_BASE; prints its path.
+po_fixture() {
+    local d="$SCRATCH_DIR/monorepo-po-$1"
+    cp -R "$PO_BASE" "$d"
+    printf '%s\n' "$d"
+}
+
+# po_sync <fixture> <label> [sync args…]: sets PO_RC, PO_OUT, PO_ERR.
+po_sync() {
+    local mono="$1" label="$2"
+    shift 2
+    PO_RC=0
+    run_sync "$SKILLS_HOME_FIXTURE" "$mono" "$SCRATCH_DIR/po-$label.stdout" "$SCRATCH_DIR/po-$label.stderr" "$@" || PO_RC=$?
+    PO_OUT="$(cat "$SCRATCH_DIR/po-$label.stdout")"
+    PO_ERR="$(cat "$SCRATCH_DIR/po-$label.stderr")"
+}
+
+PG_ROW='| [pg](./plugins/pg/) | 1.0.0 | 1 | 0 | fixture |'
+
+# 1. Plain sync writes only the catalogue.
+PO1="$(po_fixture plain)"
+PO1_REST="$(tree_digest_except_catalogue "$PO1")"
+po_sync "$PO1" plain
+assert_eq "plain sync on a plugin-only monorepo exits 0 (#190)" "0" "$PO_RC"
+assert_line_present "…and writes the plugin's row into the README table" "$PG_ROW" "$(cat "$PO1/README.md")"
+assert_contains "…and keeps the README text outside the markers" "PO-INTRO-MARKER" "$(cat "$PO1/README.md")"
+assert_eq "…and lists the plugin in marketplace.json" "pg ./plugins/pg 1.0.0 fixture" \
+    "$(jq -r '.plugins[] | "\(.name) \(.source) \(.version) \(.description)"' "$PO1/.claude-plugin/marketplace.json" 2>/dev/null || echo NOT-JSON)"
+assert_eq "…and keeps the marketplace owner and metadata (metadata.version unchanged)" '{"name":"Fixture Owner"} 2026.01.01' \
+    "$(jq -c '.owner' "$PO1/.claude-plugin/marketplace.json" 2>/dev/null) $(jq -r '.metadata.version' "$PO1/.claude-plugin/marketplace.json" 2>/dev/null)"
+assert_line_present "…and writes the plugin README meta line" '**Version:** 1.0.0 · **1** skill · **0** agents · **0** commands' \
+    "$(cat "$PO1/plugins/pg/README.md")"
+assert_eq "…and every other file is byte-identical (CHANGELOG, workflow, docs; none created)" "$PO1_REST" "$(tree_digest_except_catalogue "$PO1")"
+for _f in scripts CONTRIBUTING.md LICENSE .gitignore .github/PULL_REQUEST_TEMPLATE.md; do
+    assert_eq "…and creates no $_f" "ABSENT" "$([[ -e "$PO1/$_f" ]] && echo PRESENT || echo ABSENT)"
+done
+assert_contains "…and says it validated the plugin" "PASS  plugins/pg" "$PO_OUT"
+PO1_ALL="$(tree_digest "$PO1")"
+po_sync "$PO1" plain-again
+assert_eq "a second plain sync exits 0" "0" "$PO_RC"
+assert_eq "…and changes nothing" "$PO1_ALL" "$(tree_digest "$PO1")"
+
+# 2. --dry-run validates and checks, writes nothing.
+PO2="$(po_fixture dryrun)"
+PO2_ALL="$(tree_digest "$PO2")"
+po_sync "$PO2" dryrun --dry-run
+assert_eq "--dry-run on a plugin-only monorepo exits 0 (#190)" "0" "$PO_RC"
+assert_contains "…and prints the drift catalogue.py --check found" "README.md: row pg: missing" "$PO_OUT"
+assert_eq "…and every file is byte-identical" "$PO2_ALL" "$(tree_digest "$PO2")"
+
+# 3. --skills, --add and --init are refused, with nothing written.
+_po_refused() {
+    local label="$1" want="$2" mono
+    shift 2
+    mono="$(po_fixture "refuse-$label")"
+    local before
+    before="$(tree_digest "$mono")"
+    po_sync "$mono" "refuse-$label" "$@"
+    assert_eq "$label on a plugin-only monorepo exits 1 (#190)" "1" "$PO_RC"
+    assert_contains "…$label: says why" "$want" "$PO_ERR"
+    assert_eq "…$label: every file is byte-identical" "$before" "$(tree_digest "$mono")"
+}
+_po_refused skills "--skills: plugin-only monorepo has no top-level skills; edit plugins/<group>/skills/<name>/ and run sync" --skills demo-skill
+_po_refused add "--add: plugin-only monorepo has no top-level skills; edit plugins/<group>/skills/<name>/ and run sync" --add demo-skill
+_po_refused init "--init: the monorepo is already initialised (it has plugins/)" --init
+_po_refused init-with-skills "--skills: plugin-only monorepo has no top-level skills" --init --skills demo-skill
+
+# 4. A plugin that fails validation blocks every write.
+PO4="$(po_fixture invalid)"
+mkdir -p "$PO4/plugins/pbad/.claude-plugin" "$PO4/plugins/pbad/skills/nouse"
+echo '{"name": "pbad", "version": "1.0.0", "description": "bad fixture"}' > "$PO4/plugins/pbad/.claude-plugin/plugin.json"
+printf -- '---\nname: nouse\ndescription: Fixture skill with no trigger list.\nmetadata:\n  version: 1.0.0\n---\n\n# nouse\n' > "$PO4/plugins/pbad/skills/nouse/SKILL.md"
+printf '# pbad\n\n`nouse`\n' > "$PO4/plugins/pbad/README.md"
+PO4_ALL="$(tree_digest "$PO4")"
+po_sync "$PO4" invalid
+assert_eq "a plugin that fails validate-plugin.sh stops a plain sync (exit 1)" "1" "$PO_RC"
+assert_contains "…and names the plugin" "plugins/pbad" "$PO_ERR"
+assert_eq "…and nothing is written" "$PO4_ALL" "$(tree_digest "$PO4")"
+po_sync "$PO4" invalid-dry --dry-run
+assert_eq "…and stops a --dry-run too" "1" "$PO_RC"
+# A plugin directory with no plugin.json fails validation too (never skipped).
+PO4B="$(po_fixture stray)"
+mkdir -p "$PO4B/plugins/stray/skills"
+PO4B_ALL="$(tree_digest "$PO4B")"
+po_sync "$PO4B" stray
+assert_eq "a plugins/ directory with no plugin.json stops a sync (exit 1)" "1" "$PO_RC"
+assert_contains "…and names it" "plugins/stray" "$PO_ERR"
+assert_contains "…with validate-plugin.sh's own reason, so validation (not the catalogue) stopped it" \
+    ".claude-plugin/plugin.json not found" "$PO_OUT"
+assert_eq "…and nothing is written" "$PO4B_ALL" "$(tree_digest "$PO4B")"
+
+# 4b. catalogue.py cannot run (no markers): exit 1, nothing written.
+PO4C="$SCRATCH_DIR/monorepo-po-nomarkers"
+cp -R "$NOSKILL_MONO" "$PO4C"
+PO4C_ALL="$(tree_digest "$PO4C")"
+po_sync "$PO4C" nomarkers
+assert_eq "a README with no catalogue markers stops a sync (exit 1)" "1" "$PO_RC"
+assert_contains "…and says what is missing" "needs exactly one <!-- catalogue:start -->" "$PO_ERR"
+assert_eq "…and nothing is written" "$PO4C_ALL" "$(tree_digest "$PO4C")"
+
+# 4c. Drift a write cannot fix (a skill the plugin README does not name): the
+# catalogue is written, the run exits 1 and lists what needs a hand edit.
+PO4D="$(po_fixture unnamed)"
+printf '# pg\n\nNo skill named here.\n' > "$PO4D/plugins/pg/README.md"
+po_sync "$PO4D" unnamed
+assert_eq "drift that needs a hand edit exits 1" "1" "$PO_RC"
+assert_contains "…and says so" "catalogue written; these need a hand edit:" "$PO_ERR"
+assert_contains "…naming the drift" "plugins/pg/README.md: does not name skill inner" "$PO_ERR"
+assert_line_present "…after writing what it could" "$PG_ROW" "$(cat "$PO4D/README.md")"
+po_sync "$PO4D" unnamed-again
+assert_eq "the same drift on a second run (catalogue already written) exits 1" "1" "$PO_RC"
+assert_not_contains "…and does not claim it wrote the catalogue (F14)" "catalogue written" "$PO_ERR"
+assert_contains "…and says nothing needed writing" "the catalogue is up to date; these need a hand edit:" "$PO_ERR"
+
+# 5. --add-plugin copies ./build/<n>/ after validating it, then writes the catalogue.
+PO5="$(po_fixture addplugin)"
+mkdir -p "$RUN_CWD/build/po-added/.claude-plugin" "$RUN_CWD/build/po-added/skills/added-skill"
+echo '{"name": "po-added", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+printf -- '---\nname: added-skill\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 0.2.0\n---\n\n# added-skill\n' \
+    > "$RUN_CWD/build/po-added/skills/added-skill/SKILL.md"
+printf '# po-added\n\n`added-skill`\n' > "$RUN_CWD/build/po-added/README.md"
+po_sync "$PO5" addplugin --add-plugin po-added
+assert_eq "--add-plugin on a plugin-only monorepo exits 0 (#190)" "0" "$PO_RC"
+assert_file_exists "…and copies the plugin" "$PO5/plugins/po-added/skills/added-skill/SKILL.md"
+assert_line_present "…and writes its row" '| [po-added](./plugins/po-added/) | 0.2.0 | 1 | 0 | added fixture |' "$(cat "$PO5/README.md")"
+assert_eq "…and its marketplace entry" "0.2.0" \
+    "$(jq -r '.plugins[] | select(.name == "po-added") | .version' "$PO5/.claude-plugin/marketplace.json" 2>/dev/null || echo NOT-JSON)"
+PO5B="$(po_fixture addplugin-dry)"
+PO5B_ALL="$(tree_digest "$PO5B")"
+po_sync "$PO5B" addplugin-dry --dry-run --add-plugin po-added
+assert_eq "--dry-run --add-plugin exits 0" "0" "$PO_RC"
+assert_contains "…and says what it would copy" "WOULD COPY  plugins/po-added/" "$PO_OUT"
+assert_eq "…and writes nothing" "$PO5B_ALL" "$(tree_digest "$PO5B")"
+# catalogue.py is checked before the copy, so a catalogue that cannot be
+# written stops --add-plugin with the build not copied either.
+PO5D="$SCRATCH_DIR/monorepo-po-addplugin-nomarkers"
+cp -R "$NOSKILL_MONO" "$PO5D"
+PO5D_ALL="$(tree_digest "$PO5D")"
+po_sync "$PO5D" addplugin-nomarkers --add-plugin po-added
+assert_eq "--add-plugin when catalogue.py cannot run exits 1" "1" "$PO_RC"
+assert_eq "…and does not copy the plugin (nothing written)" "$PO5D_ALL" "$(tree_digest "$PO5D")"
+# F2: the build is checked by catalogue.py (in a staging copy) before it is
+# copied, in a real run and in --dry-run.
+_po_build_refused() {
+    local label="$1" want="$2" mono before
+    mono="$(po_fixture "addplugin-$label")"
+    before="$(tree_digest "$mono")"
+    po_sync "$mono" "addplugin-$label" --add-plugin po-added
+    assert_eq "--add-plugin of a build catalogue.py refuses ($label) exits 1" "1" "$PO_RC"
+    assert_contains "…$label: says why" "$want" "$PO_ERR"
+    assert_eq "…$label: and copies nothing" "$before" "$(tree_digest "$mono")"
+    mono="$(po_fixture "addplugin-$label-dry")"
+    before="$(tree_digest "$mono")"
+    po_sync "$mono" "addplugin-$label-dry" --dry-run --add-plugin po-added
+    assert_eq "…$label: --dry-run --add-plugin exits 1 too, not clean" "1" "$PO_RC"
+    assert_eq "…$label: --dry-run writes nothing" "$before" "$(tree_digest "$mono")"
+}
+cp "$RUN_CWD/build/po-added/.claude-plugin/plugin.json" "$SCRATCH_DIR/po-added-plugin.json"
+echo '{"name": "po-added", "version": "0.2.0", "description": "a | b"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+_po_build_refused pipe "description contains '|'"
+cp "$SCRATCH_DIR/po-added-plugin.json" "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+mv "$RUN_CWD/build/po-added/README.md" "$SCRATCH_DIR/po-added-README.md"
+ln -s "$SCRATCH_DIR/po-added-README.md" "$RUN_CWD/build/po-added/README.md"
+_po_build_refused symlink "build/po-added holds a symlink"
+rm "$RUN_CWD/build/po-added/README.md"; mv "$SCRATCH_DIR/po-added-README.md" "$RUN_CWD/build/po-added/README.md"
+echo '{"name": "po-other", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+_po_build_refused name-mismatch "is the po-other plugin, not po-added"
+cp "$SCRATCH_DIR/po-added-plugin.json" "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+# A dry run that adds a good build reports the catalogue the copy would need.
+PO5E="$(po_fixture addplugin-dry-drift)"
+po_sync "$PO5E" addplugin-dry-drift --dry-run --add-plugin po-added
+assert_contains "--dry-run --add-plugin checks the catalogue with the build in it" "README.md: row po-added: missing" "$PO_OUT"
+printf -- '---\nname: added-skill\ndescription: No trigger list.\nmetadata:\n  version: 0.2.0\n---\n\n# added-skill\n' \
+    > "$RUN_CWD/build/po-added/skills/added-skill/SKILL.md"
+PO5C="$(po_fixture addplugin-bad)"
+PO5C_ALL="$(tree_digest "$PO5C")"
+po_sync "$PO5C" addplugin-bad --add-plugin po-added
+assert_eq "--add-plugin of a build that fails validation exits 1" "1" "$PO_RC"
+assert_contains "…and names the build" "build/po-added" "$PO_ERR"
+assert_eq "…and writes nothing" "$PO5C_ALL" "$(tree_digest "$PO5C")"
+rm -rf "$RUN_CWD/build/po-added"
+
+# 6. --json prints one JSON object on stdout.
+PO6="$(po_fixture json)"
+po_sync "$PO6" json --json
+assert_eq "--json plain sync exits 0" "0" "$PO_RC"
+assert_eq "…and stdout is the JSON object: layout, validated, catalogue written" "plugin-only 1 written" \
+    "$(jq -r '"\(.layout) \(.validated) \(.catalogue)"' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+po_sync "$PO6" json-again --json
+assert_eq "…a second run reports catalogue clean" "clean" "$(jq -r '.catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+PO6T="$(po_fixture json-two)"
+mkdir -p "$PO6T/plugins/ph/.claude-plugin" "$PO6T/plugins/ph/skills/hs"
+echo '{"name": "ph", "version": "1.0.0", "description": "second fixture"}' > "$PO6T/plugins/ph/.claude-plugin/plugin.json"
+printf -- '---\nname: hs\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# hs\n' > "$PO6T/plugins/ph/skills/hs/SKILL.md"
+printf '# ph\n\n`hs`\n' > "$PO6T/plugins/ph/README.md"
+po_sync "$PO6T" json-two --json
+assert_eq "--json counts both plugins it validated (T7)" "0 2" "$PO_RC $(jq -r '.validated' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+PO6B="$(po_fixture json-dry)"
+po_sync "$PO6B" json-dry --json --dry-run
+assert_eq "…--dry-run --json on drift reports catalogue drift (exit 0)" "0 drift" \
+    "$PO_RC $(jq -r '.catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+PO6C="$(po_fixture json-refused)"
+po_sync "$PO6C" json-refused --json --init
+assert_eq "…a refused --json run exits 1 with an error in the JSON" "1 plugin-only" \
+    "$PO_RC $(jq -r 'select(.error != null) | .layout' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+assert_eq "…and catalogue not-run" "not-run" "$(jq -r '.catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+# F13: refusals that happen before the plugin-only mode starts still print the JSON object.
+PO6D="$(po_fixture json-standalone)"
+po_sync "$PO6D" json-standalone --json --add-plugin git-flow
+assert_eq "--json --add-plugin of a standalone plugin exits 1 with a JSON error (F13)" "1 not-run" \
+    "$PO_RC $(jq -r 'select(.error != null) | .catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+# --json is for the plugin-only layout only; anywhere else it is refused up front.
+JSON_MIXED="$SCRATCH_DIR/monorepo-json-mixed"
+mkdir -p "$JSON_MIXED"
+po_sync "$JSON_MIXED" json-mixed --json --skills demo-skill
+assert_eq "--json on a monorepo that is not plugin-only exits 1" "1" "$PO_RC"
+assert_contains "…and says so" "--json is only supported for a plugin-only monorepo" "$PO_ERR"
+assert_eq "…and writes nothing" "" "$(ls -A "$JSON_MIXED")"
+
+# 7. A top-level SYMLINK to a directory that holds a SKILL.md is not a candidate:
+# discovery (find -type d) skips symlinks, so this is still plugin-only (#167
+# review C-001), and a sync writes only the catalogue.
+SYM_MONO="$(po_fixture symlink)"
+SYM_EXTERNAL="$SCRATCH_DIR/symlink-external/foo"
+mkdir -p "$SYM_EXTERNAL"
+printf -- '---\nname: foo\ndescription: External skill reached by a symlink. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# foo\n' \
+    > "$SYM_EXTERNAL/SKILL.md"
+ln -s "$SYM_EXTERNAL" "$SYM_MONO/foo"
+SYM_REST="$(tree_digest_except_catalogue "$SYM_MONO")"
+SYM_EXT_DIGEST="$(tree_digest "$SCRATCH_DIR/symlink-external")"
+po_sync "$SYM_MONO" symlink
+assert_eq "a plugin-only monorepo with a top-level skill symlink syncs as plugin-only (exit 0)" "0" "$PO_RC"
+assert_line_present "…and writes the catalogue" "$PG_ROW" "$(cat "$SYM_MONO/README.md")"
+assert_eq "…and nothing else" "$SYM_REST" "$(tree_digest_except_catalogue "$SYM_MONO")"
+assert_eq "…and the symlinked skill is untouched" "$SYM_EXT_DIGEST" "$(tree_digest "$SCRATCH_DIR/symlink-external")"
+
+# 8. validate-pre-sync.sh on a plugin-only monorepo: every plugin, then catalogue.py --check.
+presync_run() {
+    local out="$1" err="$2" rc=0
+    shift 2
+    ( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$PRESYNC_SCRIPT" "$@" ) >"$out" 2>"$err" || rc=$?
+    return "$rc"
+}
+PRE_CLEAN="$(po_fixture pre-clean)"
+po_sync "$PRE_CLEAN" pre-clean-write
+PRE_CLEAN_ALL="$(tree_digest "$PRE_CLEAN")"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-clean.stdout" "$SCRATCH_DIR/pre-clean.stderr" "$PRE_CLEAN" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh on a clean plugin-only monorepo exits 0 (#190)" "0" "$PRE_RC"
+assert_contains "…and says it is safe to sync" "Safe to sync" "$(cat "$SCRATCH_DIR/pre-clean.stdout")"
+assert_eq "…and changes no file" "$PRE_CLEAN_ALL" "$(tree_digest "$PRE_CLEAN")"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-cleanj.stdout" "$SCRATCH_DIR/pre-cleanj.stderr" "$PRE_CLEAN" --json || PRE_RC=$?
+assert_eq "…--json keeps its shape and adds the layout" "0 plugin-only 1 1 0 clean" \
+    "$PRE_RC $(jq -r '"\(.layout) \(.total) \(.pass) \(.fail) \(.catalogue)"' < "$SCRATCH_DIR/pre-cleanj.stdout" 2>/dev/null || echo NOT-JSON)"
+PRE_DRIFT="$(po_fixture pre-drift)"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-drift.stdout" "$SCRATCH_DIR/pre-drift.stderr" "$PRE_DRIFT" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh on catalogue drift exits 1" "1" "$PRE_RC"
+assert_contains "…and prints the drift line" "README.md: row pg: missing" "$(cat "$SCRATCH_DIR/pre-drift.stdout")"
+assert_not_contains "…and never says \"Safe to sync\"" "Safe to sync" "$(cat "$SCRATCH_DIR/pre-drift.stdout")"
+# T5: the catalogue is made clean first, so only the failing plugin can make it exit 1.
+PRE_INV="$SCRATCH_DIR/monorepo-pre-invalid"
+cp -R "$PO4" "$PRE_INV"
+python3 "$(dirname "$SYNC_SCRIPT")/catalogue.py" "$PRE_INV" >/dev/null 2>&1 || true
+PRE_INV_CHECK=0
+python3 "$(dirname "$SYNC_SCRIPT")/catalogue.py" --check "$PRE_INV" >/dev/null 2>&1 || PRE_INV_CHECK=$?
+assert_eq "control: that fixture's catalogue is clean" "0" "$PRE_INV_CHECK"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-invalid.stdout" "$SCRATCH_DIR/pre-invalid.stderr" "$PRE_INV" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh with a plugin that fails validation exits 1" "1" "$PRE_RC"
+assert_contains "…and names it" "FAIL  plugins/pbad" "$(cat "$SCRATCH_DIR/pre-invalid.stdout")"
+assert_contains "…while the catalogue is clean" "catalogue.py --check: clean" "$(cat "$SCRATCH_DIR/pre-invalid.stdout")"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-nomark.stdout" "$SCRATCH_DIR/pre-nomark.stderr" "$NOSKILL_MONO" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh when catalogue.py cannot run (no markers) exits 1" "1" "$PRE_RC"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-add.stdout" "$SCRATCH_DIR/pre-add.stderr" --add demo-skill "$PRE_CLEAN" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh --add on a plugin-only monorepo is refused (exit 1)" "1" "$PRE_RC"
+assert_contains "…and says why" "plugin-only monorepo has no top-level skills" "$(cat "$SCRATCH_DIR/pre-add.stderr")"
+assert_eq "…and no validate-pre-sync.sh run changed a file" "$PRE_CLEAN_ALL" "$(tree_digest "$PRE_CLEAN")"
+
+# 9. A missing standalone-plugins.txt stops the sync before anything runs.
+NOSTAND_DIR="$SCRATCH_DIR/publish-no-standalone"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$NOSTAND_DIR"
+rm "$NOSTAND_DIR/scripts/standalone-plugins.txt"
+PO9="$(po_fixture nostandalone)"
+PO9_ALL="$(tree_digest "$PO9")"
+PO_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$NOSTAND_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user "$PO9" ) \
+    >"$SCRATCH_DIR/po-nostand.stdout" 2>"$SCRATCH_DIR/po-nostand.stderr" || PO_RC=$?
+assert_eq "sync-monorepo.sh with no standalone-plugins.txt exits 1" "1" "$PO_RC"
+assert_contains "…and names the file" "standalone-plugins.txt" "$(cat "$SCRATCH_DIR/po-nostand.stderr")"
+# catalogue.py would also stop on the missing file; this pins the earlier stop
+# in sync-monorepo.sh itself, before the plugin-only mode starts.
+assert_eq "…and stops before the plugin-only mode starts (stdout empty)" "" "$(cat "$SCRATCH_DIR/po-nostand.stdout")"
+assert_eq "…and writes nothing" "$PO9_ALL" "$(tree_digest "$PO9")"
+
+# F1: an unreadable standalone-plugins.txt is an error, never an empty list.
+UNREAD_DIR="$SCRATCH_DIR/publish-unreadable-standalone"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$UNREAD_DIR"
+chmod 000 "$UNREAD_DIR/scripts/standalone-plugins.txt"
+_unread_case() {
+    local label="$1" mono before rc=0
+    shift
+    mono="$(po_fixture "unread-$label")"
+    # A new, empty monorepo: the old code went on with an empty list there and
+    # planned the copy of a standalone plugin (exit 0).
+    if [[ "$label" == new-* ]]; then
+        mono="$SCRATCH_DIR/monorepo-unread-$label-empty"
+        mkdir -p "$mono"
+    fi
+    # A mixed-layout variant (a top-level skill too): there the old code went
+    # on with an empty list and planned the copy of a standalone plugin.
+    if [[ "$label" == mixed-* ]]; then
+        mkdir -p "$mono/mixed-top"
+        printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' > "$mono/mixed-top/SKILL.md"
+        printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$mono/mixed-top/CHANGELOG.md"
+    fi
+    before="$(tree_digest "$mono")"
+    ( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$UNREAD_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user "$@" "$mono" ) \
+        >"$SCRATCH_DIR/unread-$label.stdout" 2>"$SCRATCH_DIR/unread-$label.stderr" || rc=$?
+    assert_eq "an unreadable standalone-plugins.txt stops sync $label (exit 1, F1)" "1" "$rc"
+    assert_contains "…$label: names the file" "standalone-plugins.txt" "$(cat "$SCRATCH_DIR/unread-$label.stderr")"
+    assert_eq "…$label: writes nothing" "$before" "$(tree_digest "$mono")"
+}
+mkdir -p "$RUN_CWD/build/git-flow/.claude-plugin" "$RUN_CWD/build/git-flow/skills/gf"
+echo '{"name": "git-flow", "version": "1.0.0", "description": "standalone fixture"}' > "$RUN_CWD/build/git-flow/.claude-plugin/plugin.json"
+printf -- '---\nname: gf\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# gf\n' > "$RUN_CWD/build/git-flow/skills/gf/SKILL.md"
+printf '# git-flow\n\n`gf`\n' > "$RUN_CWD/build/git-flow/README.md"
+_unread_case plain
+_unread_case add-plugin-git-flow-dry --dry-run --add-plugin git-flow
+_unread_case add-plugin-git-flow --add-plugin git-flow
+_unread_case mixed-add-plugin-git-flow-dry --dry-run --add-plugin git-flow
+_unread_case new-add-plugin-git-flow-dry --dry-run --add-plugin git-flow
+_unread_case json --json
+rm -rf "$RUN_CWD/build/git-flow"
+assert_eq "…--json: still prints the JSON error object (F13)" "not-run" \
+    "$(jq -r 'select(.error != null) | .catalogue' < "$SCRATCH_DIR/unread-json.stdout" 2>/dev/null || echo NOT-JSON)"
+UNREAD_PRE_RC=0
+( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$UNREAD_DIR/scripts/validate-pre-sync.sh" "$PRE_CLEAN" ) \
+    >"$SCRATCH_DIR/unread-pre.stdout" 2>"$SCRATCH_DIR/unread-pre.stderr" || UNREAD_PRE_RC=$?
+assert_eq "validate-pre-sync.sh with an unreadable standalone-plugins.txt exits 1" "1" "$UNREAD_PRE_RC"
+assert_contains "…and names the file" "standalone-plugins.txt" "$(cat "$SCRATCH_DIR/unread-pre.stderr")"
+chmod 644 "$UNREAD_DIR/scripts/standalone-plugins.txt"
+
+# C-002: a CRLF standalone list is read the same way catalogue.py reads it.
+CRLF_DIR="$SCRATCH_DIR/publish-crlf-standalone"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$CRLF_DIR"
+printf '# Standalone plugins\r\ngit-flow\r\n  obsidian-brain  \r\n' > "$CRLF_DIR/scripts/standalone-plugins.txt"
+mkdir -p "$RUN_CWD/build/git-flow/.claude-plugin"
+echo '{"name": "git-flow", "version": "1.0.0", "description": "standalone fixture"}' > "$RUN_CWD/build/git-flow/.claude-plugin/plugin.json"
+CRLF_MONO="$SCRATCH_DIR/monorepo-crlf-empty"
+mkdir -p "$CRLF_MONO"
+CRLF_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRLF_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user --dry-run --add-plugin git-flow "$CRLF_MONO" ) \
+    >"$SCRATCH_DIR/crlf.stdout" 2>"$SCRATCH_DIR/crlf.stderr" || CRLF_RC=$?
+assert_eq "a CRLF standalone list still refuses --add-plugin git-flow (exit 1, C-002)" "1" "$CRLF_RC"
+assert_contains "…as a standalone plugin" "git-flow ships from its own marketplace" "$(cat "$SCRATCH_DIR/crlf.stderr")"
+printf 'git-flow # ships elsewhere\n' > "$CRLF_DIR/scripts/standalone-plugins.txt"
+BADLINE_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRLF_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user --dry-run "$CRLF_MONO" ) \
+    >"$SCRATCH_DIR/badline.stdout" 2>"$SCRATCH_DIR/badline.stderr" || BADLINE_RC=$?
+assert_eq "a standalone list line that is not one plugin name stops the sync (exit 1)" "1" "$BADLINE_RC"
+assert_contains "…naming the line" "line 1: 'git-flow # ships elsewhere' is not a plugin name" "$(cat "$SCRATCH_DIR/badline.stderr")"
+rm -rf "$RUN_CWD/build/git-flow"
+
+# X-001: --add-plugin never writes through a symlink. A plugins/<name> (or the
+# --add-plugin destination) that is a symlink to a directory outside the repo
+# is refused before anything is copied, in plugin-only and mixed layouts, in a
+# real run and in --dry-run; the outside directory is left byte-identical.
+mkdir -p "$RUN_CWD/build/po-added/.claude-plugin" "$RUN_CWD/build/po-added/skills/added-skill"
+echo '{"name": "po-added", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+printf -- '---\nname: added-skill\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 0.2.0\n---\n\n# added-skill\n' > "$RUN_CWD/build/po-added/skills/added-skill/SKILL.md"
+printf '# po-added\n\n`added-skill`\n' > "$RUN_CWD/build/po-added/README.md"
+_decoy_case() {
+    local label="$1" layout="$2" link="$3" mono decoy before_mono before_decoy rc=0
+    shift 3
+    mono="$(po_fixture "decoy-$label")"
+    if [[ "$layout" == mixed ]]; then
+        mkdir -p "$mono/mixed-top"
+        printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' > "$mono/mixed-top/SKILL.md"
+        printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$mono/mixed-top/CHANGELOG.md"
+    fi
+    decoy="$SCRATCH_DIR/decoy-$label"
+    mkdir -p "$decoy/sub"
+    echo "SENTINEL" > "$decoy/SENTINEL.txt"; echo "x" > "$decoy/sub/keep.txt"
+    ln -s "$decoy" "$mono/plugins/$link"
+    before_mono="$(tree_digest "$mono")"; before_decoy="$(tree_digest "$decoy")"
+    po_sync "$mono" "decoy-$label" "$@"
+    assert_eq "a symlinked plugins/$link stops the sync ($label, exit 1, X-001)" "1" "$PO_RC"
+    assert_contains "…$label: says why" "plugins/$link is a symlink; refusing to write through it" "$PO_ERR"
+    assert_eq "…$label: the directory behind the link is byte-identical" "$before_decoy" "$(tree_digest "$decoy")"
+    assert_eq "…$label: the monorepo is byte-identical" "$before_mono" "$(tree_digest "$mono")"
+}
+_decoy_case po-dest-dry plugin-only po-added --dry-run --add-plugin po-added
+_decoy_case po-dest plugin-only po-added --add-plugin po-added
+_decoy_case po-other-dry plugin-only other --dry-run --add-plugin po-added
+_decoy_case mixed-dest-dry mixed po-added --dry-run --add-plugin po-added
+_decoy_case mixed-dest mixed po-added --add-plugin po-added
+_decoy_case mixed-other mixed other --add-plugin po-added
+# A symlink deeper inside a plugin is refused by the staging copy, which
+# never keeps or follows one.
+PO_DEEP="$(po_fixture deep-link)"
+DEEP_DECOY="$SCRATCH_DIR/decoy-deep"; mkdir -p "$DEEP_DECOY"; echo SENTINEL > "$DEEP_DECOY/SENTINEL.txt"
+ln -s "$DEEP_DECOY" "$PO_DEEP/plugins/pg/linked"
+PO_DEEP_ALL="$(tree_digest "$PO_DEEP")"; DEEP_DECOY_ALL="$(tree_digest "$DEEP_DECOY")"
+po_sync "$PO_DEEP" deep-link --dry-run --add-plugin po-added
+assert_eq "a symlink inside a plugin stops --dry-run --add-plugin (exit 1)" "1" "$PO_RC"
+assert_contains "…and says the staging copy refuses it" "plugins/pg/linked is a symlink; the staging copy refuses symlinks" "$PO_ERR"
+assert_eq "…and the directory behind it is byte-identical" "$DEEP_DECOY_ALL" "$(tree_digest "$DEEP_DECOY")"
+assert_eq "…and so is the monorepo" "$PO_DEEP_ALL" "$(tree_digest "$PO_DEEP")"
+# A symlinked plugins/<standalone> is skipped by catalogue.py, so the mixed
+# layout's own check at the start is what stops it.
+_decoy_case mixed-standalone mixed git-flow --dry-run
+# The build directory itself may not be a symlink either.
+BUILD_REAL="$SCRATCH_DIR/build-real-po-linked"
+cp -R "$RUN_CWD/build/po-added" "$BUILD_REAL"
+ln -s "$BUILD_REAL" "$RUN_CWD/build/po-linked"
+echo '{"name": "po-linked", "version": "0.2.0", "description": "linked fixture"}' > "$BUILD_REAL/.claude-plugin/plugin.json"
+PO_LB="$(po_fixture linked-build)"; PO_LB_ALL="$(tree_digest "$PO_LB")"
+po_sync "$PO_LB" linked-build --add-plugin po-linked
+assert_eq "a symlinked ./build/<name> is refused (exit 1)" "1" "$PO_RC"
+assert_contains "…and says why" "build/po-linked is a symlink; refusing to copy through it" "$PO_ERR"
+assert_eq "…and writes nothing" "$PO_LB_ALL" "$(tree_digest "$PO_LB")"
+rm "$RUN_CWD/build/po-linked"
+rm -rf "$RUN_CWD/build/po-added"
+
+# F11: a catalogue.py that crashes (exit 1 with a traceback) is "cannot run", not drift.
+CRASH_DIR="$SCRATCH_DIR/publish-crashing-catalogue"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$CRASH_DIR"
+printf 'import no_such_module_for_190\n' > "$CRASH_DIR/scripts/catalogue.py"
+PO11="$(po_fixture crash)"
+PO11_ALL="$(tree_digest "$PO11")"
+_crash_sync() {
     local label="$1" rc=0
     shift
-    run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_MONO" "$SCRATCH_DIR/noskill-$label.stdout" "$SCRATCH_DIR/noskill-$label.stderr" "$@" || rc=$?
-    assert_eq "sync-monorepo.sh $label on a plugin-only monorepo exits 1 (#167)" "1" "$rc"
-    assert_contains "…$label: the message on stderr" "sync-monorepo.sh: $NOSKILL_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-$label.stderr")"
-    assert_eq "…$label: the message is one line" "1" "$(grep -c 'plugin-only monorepo' "$SCRATCH_DIR/noskill-$label.stderr")"
-    assert_eq "…$label: every file is byte-identical" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+    ( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRASH_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user "$@" "$PO11" ) \
+        >"$SCRATCH_DIR/crash-$label.stdout" 2>"$SCRATCH_DIR/crash-$label.stderr" || rc=$?
+    CRASH_RC=$rc
 }
-_noskill_sync_case discovery
-_noskill_sync_case dry-run --dry-run
-_noskill_sync_case add-plugin --add-plugin noskill-addplug
-_noskill_sync_case skills --skills demo-skill
-_noskill_sync_case add --add demo-skill
-_noskill_sync_case init --init --skills demo-skill
-rm -rf "$RUN_CWD/build/noskill-addplug"
+_crash_sync dry --dry-run
+assert_eq "--dry-run with a crashing catalogue.py exits 1, not 0 (F11)" "1" "$CRASH_RC"
+assert_contains "…and says catalogue.py cannot run" "catalogue.py cannot run" "$(cat "$SCRATCH_DIR/crash-dry.stderr")"
+_crash_sync plain
+assert_eq "a plain sync with a crashing catalogue.py exits 1" "1" "$CRASH_RC"
+assert_not_contains "…and does not report it as drift" "need a hand edit" "$(cat "$SCRATCH_DIR/crash-plain.stderr")"
+assert_eq "…and writes nothing" "$PO11_ALL" "$(tree_digest "$PO11")"
+CRASH_PRE_RC=0
+( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRASH_DIR/scripts/validate-pre-sync.sh" --json "$PRE_CLEAN" ) \
+    >"$SCRATCH_DIR/crash-pre.stdout" 2>"$SCRATCH_DIR/crash-pre.stderr" || CRASH_PRE_RC=$?
+assert_eq "validate-pre-sync.sh with a crashing catalogue.py: exit 1, catalogue error" "1 error" \
+    "$CRASH_PRE_RC $(jq -r '.catalogue' < "$SCRATCH_DIR/crash-pre.stdout" 2>/dev/null || echo NOT-JSON)"
 
-# Controls: the rule is about layout, not about whether skills were named.
+# Controls: the plugin-only rule is about layout, not about whether skills were named.
 # A new empty directory with --skills still runs (a consumer monorepo built this way).
 NOSKILL_NAMED_MONO="$SCRATCH_DIR/monorepo-noskills-named"
 mkdir -p "$NOSKILL_NAMED_MONO"
@@ -5874,6 +6334,7 @@ assert_contains "…and where a plugin skill goes" \
 MIXED_MONO="$SCRATCH_DIR/monorepo-mixed"
 mkdir -p "$MIXED_MONO/plugins/pg/.claude-plugin" "$MIXED_MONO/mixed-top"
 echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$MIXED_MONO/plugins/pg/.claude-plugin/plugin.json"
+printf '# pg\n' > "$MIXED_MONO/plugins/pg/README.md"
 printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' \
     > "$MIXED_MONO/mixed-top/SKILL.md"
 printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$MIXED_MONO/mixed-top/CHANGELOG.md"
@@ -5881,6 +6342,90 @@ MIXED_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_MONO" "$SCRATCH_DIR/mixed.stdout" "$SCRATCH_DIR/mixed.stderr" --dry-run || MIXED_RC=$?
 assert_eq "control: discovery on a monorepo with a top-level skill and plugins/ runs" "0" "$MIXED_RC"
 assert_line_present "…and lists the top-level skill" "  - mixed-top" "$(cat "$SCRATCH_DIR/mixed.stdout")"
+
+# Mixed layout: marketplace.json is written by catalogue.py now. The old
+# string-built JSON broke on a description holding a quote or a backslash.
+MIXED_Q="$SCRATCH_DIR/monorepo-mixed-quotes"
+cp -R "$MIXED_MONO" "$MIXED_Q"
+python3 -c 'import json,sys; json.dump({"name": "pg", "version": "1.0.0", "description": "Say \"hi\" to C:\\dir."}, open(sys.argv[1], "w"))' \
+    "$MIXED_Q/plugins/pg/.claude-plugin/plugin.json"
+MIXED_Q_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_Q" "$SCRATCH_DIR/mixed-q.stdout" "$SCRATCH_DIR/mixed-q.stderr" || MIXED_Q_RC=$?
+assert_eq "mixed-layout sync with a quote and a backslash in a plugin description exits 0" "0" "$MIXED_Q_RC"
+assert_eq "…and marketplace.json is valid JSON holding that description" 'Say "hi" to C:\dir.' \
+    "$(jq -r '.plugins[] | select(.name == "pg") | .description' "$MIXED_Q/.claude-plugin/marketplace.json" 2>/dev/null || echo NOT-JSON)"
+assert_contains "…and the README plugin table sits between the catalogue markers" \
+    "$(printf '<!-- catalogue:start -->\n| Plugin | Version | Skills | Commands | Description |')" "$(cat "$MIXED_Q/README.md" 2>/dev/null || true)"
+assert_file_exists "…and catalogue.py is copied into the monorepo's scripts/" "$MIXED_Q/scripts/catalogue.py"
+assert_file_exists "…with standalone-plugins.txt beside it" "$MIXED_Q/scripts/standalone-plugins.txt"
+MIXED_Q_CHECK_RC=0
+python3 "$MIXED_Q/scripts/catalogue.py" --check "$MIXED_Q" >"$SCRATCH_DIR/mixed-q-check.out" 2>&1 || MIXED_Q_CHECK_RC=$?
+assert_eq "…and the copied catalogue.py --check is clean on the result" "0" "$MIXED_Q_CHECK_RC"
+assert_contains "…and the synced workflow runs the catalogue check only when plugins/ exists (F15)" \
+    'if [ -d plugins ]; then python3 scripts/catalogue.py --check .; fi' "$(cat "$MIXED_Q/.github/workflows/validate-skill.yml" 2>/dev/null || true)"
+
+# F3: in a mixed layout a plugin catalogue.py refuses stops the sync before its
+# first write, in a real run and in --dry-run.
+MIXED_BAD="$SCRATCH_DIR/monorepo-mixed-badplugin"
+cp -R "$MIXED_MONO" "$MIXED_BAD"
+echo '{"name": "pg", "version": "1.0.0", "description": "a | b"}' > "$MIXED_BAD/plugins/pg/.claude-plugin/plugin.json"
+MIXED_BAD_ALL="$(tree_digest "$MIXED_BAD")"
+for _mb in dry plain; do
+    MIXED_BAD_RC=0
+    if [[ "$_mb" == dry ]]; then _mb_args=(--dry-run); else _mb_args=(); fi
+    run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_BAD" "$SCRATCH_DIR/mixed-bad-$_mb.stdout" "$SCRATCH_DIR/mixed-bad-$_mb.stderr" ${_mb_args[@]+"${_mb_args[@]}"} || MIXED_BAD_RC=$?
+    assert_eq "mixed layout ($_mb) with a plugin catalogue.py refuses exits 1 (F3)" "1" "$MIXED_BAD_RC"
+    assert_contains "…$_mb: says why" "description contains '|'" "$(cat "$SCRATCH_DIR/mixed-bad-$_mb.stderr")"
+    assert_eq "…$_mb: and nothing was written" "$MIXED_BAD_ALL" "$(tree_digest "$MIXED_BAD")"
+done
+
+# X-002: a malformed marketplace.json in a mixed layout stops the sync before
+# its first write, in a real run and in --dry-run.
+MIXED_BADM="$SCRATCH_DIR/monorepo-mixed-badmarket"
+cp -R "$MIXED_MONO" "$MIXED_BADM"
+mkdir -p "$MIXED_BADM/.claude-plugin"
+printf '{\n' > "$MIXED_BADM/.claude-plugin/marketplace.json"
+MIXED_BADM_ALL="$(tree_digest "$MIXED_BADM")"
+for _mb in dry plain; do
+    MIXED_BADM_RC=0
+    if [[ "$_mb" == dry ]]; then _mb_args=(--dry-run); else _mb_args=(); fi
+    run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_BADM" "$SCRATCH_DIR/mixed-badm-$_mb.stdout" "$SCRATCH_DIR/mixed-badm-$_mb.stderr" ${_mb_args[@]+"${_mb_args[@]}"} || MIXED_BADM_RC=$?
+    assert_eq "mixed layout ($_mb) with a malformed marketplace.json exits 1 (X-002)" "1" "$MIXED_BADM_RC"
+    assert_contains "…$_mb: names the file" ".claude-plugin/marketplace.json" "$(cat "$SCRATCH_DIR/mixed-badm-$_mb.stderr")"
+    assert_eq "…$_mb: and nothing was written" "$MIXED_BADM_ALL" "$(tree_digest "$MIXED_BADM")"
+done
+
+# F3: catalogue drift that needs a hand edit does not hide a REFUSED skill (exit 3).
+REF_HOME="$SCRATCH_DIR/skills-home-refused-cat"
+REF_MONO="$SCRATCH_DIR/monorepo-refused-cat"
+mkdir -p "$REF_HOME/rs" "$REF_MONO/rs" "$REF_MONO/plugins/pg/.claude-plugin"
+printf -- '---\nname: rs\ndescription: Stale local copy. Use when: testing.\nversion: 1.0.0\n---\n\n# rs\n' > "$REF_HOME/rs/SKILL.md"
+printf -- '---\nname: rs\ndescription: Newer in-repo copy. Use when: testing.\nversion: 2.0.0\n---\n\n# rs\n' > "$REF_MONO/rs/SKILL.md"
+printf '# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- Newer.\n' > "$REF_MONO/rs/CHANGELOG.md"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$REF_MONO/plugins/pg/.claude-plugin/plugin.json"
+REF_RC=0
+run_sync "$REF_HOME" "$REF_MONO" "$SCRATCH_DIR/refused-cat.stdout" "$SCRATCH_DIR/refused-cat.stderr" || REF_RC=$?
+assert_eq "a refused skill and catalogue hand-edit drift together exit 3, not 1" "3" "$REF_RC"
+assert_contains "…and the REFUSED summary prints" "REFUSED 1 skill(s)" "$(cat "$SCRATCH_DIR/refused-cat.stdout")"
+assert_contains "…and so does the catalogue drift" "plugins/pg/README.md: missing" "$(cat "$SCRATCH_DIR/refused-cat.stderr")"
+# A catalogue failure in the mixed layout is not swallowed: a plugin with no
+# README is drift catalogue.py cannot fix, so the sync exits 1 and says so.
+MIXED_NR="$SCRATCH_DIR/monorepo-mixed-noreadme"
+cp -R "$MIXED_MONO" "$MIXED_NR"
+rm "$MIXED_NR/plugins/pg/README.md"
+MIXED_NR_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_NR" "$SCRATCH_DIR/mixed-nr.stdout" "$SCRATCH_DIR/mixed-nr.stderr" || MIXED_NR_RC=$?
+assert_eq "mixed-layout sync with a plugin that has no README exits 1" "1" "$MIXED_NR_RC"
+assert_contains "…and says the catalogue was written but needs a hand edit" "catalogue written; these need a hand edit:" "$(cat "$SCRATCH_DIR/mixed-nr.stderr")"
+assert_contains "…and names it as needing a hand edit" "plugins/pg/README.md: missing" "$(cat "$SCRATCH_DIR/mixed-nr.stderr")"
+# …and a catalogue that cannot run (a plugin.json with no description) is exit 1 too.
+MIXED_ND="$SCRATCH_DIR/monorepo-mixed-nodesc"
+cp -R "$MIXED_MONO" "$MIXED_ND"
+echo '{"name": "pg", "version": "1.0.0"}' > "$MIXED_ND/plugins/pg/.claude-plugin/plugin.json"
+MIXED_ND_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_ND" "$SCRATCH_DIR/mixed-nd.stdout" "$SCRATCH_DIR/mixed-nd.stderr" || MIXED_ND_RC=$?
+assert_eq "mixed-layout sync when catalogue.py cannot run exits 1" "1" "$MIXED_ND_RC"
+assert_contains "…and says why" "'description' missing or empty" "$(cat "$SCRATCH_DIR/mixed-nd.stderr")"
 
 # --init with no skill named: there is no default set any more (the old one named
 # deleted skills). Refused before the directory is created.
@@ -5895,34 +6440,7 @@ run_sync "$SKILLS_HOME_FIXTURE" "$INIT_NEW_MONO" "$SCRATCH_DIR/nodir.stdout" "$S
 assert_eq "a monorepo directory that does not exist, with no skill named, exits 1" "1" "$NODIR_RC"
 assert_eq "…and is not created" "ABSENT" "$([[ -e "$INIT_NEW_MONO" ]] && echo PRESENT || echo ABSENT)"
 
-# validate-pre-sync.sh
-presync_run() {
-    local out="$1" err="$2" rc=0
-    shift 2
-    ( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$PRESYNC_SCRIPT" "$@" ) >"$out" 2>"$err" || rc=$?
-    return "$rc"
-}
-NOSKILL_PRE_RC=0
-presync_run "$SCRATCH_DIR/noskill-pre.stdout" "$SCRATCH_DIR/noskill-pre.stderr" "$NOSKILL_MONO" || NOSKILL_PRE_RC=$?
-assert_eq "validate-pre-sync.sh on a plugin-only monorepo exits 1 (#167)" "1" "$NOSKILL_PRE_RC"
-assert_contains "…with the same message on stderr" "validate-pre-sync.sh: $NOSKILL_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-pre.stderr")"
-assert_not_contains "…and never says \"Safe to sync\"" "Safe to sync" "$(cat "$SCRATCH_DIR/noskill-pre.stdout")"
-
-NOSKILL_PREJ_RC=0
-presync_run "$SCRATCH_DIR/noskill-prej.stdout" "$SCRATCH_DIR/noskill-prej.stderr" "$NOSKILL_MONO" --json || NOSKILL_PREJ_RC=$?
-assert_eq "…--json is refused the same way" "1" "$NOSKILL_PREJ_RC"
-assert_eq "…and prints a JSON error object on stdout" "plugin_only_monorepo" \
-    "$(jq -r '.error' < "$SCRATCH_DIR/noskill-prej.stdout" 2>/dev/null || echo NOT-JSON)"
-assert_contains "…whose message is the stderr message" "$NOSKILL_MSG" \
-    "$(jq -r '.message' < "$SCRATCH_DIR/noskill-prej.stdout" 2>/dev/null || echo NOT-JSON)"
-
-NOSKILL_PREA_RC=0
-presync_run "$SCRATCH_DIR/noskill-prea.stdout" "$SCRATCH_DIR/noskill-prea.stderr" --add demo-skill "$NOSKILL_MONO" || NOSKILL_PREA_RC=$?
-assert_eq "…--add of a real skill is refused too" "1" "$NOSKILL_PREA_RC"
-assert_contains "…with the same message" "$NOSKILL_MSG" "$(cat "$SCRATCH_DIR/noskill-prea.stderr")"
-assert_eq "…and validate-pre-sync.sh changed no file" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
-
-# Controls: not plugin-only, so not refused (as on develop).
+# Controls: validate-pre-sync.sh on layouts that are not plugin-only.
 MIXED_PRE_RC=0
 presync_run "$SCRATCH_DIR/mixed-pre.stdout" "$SCRATCH_DIR/mixed-pre.stderr" "$MIXED_MONO" || MIXED_PRE_RC=$?
 assert_eq "control: validate-pre-sync.sh on a monorepo with a top-level skill and plugins/ passes" "0" "$MIXED_PRE_RC"
@@ -5933,36 +6451,6 @@ EMPTY_PRE_RC=0
 presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --add no-such-skill "$EMPTY_PRE_MONO" || EMPTY_PRE_RC=$?
 assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
 assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
-
-# A top-level SYMLINK to a directory that holds a SKILL.md is not a candidate:
-# discovery (find -type d) skips symlinks. The plugin-only predicate used to walk
-# "$1"/*/, which follows them, so it called the monorepo "not plugin-only" while
-# discovery found 0 skills, and a dry run would have rewritten README.md,
-# CHANGELOG.md, validate-skill.yml and marketplace.json (#167 review C-001).
-# Predicate and discovery now share list_top_level_candidates() in _lib.sh.
-SYM_MONO="$SCRATCH_DIR/monorepo-symlink-skill"
-SYM_EXTERNAL="$SCRATCH_DIR/symlink-external/foo"
-mkdir -p "$SYM_EXTERNAL"
-printf -- '---\nname: foo\ndescription: External skill reached by a symlink. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# foo\n' \
-    > "$SYM_EXTERNAL/SKILL.md"
-cp -R "$NOSKILL_MONO" "$SYM_MONO"
-ln -s "$SYM_EXTERNAL" "$SYM_MONO/foo"
-SYM_DIGEST="$(tree_digest "$SYM_MONO")"
-_symlink_sync_case() {
-    local label="$1" rc=0
-    shift
-    run_sync "$SKILLS_HOME_FIXTURE" "$SYM_MONO" "$SCRATCH_DIR/sym-$label.stdout" "$SCRATCH_DIR/sym-$label.stderr" "$@" || rc=$?
-    assert_eq "sync-monorepo.sh $label on a plugin-only monorepo with a top-level skill symlink exits 1 (#167)" "1" "$rc"
-    assert_contains "…$label: the plugin-only message" "sync-monorepo.sh: $SYM_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/sym-$label.stderr")"
-    assert_eq "…$label: every file is byte-identical" "$SYM_DIGEST" "$(tree_digest "$SYM_MONO")"
-}
-_symlink_sync_case plain
-_symlink_sync_case dry-run --dry-run
-SYM_PRE_RC=0
-presync_run "$SCRATCH_DIR/sym-pre.stdout" "$SCRATCH_DIR/sym-pre.stderr" "$SYM_MONO" || SYM_PRE_RC=$?
-assert_eq "validate-pre-sync.sh on the symlink fixture exits 1 (#167)" "1" "$SYM_PRE_RC"
-assert_contains "…with the plugin-only message" "validate-pre-sync.sh: $SYM_MONO $NOSKILL_MSG" "$(cat "$SCRATCH_DIR/sym-pre.stderr")"
-assert_eq "…and changed no file" "$SYM_DIGEST" "$(tree_digest "$SYM_MONO")"
 
 # prepare-plugin.sh fails closed on a plugin that fails validate-plugin.sh (#167).
 # It used to run the validator with `|| true`, print "Plugin assembled" and exit 0.

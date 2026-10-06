@@ -1,5 +1,9 @@
 # spec-implement
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.1 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation.
 
 ## What It Does

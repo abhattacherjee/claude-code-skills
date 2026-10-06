@@ -2,7 +2,7 @@
 name: statusline-creator
 description: "Creates and customizes Claude Code statusline scripts from composable items. Use when: (1) user wants to add or change their statusline, (2) user asks to show cost, git, context, or other info in the status bar, (3) user says 'customize my statusline' or 'add X to my statusline', (4) user wants to create a statusline from scratch, (5) debugging statusline display issues."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Statusline Creator

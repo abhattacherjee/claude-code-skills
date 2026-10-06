@@ -100,6 +100,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The README plugin table, marketplace.json and each plugin README's meta
+      # line must match every plugin.json. Fix drift with: python3 scripts/catalogue.py .
+      # A monorepo with no plugins/ has no catalogue, so the check is skipped there.
+      - name: Catalogue drift guard
+        run: if [ -d plugins ]; then python3 scripts/catalogue.py --check .; fi
+
       - name: Detect changed plugin directories
         id: changed
         run: |

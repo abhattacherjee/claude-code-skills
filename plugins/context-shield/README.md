@@ -1,5 +1,9 @@
 # context-shield
 
+<!-- plugin-meta:start -->
+**Version:** 1.3.3 · **1** skill · **1** agent · **0** commands
+<!-- plugin-meta:end -->
+
 Prevents context window overflow by delegating token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed. Covers: documentation sites, code audits, dependency research, large PR reviews, competitive analysis, security advisories.
 
 ## What It Does

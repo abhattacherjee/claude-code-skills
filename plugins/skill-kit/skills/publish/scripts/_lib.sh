@@ -612,17 +612,18 @@ skill_source_dir() {
   fi
 }
 
-# --- Plugin-only monorepo (issue #167) --------------------------------------
+# --- Plugin-only monorepo (issues #167, #190) ---------------------------------
 #
-# sync-monorepo.sh and validate-pre-sync.sh still write and check the old
-# layout: skills as top-level <name>/ directories. A monorepo whose skills all
-# live under plugins/<group>/skills/<name>/ (this repo after #167) is a layout
-# they do not understand. Run on one, they found no skills and still rewrote
-# the README, CHANGELOG, marketplace catalogue and CI workflow (an --add-plugin
-# run did, measured). So every mode of both scripts refuses such a monorepo
-# before writing anything. Any other monorepo (an empty or new directory, or one
-# with top-level skills, with or without plugins/) behaves as before. Sync for
-# plugin-only monorepos is being redesigned in #190.
+# sync-monorepo.sh and validate-pre-sync.sh were written for the old layout:
+# skills as top-level <name>/ directories. A monorepo whose skills all live
+# under plugins/<group>/skills/<name>/ (this repo after #167) is "plugin-only".
+# #167 made both scripts refuse it, because the old flow found no skills there
+# and still rewrote README, CHANGELOG, catalogue and CI workflow. Since #190
+# both scripts handle it in its own mode instead: sync-monorepo.sh's
+# sync_plugin_only validates every plugin and then runs catalogue.py, and
+# writes nothing else; validate-pre-sync.sh validates every plugin and runs
+# catalogue.py --check. Any other monorepo (an empty or new directory, or one
+# with top-level skills, with or without plugins/) takes the old flow.
 
 # Prints the basename of every top-level directory of <monorepo-dir> that
 # discovery may consider a skill: real directories only (find -type d does NOT
@@ -667,22 +668,100 @@ is_plugin_only_monorepo() {
   return 1
 }
 
-# Usage: refuse_if_plugin_only_monorepo <monorepo-dir> <script-name> [json]
-# Returns 0 when the monorepo is not plugin-only. Otherwise prints one message
-# on stderr and exits 1. With a third argument "json", it also prints a JSON
-# error object on stdout, for callers that parse --json output.
-refuse_if_plugin_only_monorepo() {
-  is_plugin_only_monorepo "$1" || return 0
-  local msg="$2: $1 is a plugin-only monorepo (skills under plugins/<group>/skills/, none at the top level). This script only handles top-level skill directories (#167); sync for plugins is being redesigned in #190. Nothing was changed."
-  echo "Error: $msg" >&2
-  if [[ "${3:-}" == json ]]; then
-    # sed, not ${msg//…}: bash 3.2 and 5 treat backslashes and quotes in a
-    # quoted pattern replacement differently.
-    local esc
-    esc="$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    printf '{\n  "error": "plugin_only_monorepo",\n  "message": "%s"\n}\n' "$esc"
+# Usage: load_standalone_plugins <scripts-dir>
+# Sets STANDALONE_PLUGINS (space-separated) from <scripts-dir>/standalone-plugins.txt,
+# the one list catalogue.py reads too: plugins that ship from their own
+# marketplace, with no catalogue row here. # comments and blank lines are
+# ignored. A missing or unreadable file is an error (return 1), never an
+# empty list: an empty list would let a standalone plugin back into the
+# catalogue, or let --add-plugin copy one.
+load_standalone_plugins() {
+  local f="$1/standalone-plugins.txt" content
+  if [[ ! -f "$f" ]]; then
+    echo "Error: $f is missing; it lists the standalone plugins (#190)" >&2
+    return 1
   fi
-  exit 1
+  if [[ ! -r "$f" ]] || ! content="$(cat "$f" 2>/dev/null)"; then
+    echo "Error: $f cannot be read; it lists the standalone plugins (#190)" >&2
+    return 1
+  fi
+  # Parsed exactly as catalogue.py's parse_standalone: strip spaces and a CR at
+  # both ends (sed's [[:space:]] covers the CR), skip blank lines and # comments, and refuse any other line
+  # that is not one plugin name (#190 C-002). A CRLF file used to keep the CR,
+  # so "git-flow\r" never matched and --add-plugin git-flow got through.
+  local line n=0 names=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if ! [[ "$line" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      echo "Error: $f: line $n: '$line' is not a plugin name (lower-case letters, digits and hyphens)" >&2
+      return 1
+    fi
+    names="${names:+$names }$line"
+  done <<< "$content"
+  STANDALONE_PLUGINS="$names"
+}
+
+# Usage: run_catalogue <catalogue.py> [args...]
+# Runs catalogue.py and sets CAT_RC and CAT_OUT (stdout and stderr together).
+# catalogue.py exits 0, 1 or 2, and prints to stderr only with exit 2. So any
+# other exit, or exit 1 with something on stderr (a Python crash such as a
+# syntax or import error, which exits 1 too), is turned into CAT_RC=2:
+# "cannot run", never drift (#190).
+run_catalogue() {
+  local py="$1" err
+  shift
+  err="$(mktemp)"
+  CAT_RC=0
+  CAT_OUT="$(python3 "$py" "$@" 2>"$err")" || CAT_RC=$?
+  if [[ -s "$err" ]]; then
+    CAT_OUT="${CAT_OUT:+$CAT_OUT
+}$(cat "$err")"
+    if [[ $CAT_RC -eq 1 ]]; then
+      CAT_OUT="$CAT_OUT
+catalogue.py crashed (exit 1 with output on stderr); treated as: catalogue.py cannot run"
+      CAT_RC=2
+    fi
+  fi
+  rm -f "$err"
+  if [[ $CAT_RC -gt 2 ]]; then
+    CAT_OUT="${CAT_OUT:+$CAT_OUT
+}catalogue.py exited $CAT_RC; treated as: catalogue.py cannot run"
+    CAT_RC=2
+  fi
+}
+
+# Usage: validate_all_plugins <monorepo-dir> <validate-plugin.sh>
+# Runs validate-plugin.sh on every plugins/<name>/ directory that is not hidden
+# and not standalone (STANDALONE_PLUGINS must be set). A directory with no
+# plugin.json is validated too, and fails: it is never skipped. Prints one
+# "PASS  plugins/<name>" or "FAIL  plugins/<name>" line each, and the failing
+# validator's FAIL lines under it. Sets PLUGINS_VALIDATED (count) and
+# PLUGINS_FAILED (space-separated names). Returns 1 when any plugin failed.
+validate_all_plugins() {
+  local mono="$1" validator="$2" d name out sp skip
+  PLUGINS_VALIDATED=0
+  PLUGINS_FAILED=""
+  for d in "$mono"/plugins/*/; do
+    [[ -d "$d" ]] || continue
+    name="$(basename "$d")"
+    [[ "$name" == .* ]] && continue
+    skip=false
+    for sp in $STANDALONE_PLUGINS; do
+      [[ "$sp" == "$name" ]] && skip=true
+    done
+    $skip && continue
+    PLUGINS_VALIDATED=$((PLUGINS_VALIDATED + 1))
+    if out="$("$validator" "$mono/plugins/$name" 2>&1 </dev/null)"; then
+      echo "  PASS  plugins/$name"
+    else
+      echo "  FAIL  plugins/$name"
+      printf '%s\n' "$out" | grep -E '^ *FAIL|^Error' | sed 's/^ */        /' || true
+      PLUGINS_FAILED="${PLUGINS_FAILED:+$PLUGINS_FAILED }$name"
+    fi
+  done
+  [[ -z "$PLUGINS_FAILED" ]]
 }
 
 # --- Manifest shape (issue #73) ----------------------------------------------

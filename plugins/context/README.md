@@ -1,5 +1,9 @@
 # context
 
+<!-- plugin-meta:start -->
+**Version:** 1.0.3 · **2** skills · **2** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Two skills for working with large content and past sessions, in one install. `shield` keeps big reads out of your context window, and `search` finds and summarizes your old Claude Code conversations.
 
 ```shell

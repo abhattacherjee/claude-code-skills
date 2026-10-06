@@ -2,7 +2,7 @@
 name: adversarial-review
 description: "Runs an adversarial code review of a PR diff or working-tree diff between Claude and an opposing model (Codex when installed and logged in, else Gemini), surfacing only findings both models independently confirm (high-precision, both-confirm rule). Use when: (1) reviewing a PR or working-tree diff with adversarial rigor and you want fewer false positives, (2) you want only findings two independent AI models agree on rather than a single-model opinion, (3) replacing a lost external PR reviewer (e.g. Copilot) with a second independent model cross-examining Claude's analysis, (4) running a high-precision pre-merge review before shipping to production. Supports automatic PR mode (saves the exchange as PR threads) and local mode (terminal report + gitignored markdown file). Degrades loudly to Claude-only review when no adversary is available."
 metadata:
-  version: 0.2.1
+  version: 0.2.2
 ---
 
 # Adversarial Review

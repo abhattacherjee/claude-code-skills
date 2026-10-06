@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.5.2] - 2026-10-06
+
+### Changed
+
+- No change to the skill itself. Its version moves with the plugin's, which now states its version and its skill, agent and command counts in the README (#190).
+
 ## [4.5.1] - 2026-10-05
 
 ### Fixed

@@ -1,7 +1,11 @@
 # Monorepo README Template
 
 Used by `scripts/sync-monorepo.sh` to generate the root README.md for the monorepo.
-Placeholders: `{{SKILL_CATALOG_TABLE}}`, `{{GITHUB_USER}}`, `{{SKILL_COUNT}}`, `{{LAST_UPDATED}}`.
+Placeholders: `{{SKILL_CATALOG_TABLE}}`, `{{GITHUB_USER}}`, `{{SKILL_COUNT}}`, `{{LAST_UPDATED}}`,
+`{{SKILL_INSTALL_ALL_COMMANDS}}`, `{{PLUGIN_SECTION}}`. The plugin section holds an empty
+`<!-- catalogue:start -->` / `<!-- catalogue:end -->` block; `catalogue.py` writes the plugin
+table between the markers after the README is written (#190). A plugin-only monorepo never
+uses this template: there `catalogue.py` writes only the marked block of the existing README.
 
 ---
 

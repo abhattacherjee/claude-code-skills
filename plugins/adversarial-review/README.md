@@ -1,5 +1,9 @@
 # adversarial-review
 
+<!-- plugin-meta:start -->
+**Version:** 0.2.2 · **1** skill · **3** agents · **0** commands
+<!-- plugin-meta:end -->
+
 Adversarial PR review — Claude and an opposing model (Codex, else Gemini) discover findings independently then cross-examine each other symmetrically, surfacing only issues both models confirm
 
 ## What It Does

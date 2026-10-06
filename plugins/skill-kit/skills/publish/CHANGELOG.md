@@ -2,6 +2,21 @@
 
 All notable changes to the **publish** skill (was `skill-publishing`) are documented here.
 
+## [1.1.0] - 2026-10-06
+
+### Added
+
+- `publish`: `scripts/catalogue.py` writes the plugin catalogue from each `plugin.json`: the root README plugin table (between `<!-- catalogue:start -->` and `<!-- catalogue:end -->`), `.claude-plugin/marketplace.json` and one meta line in each plugin README. `--check` writes nothing and reports drift, including any change a write would make (exit 0 clean, 1 drift, 2 cannot run). `--validate-plugins` only loads and checks the plugins, the write targets and `marketplace.json`. A write goes through temp files and renames, so a failed write leaves nothing half done, and it names any file it already replaced. A plugin README names a skill or agent only as `` `name` ``, `<plugin>:name` or `/name`. It also checks that each plugin README names its skills and agents, and that the README's install lines use this marketplace. It fails closed: a missing marker, a bad `plugin.json`, name or version, a name or description holding `<!--` or `-->`, a stray `plugins/` directory, an unreadable `skills/`, `agents/` or `commands/` directory, or a write target that is a symlink is exit 2 (#190).
+- `publish`: `scripts/standalone-plugins.txt` lists the standalone plugins (`git-flow`, `obsidian-brain`). `catalogue.py`, `sync-monorepo.sh` and `validate-pre-sync.sh` read it; both parse it the same way (spaces and CR stripped, `#` comments, one plugin name per line, any other line refused), and a missing or unreadable list is an error, never an empty list; it replaces the `STANDALONE_PLUGINS` line in `sync-monorepo.sh` (#190).
+- `publish`: `references/plugin-only-monorepo.md` describes the plugin-only mode and the catalogue (#190).
+
+### Changed
+
+- `publish`: `sync-monorepo.sh` syncs a plugin-only monorepo instead of refusing it. A plain sync runs `validate-plugin.sh` on every plugin (any failure: exit 1, nothing written) and then `catalogue.py`, and writes nothing else, except the plugin `--add-plugin` copies. `--dry-run` validates and prints the drift. `--add-plugin` validates the build and every plugin, and runs `catalogue.py --check` on a staging copy with the build in it, before it copies; a build whose `plugin.json` name is not the `--add-plugin` name is refused, and so is any symlink in `plugins/`, in `./build` or the build, so nothing is ever copied through one. A crashing `catalogue.py` counts as "cannot run", never drift. A refusal before the plugin-only mode starts still prints the JSON object, with `"catalogue": "not-run"`. `--skills`, `--add` and `--init` are refused. The new `--json` prints `{"layout", "validated", "catalogue"}` (#190).
+- `publish`: `validate-pre-sync.sh` on a plugin-only monorepo validates every plugin and runs `catalogue.py --check`; exit 1 if either fails. `--json` keeps its shape and adds `layout`, `catalogue` and `catalogue_lines` (#190).
+- `publish`: in every other layout, `catalogue.py` writes the README plugin table and `marketplace.json`, so one tool writes them. The old `marketplace.json` was built as a string and broke on a description with a quote or a backslash. `marketplace.json` keeps its `owner` and `metadata`; a sync no longer rewrites `metadata.version` with the date. The sync runs `catalogue.py --validate-plugins` before its first write and again before the README. A REFUSED skill (exit 3) is no longer hidden by catalogue drift, and `--init` does not initialise while the catalogue needs a hand edit. `catalogue.py` and `standalone-plugins.txt` are copied into the monorepo's `scripts/`, and the `workflow-monorepo.yml` template runs `catalogue.py --check` when the monorepo has `plugins/` (#190).
+- `publish`: `SKILL.md` describes the plugin-only mode in place of the #167 refusal (#190).
+
 ## [1.0.2] - 2026-10-05
 
 ### Fixed

@@ -1,5 +1,9 @@
 # custom-statusline
 
+<!-- plugin-meta:start -->
+**Version:** 1.3.2 · **1** skill · **0** agents · **0** commands
+<!-- plugin-meta:end -->
+
 An adaptive Claude Code statusline that shows project, git, and context info with icons — and dynamically adjusts between 1, 2, or 3 lines based on your terminal width and branch name length.
 
 ## Preview
