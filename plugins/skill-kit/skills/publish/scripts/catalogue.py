@@ -129,10 +129,25 @@ def write_all(writes):
     return done
 
 
+def parse_standalone(text, where):
+    """The standalone list: one plugin name per line. Spaces and a CR at the
+    ends are stripped; blank lines and lines starting with # are skipped; any
+    other line must be a plugin name. sync-monorepo.sh's
+    load_standalone_plugins (in _lib.sh) parses the file the same way."""
+    names = set()
+    for i, raw in enumerate(text.split("\n"), 1):
+        line = raw.strip(" \t\r")
+        if not line or line.startswith("#"):
+            continue
+        if not NAME_RE.match(line):
+            raise CannotRun(f"{where}: line {i}: {line!r} is not a plugin name (lower-case letters, digits and hyphens)")
+        names.add(line)
+    return names
+
+
 def standalone_plugins():
     f = Path(__file__).with_name("standalone-plugins.txt")
-    lines = read(f, str(f)).splitlines()
-    return {l.strip() for l in lines if l.strip() and not l.strip().startswith("#")}
+    return parse_standalone(read(f, "standalone-plugins.txt"), "standalone-plugins.txt")
 
 
 def list_dir(d, rel):
@@ -367,11 +382,37 @@ def insert_meta(text, p):
     return nl.join(lines)
 
 
+def load_market(mp):
+    """(text, parsed) of an existing marketplace.json, or (None, None). Its
+    shape is checked here, so --validate-plugins catches what a write would
+    stop on: invalid JSON, not an object, no top-level name, or a plugins
+    entry that is not a list."""
+    rel = ".claude-plugin/marketplace.json"
+    if not mp.exists() and not mp.is_symlink():
+        return None, None
+    if not mp.is_file():
+        raise CannotRun(f"{rel}: not a file")
+    text = read(mp, rel)
+    try:
+        market = json.loads(text)
+    except ValueError as e:
+        raise CannotRun(f"{rel}: {e}")
+    if not isinstance(market, dict) or not isinstance(market.get("name"), str) or not market["name"]:
+        raise CannotRun(f"{rel}: no top-level name")
+    if "plugins" in market and not isinstance(market["plugins"], list):
+        raise CannotRun(f"{rel}: 'plugins' is not a list")
+    return text, market
+
+
 def load_checked(repo):
-    """Load every plugin and check every write target; nothing is written."""
+    """Load every plugin and check every write target and marketplace.json;
+    nothing is written. The README markers are not checked here: the layout
+    that runs --validate-plugins regenerates the README with the markers."""
     skip = standalone_plugins()
     guard(repo, repo / "README.md", "README.md")
-    guard(repo, repo / ".claude-plugin" / "marketplace.json", ".claude-plugin/marketplace.json")
+    mp = repo / ".claude-plugin" / "marketplace.json"
+    guard(repo, mp, ".claude-plugin/marketplace.json")
+    load_market(mp)
     plugins = load_plugins(repo, skip)
     for p in plugins:
         guard(repo, p["dir"] / "README.md", f"plugins/{p['name']}/README.md")
@@ -397,18 +438,8 @@ def run(repo, check, market_name, owner):
         fixable.append("README.md: catalogue table formatting differs from catalogue.py output")
 
     # Marketplace
-    mp_text = None
-    if mp.is_file():
-        mp_text = read(mp, ".claude-plugin/marketplace.json")
-        try:
-            market = json.loads(mp_text)
-        except ValueError as e:
-            raise CannotRun(f".claude-plugin/marketplace.json: {e}")
-        if not isinstance(market, dict) or not isinstance(market.get("name"), str) or not market["name"]:
-            raise CannotRun(".claude-plugin/marketplace.json: no top-level name")
-    elif mp.exists():
-        raise CannotRun(".claude-plugin/marketplace.json: not a file")
-    else:
+    mp_text, market = load_market(mp)
+    if mp_text is None:
         if not (market_name and owner):
             raise CannotRun(".claude-plugin/marketplace.json is missing; pass --marketplace-name and --owner")
         market = {"name": market_name, "owner": {"name": owner},

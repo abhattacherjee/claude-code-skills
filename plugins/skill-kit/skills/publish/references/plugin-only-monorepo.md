@@ -1,6 +1,6 @@
 # Plugin-only monorepos (#190)
 
-A plugin-only monorepo has `plugins/*/.claude-plugin/plugin.json` and no top-level skill directory. Its skills live at `plugins/<plugin>/skills/<name>/`, and you edit them in place. `claude-code-skills` is one. Here `sync-monorepo.sh` never writes anything but the catalogue.
+A plugin-only monorepo has `plugins/*/.claude-plugin/plugin.json` and no top-level skill directory. Its skills live at `plugins/<plugin>/skills/<name>/`, and you edit them in place. `claude-code-skills` is one. Here `sync-monorepo.sh` writes only the catalogue, plus the copied `plugins/<name>/` with `--add-plugin`.
 
 ## Modes
 

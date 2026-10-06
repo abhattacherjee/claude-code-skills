@@ -685,9 +685,22 @@ load_standalone_plugins() {
     echo "Error: $f cannot be read; it lists the standalone plugins (#190)" >&2
     return 1
   fi
-  # The text is already in memory, so these filters cannot fail on a read; an
-  # all-comment file is a real empty list (grep -v exits 1 on no output).
-  STANDALONE_PLUGINS="$(printf '%s\n' "$content" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | tr '\n' ' ' | sed 's/ *$//' || true)"
+  # Parsed exactly as catalogue.py's parse_standalone: strip spaces and a CR at
+  # both ends (sed's [[:space:]] covers the CR), skip blank lines and # comments, and refuse any other line
+  # that is not one plugin name (#190 C-002). A CRLF file used to keep the CR,
+  # so "git-flow\r" never matched and --add-plugin git-flow got through.
+  local line n=0 names=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if ! [[ "$line" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      echo "Error: $f: line $n: '$line' is not a plugin name (lower-case letters, digits and hyphens)" >&2
+      return 1
+    fi
+    names="${names:+$names }$line"
+  done <<< "$content"
+  STANDALONE_PLUGINS="$names"
 }
 
 # Usage: run_catalogue <catalogue.py> [args...]

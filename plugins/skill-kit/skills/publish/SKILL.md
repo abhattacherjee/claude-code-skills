@@ -9,7 +9,7 @@ metadata:
 
 > **Paths:** Commands call this skill's scripts as `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. Claude Code fills in this skill's directory before the text reaches you, so the command works from the project directory. Values you only know at run time are `<NAME>` placeholders: write the real value in their place, for example `<MONOREPO_DIR>` (the monorepo checkout), `<SKILL_DIR>`, `<SKILL_NAME>`, `<GITHUB_USER>` and `<MANIFEST_PATH>`.
 
-> **Plugin-only monorepos have their own mode (#190).** A monorepo with `plugins/*/.claude-plugin/plugin.json` and no top-level skill directory (such as `claude-code-skills` itself) is synced by running `validate-plugin.sh` on every plugin (any failure: exit 1, nothing written) and then `scripts/catalogue.py`, which writes only the catalogue: the README plugin table, `marketplace.json` and each plugin README's meta line, all from `plugin.json`. `--dry-run` checks and writes nothing, `--add-plugin` checks the build in a staging copy before it copies it, and `--skills`, `--add` and `--init` are refused. After you change a `plugin.json`, write the catalogue with `"${CLAUDE_SKILL_DIR}/scripts/catalogue.py" "<MONOREPO_DIR>"`, or add `--check` before the directory to report drift without writing (exit 0 clean, 1 drift, 2 cannot run). Modes, `--json` and exit codes: [references/plugin-only-monorepo.md](references/plugin-only-monorepo.md).
+> **Plugin-only monorepos have their own mode (#190).** A monorepo with `plugins/*/.claude-plugin/plugin.json` and no top-level skill directory (such as `claude-code-skills` itself) is synced by running `validate-plugin.sh` on every plugin (any failure: exit 1, nothing written) and then `scripts/catalogue.py`, which writes the catalogue (and nothing else, except the plugin `--add-plugin` copies): the README plugin table, `marketplace.json` and each plugin README's meta line, all from `plugin.json`. `--dry-run` checks and writes nothing, `--add-plugin` checks the build in a staging copy before it copies it, and `--skills`, `--add` and `--init` are refused. After you change a `plugin.json`, write the catalogue with `"${CLAUDE_SKILL_DIR}/scripts/catalogue.py" "<MONOREPO_DIR>"`, or add `--check` before the directory to report drift without writing (exit 0 clean, 1 drift, 2 cannot run). Modes, `--json` and exit codes: [references/plugin-only-monorepo.md](references/plugin-only-monorepo.md).
 
 **Plugin-first publishing** for Claude Code skills. Every skill with a `plugin-manifest.json`
 is automatically assembled and synced as an installable plugin. Bare skills (without manifests)
@@ -213,7 +213,7 @@ When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and publ
 
 ### Step 5: Auto-Sync to Monorepo
 
-**When any Monorepo or Plugin target is selected, automatically sync and push.** Do NOT leave this as a manual step — the user expects publishing to be end-to-end. On a plugin-only monorepo the sync writes only the catalogue: see the plugin-only note at the top.
+**When any Monorepo or Plugin target is selected, automatically sync and push.** Do NOT leave this as a manual step — the user expects publishing to be end-to-end. On a plugin-only monorepo the sync writes only the catalogue (and the plugin `--add-plugin` copies): see the plugin-only note at the top.
 
 `sync-monorepo.sh` automatically handles both bare skills and plugins:
 - Skills **with** `plugin-manifest.json` → auto-assembled via `prepare-plugin.sh` and synced to `plugins/`

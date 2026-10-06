@@ -180,7 +180,7 @@ Each skill's commands run its own scripts through `${CLAUDE_SKILL_DIR}`, so they
 | `author` | `validate-skill.sh <skill-dir>` | Checks frontmatter fields, description format, body length and script conventions. |
 | `author` | `generate-task-manifest.sh --skill-dir <dir> --workflows "name:count,..."` | Scaffolds a `task-manifest.sh` with placeholder tasks in the skill's `scripts/` directory. |
 | `publish` | `validate-pre-sync.sh <monorepo-dir>` | Pre-sync gate (mandatory before a sync). |
-| `publish` | `sync-monorepo.sh [--dry-run] [--init] [--add <skill>] <monorepo-dir>` | Syncs skills and plugins into the monorepo; auto-builds plugins. On a plugin-only monorepo it validates every plugin and writes only the catalogue (`--skills`, `--add` and `--init` are refused). |
+| `publish` | `sync-monorepo.sh [--dry-run] [--init] [--add <skill>] <monorepo-dir>` | Syncs skills and plugins into the monorepo; auto-builds plugins. On a plugin-only monorepo it validates every plugin and writes only the catalogue, plus the copied plugin with `--add-plugin` (`--skills`, `--add` and `--init` are refused). |
 | `publish` | `catalogue.py [--check] <monorepo-dir>` | Writes the README plugin table, `marketplace.json` and each plugin README's meta line from `plugin.json`; `--check` reports drift instead (exit 0 clean, 1 drift, 2 cannot run). |
 | `publish` | `release-monorepo.sh patch\|minor\|major <monorepo-dir>` | Version tag and release for the monorepo. |
 | `publish` | `prepare-plugin.sh <plugin-manifest.json>` | Assembles a plugin from a manifest. |

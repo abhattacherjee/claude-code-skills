@@ -123,6 +123,30 @@ mkdir -p "$TMP/outside-target"; printf 'x\n' > "$TMP/outside-target/f.md"
 with x README.md "[out](../outside-target/f.md)"; reported "a link that leaves the repo is reported" "../outside-target/f.md: link target is outside the repo"
 with x README.md 'See `docs/../../outside-target/f.md`.'; reported "a repo path that leaves the repo is reported" "outside the repo"
 
+echo "6e. .. segments, globs and symlinks cannot leave the repo (X-003)"
+with x README.md 'See `docs/*/../../../outside-target/*`.'; reported "a glob with .. is outside the repo" "docs/*/../../../outside-target/*: path is outside the repo"
+with x README.md 'See `docs/../README.md`.'; reported "any .. segment in a repo path is refused" "docs/../README.md: path is outside the repo"
+n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; ln -s "$TMP/outside-target" "$R/docs/linkout"
+printf '%s\n' 'See `docs/linko*/f.md`.' >> "$R/README.md"; run "$R"
+reported "a glob whose only match resolves outside the repo is refused" "docs/linko*/f.md: path is outside the repo"
+
+echo "6f. link titles in all three forms (C-004)"
+for title in '"T"' "'T'" '(T)'; do
+  with x README.md "A [t](./docs/gone.md $title) link."; reported "a link with a $title title is checked" "./docs/gone.md: link target does not exist"
+  with x README.md "A [t](./docs/x.md $title) link."; clean "a good link with a $title title passes"
+done
+
+echo "6g. angle-bracket reference definitions (X-004)"
+with x README.md '[ref]: <./docs/gone file.md>'; reported "an angle-bracket reference target is read whole" "./docs/gone file.md: link target does not exist"
+n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; printf '# m\n' > "$R/docs/my file.md"
+printf '%s\n' '[ref]: <./docs/my file.md> "Title"' >> "$R/README.md"; run "$R"
+clean "a good angle-bracket reference target with a space passes"
+
+echo "6h. one enumeration of skills, agents and commands (C-006)"
+n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; mkdir -p "$R/plugins/kit/agents/dirent.md"
+printf '%s\n' 'Use `kit:dirent`.' >> "$R/README.md"; run "$R"
+reported "a directory named agents/x.md is not an agent" "kit:dirent: kit has no skill, agent or command named dirent"
+
 echo "7. cannot run (exit 2)"
 n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; rm "$R/LOCAL-TESTING.md"; run "$R"
 [[ $RC -eq 2 && "$OUT" == *"LOCAL-TESTING.md: missing"* ]] && ok "a missing root doc" || bad "a missing root doc" "rc=$RC: $OUT"

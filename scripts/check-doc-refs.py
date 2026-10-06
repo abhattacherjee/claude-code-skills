@@ -32,15 +32,27 @@ Exit: 0 clean, 1 broken references (file:line: token: reason), 2 cannot run.
 """
 import os
 import re
-import stat
 import sys
 from pathlib import Path
 from urllib.parse import unquote
 
+# The one enumeration of a plugin's skills, agents and commands lives in
+# catalogue.py; import it from this repo's copy.
+CATALOGUE_DIR = Path(__file__).resolve().parent.parent / "plugins" / "skill-kit" / "skills" / "publish" / "scripts"
+sys.path.insert(0, str(CATALOGUE_DIR))
+sys.dont_write_bytecode = True  # no __pycache__ beside catalogue.py
+try:
+    import catalogue  # noqa: E402
+except Exception as e:  # fail closed: without it nothing can be counted
+    print(f"check-doc-refs.py: cannot run: cannot import catalogue.py from {CATALOGUE_DIR}: {e}", file=sys.stderr)
+    sys.exit(2)
+
 ROOT_DOCS = ["README.md", "CONTRIBUTING.md", "LOCAL-TESTING.md", "AGENTS.md", "CLAUDE.md"]
-LINK = re.compile(r"\]\(([^)\s<][^)\s]*)(?:\s+\"[^\"]*\")?\)")
+# A CommonMark link title is "T", 'T' or (T).
+TITLE = r"(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?"
+LINK = re.compile(r"\]\(([^)\s<][^)\s]*)" + TITLE + r"\s*\)")
 ANGLE_LINK = re.compile(r"\]\(<([^>\n]+)>")
-REF_DEF = re.compile(r"^ {0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?")
+REF_DEF = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(?:<([^>\n]+)>|([^\s<]\S*))")
 HTML_ATTR = re.compile(r"""\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 CODE = re.compile(r"`([^`\n]+)`")
 PREFIXES = ("plugins/", "scripts/", ".github/", ".claude-plugin/", "docs/")
@@ -67,15 +79,23 @@ def exists(repo, bases, token):
     t = token[2:] if token.startswith("./") else token
     t = LINE_SUFFIX.sub("", t)
     pattern = re.sub(r"<[^>]*>", "*", t).rstrip("/")
+    # Any .. segment is refused: glob() follows it, so a pattern such as
+    # docs/*/../../../* could match outside the repo.
+    if ".." in pattern.split("/"):
+        return "outside"
     if "*" not in pattern and not inside(repo, bases[0] / pattern):
         return "outside"
+    seen_outside = False
     for b in bases:
         if "*" in pattern:
-            if any(True for _ in b.glob(pattern)):
-                return "yes"
+            for m in b.glob(pattern):
+                if inside(repo, m):
+                    return "yes"
+                seen_outside = True
         elif (b / pattern).exists():
             return "yes"
-    return "no"
+    # Only matches that resolve outside the repo (through a symlink).
+    return "outside" if seen_outside else "no"
 
 
 def plugin_dirs(repo):
@@ -85,34 +105,16 @@ def plugin_dirs(repo):
     return sorted(d for d in pdir.iterdir() if d.is_dir() and not d.name.startswith("."))
 
 
-def list_dir(d, rel):
-    """Entries of d (none if it does not exist); unreadable is CannotRun,
-    where glob() would silently find nothing."""
-    if not d.exists():
-        return []
-    try:
-        with os.scandir(str(d)) as it:
-            return [e for e in it if not e.name.startswith(".")]
-    except OSError as e:
-        raise CannotRun(f"{rel}: {e}")
-
-
 def plugin_names(repo, dirs):
+    """Each plugin's skill, agent and command names, from catalogue.py's own
+    plugin_parts(), so both tools count a plugin the same way (#190 C-006)."""
     out = {}
     for d in dirs:
-        rel = f"plugins/{d.name}"
-        names = set()
-        for e in list_dir(d / "skills", f"{rel}/skills"):
-            try:
-                if stat.S_ISREG(os.stat(os.path.join(e.path, "SKILL.md")).st_mode):
-                    names.add(e.name)
-            except (FileNotFoundError, NotADirectoryError):
-                pass
-            except OSError as err:
-                raise CannotRun(f"{rel}/skills/{e.name}: {err}")
-        for sub in ("agents", "commands"):
-            names |= {e.name[:-3] for e in list_dir(d / sub, f"{rel}/{sub}") if e.name.endswith(".md")}
-        out[d.name] = names
+        try:
+            skills, agents, commands = catalogue.plugin_parts(d, f"plugins/{d.name}")
+        except catalogue.CannotRun as e:
+            raise CannotRun(str(e))
+        out[d.name] = set(skills) | set(agents) | set(commands)
     return out
 
 
@@ -146,7 +148,7 @@ def check_file(repo, f, names):
         targets += [m.group(1) or m.group(2) for m in HTML_ATTR.finditer(prose)]
         rd = REF_DEF.match(prose)
         if rd:
-            targets.append(rd.group(1))
+            targets.append(rd.group(1) or rd.group(2))
         for t in targets:
             if not t or t.startswith("#") or SCHEME.match(t):
                 continue

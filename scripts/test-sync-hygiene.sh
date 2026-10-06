@@ -6023,7 +6023,7 @@ _po_build_refused pipe "description contains '|'"
 cp "$SCRATCH_DIR/po-added-plugin.json" "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
 mv "$RUN_CWD/build/po-added/README.md" "$SCRATCH_DIR/po-added-README.md"
 ln -s "$SCRATCH_DIR/po-added-README.md" "$RUN_CWD/build/po-added/README.md"
-_po_build_refused symlink "plugins/po-added/README.md: is a symlink"
+_po_build_refused symlink "build/po-added holds a symlink"
 rm "$RUN_CWD/build/po-added/README.md"; mv "$SCRATCH_DIR/po-added-README.md" "$RUN_CWD/build/po-added/README.md"
 echo '{"name": "po-other", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
 _po_build_refused name-mismatch "is the po-other plugin, not po-added"
@@ -6206,6 +6206,88 @@ assert_eq "validate-pre-sync.sh with an unreadable standalone-plugins.txt exits 
 assert_contains "…and names the file" "standalone-plugins.txt" "$(cat "$SCRATCH_DIR/unread-pre.stderr")"
 chmod 644 "$UNREAD_DIR/scripts/standalone-plugins.txt"
 
+# C-002: a CRLF standalone list is read the same way catalogue.py reads it.
+CRLF_DIR="$SCRATCH_DIR/publish-crlf-standalone"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$CRLF_DIR"
+printf '# Standalone plugins\r\ngit-flow\r\n  obsidian-brain  \r\n' > "$CRLF_DIR/scripts/standalone-plugins.txt"
+mkdir -p "$RUN_CWD/build/git-flow/.claude-plugin"
+echo '{"name": "git-flow", "version": "1.0.0", "description": "standalone fixture"}' > "$RUN_CWD/build/git-flow/.claude-plugin/plugin.json"
+CRLF_MONO="$SCRATCH_DIR/monorepo-crlf-empty"
+mkdir -p "$CRLF_MONO"
+CRLF_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRLF_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user --dry-run --add-plugin git-flow "$CRLF_MONO" ) \
+    >"$SCRATCH_DIR/crlf.stdout" 2>"$SCRATCH_DIR/crlf.stderr" || CRLF_RC=$?
+assert_eq "a CRLF standalone list still refuses --add-plugin git-flow (exit 1, C-002)" "1" "$CRLF_RC"
+assert_contains "…as a standalone plugin" "git-flow ships from its own marketplace" "$(cat "$SCRATCH_DIR/crlf.stderr")"
+printf 'git-flow # ships elsewhere\n' > "$CRLF_DIR/scripts/standalone-plugins.txt"
+BADLINE_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRLF_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user --dry-run "$CRLF_MONO" ) \
+    >"$SCRATCH_DIR/badline.stdout" 2>"$SCRATCH_DIR/badline.stderr" || BADLINE_RC=$?
+assert_eq "a standalone list line that is not one plugin name stops the sync (exit 1)" "1" "$BADLINE_RC"
+assert_contains "…naming the line" "line 1: 'git-flow # ships elsewhere' is not a plugin name" "$(cat "$SCRATCH_DIR/badline.stderr")"
+rm -rf "$RUN_CWD/build/git-flow"
+
+# X-001: --add-plugin never writes through a symlink. A plugins/<name> (or the
+# --add-plugin destination) that is a symlink to a directory outside the repo
+# is refused before anything is copied, in plugin-only and mixed layouts, in a
+# real run and in --dry-run; the outside directory is left byte-identical.
+mkdir -p "$RUN_CWD/build/po-added/.claude-plugin" "$RUN_CWD/build/po-added/skills/added-skill"
+echo '{"name": "po-added", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+printf -- '---\nname: added-skill\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 0.2.0\n---\n\n# added-skill\n' > "$RUN_CWD/build/po-added/skills/added-skill/SKILL.md"
+printf '# po-added\n\n`added-skill`\n' > "$RUN_CWD/build/po-added/README.md"
+_decoy_case() {
+    local label="$1" layout="$2" link="$3" mono decoy before_mono before_decoy rc=0
+    shift 3
+    mono="$(po_fixture "decoy-$label")"
+    if [[ "$layout" == mixed ]]; then
+        mkdir -p "$mono/mixed-top"
+        printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' > "$mono/mixed-top/SKILL.md"
+        printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$mono/mixed-top/CHANGELOG.md"
+    fi
+    decoy="$SCRATCH_DIR/decoy-$label"
+    mkdir -p "$decoy/sub"
+    echo "SENTINEL" > "$decoy/SENTINEL.txt"; echo "x" > "$decoy/sub/keep.txt"
+    ln -s "$decoy" "$mono/plugins/$link"
+    before_mono="$(tree_digest "$mono")"; before_decoy="$(tree_digest "$decoy")"
+    po_sync "$mono" "decoy-$label" "$@"
+    assert_eq "a symlinked plugins/$link stops the sync ($label, exit 1, X-001)" "1" "$PO_RC"
+    assert_contains "…$label: says why" "plugins/$link is a symlink; refusing to write through it" "$PO_ERR"
+    assert_eq "…$label: the directory behind the link is byte-identical" "$before_decoy" "$(tree_digest "$decoy")"
+    assert_eq "…$label: the monorepo is byte-identical" "$before_mono" "$(tree_digest "$mono")"
+}
+_decoy_case po-dest-dry plugin-only po-added --dry-run --add-plugin po-added
+_decoy_case po-dest plugin-only po-added --add-plugin po-added
+_decoy_case po-other-dry plugin-only other --dry-run --add-plugin po-added
+_decoy_case mixed-dest-dry mixed po-added --dry-run --add-plugin po-added
+_decoy_case mixed-dest mixed po-added --add-plugin po-added
+_decoy_case mixed-other mixed other --add-plugin po-added
+# A symlink deeper inside a plugin is refused by the staging copy, which
+# never keeps or follows one.
+PO_DEEP="$(po_fixture deep-link)"
+DEEP_DECOY="$SCRATCH_DIR/decoy-deep"; mkdir -p "$DEEP_DECOY"; echo SENTINEL > "$DEEP_DECOY/SENTINEL.txt"
+ln -s "$DEEP_DECOY" "$PO_DEEP/plugins/pg/linked"
+PO_DEEP_ALL="$(tree_digest "$PO_DEEP")"; DEEP_DECOY_ALL="$(tree_digest "$DEEP_DECOY")"
+po_sync "$PO_DEEP" deep-link --dry-run --add-plugin po-added
+assert_eq "a symlink inside a plugin stops --dry-run --add-plugin (exit 1)" "1" "$PO_RC"
+assert_contains "…and says the staging copy refuses it" "plugins/pg/linked is a symlink; the staging copy refuses symlinks" "$PO_ERR"
+assert_eq "…and the directory behind it is byte-identical" "$DEEP_DECOY_ALL" "$(tree_digest "$DEEP_DECOY")"
+assert_eq "…and so is the monorepo" "$PO_DEEP_ALL" "$(tree_digest "$PO_DEEP")"
+# A symlinked plugins/<standalone> is skipped by catalogue.py, so the mixed
+# layout's own check at the start is what stops it.
+_decoy_case mixed-standalone mixed git-flow --dry-run
+# The build directory itself may not be a symlink either.
+BUILD_REAL="$SCRATCH_DIR/build-real-po-linked"
+cp -R "$RUN_CWD/build/po-added" "$BUILD_REAL"
+ln -s "$BUILD_REAL" "$RUN_CWD/build/po-linked"
+echo '{"name": "po-linked", "version": "0.2.0", "description": "linked fixture"}' > "$BUILD_REAL/.claude-plugin/plugin.json"
+PO_LB="$(po_fixture linked-build)"; PO_LB_ALL="$(tree_digest "$PO_LB")"
+po_sync "$PO_LB" linked-build --add-plugin po-linked
+assert_eq "a symlinked ./build/<name> is refused (exit 1)" "1" "$PO_RC"
+assert_contains "…and says why" "build/po-linked is a symlink; refusing to copy through it" "$PO_ERR"
+assert_eq "…and writes nothing" "$PO_LB_ALL" "$(tree_digest "$PO_LB")"
+rm "$RUN_CWD/build/po-linked"
+rm -rf "$RUN_CWD/build/po-added"
+
 # F11: a catalogue.py that crashes (exit 1 with a traceback) is "cannot run", not drift.
 CRASH_DIR="$SCRATCH_DIR/publish-crashing-catalogue"
 cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$CRASH_DIR"
@@ -6295,6 +6377,22 @@ for _mb in dry plain; do
     assert_eq "mixed layout ($_mb) with a plugin catalogue.py refuses exits 1 (F3)" "1" "$MIXED_BAD_RC"
     assert_contains "…$_mb: says why" "description contains '|'" "$(cat "$SCRATCH_DIR/mixed-bad-$_mb.stderr")"
     assert_eq "…$_mb: and nothing was written" "$MIXED_BAD_ALL" "$(tree_digest "$MIXED_BAD")"
+done
+
+# X-002: a malformed marketplace.json in a mixed layout stops the sync before
+# its first write, in a real run and in --dry-run.
+MIXED_BADM="$SCRATCH_DIR/monorepo-mixed-badmarket"
+cp -R "$MIXED_MONO" "$MIXED_BADM"
+mkdir -p "$MIXED_BADM/.claude-plugin"
+printf '{\n' > "$MIXED_BADM/.claude-plugin/marketplace.json"
+MIXED_BADM_ALL="$(tree_digest "$MIXED_BADM")"
+for _mb in dry plain; do
+    MIXED_BADM_RC=0
+    if [[ "$_mb" == dry ]]; then _mb_args=(--dry-run); else _mb_args=(); fi
+    run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_BADM" "$SCRATCH_DIR/mixed-badm-$_mb.stdout" "$SCRATCH_DIR/mixed-badm-$_mb.stderr" ${_mb_args[@]+"${_mb_args[@]}"} || MIXED_BADM_RC=$?
+    assert_eq "mixed layout ($_mb) with a malformed marketplace.json exits 1 (X-002)" "1" "$MIXED_BADM_RC"
+    assert_contains "…$_mb: names the file" ".claude-plugin/marketplace.json" "$(cat "$SCRATCH_DIR/mixed-badm-$_mb.stderr")"
+    assert_eq "…$_mb: and nothing was written" "$MIXED_BADM_ALL" "$(tree_digest "$MIXED_BADM")"
 done
 
 # F3: catalogue drift that needs a hand edit does not hide a REFUSED skill (exit 3).

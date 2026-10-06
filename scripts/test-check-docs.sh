@@ -62,6 +62,12 @@ expect "a catalogue.py with a syntax error exits 2" 2 "treated as: could not run
 fresh; printf 'import sys\nsys.exit(5)\n' > "$R/scripts/check-doc-refs.py"; run
 expect "a checker that exits 5 exits 2" 2 "exited 5"
 
+fresh; ( unset PYTHONDONTWRITEBYTECODE; bash "$R/scripts/check-docs.sh" >/dev/null 2>&1 ) || true
+[[ -z "$(find "$R" -name __pycache__)" ]] && ok "check-doc-refs.py importing catalogue.py leaves no __pycache__ behind" || bad "check-doc-refs.py importing catalogue.py leaves no __pycache__ behind" "$(find "$R" -name __pycache__)"
+fresh; rm "$R/plugins/skill-kit/skills/publish/scripts/catalogue.py"
+OUT="$(python3 "$R/scripts/check-doc-refs.py" "$R" 2>&1)" && RC=0 || RC=$?
+expect "check-doc-refs.py without catalogue.py beside it exits 2" 2 "cannot import catalogue.py"
+
 echo ""
 echo "PASS: $PASS  FAIL: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

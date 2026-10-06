@@ -375,6 +375,31 @@ run --validate-plugins "$R"; expect "--validate-plugins refuses a symlinked plug
 fresh; written "$R"
 run --check --validate-plugins "$R"; expect "--check and --validate-plugins together is a usage error" 2 "not allowed with"
 
+echo "20. marketplace.json is checked by --validate-plugins too (X-002)"
+for bad_market in '{' '[]' '{"plugins": []}' '{"name": "m", "plugins": {}}'; do
+  fresh; written "$R"; printf '%s\n' "$bad_market" > "$R/.claude-plugin/marketplace.json"
+  run --validate-plugins "$R"; expect "--validate-plugins refuses marketplace.json [$bad_market]" 2 ".claude-plugin/marketplace.json"
+  run --check "$R"; expect "--check refuses marketplace.json [$bad_market] too" 2 ".claude-plugin/marketplace.json"
+done
+
+echo "21. standalone-plugins.txt is parsed strictly (C-002)"
+# lonecat <name> <printf format>: a catalogue.py copy with its own standalone list.
+lonecat() { mkdir -p "$TMP/lc-$1"; cp "$CAT" "$TMP/lc-$1/catalogue.py"; printf "$2" > "$TMP/lc-$1/standalone-plugins.txt"; LC="$TMP/lc-$1/catalogue.py"; }
+lonecat crlf '# comment\r\ngit-flow\r\n  obsidian-brain  \r\n\r\n'
+fresh; written "$R"; mkdir -p "$R/plugins/git-flow/skills/x" "$R/plugins/obsidian-brain"
+OUT="$(python3 "$LC" --check "$R" 2>&1)" && RC=0 || RC=$?
+expect "a CRLF list with spaces still skips git-flow and obsidian-brain" 0
+lonecat inline 'git-flow # ships elsewhere\n'
+fresh; written "$R"; OUT="$(python3 "$LC" --check "$R" 2>&1)" && RC=0 || RC=$?
+expect "a list line that is not one plugin name is exit 2" 2 "standalone-plugins.txt: line 1: 'git-flow # ships elsewhere' is not a plugin name"
+lonecat upper 'Git-Flow\n'
+fresh; written "$R"; OUT="$(python3 "$LC" --check "$R" 2>&1)" && RC=0 || RC=$?
+expect "an upper-case name in the list is exit 2" 2 "is not a plugin name"
+
+echo "22. a directory named like a file is not a skill, agent or command (C-006)"
+fresh; written "$R"; mkdir -p "$R/plugins/beta/agents/dir.md" "$R/plugins/beta/commands/cmd.md" "$R/plugins/beta/skills/noskill/SKILL.md"
+run --check "$R"; expect "agents/dir.md, commands/cmd.md (directories) and skills/noskill/SKILL.md (a directory) count as nothing" 0
+
 echo ""
 echo "PASS: $PASS  FAIL: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

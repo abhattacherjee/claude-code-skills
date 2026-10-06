@@ -60,7 +60,8 @@ Options:
 
 Plugin-only monorepo (#190):
   A monorepo that has plugins/*/.claude-plugin/plugin.json and no top-level
-  skill directory has its own mode. Nothing but the catalogue is ever written:
+  skill directory has its own mode. It writes only the catalogue, plus the
+  copied plugin with --add-plugin:
     plain         validate-plugin.sh on every plugin (any failure: exit 1,
                   nothing written), then catalogue.py writes the README table,
                   marketplace.json and each plugin README's meta line
@@ -247,8 +248,39 @@ fi
 
 # check_plugin_build: the checks --add-plugin makes on ./build/$ADD_PLUGIN/
 # before anything is copied. Prints the reason on stderr and returns 1.
+# refuse_plugin_symlinks: plugins/ itself, and every entry directly under it,
+# must not be a symlink. rsync and cp write into plugins/<name>/, and a
+# symlinked one would send that write (and rsync --delete) to wherever the
+# link points, outside the repo (#190 X-001). Prints the reason; returns 1.
+refuse_plugin_symlinks() {
+  local d="$MONOREPO_DIR/plugins" e
+  [[ -e "$d" || -L "$d" ]] || return 0
+  if [[ -L "$d" ]]; then
+    echo "Error: plugins is a symlink; refusing to write through it" >&2
+    return 1
+  fi
+  for e in "$d"/* "$d"/.[!.]*; do
+    if [[ -L "$e" ]]; then
+      echo "Error: plugins/$(basename "$e") is a symlink; refusing to write through it" >&2
+      return 1
+    fi
+  done
+}
+
 check_plugin_build() {
   PLUGIN_BUILD="./build/$ADD_PLUGIN"
+  # Neither ./build, the build directory nor anything in it may be a symlink:
+  # the build is copied with rsync -a, which would copy a link that points
+  # outside the repo into plugins/ (#190 X-001).
+  if [[ -L ./build ]]; then
+    echo "Error: ./build is a symlink; refusing to copy through it" >&2
+    return 1
+  fi
+  if [[ -L "$PLUGIN_BUILD" ]]; then
+    echo "Error: $PLUGIN_BUILD is a symlink; refusing to copy through it" >&2
+    return 1
+  fi
+  refuse_plugin_symlinks || return 1
   if [[ ! -d "$PLUGIN_BUILD" ]]; then
     echo "Error: plugin build directory not found: $PLUGIN_BUILD" >&2
     echo "Run: prepare-plugin.sh <manifest-file> first" >&2
@@ -256,6 +288,12 @@ check_plugin_build() {
   fi
   if [[ ! -f "$PLUGIN_BUILD/.claude-plugin/plugin.json" ]]; then
     echo "Error: $PLUGIN_BUILD is not a valid plugin (missing .claude-plugin/plugin.json)" >&2
+    return 1
+  fi
+  local link
+  link="$(find "$PLUGIN_BUILD" -type l -print 2>/dev/null | head -1)"
+  if [[ -n "$link" ]]; then
+    echo "Error: $PLUGIN_BUILD holds a symlink ($link); refusing to copy it" >&2
     return 1
   fi
 
@@ -330,6 +368,21 @@ add_plugin_from_build() {
 # Symlinks are copied as symlinks, so catalogue.py's symlink checks still see
 # them. Sets STAGE_DIR; remove it with drop_staging_view.
 make_staging_view() {
+  # The copy below must never follow or keep a symlink, so any symlink in what
+  # it copies is refused first (#190 X-001).
+  local link f
+  refuse_plugin_symlinks || return 1
+  for f in plugins .claude-plugin README.md; do
+    if [[ -L "$MONOREPO_DIR/$f" ]]; then
+      echo "Error: $f is a symlink; the staging copy refuses symlinks" >&2
+      return 1
+    fi
+  done
+  link="$(find "$MONOREPO_DIR/plugins" "$MONOREPO_DIR/.claude-plugin" -type l -print 2>/dev/null | head -1)"
+  if [[ -n "$link" ]]; then
+    echo "Error: ${link#"$MONOREPO_DIR"/} is a symlink; the staging copy refuses symlinks" >&2
+    return 1
+  fi
   STAGE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
   mkdir -p "$STAGE_DIR/plugins"
   if [[ -d "$MONOREPO_DIR/plugins" ]]; then
@@ -414,6 +467,7 @@ sync_plugin_only() {
   if $INIT_MODE; then
     po_fail "--init: the monorepo is already initialised (it has plugins/). Nothing was changed."
   fi
+  refuse_plugin_symlinks || po_fail "a symlink under plugins/ (see above). Nothing was changed."
   [[ -f "$cat" ]] || po_fail "$cat is missing. Nothing was changed."
 
   local view="$MONOREPO_DIR"
@@ -516,7 +570,8 @@ validate_catalogue_inputs() {
   for f in "$MONOREPO_DIR"/plugins/*/.claude-plugin/plugin.json; do
     [[ -f "$f" ]] && any=true
   done
-  if [[ "${2:-}" != no-build && -n "$ADD_PLUGIN" ]] && check_plugin_build 2>/dev/null; then
+  if [[ "${2:-}" != no-build && -n "$ADD_PLUGIN" ]]; then
+    check_plugin_build || { echo "Error: --add-plugin: ./build/$ADD_PLUGIN cannot be added (see above). $1" >&2; exit 1; }
     make_staging_view || { drop_staging_view; echo "Error: could not make a staging copy to check ./build/$ADD_PLUGIN. $1" >&2; exit 1; }
     view="$STAGE_DIR"
     any=true
@@ -533,6 +588,7 @@ validate_catalogue_inputs() {
   fi
 }
 if [[ -d "$MONOREPO_DIR" ]]; then
+  refuse_plugin_symlinks || { echo "Error: nothing was changed." >&2; exit 1; }
   validate_catalogue_inputs "Nothing was changed."
 fi
 
