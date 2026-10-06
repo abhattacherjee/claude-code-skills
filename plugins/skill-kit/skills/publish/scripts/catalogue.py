@@ -20,9 +20,11 @@ Plugins listed in standalone-plugins.txt (next to this file) are skipped.
 
 Exit: 0 clean (or written), 1 drift (or, after a write, drift left that
 needs a hand edit), 2 cannot run. It fails closed: a missing or repeated
-marker, a bad plugin.json, a stray plugins/ directory or a file it cannot
-read is exit 2, never a skip. A write only starts once every file has been
-read and checked, so exit 2 means nothing was written.
+marker, a bad plugin.json or version, a stray plugins/ directory, a file it
+cannot read, or a write target or plugin directory that is a symlink or
+resolves outside the repo is exit 2, never a skip. A write only starts
+once every file has been read and checked, so exit 2 means nothing was
+written.
 
 Usage: catalogue.py [--check] [--json] [--marketplace-name NAME --owner OWNER] <repo>
 """
@@ -39,6 +41,7 @@ HEADER = ("| Plugin | Version | Skills | Commands | Description |",
 ROW_RE = re.compile(r"^\| \[([^\]]+)\]\(\./plugins/[^)]*\) \| ([^|]*) \| ([^|]*) \| ([^|]*) \| (.*) \|$")
 INSTALL_RE = re.compile(r"/plugin (?:un)?install ([A-Za-z0-9_.-]+)@([A-Za-z0-9_.-]+)")
 INSTALL_SCRIPT = "scripts/install-plugin.sh"
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$")
 DEFAULT_MARKET_DESC = "Reusable Agent Skills and Plugins for Claude Code"
 
 
@@ -56,6 +59,17 @@ def read(path, rel):
         return path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as e:
         raise CannotRun(f"{rel}: {e}")
+
+
+def guard(repo, path, rel):
+    """Refuse a write target (or a plugin directory) that is a symlink or
+    resolves outside the repo, so a write can never land outside it."""
+    if path.is_symlink():
+        raise CannotRun(f"{rel}: is a symlink; catalogue.py will not read or write through it")
+    try:
+        path.resolve().relative_to(repo)
+    except ValueError:
+        raise CannotRun(f"{rel}: is outside the repo (resolves to {path.resolve()})")
 
 
 def write(path, text):
@@ -81,6 +95,7 @@ def load_plugins(repo, skip):
     for d in sorted(p for p in pdir.iterdir() if p.is_dir() and not p.name.startswith(".")):
         if d.name in skip:
             continue
+        guard(repo, d, f"plugins/{d.name}")
         mf = d / ".claude-plugin" / "plugin.json"
         rel = mf.relative_to(repo)
         if not mf.is_file():
@@ -96,6 +111,8 @@ def load_plugins(repo, skip):
                 raise CannotRun(f"{rel}: '{k}' missing or empty")
         if m["name"] != d.name:
             raise CannotRun(f"{rel}: name {m['name']} does not match directory {d.name}")
+        if not VERSION_RE.match(m["version"]):
+            raise CannotRun(f"{rel}: version {m['version']!r} is not X.Y.Z (with an optional -pre or +build part)")
         for k in ("version", "description"):
             if any(c in m[k] for c in "|\n\r"):
                 raise CannotRun(f"{rel}: {k} contains '|' or a newline; it cannot sit in a table row")
@@ -242,12 +259,18 @@ def insert_meta(text, p):
 def run(repo, check, market_name, owner):
     """Return (written, drift). In write mode drift is only what a write cannot fix."""
     skip = standalone_plugins()
+    rp = repo / "README.md"
+    mp = repo / ".claude-plugin" / "marketplace.json"
+    # Every write target is checked before anything is read or written.
+    guard(repo, rp, "README.md")
+    guard(repo, mp, ".claude-plugin/marketplace.json")
     plugins = load_plugins(repo, skip)
+    for p in plugins:
+        guard(repo, p["dir"] / "README.md", f"plugins/{p['name']}/README.md")
     names = {p["name"] for p in plugins}
     fixable, manual = [], []
 
     # Root README
-    rp = repo / "README.md"
     readme = read(rp, "README.md")
     head, block, tail = split(readme, CAT_START, CAT_END, "README.md")
     new_readme = head + readme_block(plugins, newline_of(readme)) + tail
@@ -257,7 +280,6 @@ def run(repo, check, market_name, owner):
         fixable.append("README.md: catalogue table formatting differs from catalogue.py output")
 
     # Marketplace
-    mp = repo / ".claude-plugin" / "marketplace.json"
     mp_text = None
     if mp.is_file():
         mp_text = read(mp, ".claude-plugin/marketplace.json")

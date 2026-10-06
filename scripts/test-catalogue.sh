@@ -199,6 +199,40 @@ run "$R"; expect "a write with one bad plugin.json exits 2" 2 "plugins/beta/.cla
 diff -r "$TMP/snap" "$R" >/dev/null && ok "and writes nothing at all" || bad "and writes nothing at all" "$(diff -r "$TMP/snap" "$R")"
 rm -rf "$TMP/snap"
 
+echo "6a. symlinks and bad versions (exit 2, nothing written)"
+OUTSIDE="$TMP/outside"; mkdir -p "$OUTSIDE"
+# refused <label> <text>: rc 2 naming <text>, and the outside file is byte-identical.
+refused() {
+  [[ $RC -eq 2 && "$OUT" == *"$2"* ]] || { bad "$1" "rc=$RC: $OUT"; return 0; }
+  cmp -s "$OUTSIDE/target.md" "$OUTSIDE/target.orig" || { bad "$1" "the outside file changed: $(cat "$OUTSIDE/target.md")"; return 0; }
+  ok "$1"
+}
+fresh; written "$R"; mv "$R/README.md" "$OUTSIDE/target.md"; cp "$OUTSIDE/target.md" "$OUTSIDE/target.orig"; ln -s "$OUTSIDE/target.md" "$R/README.md"
+setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="4.0.0"'
+run "$R"; refused "a symlinked root README is refused and its target is untouched" "README.md: is a symlink"
+fresh; written "$R"; mv "$R/plugins/alpha/README.md" "$OUTSIDE/target.md"; cp "$OUTSIDE/target.md" "$OUTSIDE/target.orig"; ln -s "$OUTSIDE/target.md" "$R/plugins/alpha/README.md"
+setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="4.0.0"'
+run "$R"; refused "a plugin README symlinked outside the repo is refused and its target is untouched" "plugins/alpha/README.md: is a symlink"
+[[ "$(grep -c '4.0.0' "$R/README.md" || true)" == 0 ]] && ok "and the root README was not written either" || bad "and the root README was not written either"
+fresh; written "$R"; mv "$R/plugins/alpha" "$OUTSIDE/alpha"; ln -s "$OUTSIDE/alpha" "$R/plugins/alpha"
+cp "$OUTSIDE/alpha/README.md" "$OUTSIDE/target.md"; cp "$OUTSIDE/alpha/README.md" "$OUTSIDE/target.orig"
+setjson "$OUTSIDE/alpha/.claude-plugin/plugin.json" 'd["version"]="4.0.0"'; cp "$OUTSIDE/alpha/README.md" "$TMP/alpha.orig"
+run "$R"; refused "a symlinked plugin directory is refused" "plugins/alpha: is a symlink"
+cmp -s "$OUTSIDE/alpha/README.md" "$TMP/alpha.orig" && ok "and the README behind the link is untouched" || bad "and the README behind the link is untouched"
+fresh; written "$R"; mv "$R/.claude-plugin/marketplace.json" "$OUTSIDE/target.md"; cp "$OUTSIDE/target.md" "$OUTSIDE/target.orig"; ln -s "$OUTSIDE/target.md" "$R/.claude-plugin/marketplace.json"
+setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="4.0.0"'
+run "$R"; refused "a symlinked marketplace.json is refused and its target is untouched" ".claude-plugin/marketplace.json: is a symlink"
+fresh; written "$R"; mv "$R/.claude-plugin" "$OUTSIDE/cp"; ln -s "$OUTSIDE/cp" "$R/.claude-plugin"; cp "$OUTSIDE/cp/marketplace.json" "$OUTSIDE/target.md"; cp "$OUTSIDE/target.md" "$OUTSIDE/target.orig"
+setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="4.0.0"'
+run "$R"; refused "a marketplace.json reached through a symlinked .claude-plugin/ is refused" "is outside the repo"
+cmp -s "$OUTSIDE/cp/marketplace.json" "$OUTSIDE/target.orig" && ok "and the marketplace.json behind the link is untouched" || bad "and the marketplace.json behind the link is untouched"
+fresh; written "$R"; setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="1.0|x"'
+run "$R"; expect "a version that is not X.Y.Z is refused, naming the plugin" 2 "plugins/alpha/.claude-plugin/plugin.json: version '1.0|x' is not"
+fresh; written "$R"; setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="1.0"'
+run --check "$R"; expect "a two-part version is refused" 2 "version '1.0' is not"
+fresh; written "$R"; setjson "$R/plugins/alpha/.claude-plugin/plugin.json" 'd["version"]="1.2.3-rc.1+b5"'
+run "$R"; expect "a pre-release version with build metadata is accepted" 0 "WROTE README.md"
+
 echo "6b. a plugin README with no meta markers"
 fresh; written "$R"; perl -ni -e 'print unless /plugin-meta:/ || /^\*\*Version:\*\*/' "$R/plugins/alpha/README.md"
 run --check "$R"; expect "check reports a missing meta line (rc 1)" 1 "plugins/alpha/README.md: no meta line"
