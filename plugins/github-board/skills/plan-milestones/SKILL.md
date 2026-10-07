@@ -117,6 +117,7 @@ Write the plan, dry-run it, then apply:
   "repo": "owner/repo",
   "create_milestones": [{"title": "v3.7", "description": "Theme: ..."}],
   "moves": [{"issue": 337, "to": "v3.7", "rationale": "Why it does not fit the source theme."}],
+  "closed_moves": [{"issue": 181, "to": "v3.6"}],
   "keep": [{"issue": 336, "note": "optional, not written anywhere"}]
 }
 ```
@@ -129,7 +130,14 @@ Write the plan, dry-run it, then apply:
 
 The script **refuses** a plan whose move lacks a real rationale (≥10 chars), and refuses
 a target milestone that neither exists nor is being created — a typo'd title otherwise
-fails silently per-issue.
+fails silently per-issue. It also refuses a target title that two milestones share, and
+an issue listed twice.
+
+`closed_moves` fix the milestone of a **closed** issue, usually to the release that
+shipped it. They need no rationale and post no comment. The target may be a closed
+milestone: every write goes through REST by number, so it works where
+`gh issue edit --milestone` cannot. A failed write prints gh's error, the rest of the
+plan still runs, and the script exits 1.
 
 ### 7. After a pivot: reconcile the version sequence
 
@@ -201,7 +209,9 @@ rejects duplicate milestone titles even when one is closed.
 
 `gh api repos/O/R/milestones` returns **open milestones only** — closed ones need
 `?state=all`. `gh issue edit --milestone` and `gh issue list --milestone` both take the
-**title**, not the number, and titles are case-sensitive. There is no `gh milestone`
+**title**, not the number, and titles are case-sensitive. `gh issue edit --milestone`
+cannot assign a **closed** milestone; `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`
+can, and `apply-plan.sh` writes that way. There is no `gh milestone`
 subcommand; create via `gh api ... -X POST -f title= -f description=`. Full list in
 **[references/triage-criteria.md](references/triage-criteria.md)**.
 

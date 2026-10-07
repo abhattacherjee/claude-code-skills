@@ -104,7 +104,9 @@ nothing if the real queue is parked outside it.
 - `gh api repos/O/R/milestones` returns **open milestones only**. Closed ones are invisible
   without `?state=all`, which hides the numbering history you need to pick the next title.
 - `gh issue edit N --milestone` takes the milestone **title**, not its number. Titles are
-  case-sensitive and a typo creates nothing — it errors.
+  case-sensitive and a typo creates nothing — it errors. It cannot assign a **closed**
+  milestone. REST by number can: `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`
+  (the number is in the `?state=all` list). `apply-plan.sh` writes every move this way.
 - `gh issue list --milestone` also takes the title.
 - Creating a milestone is `gh api repos/O/R/milestones -X POST -f title= -f description=`;
   there is no `gh milestone` subcommand.

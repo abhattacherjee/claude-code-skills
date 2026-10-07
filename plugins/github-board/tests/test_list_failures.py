@@ -84,7 +84,9 @@ exit 1''')
 
 # ---- X-005: apply-plan.sh -----------------------------------------------------------
 
-PAGES = [[{"title": f"m{i}"} for i in range(100)], [{"title": "v3.7"}]]
+# REST pages carry a number and a state; apply-plan.sh writes by number (#203).
+PAGES = [[{"title": f"m{i}", "number": i + 1, "state": "open"} for i in range(100)],
+         [{"title": "v3.7", "number": 101, "state": "closed"}]]
 
 # gh applies --jq to each page separately. Without --jq, gh 2.x merges array pages into one
 # array (MERGE=1); older versions print the pages back to back (MERGE=0). Both must work.
