@@ -47,7 +47,7 @@ issue: no rationale, no comment. The target may be a closed milestone.
 
 Refused before anything is written: a target that does not exist and is not in
 create_milestones, a target title held by two milestones, an issue that is not a
-positive integer, and an issue listed more than once.
+positive integer, an issue listed more than once, and a repo that is not OWNER/REPO.
 
 Exit codes: 0 ok · 1 error, or any write failed (gh's error is printed) · 2 usage
 USAGE
@@ -56,9 +56,12 @@ USAGE
 PLAN=""; APPLY=0; REPO_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --plan) PLAN="${2:-}"; shift 2 ;;
+    # `shift 2` with one argument left fails under set -e: exit 1 and no message.
+    --plan|--repo)
+      [ $# -ge 2 ] || { echo "ERROR: $1 needs a value" >&2; usage >&2; exit 2; }
+      if [ "$1" = "--plan" ]; then PLAN="$2"; else REPO_OVERRIDE="$2"; fi
+      shift 2 ;;
     --apply) APPLY=1; shift ;;
-    --repo) REPO_OVERRIDE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac

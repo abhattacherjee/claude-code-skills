@@ -2,7 +2,7 @@
 name: plan-milestones
 description: "Re-organises open GitHub issues across milestones so each milestone stays small, themed, and shippable, deferring the rest to a themed backlog rather than letting one milestone absorb everything. Use when: (1) a milestone keeps growing and never ships, (2) new issues land in the open milestone by default, (3) open issues have no milestone at all, (4) planning what a release actually contains, (5) the user asks to re-arrange, re-scope, or focus milestones, (6) a roadmap pivots and leaves version-numbered milestones that never shipped, (7) 'milestone planning' or /github-milestone-planning (the old name of this skill). Covers: milestone themes, accretion detection, keep/defer/backlog triage, what to do with emptied and never-shipped milestones, gh milestone mechanics."
 metadata:
-  version: 2.0.0
+  version: 2.1.0
 ---
 
 # GitHub Milestone Planning

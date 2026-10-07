@@ -262,7 +262,8 @@ milestone_for_tag() {
     raw=$(gh api "repos/${repo}/milestones?state=all&per_page=100" --paginate 2>"$errf")
     rc=$?
     set -e
-    if [ "$rc" -ne 0 ] || ! printf '%s' "$raw" \
+    # Empty output with exit 0 is not "no milestones" (gh prints [] for that).
+    if [ "$rc" -ne 0 ] || [ -z "$raw" ] || ! printf '%s' "$raw" \
          | jq -s 'add // [] | map({title, number, state})' > "$ms_file.tmp" 2>/dev/null; then
       echo "WARN: could not list milestones for ${repo} (gh exit $rc): $(tr '\n' ' ' < "$errf" | cut -c1-160)" >&2
       echo "      release milestones for this repo will be reported as FAILED, not skipped." >&2

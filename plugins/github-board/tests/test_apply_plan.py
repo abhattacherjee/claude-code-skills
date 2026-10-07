@@ -218,3 +218,12 @@ def test_move_without_a_real_rationale_is_refused(tmp_path):
     assert r.returncode == 1
     assert "rationale" in r.stderr
     assert _patches(calls) == []
+
+
+@pytest.mark.parametrize("flag", ["--plan", "--repo"])
+def test_flag_without_a_value_is_a_usage_error(tmp_path, flag):
+    # `shift 2` with one argument left failed under set -e: exit 1, no message.
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 1, "to": "v0.6"}]}, flag)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "needs a value" in r.stderr
+    assert calls == []

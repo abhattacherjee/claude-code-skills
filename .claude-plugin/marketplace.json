@@ -30,7 +30,7 @@
       "name": "github-board",
       "source": "./plugins/github-board",
       "description": "GitHub workflow skills in one install: create-board, triage-issues, plan-milestones, plan-week, move-card, promote-shipped and prune-branches, plus the four agents create-board dispatches. Per-user settings live in ~/.config/github-board/config.json.",
-      "version": "1.0.2"
+      "version": "1.1.0"
     },
     {
       "name": "review",

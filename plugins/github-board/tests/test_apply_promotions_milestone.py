@@ -350,3 +350,13 @@ def test_inventory_and_find_promotable_carry_the_milestone(tmp_path):
     assert by_num[7]["milestone"] == V41
     assert "milestone" in by_num[9] and by_num[9]["milestone"] is None
     assert not [c for c in gh_calls(tmp_path / "gh.log") if "PATCH" in c]
+
+
+def test_empty_milestone_listing_is_a_failure_not_an_empty_list(tmp_path):
+    # gh prints [] for a repo with no milestones. No output at all is not that answer.
+    stub = _STUB.replace('''jq -c '.[]' "$MS_PAGES"; exit 0 ;;''', '''exit 0 ;;''')
+    assert stub != _STUB
+    r, calls = _run(tmp_path, "--apply", stub=stub)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "could not list milestones" in r.stderr
+    assert "Milestones: 0 set, 0 unchanged, 0 skipped, 1 failed" in r.stdout

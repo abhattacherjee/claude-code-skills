@@ -4,6 +4,29 @@ All notable changes to the `promote-shipped` skill (named `github-release-board-
 before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-10-07
+
+### Added
+- **Each promoted `merged` item gets its release milestone (#203).** `apply-promotions.sh`
+  maps the release tag it resolves (or `--release-tag`) to a milestone: the exact
+  `vX.Y.Z` title first, then `vX.Y`, with the leading `v` optional on both sides. When
+  the item is in another milestone, or none, it is set after the board move with
+  `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`, which also works for a
+  closed milestone. The milestone list (`state=all`, paginated) is read once per repo
+  and run. No match, or two matches, prints a warning and changes nothing. `nopr` and
+  `wontfix` items keep their milestone.
+- Dry run: `would set milestone: <current|none> -> <target> (<tag>)`, printed only when
+  the milestone would change. Summary: `Milestones: N set, N unchanged, N skipped, N failed`.
+- `inventory-board.sh` fetches `milestone { number title state }` for issues and PRs;
+  `find-promotable.sh` passes it through in each candidate.
+
+### Changed
+- `--no-release-comment` still looks up the release, so the milestone can be set.
+  `--release-tag` still skips the lookup and is used for the milestone too.
+- A failed milestone write, or a milestone list that cannot be read, is reported like a
+  comment failure: it is counted, and it never undoes the board move or changes the
+  exit code. A failed list, or an empty reply, is not cached as an empty one.
+
 ## [2.0.0] — 2026-10-02
 
 ### Security

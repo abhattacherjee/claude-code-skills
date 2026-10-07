@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+### Added
+
+- **`github-board` 1.1.0: release milestones where the release is known (#203, part of #180).** `plan-milestones` (2.1.0) writes every milestone through REST by number, so an issue can move into a closed milestone, and takes `closed_moves` with no rationale or comment. A failed write prints gh's error and exits 1. `promote-shipped` (2.1.0) sets the release milestone of each shipped `merged` item: the exact `vX.Y.Z` title, else `vX.Y`. See `plugins/github-board/CHANGELOG.md`.
+
 ## [4.0.0] - 2026-10-07
 
 ### Added

@@ -2,6 +2,26 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.1.0] - 2026-10-07
+
+### Added
+
+- `plan-milestones` 2.1.0: `apply-plan.sh` accepts `closed_moves: [{issue, to}]`, which set the milestone of a closed issue with no rationale and no comment (#203).
+- `promote-shipped` 2.1.0: `apply-promotions.sh` sets the release milestone of each promoted `merged` item. It maps the release tag (auto-detected, or `--release-tag`) to the milestone titled with the exact `vX.Y.Z`, else `vX.Y`, with the leading `v` optional. The dry run shows `would set milestone: <current|none> -> <target> (<tag>)`, and the summary gets a `Milestones:` line. `nopr` and `wontfix` items keep their milestone. No match, or two matches, prints a warning and changes nothing (#203).
+
+### Changed
+
+- `apply-plan.sh` and `apply-promotions.sh` write milestones with `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`, so a closed milestone works. `gh issue edit --milestone` cannot assign one (#203).
+- `apply-plan.sh` prints gh's error when a milestone write fails, runs the rest of the plan, and exits 1. It used to send gh's error to `/dev/null`. It refuses, before any write, a target title that two milestones share, an issue that is not a positive integer, a repo that is not `OWNER/REPO`, and an issue listed more than once (#203).
+- `apply-promotions.sh --no-release-comment` still looks up the release, to set the milestone. A failed milestone write or milestone list is reported and counted, and never undoes the board move or changes the exit code (#203).
+- `inventory-board.sh` fetches `milestone { number title state }` for issues and pull requests, and `find-promotable.sh` passes it through in each candidate (#203).
+
+### Fixed
+
+- `apply-plan.sh` posted a rationale with a newline or a tab as the two characters `\n` or `\t`. The comment now keeps them (#203).
+- `apply-plan.sh --plan` or `--repo` with no value exited 1 with no message. It now says which flag needs a value and exits 2, the documented usage code (#203).
+- The two forced-tag test groups in `test_apply_promotions_reconcile.py` run with a `gh` stub that fails every call. The new milestone lookup would otherwise have called the real `gh` (#203).
+
 ## [1.0.2] - 2026-10-06
 
 ### Changed
