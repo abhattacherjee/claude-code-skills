@@ -49,6 +49,7 @@
 # A failed release COMMENT or MILESTONE write does not change the exit code (see above).
 
 set -eu
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../lib/config.sh"
 
 usage() {
   cat <<EOF
@@ -241,75 +242,36 @@ find_release_for_commit() {
 }
 
 # milestone_for_tag <repo> <tag>
-# Prints "<number><TAB><title>" of the release milestone for <tag>: the exact X.Y.Z
-# title first, then X.Y, with the leading "v" optional on both sides. Prints
-# "skip<TAB><reason>", with one WARN per repo and tag, when no milestone matches,
-# more than one does, or the tag is not shaped like a version. Returns 2 when the milestone list could not
-# be read. Like the release listing, a failed list is never cached as an empty one:
-# that would report every item in the repo as "no milestone matches".
+# Prints "<number><TAB><title>" of the release milestone for <tag>, or "skip<TAB><reason>"
+# with one WARN per repo and tag. The rules live in lib/config.py (milestone-for-tag), shared
+# with move-card and plan-milestones (#204): the exact X.Y.Z title first, then X.Y, leading
+# "v" optional on both sides; no match, more than one, or a tag that is not a version is a
+# skip. The list (state=all, every page) is read once per repo into CACHE_DIR. Returns 2 when
+# it could not be read. Like the release listing, a failed list is never cached as an empty
+# one: that would report every item in the repo as "no milestone matches".
 milestone_for_tag() {
   local repo="$1" tag="$2"
   local slug="${repo//\//_}"
-  local ms_file="$CACHE_DIR/milestones_${slug}"
+  local ms_file="$CACHE_DIR/milestones_${slug}.json"
   local failed_marker="$CACHE_DIR/milestones_failed_${slug}"
+  local errf="$CACHE_DIR/milestones_err_${slug}"
   local warned
   warned="$CACHE_DIR/milestone_warned_${slug}_$(printf '%s' "$tag" | tr -c 'A-Za-z0-9._-' '_')"
   [ -f "$failed_marker" ] && return 2
-  if [ ! -f "$ms_file" ]; then
-    # state=all: the release milestone is usually closed by the time this runs.
-    # No --jq: gh applies it per page. `jq -s add` joins the pages whether gh merged
-    # them into one array or printed them back to back.
-    local raw rc errf="$CACHE_DIR/milestones_err_${slug}"
-    set +e
-    raw=$(gh api "repos/${repo}/milestones?state=all&per_page=100" --paginate 2>"$errf")
-    rc=$?
-    set -e
-    # Empty output with exit 0 is not "no milestones" (gh prints [] for that).
-    if [ "$rc" -ne 0 ] || [ -z "$raw" ] || ! printf '%s' "$raw" \
-         | jq -s 'add // [] | map({title, number, state})' > "$ms_file.tmp" 2>/dev/null; then
-      echo "WARN: could not list milestones for ${repo} (gh exit $rc): $(tr '\n' ' ' < "$errf" | cut -c1-160)" >&2
-      echo "      release milestones for this repo will be reported as FAILED, not skipped." >&2
-      rm -f "$ms_file.tmp"
-      : > "$failed_marker"
-      return 2
-    fi
-    mv "$ms_file.tmp" "$ms_file"
+  local out rc=0
+  out=$(gb_milestone_for_tag --repo "$repo" --tag "$tag" --cache "$ms_file" 2>"$errf") || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    echo "WARN: $(tr '\n' ' ' < "$errf" | sed 's/^github-board: error: //' | cut -c1-240)" >&2
+    echo "      release milestones for this repo will be reported as FAILED, not skipped." >&2
+    : > "$failed_marker"
+    return 2
   fi
-
-  local core="${tag#v}" exact="" minor=""
-  if printf '%s' "$core" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    exact="$core"; minor="${core%.*}"
-  elif printf '%s' "$core" | grep -Eq '^[0-9]+\.[0-9]+$'; then
-    exact="$core"
-  else
-    [ -f "$warned" ] || echo "WARN: release tag '${tag}' is not vX.Y.Z or vX.Y; no release milestone set for ${repo}." >&2
-    : > "$warned"
-    printf 'skip\t%s\n' "tag '${tag}' is not vX.Y.Z or vX.Y"
-    return 0
-  fi
-
-  # Exact first; vX.Y only when no exact title exists. More than one match at the
-  # first level that has any is refused, never resolved by picking one.
-  local hit
-  hit=$(jq -r --arg e "$exact" --arg m "$minor" '
-    def pick($t): [.[] | select(((.title // "") | ltrimstr("v")) == $t)];
-    pick($e) as $x
-    | (if ($x | length) > 0 or $m == "" then $x else pick($m) end)
-    | if length == 1 and (.[0].number | type) == "number"
-        then "\(.[0].number)\t\(.[0].title)"
-      elif length == 0 then "none"
-      else "ambiguous: " + (map("\(.title) #\(.number)") | join(", ")) end' "$ms_file") || return 2
-  case "$hit" in
-    none)
-      [ -f "$warned" ] || echo "WARN: no milestone titled ${exact}${minor:+ or ${minor}} (leading v optional) in ${repo}; release milestone for ${tag} not set." >&2
-      : > "$warned"
-      printf 'skip\t%s\n' "no milestone titled ${exact}${minor:+ or ${minor}} for ${tag}" ;;
-    ambiguous*)
-      [ -f "$warned" ] || echo "WARN: ${hit} in ${repo} for ${tag}; release milestone not set." >&2
-      : > "$warned"
-      printf 'skip\t%s\n' "${hit} for ${tag}" ;;
-    *) printf '%s\n' "$hit" ;;
+  case "$out" in
+    skip$'\t'*)
+      [ -f "$warned" ] || echo "WARN: ${out#skip$'\t'} in ${repo}; release milestone not set." >&2
+      : > "$warned" ;;
   esac
+  printf '%s\n' "$out"
   return 0
 }
 
