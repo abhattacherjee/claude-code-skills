@@ -382,28 +382,98 @@ short_desc() {
   printf '%s\n' "$1" | sed 's/\. Use when:.*/\./'
 }
 
+# Fenced code blocks (#106). A "## " line inside ``` or ~~~ is code, not a
+# heading: skill-publishing's SKILL.md shows a "## See Also" template inside a
+# ```markdown block, and extract_section used to take that as the See Also
+# section. A fence opens with 3 or more backticks or tildes (any indent) and
+# closes with a line of only the same character, at least as many, as
+# CommonMark has it. _MD_FENCE_AWK is shared by the two awk readers below so
+# they cannot disagree about where a fence ends; section_has_prose_placeholder
+# applies the same rule in perl.
+_MD_FENCE_AWK='
+  function fence_run(line,   s, c, n) {
+    s = line; sub(/^[ \t]*/, "", s)
+    c = substr(s, 1, 1)
+    if (c != "`" && c != "~") return ""
+    n = 0
+    while (substr(s, n + 1, 1) == c) n++
+    if (n < 3) return ""
+    FENCE_REST = substr(s, n + 1)
+    return c n
+  }
+  # Returns 1 when this line opens, closes or sits inside a fence.
+  function in_fence(line,   f) {
+    f = fence_run(line)
+    if (fc == "") {
+      if (f != "") { fc = substr(f, 1, 1); fl = substr(f, 2) + 0; return 1 }
+      return 0
+    }
+    if (f != "" && substr(f, 1, 1) == fc && substr(f, 2) + 0 >= fl && FENCE_REST ~ /^[ \t]*$/) fc = ""
+    return 1
+  }
+'
+
 # Extract content under a ## heading (returns lines until next ## or EOF)
-# Uses awk for BSD/GNU portability, perl for blank-line trimming.
+# Uses awk for BSD/GNU portability, perl for blank-line trimming. "## " lines
+# inside fenced code blocks are content, not headings.
 # Usage: extract_section <file> <heading_text>
 # Example: extract_section SKILL.md "Quick Check"
 extract_section() {
   local file="$1"
   local heading="$2"
-  awk -v h="$heading" '
-    $0 == "## " h { found=1; next }
+  awk -v h="$heading" "$_MD_FENCE_AWK"'
+    BEGIN { fc = "" }
+    {
+      if (in_fence($0)) { if (found) print; next }
+    }
+    $0 == "## " h && !found { found=1; next }
     found && /^## / { exit }
     found { print }
   ' "$file" 2>/dev/null | perl -0777 -pe 's/\A\s*\n//; s/\n\s*\z//'
 }
 
-# Extract ## heading titles from markdown (after frontmatter)
+# Extract ## heading titles from markdown (after frontmatter), skipping "## "
+# lines inside fenced code blocks.
 # Usage: extract_headings <file> [max_count]
 # Returns one heading per line, frontmatter skipped
 extract_headings() {
   local file="$1"
   local max="${2:-10}"
-  awk '/^---$/{fm++; next} fm>=2{print}' "$file" 2>/dev/null | \
-    grep '^## ' | head -"$max" | sed 's/^## //'
+  awk "$_MD_FENCE_AWK"'
+    BEGIN { fc = "" }
+    /^---$/ && fm < 2 { fm++; next }
+    fm < 2 { next }
+    { if (in_fence($0)) next }
+    /^## / { print }
+  ' "$file" 2>/dev/null | head -"$max" | sed 's/^## //'
+}
+
+# section_has_prose_placeholder <text>: true (exit 0) when the text has a
+# template placeholder such as <github-user> outside code, and prints the first
+# one. Fenced blocks and inline code spans are removed first: a usage line such
+# as `tool <monorepo-dir>` is legitimate. A few common HTML tags (<br>,
+# <kbd>, <details>, ...) are not placeholders. Used by prepare-plugin.sh to
+# keep template text out of generated READMEs (#106).
+section_has_prose_placeholder() {
+  printf '%s\n' "$1" | perl -0777 -ne '
+    my ($fc, $fl, $prose) = ("", 0, "");
+    for my $l (split /\n/, $_) {
+      if ($fc ne "") {
+        $fc = "" if $l =~ /^[ \t]*(\Q$fc\E+)[ \t]*$/ && length($1) >= $fl;
+        next;
+      }
+      if ($l =~ /^[ \t]*(`{3,}|~{3,})/) { $fc = substr($1, 0, 1); $fl = length($1); next; }
+      $prose .= "$l\n";
+    }
+    $prose =~ s/(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)//gs;
+    my %html = map { $_ => 1 } qw(a abbr b blockquote br center code dd del details div dl dt em hr i img ins kbd li mark ol p pre s small span strong sub summary sup table tbody td th thead tr u ul);
+    while ($prose =~ /<([a-z][a-z0-9_-]*)>/g) {
+      next if $html{$1};
+      print "<$1>";
+      exit 0;
+    }
+    exit 1;
+  '
 }
 
 # ============================================================

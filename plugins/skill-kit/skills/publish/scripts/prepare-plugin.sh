@@ -408,6 +408,23 @@ PRIMARY_SKILL_SRC=$(jq -r '.skills[0].source' "$MANIFEST_FILE")
 PRIMARY_SKILL_SRC=$(resolve_source_path "$PRIMARY_SKILL_SRC" "$MANIFEST_DIR")
 PRIMARY_SKILL_MD="$PRIMARY_SKILL_SRC/SKILL.md"
 
+# readme_section <SKILL.md> <heading>: the section to copy into the README, or
+# nothing. Every SKILL.md section the README inlines goes through here. A
+# section whose prose holds a template placeholder such as <github-user> is
+# left out, with a note on stderr (#106): a published README must not tell
+# people to visit https://github.com/<github-user>/<skill-name>. Placeholders
+# in fenced blocks and inline code stay (see section_has_prose_placeholder).
+readme_section() {
+  local text ph
+  text=$(extract_section "$1" "$2")
+  [[ -z "$text" ]] && return 0
+  if ph=$(section_has_prose_placeholder "$text"); then
+    echo "dropped section \"$2\": placeholder $ph in prose" >&2
+    return 0
+  fi
+  printf '%s\n' "$text"
+}
+
 # --- Extract data from primary skill ---
 FULL_DESC=""
 USE_WHEN=""
@@ -443,14 +460,14 @@ if [[ -f "$PRIMARY_SKILL_MD" ]]; then
   fi
 
   # Usage from Quick Check or Quick Reference section
-  USAGE_SECTION=$(extract_section "$PRIMARY_SKILL_MD" "Quick Check")
+  USAGE_SECTION=$(readme_section "$PRIMARY_SKILL_MD" "Quick Check")
   if [[ -z "$USAGE_SECTION" ]]; then
-    USAGE_SECTION=$(extract_section "$PRIMARY_SKILL_MD" "Quick Reference")
+    USAGE_SECTION=$(readme_section "$PRIMARY_SKILL_MD" "Quick Reference")
   fi
 
   # Optional sections
-  SEE_ALSO=$(extract_section "$PRIMARY_SKILL_MD" "See Also")
-  PREREQUISITES=$(extract_section "$PRIMARY_SKILL_MD" "Prerequisites")
+  SEE_ALSO=$(readme_section "$PRIMARY_SKILL_MD" "See Also")
+  PREREQUISITES=$(readme_section "$PRIMARY_SKILL_MD" "Prerequisites")
 fi
 
 # --- Build Contents lists with descriptions ---

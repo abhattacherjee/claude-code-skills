@@ -1581,6 +1581,13 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
 
             find "$_PLUGIN_DST" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
             echo "  AUTO-SYNCED  plugins/$_MANIFEST_NAME/$_PRESERVED_MSG"
+            # prepare-plugin.sh notes each SKILL.md section it left out of the
+            # README for holding a placeholder (#106). The build log is shown
+            # only on failure, so pass the notes on when the generated README
+            # is the one published.
+            if [[ -z "$_PRESERVED_MSG" ]]; then
+              grep '^dropped section ' "$_BUILD_LOG" | sed 's/^/    NOTE: /' || true
+            fi
             AUTO_BUILT_PLUGINS="${AUTO_BUILT_PLUGINS:+$AUTO_BUILT_PLUGINS }$_MANIFEST_NAME"
           else
             echo "  Warning: build produced no plugin at $_BUILD_DIR"

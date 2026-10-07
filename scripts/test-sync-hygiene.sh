@@ -6787,6 +6787,150 @@ run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-4.stdout" "$SCRATCH_DIR/n93-4
 assert_eq "--skills naming only a missing skill is still refused with exit 1 (#93)" "1" "$N93_RC"
 assert_eq "…and writes nothing" "$N93_DIGEST" "$(tree_digest "$N93_MONO")"
 
+# ============================================================
+# Issue #106 — no <placeholder> prose in generated plugin READMEs
+# ============================================================
+#
+# prepare-plugin.sh copies a few SKILL.md sections (Quick Check or Quick
+# Reference, Prerequisites, See Also) into the plugin README. Two defects put
+# template text such as https://github.com/<github-user>/<skill-name> there:
+#   1. extract_section and extract_headings also matched "## " lines inside
+#      fenced code blocks. skill-publishing's SKILL.md shows a "## See Also"
+#      template inside a ```markdown block, before its real See Also, so the
+#      template and the "### Step 4" block after it became the README's See Also.
+#   2. A section whose prose holds a <placeholder> was copied as is.
+# A section with a placeholder in its prose is now left out, with a note on
+# stderr. Placeholders inside fenced blocks and inline code are legitimate
+# (usage lines such as `tool <monorepo-dir>`) and stay.
+
+# (a) skill-publishing's own SKILL.md, the case the issue was found on.
+mkdir -p "$PREPARE_FIXTURE_DIR/n106pub-plugin"
+cp "$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/SKILL.md" "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md"
+printf '{"name": "n106pub-plugin", "version": "1.0.0", "description": "Fixture plugin built from skill-publishing SKILL.md.", "skills": [{"name": "skill-publishing", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/n106pub-plugin/plugin-manifest.json"
+N106_RC=0
+run_prepare n106pub-plugin "$SCRATCH_DIR/n106pub.stdout" "$SCRATCH_DIR/n106pub.stderr" || N106_RC=$?
+N106_README="$(cat "$PREPARE_OUT_DIR/n106pub-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds skill-publishing's SKILL.md (#106)" "0" "$N106_RC"
+assert_not_contains "…with no <github-user> in the README" "<github-user>" "$N106_README"
+assert_not_contains "…and no <skill-name>" "<skill-name>" "$N106_README"
+assert_not_contains "…and no template block pulled in after a fenced heading" "### Step 4: Initialize Git and Push" "$N106_README"
+assert_contains "positive control: the README has the real See Also section" \
+    "$(printf '## See Also\n\n- `skill-authoring` — how to structure and write skills (the content)')" "$N106_README"
+assert_contains "positive control: and the Quick Reference block as Usage" \
+    '$SCRIPTS/validate-pre-sync.sh ~/dev/claude-code-skills' "$N106_README"
+
+# (b) three sections: a placeholder in prose, a placeholder only in code, none.
+mkdir -p "$PREPARE_FIXTURE_DIR/n106mix-plugin"
+cat > "$PREPARE_FIXTURE_DIR/n106mix-plugin/SKILL.md" <<'EOF'
+---
+name: n106mix
+description: Fixture skill with one section per placeholder case. Use when: testing issue 106.
+metadata:
+  version: 1.0.0
+---
+
+# n106mix
+
+## Quick Check
+
+Run `n106-tool <monorepo-dir>` first. N106-CODE-ONLY-MARKER.
+
+```bash
+## N106 fenced comment, not a heading
+n106-tool --check <monorepo-dir>
+```
+
+~~~text
+n106-tool --list <monorepo-dir>
+~~~
+
+## Prerequisites
+
+The account must exist; see https://github.com/<user>/<repo> for setup. N106-PROSE-MARKER.
+
+## See Also
+
+- Plain link: https://example.com/n106-plain, press <kbd>Enter</kbd>. N106-PLAIN-MARKER.
+EOF
+printf '{"name": "n106mix-plugin", "version": "1.0.0", "description": "Fixture plugin for the placeholder cases.", "skills": [{"name": "n106mix", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/n106mix-plugin/plugin-manifest.json"
+N106_RC=0
+run_prepare n106mix-plugin "$SCRATCH_DIR/n106mix.stdout" "$SCRATCH_DIR/n106mix.stderr" || N106_RC=$?
+N106_README="$(cat "$PREPARE_OUT_DIR/n106mix-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds the three-case fixture (#106)" "0" "$N106_RC"
+assert_not_contains "a section with a placeholder in prose is dropped" "N106-PROSE-MARKER" "$N106_README"
+assert_not_contains "…with no Prerequisites heading left behind" "## Prerequisites" "$N106_README"
+assert_line_present "…and a note says so on stderr" \
+    'dropped section "Prerequisites": placeholder <user> in prose' "$(cat "$SCRATCH_DIR/n106mix.stderr")"
+assert_contains "positive control: a placeholder only in a fenced block and inline code stays" \
+    "$(printf '## Usage\n\nRun `n106-tool <monorepo-dir>` first. N106-CODE-ONLY-MARKER.\n\n```bash\n## N106 fenced comment, not a heading\nn106-tool --check <monorepo-dir>\n```\n\n~~~text\nn106-tool --list <monorepo-dir>\n~~~')" "$N106_README"
+assert_not_contains "…and a \"## \" line inside a fence is not a Key Feature" "**N106 fenced comment" "$N106_README"
+assert_contains "positive control: a plain section with an HTML tag stays verbatim" \
+    "$(printf '## See Also\n\n- Plain link: https://example.com/n106-plain, press <kbd>Enter</kbd>. N106-PLAIN-MARKER.')" "$N106_README"
+assert_eq "…and only the one section is reported" "1" "$(grep -c '^dropped section' "$SCRATCH_DIR/n106mix.stderr" || true)"
+
+# (c) every extracted section has a placeholder in prose: the README still has
+# its heading, description and contents.
+mkdir -p "$PREPARE_FIXTURE_DIR/n106all-plugin"
+cat > "$PREPARE_FIXTURE_DIR/n106all-plugin/SKILL.md" <<'EOF'
+---
+name: n106all
+description: Fixture skill whose every extracted section has a placeholder. Use when: testing issue 106.
+metadata:
+  version: 1.0.0
+---
+
+# n106all
+
+## Quick Check
+
+Point it at <your-repo>.
+
+## Prerequisites
+
+Install <tool-name> first.
+
+## See Also
+
+- https://github.com/<github-user>/n106all
+EOF
+printf '{"name": "n106all-plugin", "version": "1.0.0", "description": "N106-ALL-PLUGIN-DESCRIPTION.", "skills": [{"name": "n106all", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/n106all-plugin/plugin-manifest.json"
+N106_RC=0
+run_prepare n106all-plugin "$SCRATCH_DIR/n106all.stdout" "$SCRATCH_DIR/n106all.stderr" || N106_RC=$?
+N106_README="$(cat "$PREPARE_OUT_DIR/n106all-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds a skill whose every section has a placeholder (#106)" "0" "$N106_RC"
+assert_eq "…and drops all three" "3" "$(grep -c '^dropped section' "$SCRATCH_DIR/n106all.stderr" || true)"
+assert_contains "…but the README keeps its heading and description" \
+    "$(printf '# n106all-plugin\n\nN106-ALL-PLUGIN-DESCRIPTION.')" "$N106_README"
+assert_contains "…and its What It Does and Contents" "- \`n106all\` — Fixture skill whose every extracted section has a placeholder." "$N106_README"
+assert_not_contains "…with no placeholder left" "<github-user>" "$N106_README"
+
+# Through a sync: the auto-build shows the child's log only on failure, so the
+# note is passed on when the generated README is published, and not when an
+# existing README is kept.
+N106S_HOME="$SCRATCH_DIR/skills-home-n106"
+N106S_MONO="$SCRATCH_DIR/monorepo-n106"
+mkdir -p "$N106S_HOME/n106sync" "$N106S_MONO"
+seed_top_level_skill "$N106S_MONO"
+printf -- '---\nname: n106sync\ndescription: Fixture skill with a placeholder in See Also. Use when: testing issue 106.\nmetadata:\n  version: 1.0.0\n---\n\n# n106sync\n\n## See Also\n\n- https://github.com/<github-user>/n106sync\n' \
+    > "$N106S_HOME/n106sync/SKILL.md"
+printf '{"name": "n106sync", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "n106sync", "source": "."}], "commands": []}\n' \
+    > "$N106S_HOME/n106sync/plugin-manifest.json"
+N106S_RC=0
+run_sync "$N106S_HOME" "$N106S_MONO" "$SCRATCH_DIR/n106s-1.stdout" "$SCRATCH_DIR/n106s-1.stderr" || N106S_RC=$?
+assert_eq "a sync that builds a plugin with a placeholder section exits 0 (#106)" "0" "$N106S_RC"
+assert_line_present "…and passes the dropped-section note on" \
+    '    NOTE: dropped section "See Also": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/n106s-1.stdout")"
+assert_not_contains "…and the published README has no placeholder" "<github-user>" \
+    "$(cat "$N106S_MONO/plugins/n106sync/README.md" 2>/dev/null || true)"
+printf '\nA longer body, so the rebuild is not skipped.\n' >> "$N106S_HOME/n106sync/SKILL.md"
+N106S_RC=0
+run_sync "$N106S_HOME" "$N106S_MONO" "$SCRATCH_DIR/n106s-2.stdout" "$SCRATCH_DIR/n106s-2.stderr" || N106S_RC=$?
+assert_contains "control: the rebuild keeps the existing README" "(README preserved)" "$(cat "$SCRATCH_DIR/n106s-2.stdout")"
+assert_not_contains "…and so prints no note about a README it did not publish" "dropped section" "$(cat "$SCRATCH_DIR/n106s-2.stdout")"
+
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
     echo "All assertions passed."
