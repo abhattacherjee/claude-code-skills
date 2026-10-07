@@ -78,7 +78,7 @@ set -euo pipefail
 #      regenerate a catalogue describing a plugin it could not build.
 #
 # The whole run is hermetic: 18 throwaway SKILLS_HOMEs, a fixture directory
-# that is deliberately never a SKILLS_HOME, 34 throwaway monorepos, the syncs
+# that is deliberately never a SKILLS_HOME, a throwaway monorepo per scenario, the syncs
 # invoked from a throwaway cwd, and `gh` shimmed off PATH so nothing reaches the
 # network. The live repo is never passed to sync-monorepo.sh or prepare-plugin.sh.
 #
@@ -99,16 +99,9 @@ set -euo pipefail
 # CONTRIBUTING.md, the PR template, and the workflow.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SYNC_SCRIPT="${SYNC_SCRIPT:-$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/scripts/sync-monorepo.sh}"
-
-# The authoring source of truth for skill-publishing lives outside the repo.
-# Checked when present (developer machines), reported as unavailable in CI.
-# The whole skill directory, not just the script: a change to this skill lands in
-# SKILL.md (metadata.version, which drives the reversion guard), CHANGELOG.md and
-# scripts/ alike, and a parity check narrower than the publish relationship it
-# describes lets the rest drift unnoticed.
-LIVE_SKILL_DIR="${LIVE_SKILL_DIR:-$HOME/.claude/skills/skill-publishing}"
-IN_REPO_SKILL_DIR="$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing"
+# plugins/skill-kit/skills/publish/ is the source of truth for these scripts and
+# the skill around them, so this suite tests the files that ship.
+SYNC_SCRIPT="${SYNC_SCRIPT:-$REPO_ROOT/plugins/skill-kit/skills/publish/scripts/sync-monorepo.sh}"
 
 # The harness runs under `set -euo pipefail`, so an unusable script under test
 # would die with rc=127 and no summary — unhelpful for the documented
@@ -157,7 +150,6 @@ if [[ ! -x "$RELEASE_SCRIPT" ]]; then
 fi
 
 FAIL_COUNT=0
-SKIPPED_COUNT=0
 
 SCRATCH_DIR="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH_DIR"' EXIT
@@ -292,6 +284,27 @@ skill_catalog_row_count() {
     grep -cE '^\| \[[^]]+\]\(\./[^/]+/\) \|' "$1" 2>/dev/null || true
 }
 
+# tree_digest <dir>: one hash over every path and every file's bytes.
+tree_digest() {
+    (
+        cd "$1"
+        find . -print | LC_ALL=C sort
+        find . -type f -exec shasum {} + | LC_ALL=C sort
+    ) | shasum | cut -d' ' -f1
+}
+
+# tree_digest_except_catalogue <dir>: tree_digest without the files catalogue.py
+# owns (README.md, .claude-plugin/marketplace.json, plugins/*/README.md). Their
+# paths still count, so a created or deleted catalogue file still changes it.
+tree_digest_except_catalogue() {
+    (
+        cd "$1"
+        find . -print | LC_ALL=C sort
+        find . -type f ! -path ./README.md ! -path ./.claude-plugin/marketplace.json \
+            ! -path './plugins/*/README.md' -exec shasum {} + | LC_ALL=C sort
+    ) | shasum | cut -d' ' -f1
+}
+
 # ============================================================
 # gh shim — keeps the run genuinely offline
 # ============================================================
@@ -322,6 +335,18 @@ printf '%s\n' "\$*" >> "$GH_SHIM_LOG"
 exit 1
 EOF
 chmod +x "$GH_SHIM_DIR/gh"
+
+# prepare-plugin.sh stops with exit 1 when the plugin it assembled fails
+# validate-plugin.sh (#167), and validation stays on for this harness: every
+# sync fixture is a valid skill (a `metadata:` version and a "Use when:" list).
+# Only nine description-scalar fixtures need a skill validate-skill.sh
+# rejects: nodesc and emptydesc (no description), overcapture (an extra
+# tagline: key), and blankline, crblank, crblock, crhdr, cronly and
+# dashescalar (no "Use when:" list). They go through run_prepare_unvalidated,
+# which takes a reason per call.
+# Until #106 the whole harness exported SKILL_KIT_NO_PLUGIN_VALIDATION=1. It is
+# unset here so a value in the caller's environment cannot switch it off again.
+unset SKILL_KIT_NO_PLUGIN_VALIDATION
 
 # ============================================================
 # Fixtures
@@ -543,8 +568,9 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
 ---
 name: demo-skill
-description: Throwaway fixture skill used only by the sync-hygiene regression harness.
-version: 0.1.0
+description: Throwaway fixture skill used only by the sync-hygiene regression harness. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Demo Skill
@@ -557,8 +583,9 @@ EOF
 cat > "$SKILLS_HOME_FIXTURE/added-skill/SKILL.md" <<'EOF'
 ---
 name: added-skill
-description: Throwaway fixture skill used only by the sync-hygiene harness's --add invocation.
-version: 0.1.0
+description: Throwaway fixture skill used only by the sync-hygiene harness's --add invocation. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Added Skill
@@ -589,8 +616,9 @@ EOF
 # then takes its SKILL_IN_PLACE path (source == destination, nothing to copy).
 INREPO_SKILL_MD='---
 name: inrepo-skill
-description: Throwaway fixture skill sourced from the monorepo only — exercises skill_source_dir()'"'"'s in-repo branch.
-version: 0.1.0
+description: Throwaway fixture skill sourced from the monorepo only — exercises skill_source_dir()'"'"'s in-repo branch. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # In-repo Skill
@@ -613,8 +641,9 @@ echo "fixture" > "$MONOREPO_EMPTY_FIXTURE/docs/notes.md"
 cat > "$PRESYNC_SKILLS_HOME_FIXTURE/presync-local-skill/SKILL.md" <<'EOF'
 ---
 name: presync-local-skill
-description: Throwaway fixture — local-source skill, regression control for validate-pre-sync.sh.
-version: 1.0.0
+description: Throwaway fixture — local-source skill, regression control for validate-pre-sync.sh. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Local Skill
@@ -633,8 +662,9 @@ EOF
 # (version 2.0.0) in both monorepos; only the CHANGELOG differs below.
 PRESYNC_INREPO_SKILL_MD='---
 name: presync-inrepo-skill
-description: Throwaway fixture — in-repo-source-only skill exercising issue #78.
-version: 2.0.0
+description: Throwaway fixture — in-repo-source-only skill exercising issue #78. Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Presync In-repo Skill
@@ -673,8 +703,9 @@ EOF
 # reach either file for a local-source skill.
 PRESYNC_SHADOW_SKILL_MD='---
 name: presync-local-skill
-description: MUST NOT BE READ — shadows presync-local-skill in the monorepo so a local-first precedence violation in skill_source_dir() is distinguishable, not silently correct by construction.
-version: 9.9.9
+description: MUST NOT BE READ — shadows presync-local-skill in the monorepo so a local-first precedence violation in skill_source_dir() is distinguishable, not silently correct by construction. Use when: testing.
+metadata:
+  version: 9.9.9
 ---
 
 # Presync Local Skill (stale monorepo shadow — must not be read)'
@@ -699,8 +730,9 @@ echo "fixture" > "$PRESYNC_MONOREPO_PASS_FIXTURE/build/stale-artifact.txt"
 cat > "$SKILLS_HOME_FIXTURE/-n/SKILL.md" <<'EOF'
 ---
 name: dash-n
-description: Throwaway fixture skill in a directory named -n, guarding filter_skill_candidates against echo option-eating.
-version: 0.1.0
+description: Throwaway fixture skill in a directory named -n, guarding filter_skill_candidates against echo option-eating. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Dash-N Skill
@@ -803,8 +835,9 @@ for _hp in hooks-none-plugin hooks-null-plugin hooks-empty-plugin hooks-ok-plugi
     cat > "$SKILLS_HOME_HOOKS_FIXTURE/$_hp/SKILL.md" <<EOF
 ---
 name: $_hp
-description: Throwaway fixture skill backing the $_hp plugin manifest, used only by the sync-hygiene harness's hooks assertions.
-version: 0.1.0
+description: Throwaway fixture skill backing the $_hp plugin manifest, used only by the sync-hygiene harness's hooks assertions. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # ${_hp}
@@ -882,8 +915,9 @@ echo "# Throwaway fixture hook, present only to prove hooks/ survives the build.
 cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-sync-plugin
-description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
-version: 0.1.0
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # legacy-sync-plugin
@@ -909,8 +943,9 @@ EOF
 cat > "$MONOREPO_LEGACYREF_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-sync-plugin
-description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
-version: 9.9.9
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form. Use when: testing.
+metadata:
+  version: 9.9.9
 ---
 
 # legacy-sync-plugin
@@ -945,8 +980,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/legacy-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-plugin
-description: LEGACY-SOURCE-MARKER — throwaway fixture skill reached only through a legacy bare-string skills[] entry.
-version: 0.1.0
+description: LEGACY-SOURCE-MARKER — throwaway fixture skill reached only through a legacy bare-string skills[] entry. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # legacy-plugin
@@ -967,8 +1003,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/relsource-plugin/nested-src/SKILL.md" <<'EOF'
 ---
 name: relsource-skill
-description: RELSOURCE-MARKER — throwaway fixture skill reached only through a relative source that is not ".".
-version: 0.1.0
+description: RELSOURCE-MARKER — throwaway fixture skill reached only through a relative source that is not ".". Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # relsource-skill
@@ -991,8 +1028,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/barecmd-plugin/SKILL.md" <<'EOF'
 ---
 name: barecmd-plugin
-description: Throwaway fixture skill backing the bare-string commands[] manifest.
-version: 0.1.0
+description: Throwaway fixture skill backing the bare-string commands[] manifest. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # barecmd-plugin
@@ -1015,8 +1053,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/bareagent-plugin/SKILL.md" <<'EOF'
 ---
 name: bareagent-plugin
-description: Throwaway fixture skill backing the bare-string agents[] manifest.
-version: 0.1.0
+description: Throwaway fixture skill backing the bare-string agents[] manifest. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # bareagent-plugin
@@ -1040,8 +1079,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/SKILL.md" <<'EOF'
 ---
 name: objentry-plugin
-description: Throwaway fixture skill backing the object-form commands[]/agents[] positive control.
-version: 0.1.0
+description: Throwaway fixture skill backing the object-form commands[]/agents[] positive control. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # objentry-plugin
@@ -1051,7 +1091,7 @@ EOF
 
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-command.md" <<'EOF'
 ---
-description: Throwaway fixture command, object-form.
+description: Throwaway fixture command, object-form. Use when: testing.
 ---
 
 Fixture command body.
@@ -1060,7 +1100,7 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-agent.md" <<'EOF'
 ---
 name: fixture-agent
-description: Throwaway fixture agent, object-form.
+description: Throwaway fixture agent, object-form. Use when: testing.
 ---
 
 Fixture agent body.
@@ -1180,6 +1220,26 @@ run_sync() {
             "$SYNC_SCRIPT" --github-user harness-fixture-user "$@" "$monorepo"
     ) >"$stdout_log" 2>"$stderr_log" || rc=$?
     return "$rc"
+}
+
+# seed_top_level_skill <monorepo-dir>: gives a fixture monorepo one top-level skill.
+# Since #167 sync-monorepo.sh refuses a plugin-only monorepo (plugins/*/.claude-plugin/
+# plugin.json and no top-level skill directory; see "Issue #167" at the end of this
+# file). A first sync into an empty directory that only auto-builds plugins leaves
+# exactly that, so fixtures that sync the same monorepo a second time (the hooks
+# and legacy-manifest rebuild runs) get one seed skill to stay on the old layout.
+seed_top_level_skill() {
+    mkdir -p "$1/seed-skill"
+    cat > "$1/seed-skill/SKILL.md" <<'SEEDEOF'
+---
+name: seed-skill
+description: Throwaway fixture skill that keeps a second sync from being refused as plugin-only (#167). Use when: testing.
+metadata:
+  version: 1.0.0
+---
+
+# seed-skill
+SEEDEOF
 }
 
 # Snapshot the directory mktemp -d actually writes into, so the auto-build
@@ -1331,8 +1391,9 @@ SKILLSCOMMA_ROWS_AFTER="$(skill_catalog_row_count "$MONOREPO_SKILLSCOMMA_FIXTURE
 cat > "$SKILLS_HOME_SKILLSBAD_FIXTURE/demo-skill/SKILL.md" <<'EOF'
 ---
 name: demo-skill
-description: Throwaway fixture skill used only by the sync-hygiene harness's --skills-nosuchskill guard-placement assertion.
-version: 0.1.0
+description: Throwaway fixture skill used only by the sync-hygiene harness's --skills-nosuchskill guard-placement assertion. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Demo Skill
@@ -1424,6 +1485,7 @@ GITIGNORE_STDOUT="$(cat "$GITIGNORE_STDOUT_LOG")"
 HOOKS_STDOUT_LOG="$SCRATCH_DIR/hooks.stdout"
 HOOKS_STDERR_LOG="$SCRATCH_DIR/hooks.stderr"
 HOOKS_RC=0
+seed_top_level_skill "$MONOREPO_HOOKS_FIXTURE"
 run_sync "$SKILLS_HOME_HOOKS_FIXTURE" "$MONOREPO_HOOKS_FIXTURE" "$HOOKS_STDOUT_LOG" "$HOOKS_STDERR_LOG" || HOOKS_RC=$?
 HOOKS_STDOUT="$(cat "$HOOKS_STDOUT_LOG")"
 HOOKS_STDERR="$(cat "$HOOKS_STDERR_LOG")"
@@ -1450,8 +1512,9 @@ rm -rf "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src"
 cat > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/SKILL.md" <<EOF
 ---
 name: hooks-ok-plugin
-description: Throwaway fixture skill backing the hooks-ok-plugin manifest, used only by the sync-hygiene harness's hooks assertions.
-version: 0.2.0
+description: Throwaway fixture skill backing the hooks-ok-plugin manifest, used only by the sync-hygiene harness's hooks assertions. Use when: testing.
+metadata:
+  version: 0.2.0
 ---
 
 # hooks-ok-plugin
@@ -1479,6 +1542,7 @@ HOOKS2_STDERR="$(cat "$HOOKS2_STDERR_LOG")"
 LEGACY_STDOUT_LOG="$SCRATCH_DIR/legacy.stdout"
 LEGACY_STDERR_LOG="$SCRATCH_DIR/legacy.stderr"
 LEGACY_RC=0
+seed_top_level_skill "$MONOREPO_LEGACY_FIXTURE"
 run_sync "$SKILLS_HOME_LEGACY_FIXTURE" "$MONOREPO_LEGACY_FIXTURE" "$LEGACY_STDOUT_LOG" "$LEGACY_STDERR_LOG" || LEGACY_RC=$?
 LEGACY_STDOUT="$(cat "$LEGACY_STDOUT_LOG")"
 
@@ -1507,8 +1571,9 @@ LEGACY_PLUGIN_JSON_AFTER_RUN12="$(cat "$MONOREPO_LEGACY_FIXTURE/plugins/legacy-s
 cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-sync-plugin
-description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
-version: 0.2.0
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form. Use when: testing.
+metadata:
+  version: 0.2.0
 ---
 
 # legacy-sync-plugin
@@ -1573,6 +1638,19 @@ run_prepare() {
                 "$PREPARE_FIXTURE_DIR/$fixture/plugin-manifest.json"
     ) >"$stdout_log" 2>"$stderr_log" || rc=$?
     return "$rc"
+}
+
+# run_prepare_unvalidated <reason> <run_prepare args...>: run_prepare with
+# SKILL_KIT_NO_PLUGIN_VALIDATION=1, for a fixture that must be a skill
+# validate-skill.sh rejects. The reason is required, so each use says why.
+run_prepare_unvalidated() {
+    local reason="$1"
+    shift
+    if [[ -z "$reason" ]]; then
+        echo "FATAL: run_prepare_unvalidated needs a reason" >&2
+        exit 1
+    fi
+    ( export SKILL_KIT_NO_PLUGIN_VALIDATION=1; run_prepare "$@" )
 }
 
 PREPARE_LEGACY_RC=0
@@ -2644,8 +2722,9 @@ mkdir -p "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill" \
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill/SKILL.md" <<'EOF'
 ---
 name: my presync skill
-description: Throwaway fixture — space-named, CHANGELOG deliberately mismatched (#81, sixth site).
-version: 1.0.0
+description: Throwaway fixture — space-named, CHANGELOG deliberately mismatched (#81, sixth site). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Presync Skill
@@ -2661,8 +2740,9 @@ EOF
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my passing skill/SKILL.md" <<'EOF'
 ---
 name: my passing skill
-description: Throwaway fixture — space-named, CHANGELOG matches (#81, sixth site).
-version: 1.0.0
+description: Throwaway fixture — space-named, CHANGELOG matches (#81, sixth site). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Passing Skill
@@ -2678,8 +2758,9 @@ EOF
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/presync-plain-skill/SKILL.md" <<'EOF'
 ---
 name: presync-plain-skill
-description: Throwaway fixture with an ordinary name — the control that survives word-splitting either way (#81, sixth site).
-version: 1.0.0
+description: Throwaway fixture with an ordinary name — the control that survives word-splitting either way (#81, sixth site). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Plain Skill
@@ -2778,7 +2859,7 @@ mkdir -p "$SKILLS_HOME_SPACE_FIXTURE/my skill/scripts" \
          "$SKILLS_HOME_SPACE_FIXTURE/space-plain-skill" \
          "$MONOREPO_SPACE_FIXTURE/my skill" \
          "$MONOREPO_SPACE_FIXTURE/space-plain-skill" \
-         "$MONOREPO_SPACE_FIXTURE/plugins/my plugin/.claude-plugin" \
+         "$SCRATCH_DIR/monorepo-space-plugin-name/plugins/my plugin/.claude-plugin" \
          "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE/my skill" \
          "$MONOREPO_SPACE_PLUGIN_FIXTURE/my skill" \
          "$MONOREPO_MIXEDSKILLS_FIXTURE"
@@ -2786,8 +2867,9 @@ mkdir -p "$SKILLS_HOME_SPACE_FIXTURE/my skill/scripts" \
 cat > "$SKILLS_HOME_SPACE_FIXTURE/my skill/SKILL.md" <<'EOF'
 ---
 name: my skill
-description: Throwaway fixture skill in a directory named with a space, guarding sync-monorepo.sh's unquoted iteration sites against IFS word-splitting (#81).
-version: 1.0.0
+description: Throwaway fixture skill in a directory named with a space, guarding sync-monorepo.sh's unquoted iteration sites against IFS word-splitting (#81). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Skill
@@ -2803,8 +2885,9 @@ echo "SPACE-FIXTURE-SCRIPT-MARKER" > "$SKILLS_HOME_SPACE_FIXTURE/my skill/script
 cat > "$SKILLS_HOME_SPACE_FIXTURE/space-plain-skill/SKILL.md" <<'EOF'
 ---
 name: space-plain-skill
-description: Throwaway fixture skill with an ordinary name, synced alongside "my skill" as the positive control for issue #81.
-version: 1.0.0
+description: Throwaway fixture skill with an ordinary name, synced alongside "my skill" as the positive control for issue #81. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Space Plain Skill
@@ -2813,20 +2896,26 @@ Fixture content.
 EOF
 
 # An already-published plugin whose directory (and manifest `name`) contains a
-# space — seeded directly rather than through prepare-plugin.sh, since the
-# PLUGINS_TO_LIST catalogue loop only reads what is already on disk under
-# plugins/. Guards `for PLUGIN_NAME in $PLUGINS_TO_LIST`: word-split into "my"
-# and "plugin", plugins/my/.claude-plugin/plugin.json and
-# plugins/plugin/.claude-plugin/plugin.json both resolve to nothing, and the
-# plugin silently drops out of PLUGIN_COUNT and the catalogue table with no
-# error at all.
-cat > "$MONOREPO_SPACE_FIXTURE/plugins/my plugin/.claude-plugin/plugin.json" <<'EOF'
+# space. Until #190 this sat in MONOREPO_SPACE_FIXTURE and guarded
+# `for PLUGIN_NAME in $PLUGINS_TO_LIST` (word-splitting dropped it from the
+# catalogue). Since #190 catalogue.py refuses any plugin name that is not
+# lower-case letters, digits and hyphens, so such a plugin can never be in the
+# catalogue; it now sits in its own monorepo and the sync must refuse it
+# before writing anything (asserted below, at site 3/5).
+SPACE_PLUGIN_NAME_MONO="$SCRATCH_DIR/monorepo-space-plugin-name"
+mkdir -p "$SPACE_PLUGIN_NAME_MONO/top-skill"
+printf -- '---\nname: top-skill\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# top-skill\n' > "$SPACE_PLUGIN_NAME_MONO/top-skill/SKILL.md"
+printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$SPACE_PLUGIN_NAME_MONO/top-skill/CHANGELOG.md"
+cat > "$SPACE_PLUGIN_NAME_MONO/plugins/my plugin/.claude-plugin/plugin.json" <<'EOF'
 {
   "name": "my plugin",
   "version": "1.0.0",
   "description": "Throwaway fixture plugin with a space in its name, guarding the PLUGINS_TO_LIST catalogue loop (#81)."
 }
 EOF
+# catalogue.py writes the plugin catalogue since #190, and a plugin with no
+# README is drift it cannot fix (the sync would exit 1), so the fixture has one.
+printf '# my plugin\n' > "$SPACE_PLUGIN_NAME_MONO/plugins/my plugin/README.md"
 
 # --- The reversion-guard-in-plugin fixture: a plugin manifest whose sole
 # skill has a space in its name, and IS refused. A stale local source (v1.0.0)
@@ -2836,8 +2925,9 @@ EOF
 cat > "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE/my skill/SKILL.md" <<'EOF'
 ---
 name: my skill
-description: Throwaway fixture skill — stale local source, refused by the reversion guard (#81's manifest-skill-names loop).
-version: 1.0.0
+description: Throwaway fixture skill — stale local source, refused by the reversion guard (#81's manifest-skill-names loop). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Skill (stale local source)
@@ -2865,8 +2955,9 @@ EOF
 cat > "$MONOREPO_SPACE_PLUGIN_FIXTURE/my skill/SKILL.md" <<'EOF'
 ---
 name: my skill
-description: Throwaway fixture skill — the in-repo copy, newer than the local source, so the reversion guard must refuse to overwrite it.
-version: 2.0.0
+description: Throwaway fixture skill — the in-repo copy, newer than the local source, so the reversion guard must refuse to overwrite it. Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # My Skill (in-repo, newer)
@@ -2962,13 +3053,15 @@ SPACE_CHANGELOG="$(cat "$MONOREPO_SPACE_FIXTURE/CHANGELOG.md" 2>/dev/null || tru
 assert_contains "the CHANGELOG skill inventory carries the space-named skill's own entry" \
     "- \`my skill\` v1.0.0" "$SPACE_CHANGELOG"
 
-# --- Assertion: published-plugin catalogue (site 3/5). Verified by hand
-# against a scratch revert of this loop alone: PLUGIN_COUNT stays 0 (the
-# split "my"/"plugin" fragments each fail the plugin.json existence check),
-# the "## Plugins" section never renders, and "my plugin" is invisible in the
-# generated README with no error at all. ---
-assert_contains "the space-named already-published plugin keeps its catalogue row" \
-    "| [my plugin](./plugins/my plugin/) |" "$SPACE_README"
+# --- Assertion: published-plugin catalogue (site 3/5). Before #190 this
+# asserted the space-named plugin kept its row. catalogue.py now refuses such
+# a name, so the sync must stop before its first write and say why. ---
+SPACE_PLUGIN_NAME_ALL="$(tree_digest "$SPACE_PLUGIN_NAME_MONO")"
+SPACE_PLUGIN_NAME_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$SPACE_PLUGIN_NAME_MONO" "$SCRATCH_DIR/space-plugin-name.stdout" "$SCRATCH_DIR/space-plugin-name.stderr" || SPACE_PLUGIN_NAME_RC=$?
+assert_eq "a space-named already-published plugin stops the sync (exit 1, #190)" "1" "$SPACE_PLUGIN_NAME_RC"
+assert_contains "…and says why" "name 'my plugin' is not lower-case letters, digits and hyphens" "$(cat "$SCRATCH_DIR/space-plugin-name.stderr")"
+assert_eq "…and writes nothing" "$SPACE_PLUGIN_NAME_ALL" "$(tree_digest "$SPACE_PLUGIN_NAME_MONO")"
 
 # --- Assertion: manifest-skill-names loop inside the reversion guard (site
 # 2/5). Verified by hand against a scratch revert of this loop alone:
@@ -3010,8 +3103,8 @@ assert_not_contains "the refused plugin is not built anyway" \
 # hand against the round-2 code: README said "0 reusable" above a 1-row
 # table, and the CHANGELOG said "Synced 0 skills" above a bullet for `my
 # skill` with no indication that entry wasn't part of the 0. Both fixed:
-# README/fallback now use SKILLS_RESOLVED_COUNT (matches the catalogue
-# unconditionally), and the CHANGELOG inventory annotates refused entries so
+# README/fallback now use CATALOG_COUNT, the catalogue's own row count (it was
+# SKILLS_RESOLVED_COUNT until #93), and the CHANGELOG inventory annotates refused entries so
 # "Synced 0" no longer reads as contradicted by a populated list. ---
 SPACE_PLUGIN_README="$(cat "$MONOREPO_SPACE_PLUGIN_FIXTURE/README.md" 2>/dev/null || true)"
 SPACE_PLUGIN_CHANGELOG="$(cat "$MONOREPO_SPACE_PLUGIN_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
@@ -3214,8 +3307,9 @@ write_fixround_skill() {
     cat > "$dir/$name/SKILL.md" <<EOF
 ---
 name: $name
-description: Throwaway fixture skill for the PR #91 deep-review fix round.
-version: $version
+description: Throwaway fixture skill for the PR #91 deep-review fix round. Use when: testing.
+metadata:
+  version: $version
 ---
 
 # $name
@@ -3470,8 +3564,9 @@ assert_eq "…and exactly one install-all cp line is published as an instruction
 cat > "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: badmanifest-skill
-description: Throwaway fixture skill whose manifest declares skills[] as a number (#73; harness defect 12).
-version: 2.0.0
+description: Throwaway fixture skill whose manifest declares skills[] as a number (#73; harness defect 12). Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Bad Manifest Skill
@@ -3506,8 +3601,9 @@ EOF
 cat > "$MONOREPO_BADMANIFEST_FIXTURE/plugins/badmanifest-plugin/skills/badmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: badmanifest-skill
-description: STALE published copy — a correct drift check wants to rebuild this.
-version: 1.0.0
+description: STALE published copy — a correct drift check wants to rebuild this. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Bad Manifest Skill (stale)
@@ -3523,12 +3619,13 @@ BADMANIFEST_MANIFEST="$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/plugin-
 # combined output contained no "ERROR" at all, and README.md was regenerated. ---
 assert_eq "a manifest whose skills[] cannot be read fails the run instead of being skipped" \
     "1" "$BADMANIFEST_RC"
+# Since the #195 review (C-001) the manifest pass that runs before the first
+# write catches this shape, so the messages are that pass's, not the
+# auto-build stage's "cannot read skills[]" (which stays as a backstop).
 assert_contains "…naming the manifest" \
-    "ERROR: cannot read skills[] from $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
-assert_contains "…and relaying jq's own diagnosis rather than swallowing it" \
-    "Cannot index number with string \"name\"" "$BADMANIFEST_STDERR"
-assert_contains "…joining the collected-failure summary that names every broken manifest in one pass" \
-    "skills[] could not be read: $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
+    "Error: $BADMANIFEST_MANIFEST: a skills[] entry is number, not a name or an object" "$BADMANIFEST_STDERR"
+assert_contains "…and saying nothing was changed" \
+    "Fix the manifest and re-run. Nothing was changed." "$BADMANIFEST_STDERR"
 assert_not_contains "…and is NOT reported as a build failure, since no build was attempted" \
     "plugin build failed:" "$BADMANIFEST_STDERR"
 assert_eq "…with the catalogue deliberately NOT regenerated on the way out" \
@@ -3540,8 +3637,9 @@ assert_eq "…with the catalogue deliberately NOT regenerated on the way out" \
 cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: goodmanifest-skill
-description: Throwaway fixture skill — positive control for #73, harness defect 12; well-formed manifest.
-version: 2.0.0
+description: Throwaway fixture skill — positive control for #73, harness defect 12; well-formed manifest. Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Good Manifest Skill
@@ -3579,7 +3677,7 @@ mkdir -p "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src"
 cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src/control-agent.md" <<'EOF'
 ---
 name: control-agent
-description: Throwaway fixture agent — proves a well-formed agents[] entry is still copied (#73, harness defect 14 positive control).
+description: Throwaway fixture agent — proves a well-formed agents[] entry is still copied (#73, harness defect 14 positive control). Use when: testing.
 ---
 
 GOODMANIFEST-AGENT-MARKER
@@ -3594,8 +3692,9 @@ EOF
 cat > "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/skills/goodmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: goodmanifest-skill
-description: STALE published copy — the drift check must rebuild this.
-version: 1.0.0
+description: STALE published copy — the drift check must rebuild this. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Good Manifest Skill (stale)
@@ -3625,8 +3724,9 @@ assert_contains "…and the published copy is no longer the stale v1.0.0" \
 cat > "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/SKILL.md" <<'EOF'
 ---
 name: bareagent-skill
-description: Throwaway fixture skill whose manifest declares a bare-string agent (#73; harness defect 14).
-version: 1.0.0
+description: Throwaway fixture skill whose manifest declares a bare-string agent (#73; harness defect 14). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Bare Agent Skill
@@ -3703,8 +3803,9 @@ mkdir -p "$SKILLS_HOME_BAREPUB_FIXTURE/barepub-skill" \
 
 BAREPUB_SKILL_MD='---
 name: barepub-skill
-description: Throwaway fixture — already-published plugin whose manifest gains a bare agents[] entry (harness defect 18).
-version: 1.0.0
+description: Throwaway fixture — already-published plugin whose manifest gains a bare agents[] entry (harness defect 18). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Barepub Skill'
@@ -3778,7 +3879,7 @@ DRYRUN_STDERR="$(cat "$SCRATCH_DIR/dryrun-stderr.log")"
 assert_eq "--dry-run over an unreadable manifest still refuses (the read happens either way)" \
     "1" "$BADMANIFEST_DRYRUN_RC"
 assert_contains "…saying plainly that nothing was written" \
-    "Nothing was written — this was a --dry-run." "$DRYRUN_STDERR"
+    "Nothing was changed." "$DRYRUN_STDERR"
 assert_not_contains "…and not repeating the real run's \"already written\" claim" \
     "Skills synced before this point are already written" "$DRYRUN_STDERR"
 assert_not_contains "…nor calling a read failure a build failure" \
@@ -3814,8 +3915,9 @@ assert_contains "…with its real content, not an empty file" \
 cat > "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/SKILL.md" <<'EOF'
 ---
 name: slashlog-skill
-description: Throwaway fixture skill whose manifest name contains a slash (#73; harness defect 13).
-version: 1.0.0
+description: Throwaway fixture skill whose manifest name contains a slash (#73; harness defect 13). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Slash Log Skill
@@ -3906,8 +4008,9 @@ mkdir -p "$PREPARE_FIXTURE_DIR/hookstypo-plugin" "$PREPARE_FIXTURE_DIR/hooksnull
 cat > "$PREPARE_FIXTURE_DIR/hookstypo-plugin/SKILL.md" <<'EOF'
 ---
 name: hookstypo-plugin
-description: Throwaway fixture — manifest declares hooks with a misspelled key (harness defect 20).
-version: 0.1.0
+description: Throwaway fixture — manifest declares hooks with a misspelled key (harness defect 20). Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # hookstypo-plugin
@@ -3930,8 +4033,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/hooksnull-plugin/SKILL.md" <<'EOF'
 ---
 name: hooksnull-plugin
-description: Throwaway fixture — hooks.source explicitly null, a deliberate no-op (harness defect 20 control).
-version: 0.1.0
+description: Throwaway fixture — hooks.source explicitly null, a deliberate no-op (harness defect 20 control). Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # hooksnull-plugin
@@ -3991,8 +4095,9 @@ mkdir -p "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill" "$MONOREPO_AUTHOR_FIXTURE"
 cat > "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill/SKILL.md" <<'EOF'
 ---
 name: author-skill
-description: Throwaway fixture backing the --author forwarding check (harness defect 21).
-version: 1.0.0
+description: Throwaway fixture backing the --author forwarding check (harness defect 21). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Author Skill
@@ -4044,8 +4149,9 @@ mkdir -p "$PRESYNC_ADD_HOME_FIXTURE/presync-brandnew" \
 cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-brandnew/SKILL.md" <<'EOF'
 ---
 name: presync-brandnew
-description: Throwaway fixture — home-only skill with a mismatched CHANGELOG (harness defect 22).
-version: 2.0.0
+description: Throwaway fixture — home-only skill with a mismatched CHANGELOG (harness defect 22). Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Presync Brandnew
@@ -4063,8 +4169,9 @@ EOF
 cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-addok/SKILL.md" <<'EOF'
 ---
 name: presync-addok
-description: Throwaway fixture — home-only skill whose CHANGELOG matches (harness defect 22 control).
-version: 1.0.0
+description: Throwaway fixture — home-only skill whose CHANGELOG matches (harness defect 22 control). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Addok
@@ -4079,8 +4186,9 @@ EOF
 
 PRESYNC_ONREPO_MD='---
 name: presync-onrepo
-description: Throwaway fixture — already in the monorepo, enumerated with or without --add.
-version: 1.0.0
+description: Throwaway fixture — already in the monorepo, enumerated with or without --add. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Onrepo'
@@ -4190,8 +4298,9 @@ PRESYNC_PCT_MONOREPO_FIXTURE="$SCRATCH_DIR/presync-pct-monorepo"
 mkdir -p "$PRESYNC_PCT_HOME_FIXTURE/pct%s-skill" "$PRESYNC_PCT_MONOREPO_FIXTURE/pct%s-skill"
 PCT_SKILL_MD='---
 name: pct%s-skill
-description: Throwaway fixture whose directory name contains a printf conversion (harness defect 24).
-version: 1.0.0
+description: Throwaway fixture whose directory name contains a printf conversion (harness defect 24). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Pct Skill'
@@ -4234,8 +4343,9 @@ mkdir -p "$SKILLS_HOME_COMMA_FIXTURE/alpha,beta" \
          "$MONOREPO_COMMA_FIXTURE/alpha,beta"
 COMMA_SKILL_MD='---
 name: alpha,beta
-description: Throwaway fixture skill whose directory name contains a comma (harness defect 23).
-version: 1.0.0
+description: Throwaway fixture skill whose directory name contains a comma (harness defect 23). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Alpha,Beta'
@@ -4244,8 +4354,9 @@ printf '%s\n' "$COMMA_SKILL_MD" > "$MONOREPO_COMMA_FIXTURE/alpha,beta/SKILL.md"
 cat > "$SKILLS_HOME_COMMA_FIXTURE/comma-newcomer/SKILL.md" <<'EOF'
 ---
 name: comma-newcomer
-description: Throwaway fixture skill brought in by --add alongside a comma-named sibling (harness defect 23).
-version: 1.0.0
+description: Throwaway fixture skill brought in by --add alongside a comma-named sibling (harness defect 23). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Comma Newcomer
@@ -4342,7 +4453,8 @@ name: foldedscalar-skill
 description: >-
   FOLDED-SCALAR-MARKER — a description written as a folded block scalar that
   spans two source lines. Use when: (1) the generator folds it into one line.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # foldedscalar-skill
@@ -4353,7 +4465,8 @@ cat > "$PREPARE_FIXTURE_DIR/dquotescalar-plugin/SKILL.md" <<'EOF'
 ---
 name: dquotescalar-skill
 description: "DQUOTE-SCALAR-MARKER — phrases like \"review this\" and \"converge to zero\" must survive intact. Use when: (1) the generator decodes a double-quoted scalar."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dquotescalar-skill
@@ -4366,7 +4479,8 @@ cat > "$PREPARE_FIXTURE_DIR/squotescalar-plugin/SKILL.md" <<'EOF'
 ---
 name: squotescalar-skill
 description: 'SQUOTE-SCALAR-MARKER — it''s a single-quoted scalar, kept whole. Use when: (1) the doubled quote collapses to one.'
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # squotescalar-skill
@@ -4380,7 +4494,8 @@ cat > "$PREPARE_FIXTURE_DIR/plainscalar-plugin/SKILL.md" <<'EOF'
 ---
 name: plainscalar-skill
 description: "PLAIN-OPENQUOTE-MARKER" stays whole when the scalar is plain. Use when: (1) nothing is stripped.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # plainscalar-skill
@@ -4403,7 +4518,8 @@ cat > "$PREPARE_FIXTURE_DIR/plainregress-plugin/SKILL.md" <<'EOF'
 ---
 name: plainregress-skill
 description: PLAINREGRESS-MARKER — an ordinary plain scalar with no quoting at all. Use when: (1) plain-scalar output is unchanged.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # plainregress-skill
@@ -4422,7 +4538,8 @@ description: |-
   LITERAL-SCALAR-MARKER — a description written as a literal block scalar whose
   two source lines must still arrive as one. Use when: (1) a literal block folds
   to spaces rather than preserving its newline.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # litscalar-skill
@@ -4444,7 +4561,8 @@ description: >-
   use-when clause, so nothing downstream trims an over-captured tail before the
   assertions see it.
 tagline: OVERCAPTURE-SENTINEL
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # overcapture-skill
@@ -4469,7 +4587,8 @@ description: >-
 
   And whose second paragraph follows a blank line, which must be dropped rather
   than folded in as an extra separator.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # blankline-skill
@@ -4487,7 +4606,8 @@ name: bareblock-skill
 description: >
   BAREBLOCK-MARKER — a folded scalar whose header carries no chomping and no
   indentation indicator. Use when: (1) the bare header parses.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # bareblock-skill
@@ -4499,7 +4619,8 @@ name: plusblock-skill
 description: >+
   PLUSBLOCK-MARKER — a folded scalar carrying the keep chomping indicator. Use
   when: (1) the keep indicator parses.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # plusblock-skill
@@ -4511,7 +4632,8 @@ name: chompindent-skill
 description: >-2
   CHOMPINDENT-MARKER — a folded scalar whose header writes chomping before the
   indentation indicator. Use when: (1) chomping-before-indentation parses.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # chompindent-skill
@@ -4526,7 +4648,8 @@ cat > "$PREPARE_FIXTURE_DIR/dquoteplain-plugin/SKILL.md" <<'EOF'
 ---
 name: dquoteplain-skill
 description: "DQUOTEPLAIN-MARKER — an escape-free double-quoted description, the shape 38 of the 40 double-quoted SKILL.md files in this repo use. Use when: (1) the outer quotes come off and nothing else changes."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dquoteplain-skill
@@ -4543,7 +4666,8 @@ cat > "$PREPARE_FIXTURE_DIR/escwsscalar-plugin/SKILL.md" <<'EOF'
 ---
 name: escwsscalar-skill
 description: "ESCWS-MARKER — a double-quoted description carrying a\nnewline escape, a\ttab escape and a\n\ndoubled newline escape, every one of which must decode to a single space. Use when: (1) the description stays on one line."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # escwsscalar-skill
@@ -4560,7 +4684,7 @@ EOF
 # lint hook, or reviewer.
 TRAILWS_DESC_LINE='description: "TRAILWS-MARKER — a double-quoted description carrying a \"nested\" quoted phrase, written with one trailing space after its closing quote. Use when: (1) the trailing space is trimmed before the quote test."'
 printf '%s\n%s\n%s \n%s\n%s\n\n%s\n' \
-    '---' 'name: trailws-skill' "$TRAILWS_DESC_LINE" 'version: 0.1.0' '---' \
+    '---' 'name: trailws-skill' "$TRAILWS_DESC_LINE" "$(printf 'metadata:\n  version: 0.1.0')" '---' \
     '# trailws-skill' > "$PREPARE_FIXTURE_DIR/trailws-plugin/SKILL.md"
 
 # A `%` in the description, including a bare printf conversion. Pins the
@@ -4570,7 +4694,8 @@ cat > "$PREPARE_FIXTURE_DIR/pctscalar-plugin/SKILL.md" <<'EOF'
 ---
 name: pctscalar-skill
 description: PCTSCALAR-MARKER — a plain description that is 100% printf conversions, %s included. Use when: (1) a percent is data, not a format.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # pctscalar-skill
@@ -4582,7 +4707,8 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/nodesc-plugin/SKILL.md" <<'EOF'
 ---
 name: nodesc-skill
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # nodesc-skill
@@ -4595,7 +4721,8 @@ cat > "$PREPARE_FIXTURE_DIR/emptydesc-plugin/SKILL.md" <<'EOF'
 ---
 name: emptydesc-skill
 description:
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # emptydesc-skill
@@ -4614,7 +4741,8 @@ cat > "$PREPARE_FIXTURE_DIR/dashescalar-plugin/SKILL.md" <<'EOF'
 ---
 name: dashescalar-skill
 description: -e
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dashescalar-skill
@@ -4639,7 +4767,8 @@ name: badblock-skill
 description: >10
   BADBLOCK-MARKER — the continuation text under an illegal block header, which
   must never reach the README because the build stops first.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # badblock-skill
@@ -4653,7 +4782,8 @@ cat > "$PREPARE_FIXTURE_DIR/dblspace-plugin/SKILL.md" <<'EOF'
 ---
 name: dblspace-skill
 description: "DBLSPACE-MARKER — the cost is  100  USD and stays that way. Use when: (1) no escape appears anywhere in the value."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dblspace-skill
@@ -4672,7 +4802,8 @@ cat > "$PREPARE_FIXTURE_DIR/dblspaceesc-plugin/SKILL.md" <<'EOF'
 ---
 name: dblspaceesc-skill
 description: "DBLESC-MARKER — the cost is  100  USD and stays that way,\teven with a tab escape at the far END of the value. Use when: (1) the collapse is local to the decoded whitespace."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dblspaceesc-skill
@@ -4695,7 +4826,7 @@ EOF
 # editor, lint hook, or reviewer.
 CRBYTE_DESC_LINE="$(printf 'description: CRBYTE-MARKER — a plain description carrying a literal carriage return byte right here:\rand ordinary text after it. Use when: (1) the byte is replaced with a space.')"
 printf '%s\n%s\n%s\n%s\n%s\n\n%s\n' \
-    '---' 'name: crbyte-skill' "$CRBYTE_DESC_LINE" 'version: 0.1.0' '---' \
+    '---' 'name: crbyte-skill' "$CRBYTE_DESC_LINE" "$(printf 'metadata:\n  version: 0.1.0')" '---' \
     '# crbyte-skill' > "$PREPARE_FIXTURE_DIR/crbyte-plugin/SKILL.md"
 
 # --- CR in the positions that DECIDE something (#102 reopened) -------------
@@ -4724,7 +4855,7 @@ printf '%s\n%s\n%s\n%s\n%s\n\n%s\n' \
 CRQUOTE_DESC_LINE='description: "CRQUOTE-MARKER — phrases like \"review this\" and \"converge to zero\" must survive a CRLF line ending. Use when: (1) the CR is scrubbed before the closing-quote test runs."'
 printf '%s\n%s\n' '---' 'name: crquote-skill' > "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
 printf '%s\r\n' "$CRQUOTE_DESC_LINE" >> "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crquote-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crquote-skill' \
     >> "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
 
 # 2. A block scalar whose BODY lines are CRLF-terminated (header left clean, so
@@ -4739,7 +4870,7 @@ printf '  %s\r\n' \
     'Each join between them must be a single space, never two.' \
     'And the value must not end in a stray space either.' \
     >> "$PREPARE_FIXTURE_DIR/crblock-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crblock-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crblock-skill' \
     >> "$PREPARE_FIXTURE_DIR/crblock-plugin/SKILL.md"
 
 # 3. The block HEADER line itself CRLF-terminated — a legal `>-` that arrives as
@@ -4754,7 +4885,7 @@ printf '  %s\n' \
     'CRHDR-MARKER — a folded description whose block header line is CRLF-terminated.' \
     'A legal header must stay legal with a CR on the end of it.' \
     >> "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crhdr-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crhdr-skill' \
     >> "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
 
 # 4. An INDENTED body line holding nothing but a CR. `line ~ /^[ \t]*$/` is false
@@ -4772,7 +4903,7 @@ printf '  \r\n' >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
 printf '  %s\n' \
     'That line must be skipped as blank rather than folded in as content.' \
     >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# cronly-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# cronly-skill' \
     >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
 
 # 5. A BARE CR-only body line — the shape a real CRLF file's paragraph break
@@ -4791,7 +4922,7 @@ printf '\r\n' >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
 printf '  %s\n' \
     'This second paragraph must survive, because a bare CR line used to end the block.' \
     >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crblank-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crblank-skill' \
     >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
 
 for _sc in foldedscalar dquotescalar squotescalar plainscalar plainregress \
@@ -4841,7 +4972,8 @@ run_prepare litscalar-plugin "$SCRATCH_DIR/scalar-literal.stdout" \
 SCALAR_LITERAL_README="$(cat "$PREPARE_OUT_DIR/litscalar-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_OVERCAP_RC=0
-run_prepare overcapture-plugin "$SCRATCH_DIR/scalar-overcap.stdout" \
+run_prepare_unvalidated "the fixture needs a non-standard tagline: key after its block, and has no 'Use when:' list" \
+    overcapture-plugin "$SCRATCH_DIR/scalar-overcap.stdout" \
     "$SCRATCH_DIR/scalar-overcap.stderr" || SCALAR_OVERCAP_RC=$?
 SCALAR_OVERCAP_README="$(cat "$PREPARE_OUT_DIR/overcapture-plugin/README.md" 2>/dev/null || true)"
 
@@ -4881,17 +5013,20 @@ run_prepare pctscalar-plugin "$SCRATCH_DIR/scalar-pct.stdout" \
 SCALAR_PCT_README="$(cat "$PREPARE_OUT_DIR/pctscalar-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_NODESC_RC=0
-run_prepare nodesc-plugin "$SCRATCH_DIR/scalar-nodesc.stdout" \
+run_prepare_unvalidated "the fixture has no description, which validate-skill.sh requires" \
+    nodesc-plugin "$SCRATCH_DIR/scalar-nodesc.stdout" \
     "$SCRATCH_DIR/scalar-nodesc.stderr" || SCALAR_NODESC_RC=$?
 SCALAR_NODESC_README="$(cat "$PREPARE_OUT_DIR/nodesc-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_EMPTYDESC_RC=0
-run_prepare emptydesc-plugin "$SCRATCH_DIR/scalar-emptydesc.stdout" \
+run_prepare_unvalidated "the description is empty, which validate-skill.sh rejects" \
+    emptydesc-plugin "$SCRATCH_DIR/scalar-emptydesc.stdout" \
     "$SCRATCH_DIR/scalar-emptydesc.stderr" || SCALAR_EMPTYDESC_RC=$?
 SCALAR_EMPTYDESC_README="$(cat "$PREPARE_OUT_DIR/emptydesc-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_DASHE_RC=0
-run_prepare dashescalar-plugin "$SCRATCH_DIR/scalar-dashe.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    dashescalar-plugin "$SCRATCH_DIR/scalar-dashe.stdout" \
     "$SCRATCH_DIR/scalar-dashe.stderr" || SCALAR_DASHE_RC=$?
 SCALAR_DASHE_README="$(cat "$PREPARE_OUT_DIR/dashescalar-plugin/README.md" 2>/dev/null || true)"
 
@@ -4902,7 +5037,8 @@ SCALAR_BADBLOCK_STDERR="$(cat "$SCRATCH_DIR/scalar-badblock.stderr")"
 SCALAR_BADBLOCK_README="$(cat "$PREPARE_OUT_DIR/badblock-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_BLANKLINE_RC=0
-run_prepare blankline-plugin "$SCRATCH_DIR/scalar-blankline.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    blankline-plugin "$SCRATCH_DIR/scalar-blankline.stdout" \
     "$SCRATCH_DIR/scalar-blankline.stderr" || SCALAR_BLANKLINE_RC=$?
 SCALAR_BLANKLINE_README="$(cat "$PREPARE_OUT_DIR/blankline-plugin/README.md" 2>/dev/null || true)"
 
@@ -4927,7 +5063,8 @@ run_prepare crquote-plugin "$SCRATCH_DIR/scalar-crquote.stdout" \
 SCALAR_CRQUOTE_README="$(cat "$PREPARE_OUT_DIR/crquote-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_CRBLOCK_RC=0
-run_prepare crblock-plugin "$SCRATCH_DIR/scalar-crblock.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    crblock-plugin "$SCRATCH_DIR/scalar-crblock.stdout" \
     "$SCRATCH_DIR/scalar-crblock.stderr" || SCALAR_CRBLOCK_RC=$?
 SCALAR_CRBLOCK_README="$(cat "$PREPARE_OUT_DIR/crblock-plugin/README.md" 2>/dev/null || true)"
 
@@ -4935,19 +5072,22 @@ SCALAR_CRBLOCK_README="$(cat "$PREPARE_OUT_DIR/crblock-plugin/README.md" 2>/dev/
 # extract_field exited 3 on a CRLF-terminated `>-` header, so the failure was an
 # aborted run, not a wrong string.
 SCALAR_CRHDR_RC=0
-run_prepare crhdr-plugin "$SCRATCH_DIR/scalar-crhdr.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    crhdr-plugin "$SCRATCH_DIR/scalar-crhdr.stdout" \
     "$SCRATCH_DIR/scalar-crhdr.stderr" || SCALAR_CRHDR_RC=$?
 SCALAR_CRHDR_README="$(cat "$PREPARE_OUT_DIR/crhdr-plugin/README.md" 2>/dev/null || true)"
 SCALAR_CRHDR_STDERR="$(cat "$SCRATCH_DIR/scalar-crhdr.stderr")"
 
 SCALAR_CRONLY_RC=0
-run_prepare cronly-plugin "$SCRATCH_DIR/scalar-cronly.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    cronly-plugin "$SCRATCH_DIR/scalar-cronly.stdout" \
     "$SCRATCH_DIR/scalar-cronly.stderr" || SCALAR_CRONLY_RC=$?
 SCALAR_CRONLY_README="$(cat "$PREPARE_OUT_DIR/cronly-plugin/README.md" 2>/dev/null || true)"
 SCALAR_CRONLY_STDERR="$(cat "$SCRATCH_DIR/scalar-cronly.stderr")"
 
 SCALAR_CRBLANK_RC=0
-run_prepare crblank-plugin "$SCRATCH_DIR/scalar-crblank.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    crblank-plugin "$SCRATCH_DIR/scalar-crblank.stdout" \
     "$SCRATCH_DIR/scalar-crblank.stderr" || SCALAR_CRBLANK_RC=$?
 SCALAR_CRBLANK_README="$(cat "$PREPARE_OUT_DIR/crblank-plugin/README.md" 2>/dev/null || true)"
 
@@ -5625,50 +5765,1873 @@ assert_contains "…naming the field, and suggesting > instead" \
 assert_not_contains "…and a folded (>) scalar is NOT announced, since folding is what it asked for" \
     "block scalar of" "$SCALAR_FOLDED_STDERR"
 
-# ============================================================
-# Authoring-source parity
-# ============================================================
+# --- standalone plugins: skipped on a plain sync, refused by --add-plugin ---
 #
-# skill-publishing is authored outside the repo and published into plugins/**.
-# A fix applied to only one copy is a fix that either nobody receives or the
-# next sync silently reverts. The live copy does not exist in CI.
+# obsidian-brain and git-flow ship from their own marketplaces. A plain sync must
+# skip a manifest with either name, and --add-plugin must refuse either name
+# before it writes anything. Against the e9d53b9 script, the obsidian-brain
+# plain-sync skip and the --add-plugin refusals fail. The git-flow plain-sync
+# skip and the ordinary-plugin positive control pass there too; they guard
+# against over-reach, not against the old bug. Against b389895, the git-flow
+# README note and the spelling and build-dir-name bypasses fail.
+STANDALONE_SKILLS_HOME="$SCRATCH_DIR/skills-home-standalone"
+STANDALONE_MONOREPO="$SCRATCH_DIR/monorepo-standalone"
+mkdir -p "$STANDALONE_SKILLS_HOME/obsidian-brain" "$STANDALONE_MONOREPO"
+cat > "$STANDALONE_SKILLS_HOME/obsidian-brain/SKILL.md" <<'EOF'
+---
+name: obsidian-brain
+description: Throwaway fixture skill backing a standalone-plugin manifest.
+version: 0.1.0
+---
 
-# Compared as a tree. The single-file form this replaced diffed scripts/
-# sync-monorepo.sh alone while describing the whole publish relationship, so
-# SKILL.md and CHANGELOG.md — two of the three files a typical change to this
-# skill touches — could drift with the check still green. SKILL.md is the
-# load-bearing one: its metadata.version is what the reversion guard compares, so
-# a live copy left behind on the older version is exactly the stale-source shape
-# that guard exists to catch.
-#
-# The live copy is its own git repo and carries repo scaffolding the published
-# copy has no business containing (verified: these seven names are the entire
-# delta). Filtered by anchored whole-line match on diff's own "Only in <live>:"
-# form, so the exclusion applies to those top-level entries and nothing nested.
-#
-# `diff -rq` for the message's sake: one line per differing or missing file
-# instead of every changed line of a 1300-line script.
-if [[ -d "$LIVE_SKILL_DIR" ]]; then
-    LIVE_ONLY_SCAFFOLD="^Only in $LIVE_SKILL_DIR: (\.git|\.github|\.gitignore|CONTRIBUTING\.md|LICENSE|README\.md|plugin-manifest\.json)\$"
-    PARITY_DIFF="$(diff -rq "$LIVE_SKILL_DIR" "$IN_REPO_SKILL_DIR" 2>&1 | grep -vE "$LIVE_ONLY_SCAFFOLD" || true)"
-    assert_eq "live authoring copy is byte-identical to the in-repo copy (whole skill tree)" \
-        "" "$PARITY_DIFF"
-else
-    echo "SKIP: live authoring copy not present, parity check skipped: $LIVE_SKILL_DIR"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-fi
+# obsidian-brain
 
-# The summary reports skips explicitly: without the count, a run where an
-# assertion was skipped and a run where it passed both print the same
-# "All assertions passed." line, so a check that silently stopped running looks
-# exactly like a check that is green.
+Fixture content.
+EOF
+cat > "$STANDALONE_SKILLS_HOME/obsidian-brain/plugin-manifest.json" <<'EOF'
+{
+  "name": "obsidian-brain",
+  "version": "0.1.0",
+  "description": "Throwaway fixture plugin; must be skipped as standalone.",
+  "skills": [
+    { "name": "obsidian-brain", "source": "." }
+  ],
+  "commands": []
+}
+EOF
+STANDALONE_RC=0
+run_sync "$STANDALONE_SKILLS_HOME" "$STANDALONE_MONOREPO" "$SCRATCH_DIR/standalone.stdout" "$SCRATCH_DIR/standalone.stderr" || STANDALONE_RC=$?
+assert_eq "plain sync with an obsidian-brain manifest exits 0" "0" "$STANDALONE_RC"
+assert_contains "…and says it skipped obsidian-brain as standalone" \
+    "SKIP (standalone marketplace: abhattacherjee/obsidian-brain)  obsidian-brain" "$(cat "$SCRATCH_DIR/standalone.stdout")"
+assert_eq "…and writes no plugins/obsidian-brain" "ABSENT" \
+    "$([[ -e "$STANDALONE_MONOREPO/plugins/obsidian-brain" ]] && echo PRESENT || echo ABSENT)"
+
+# Same shape for git-flow: a plain sync skips it too.
+mkdir -p "$STANDALONE_SKILLS_HOME/git-flow"
+cat > "$STANDALONE_SKILLS_HOME/git-flow/SKILL.md" <<'GFEOF'
+---
+name: git-flow
+description: Throwaway fixture skill backing a standalone-plugin manifest.
+version: 0.1.0
+---
+
+# git-flow
+
+Fixture content.
+GFEOF
+sed 's/obsidian-brain/git-flow/g' "$STANDALONE_SKILLS_HOME/obsidian-brain/plugin-manifest.json" \
+    > "$STANDALONE_SKILLS_HOME/git-flow/plugin-manifest.json"
+GF_MONOREPO="$SCRATCH_DIR/monorepo-standalone-gf"
+mkdir -p "$GF_MONOREPO"
+GF_RC=0
+run_sync "$STANDALONE_SKILLS_HOME" "$GF_MONOREPO" "$SCRATCH_DIR/standalone-gf.stdout" "$SCRATCH_DIR/standalone-gf.stderr" || GF_RC=$?
+assert_eq "plain sync with a git-flow manifest exits 0" "0" "$GF_RC"
+assert_contains "…and says it skipped git-flow as standalone" \
+    "SKIP (standalone marketplace: abhattacherjee/git-flow)  git-flow" "$(cat "$SCRATCH_DIR/standalone-gf.stdout")"
+assert_eq "…and writes no plugins/git-flow" "ABSENT" \
+    "$([[ -e "$GF_MONOREPO/plugins/git-flow" ]] && echo PRESENT || echo ABSENT)"
+
+# The regenerated root README carries one install note per standalone plugin,
+# generated from STANDALONE_PLUGINS (repo abhattacherjee/<name>, marketplace
+# <name>-repo).
+for _sp in git-flow obsidian-brain; do
+    assert_line_present "the regenerated README has the install note for $_sp" \
+        "$_sp is not in this marketplace. It installs from its own: \`/plugin marketplace add abhattacherjee/$_sp\`, then \`/plugin install $_sp@$_sp-repo\`." \
+        "$(cat "$MONOREPO_FIXTURE/README.md" 2>/dev/null || true)"
+done
+
+for _sp in obsidian-brain git-flow; do
+    # A valid-looking build dir, so a missing guard would copy it instead of
+    # failing on "build directory not found".
+    mkdir -p "$RUN_CWD/build/$_sp/.claude-plugin"
+    echo "{\"name\": \"$_sp\", \"version\": \"0.1.0\"}" > "$RUN_CWD/build/$_sp/.claude-plugin/plugin.json"
+    _sp_mono="$SCRATCH_DIR/monorepo-addplugin-$_sp"
+    mkdir -p "$_sp_mono"
+    _sp_rc=0
+    run_sync "$SKILLS_HOME_FIXTURE" "$_sp_mono" "$SCRATCH_DIR/addplugin-$_sp.stdout" "$SCRATCH_DIR/addplugin-$_sp.stderr" \
+        --add-plugin "$_sp" || _sp_rc=$?
+    assert_eq "--add-plugin $_sp exits 1" "1" "$_sp_rc"
+    assert_contains "…and names the reason on stderr" \
+        "$_sp ships from its own marketplace; not adding it to this monorepo" "$(cat "$SCRATCH_DIR/addplugin-$_sp.stderr")"
+    assert_eq "…and creates no plugins/$_sp in the target" "ABSENT" \
+        "$([[ -e "$_sp_mono/plugins/$_sp" ]] && echo PRESENT || echo ABSENT)"
+    rm -rf "$RUN_CWD/build/$_sp"
+done
+
+# Bypass attempts: other spellings of a standalone name, and a build dir with a
+# different name whose plugin.json says it is a standalone plugin. Each must
+# exit non-zero, write nothing under plugins/, and add no marketplace entry.
+_bypass_case() {
+    # $1 label, $2 --add-plugin value, $3 build dir (relative to RUN_CWD), $4 plugin.json name
+    local label="$1" value="$2" bdir="$3" bname="$4"
+    local mono="$SCRATCH_DIR/monorepo-bypass-$label" rc=0
+    mkdir -p "$mono/.claude-plugin"
+    echo '{"name": "bypass-fixture", "plugins": []}' > "$mono/.claude-plugin/marketplace.json"
+    mkdir -p "$RUN_CWD/$bdir/.claude-plugin"
+    echo "{\"name\": \"$bname\", \"version\": \"0.1.0\"}" > "$RUN_CWD/$bdir/.claude-plugin/plugin.json"
+    run_sync "$SKILLS_HOME_FIXTURE" "$mono" "$SCRATCH_DIR/bypass-$label.stdout" "$SCRATCH_DIR/bypass-$label.stderr" \
+        --add-plugin "$value" || rc=$?
+    assert_eq "--add-plugin $value ($label) exits 1" "1" "$rc"
+    # The fixture home auto-builds its own plugins, so check the names in play,
+    # not an empty plugins/ dir.
+    assert_eq "…and creates no plugins/ dir for it" "ABSENT" \
+        "$([[ -e "$mono/plugins/$value" || -e "$mono/plugins/${value%/}" || -e "$mono/plugins/$(printf %s "$bname" | tr '[:upper:]' '[:lower:]')" ]] && echo PRESENT || echo ABSENT)"
+    assert_not_contains "…and adds no standalone marketplace entry" \
+        "$bname" "$(cat "$mono/.claude-plugin/marketplace.json")"
+    rm -rf "$RUN_CWD/$bdir"
+}
+_bypass_case trailing-slash "obsidian-brain/" "build/obsidian-brain" "obsidian-brain"
+_bypass_case uppercase "Obsidian-Brain" "build/Obsidian-Brain" "obsidian-brain"
+_bypass_case renamed-build-dir "ob2" "build/ob2" "obsidian-brain"
+_bypass_case renamed-build-dir-mixed-case-name "gf2" "build/gf2" "Git-Flow"
+
+# Positive control: --add-plugin for a non-standalone plugin is not refused.
+mkdir -p "$RUN_CWD/build/ordinary-plugin/.claude-plugin"
+# A description and a README: catalogue.py (#190) refuses a plugin.json with no
+# description (exit 2) and reports a plugin with no README as drift (exit 1).
+echo '{"name": "ordinary-plugin", "version": "0.1.0", "description": "fixture"}' > "$RUN_CWD/build/ordinary-plugin/.claude-plugin/plugin.json"
+printf '# ordinary-plugin\n' > "$RUN_CWD/build/ordinary-plugin/README.md"
+ORD_MONO="$SCRATCH_DIR/monorepo-addplugin-ordinary"
+mkdir -p "$ORD_MONO"
+ORD_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$ORD_MONO" "$SCRATCH_DIR/addplugin-ord.stdout" "$SCRATCH_DIR/addplugin-ord.stderr" \
+    --add-plugin ordinary-plugin || ORD_RC=$?
+assert_eq "control: --add-plugin ordinary-plugin exits 0" "0" "$ORD_RC"
+# #167: an empty directory is not a plugin-only monorepo, so it is not refused.
+# The run also reaches the empty-skill-list printing that defect 5 fixed.
+assert_eq "…into an empty directory, which is not plugin-only (#167), with 0 skills listed" "0" \
+    "$(printed_skill_count "$(cat "$SCRATCH_DIR/addplugin-ord.stdout")")"
+assert_not_contains "…and prints no bare \"  - \" bullet" \
+    "$(printf '\n  - \n')" "$(cat "$SCRATCH_DIR/addplugin-ord.stdout")"
+assert_eq "control: …and copies plugins/ordinary-plugin" "PRESENT" \
+    "$([[ -f "$ORD_MONO/plugins/ordinary-plugin/.claude-plugin/plugin.json" ]] && echo PRESENT || echo ABSENT)"
+rm -rf "$RUN_CWD/build/ordinary-plugin"
+
+# ============================================================
+# Issue #190 — a plugin-only monorepo is synced: validate, then the catalogue
+# ============================================================
+#
+# The bare top-level skill directories are deleted; skills live under
+# plugins/<group>/skills/<name>/. #167 made both scripts refuse such a monorepo
+# in every mode, because the old flow found no skills there and still rewrote
+# README.md, CHANGELOG.md, the marketplace catalogue and the CI workflow. #190
+# replaces that refusal with a plugin-only mode: validate every plugin, then
+# catalogue.py writes the README table, marketplace.json and the plugin README
+# meta lines. Nothing else is written. --skills, --add and --init are refused.
+
+# The #167 fixture, kept as it was: README with no catalogue markers. The
+# later cases also use it, and it is never synced into.
+NOSKILL_MONO="$SCRATCH_DIR/monorepo-noskills"
+mkdir -p "$NOSKILL_MONO/plugins/pg/.claude-plugin" "$NOSKILL_MONO/plugins/pg/skills/inner" "$NOSKILL_MONO/docs" \
+         "$NOSKILL_MONO/.claude-plugin" "$NOSKILL_MONO/.github/workflows"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$NOSKILL_MONO/plugins/pg/.claude-plugin/plugin.json"
+printf -- '---\nname: inner\ndescription: Fixture skill inside a plugin. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# inner\n' \
+    > "$NOSKILL_MONO/plugins/pg/skills/inner/SKILL.md"
+echo "fixture" > "$NOSKILL_MONO/docs/notes.md"
+printf '# Fixture monorepo\n\n39 skills in 23 plugins. Deprecated: old-plugin.\n' > "$NOSKILL_MONO/README.md"
+printf '# Changelog\n\n## [Unreleased]\n\n- NOSKILL-CHANGELOG-MARKER\n' > "$NOSKILL_MONO/CHANGELOG.md"
+echo '{"name": "fixture-marketplace", "plugins": [{"name": "pg", "source": "./plugins/pg"}]}' \
+    > "$NOSKILL_MONO/.claude-plugin/marketplace.json"
+cp "$REPO_ROOT/.github/workflows/validate-skill.yml" "$NOSKILL_MONO/.github/workflows/validate-skill.yml"
+git -C "$NOSKILL_MONO" init -q
+NOSKILL_DIGEST="$(tree_digest "$NOSKILL_MONO")"
+
+# PO_BASE: the same plugin-only shape, ready for catalogue.py: README markers and
+# an install line, a plugin README that names its skill, and a marketplace
+# with an owner and metadata (kept as they are by a sync).
+PO_BASE="$SCRATCH_DIR/monorepo-po-base"
+cp -R "$NOSKILL_MONO" "$PO_BASE"
+printf '# Fixture monorepo\n\nPO-INTRO-MARKER\n\n<!-- catalogue:start -->\n<!-- catalogue:end -->\n\n/plugin install PLUGIN_NAME@fixture-marketplace\n' > "$PO_BASE/README.md"
+printf '# pg\n\nThe `inner` skill.\n' > "$PO_BASE/plugins/pg/README.md"
+printf '{\n  "name": "fixture-marketplace",\n  "owner": {"name": "Fixture Owner"},\n  "metadata": {"description": "d", "version": "2026.01.01"},\n  "plugins": []\n}\n' \
+    > "$PO_BASE/.claude-plugin/marketplace.json"
+
+# po_fixture <name>: a fresh copy of PO_BASE; prints its path.
+po_fixture() {
+    local d="$SCRATCH_DIR/monorepo-po-$1"
+    cp -R "$PO_BASE" "$d"
+    printf '%s\n' "$d"
+}
+
+# po_sync <fixture> <label> [sync args…]: sets PO_RC, PO_OUT, PO_ERR.
+po_sync() {
+    local mono="$1" label="$2"
+    shift 2
+    PO_RC=0
+    run_sync "$SKILLS_HOME_FIXTURE" "$mono" "$SCRATCH_DIR/po-$label.stdout" "$SCRATCH_DIR/po-$label.stderr" "$@" || PO_RC=$?
+    PO_OUT="$(cat "$SCRATCH_DIR/po-$label.stdout")"
+    PO_ERR="$(cat "$SCRATCH_DIR/po-$label.stderr")"
+}
+
+PG_ROW='| [pg](./plugins/pg/) | 1.0.0 | 1 | 0 | fixture |'
+
+# 1. Plain sync writes only the catalogue.
+PO1="$(po_fixture plain)"
+PO1_REST="$(tree_digest_except_catalogue "$PO1")"
+po_sync "$PO1" plain
+assert_eq "plain sync on a plugin-only monorepo exits 0 (#190)" "0" "$PO_RC"
+assert_line_present "…and writes the plugin's row into the README table" "$PG_ROW" "$(cat "$PO1/README.md")"
+assert_contains "…and keeps the README text outside the markers" "PO-INTRO-MARKER" "$(cat "$PO1/README.md")"
+assert_eq "…and lists the plugin in marketplace.json" "pg ./plugins/pg 1.0.0 fixture" \
+    "$(jq -r '.plugins[] | "\(.name) \(.source) \(.version) \(.description)"' "$PO1/.claude-plugin/marketplace.json" 2>/dev/null || echo NOT-JSON)"
+assert_eq "…and keeps the marketplace owner and metadata (metadata.version unchanged)" '{"name":"Fixture Owner"} 2026.01.01' \
+    "$(jq -c '.owner' "$PO1/.claude-plugin/marketplace.json" 2>/dev/null) $(jq -r '.metadata.version' "$PO1/.claude-plugin/marketplace.json" 2>/dev/null)"
+assert_line_present "…and writes the plugin README meta line" '**Version:** 1.0.0 · **1** skill · **0** agents · **0** commands' \
+    "$(cat "$PO1/plugins/pg/README.md")"
+assert_eq "…and every other file is byte-identical (CHANGELOG, workflow, docs; none created)" "$PO1_REST" "$(tree_digest_except_catalogue "$PO1")"
+for _f in scripts CONTRIBUTING.md LICENSE .gitignore .github/PULL_REQUEST_TEMPLATE.md; do
+    assert_eq "…and creates no $_f" "ABSENT" "$([[ -e "$PO1/$_f" ]] && echo PRESENT || echo ABSENT)"
+done
+assert_contains "…and says it validated the plugin" "PASS  plugins/pg" "$PO_OUT"
+PO1_ALL="$(tree_digest "$PO1")"
+po_sync "$PO1" plain-again
+assert_eq "a second plain sync exits 0" "0" "$PO_RC"
+assert_eq "…and changes nothing" "$PO1_ALL" "$(tree_digest "$PO1")"
+
+# 2. --dry-run validates and checks, writes nothing.
+PO2="$(po_fixture dryrun)"
+PO2_ALL="$(tree_digest "$PO2")"
+po_sync "$PO2" dryrun --dry-run
+assert_eq "--dry-run on a plugin-only monorepo exits 0 (#190)" "0" "$PO_RC"
+assert_contains "…and prints the drift catalogue.py --check found" "README.md: row pg: missing" "$PO_OUT"
+assert_eq "…and every file is byte-identical" "$PO2_ALL" "$(tree_digest "$PO2")"
+
+# 3. --skills, --add and --init are refused, with nothing written.
+_po_refused() {
+    local label="$1" want="$2" mono
+    shift 2
+    mono="$(po_fixture "refuse-$label")"
+    local before
+    before="$(tree_digest "$mono")"
+    po_sync "$mono" "refuse-$label" "$@"
+    assert_eq "$label on a plugin-only monorepo exits 1 (#190)" "1" "$PO_RC"
+    assert_contains "…$label: says why" "$want" "$PO_ERR"
+    assert_eq "…$label: every file is byte-identical" "$before" "$(tree_digest "$mono")"
+}
+_po_refused skills "--skills: plugin-only monorepo has no top-level skills; edit plugins/<group>/skills/<name>/ and run sync" --skills demo-skill
+_po_refused add "--add: plugin-only monorepo has no top-level skills; edit plugins/<group>/skills/<name>/ and run sync" --add demo-skill
+_po_refused init "--init: the monorepo is already initialised (it has plugins/)" --init
+_po_refused init-with-skills "--skills: plugin-only monorepo has no top-level skills" --init --skills demo-skill
+
+# 4. A plugin that fails validation blocks every write.
+PO4="$(po_fixture invalid)"
+mkdir -p "$PO4/plugins/pbad/.claude-plugin" "$PO4/plugins/pbad/skills/nouse"
+echo '{"name": "pbad", "version": "1.0.0", "description": "bad fixture"}' > "$PO4/plugins/pbad/.claude-plugin/plugin.json"
+printf -- '---\nname: nouse\ndescription: Fixture skill with no trigger list.\nmetadata:\n  version: 1.0.0\n---\n\n# nouse\n' > "$PO4/plugins/pbad/skills/nouse/SKILL.md"
+printf '# pbad\n\n`nouse`\n' > "$PO4/plugins/pbad/README.md"
+PO4_ALL="$(tree_digest "$PO4")"
+po_sync "$PO4" invalid
+assert_eq "a plugin that fails validate-plugin.sh stops a plain sync (exit 1)" "1" "$PO_RC"
+assert_contains "…and names the plugin" "plugins/pbad" "$PO_ERR"
+assert_eq "…and nothing is written" "$PO4_ALL" "$(tree_digest "$PO4")"
+po_sync "$PO4" invalid-dry --dry-run
+assert_eq "…and stops a --dry-run too" "1" "$PO_RC"
+# A plugin directory with no plugin.json fails validation too (never skipped).
+PO4B="$(po_fixture stray)"
+mkdir -p "$PO4B/plugins/stray/skills"
+PO4B_ALL="$(tree_digest "$PO4B")"
+po_sync "$PO4B" stray
+assert_eq "a plugins/ directory with no plugin.json stops a sync (exit 1)" "1" "$PO_RC"
+assert_contains "…and names it" "plugins/stray" "$PO_ERR"
+assert_contains "…with validate-plugin.sh's own reason, so validation (not the catalogue) stopped it" \
+    ".claude-plugin/plugin.json not found" "$PO_OUT"
+assert_eq "…and nothing is written" "$PO4B_ALL" "$(tree_digest "$PO4B")"
+
+# 4b. catalogue.py cannot run (no markers): exit 1, nothing written.
+PO4C="$SCRATCH_DIR/monorepo-po-nomarkers"
+cp -R "$NOSKILL_MONO" "$PO4C"
+PO4C_ALL="$(tree_digest "$PO4C")"
+po_sync "$PO4C" nomarkers
+assert_eq "a README with no catalogue markers stops a sync (exit 1)" "1" "$PO_RC"
+assert_contains "…and says what is missing" "needs exactly one <!-- catalogue:start -->" "$PO_ERR"
+assert_eq "…and nothing is written" "$PO4C_ALL" "$(tree_digest "$PO4C")"
+
+# 4c. Drift a write cannot fix (a skill the plugin README does not name): the
+# catalogue is written, the run exits 1 and lists what needs a hand edit.
+PO4D="$(po_fixture unnamed)"
+printf '# pg\n\nNo skill named here.\n' > "$PO4D/plugins/pg/README.md"
+po_sync "$PO4D" unnamed
+assert_eq "drift that needs a hand edit exits 1" "1" "$PO_RC"
+assert_contains "…and says so" "catalogue written; these need a hand edit:" "$PO_ERR"
+assert_contains "…naming the drift" "plugins/pg/README.md: does not name skill inner" "$PO_ERR"
+assert_line_present "…after writing what it could" "$PG_ROW" "$(cat "$PO4D/README.md")"
+po_sync "$PO4D" unnamed-again
+assert_eq "the same drift on a second run (catalogue already written) exits 1" "1" "$PO_RC"
+assert_not_contains "…and does not claim it wrote the catalogue (F14)" "catalogue written" "$PO_ERR"
+assert_contains "…and says nothing needed writing" "the catalogue is up to date; these need a hand edit:" "$PO_ERR"
+
+# 5. --add-plugin copies ./build/<n>/ after validating it, then writes the catalogue.
+PO5="$(po_fixture addplugin)"
+mkdir -p "$RUN_CWD/build/po-added/.claude-plugin" "$RUN_CWD/build/po-added/skills/added-skill"
+echo '{"name": "po-added", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+printf -- '---\nname: added-skill\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 0.2.0\n---\n\n# added-skill\n' \
+    > "$RUN_CWD/build/po-added/skills/added-skill/SKILL.md"
+printf '# po-added\n\n`added-skill`\n' > "$RUN_CWD/build/po-added/README.md"
+po_sync "$PO5" addplugin --add-plugin po-added
+assert_eq "--add-plugin on a plugin-only monorepo exits 0 (#190)" "0" "$PO_RC"
+assert_file_exists "…and copies the plugin" "$PO5/plugins/po-added/skills/added-skill/SKILL.md"
+assert_line_present "…and writes its row" '| [po-added](./plugins/po-added/) | 0.2.0 | 1 | 0 | added fixture |' "$(cat "$PO5/README.md")"
+assert_eq "…and its marketplace entry" "0.2.0" \
+    "$(jq -r '.plugins[] | select(.name == "po-added") | .version' "$PO5/.claude-plugin/marketplace.json" 2>/dev/null || echo NOT-JSON)"
+PO5B="$(po_fixture addplugin-dry)"
+PO5B_ALL="$(tree_digest "$PO5B")"
+po_sync "$PO5B" addplugin-dry --dry-run --add-plugin po-added
+assert_eq "--dry-run --add-plugin exits 0" "0" "$PO_RC"
+assert_contains "…and says what it would copy" "WOULD COPY  plugins/po-added/" "$PO_OUT"
+assert_eq "…and writes nothing" "$PO5B_ALL" "$(tree_digest "$PO5B")"
+# catalogue.py is checked before the copy, so a catalogue that cannot be
+# written stops --add-plugin with the build not copied either.
+PO5D="$SCRATCH_DIR/monorepo-po-addplugin-nomarkers"
+cp -R "$NOSKILL_MONO" "$PO5D"
+PO5D_ALL="$(tree_digest "$PO5D")"
+po_sync "$PO5D" addplugin-nomarkers --add-plugin po-added
+assert_eq "--add-plugin when catalogue.py cannot run exits 1" "1" "$PO_RC"
+assert_eq "…and does not copy the plugin (nothing written)" "$PO5D_ALL" "$(tree_digest "$PO5D")"
+# F2: the build is checked by catalogue.py (in a staging copy) before it is
+# copied, in a real run and in --dry-run.
+_po_build_refused() {
+    local label="$1" want="$2" mono before
+    mono="$(po_fixture "addplugin-$label")"
+    before="$(tree_digest "$mono")"
+    po_sync "$mono" "addplugin-$label" --add-plugin po-added
+    assert_eq "--add-plugin of a build catalogue.py refuses ($label) exits 1" "1" "$PO_RC"
+    assert_contains "…$label: says why" "$want" "$PO_ERR"
+    assert_eq "…$label: and copies nothing" "$before" "$(tree_digest "$mono")"
+    mono="$(po_fixture "addplugin-$label-dry")"
+    before="$(tree_digest "$mono")"
+    po_sync "$mono" "addplugin-$label-dry" --dry-run --add-plugin po-added
+    assert_eq "…$label: --dry-run --add-plugin exits 1 too, not clean" "1" "$PO_RC"
+    assert_eq "…$label: --dry-run writes nothing" "$before" "$(tree_digest "$mono")"
+}
+cp "$RUN_CWD/build/po-added/.claude-plugin/plugin.json" "$SCRATCH_DIR/po-added-plugin.json"
+echo '{"name": "po-added", "version": "0.2.0", "description": "a | b"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+_po_build_refused pipe "description contains '|'"
+cp "$SCRATCH_DIR/po-added-plugin.json" "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+mv "$RUN_CWD/build/po-added/README.md" "$SCRATCH_DIR/po-added-README.md"
+ln -s "$SCRATCH_DIR/po-added-README.md" "$RUN_CWD/build/po-added/README.md"
+_po_build_refused symlink "build/po-added holds a symlink"
+rm "$RUN_CWD/build/po-added/README.md"; mv "$SCRATCH_DIR/po-added-README.md" "$RUN_CWD/build/po-added/README.md"
+echo '{"name": "po-other", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+_po_build_refused name-mismatch "is the po-other plugin, not po-added"
+cp "$SCRATCH_DIR/po-added-plugin.json" "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+# A dry run that adds a good build reports the catalogue the copy would need.
+PO5E="$(po_fixture addplugin-dry-drift)"
+po_sync "$PO5E" addplugin-dry-drift --dry-run --add-plugin po-added
+assert_contains "--dry-run --add-plugin checks the catalogue with the build in it" "README.md: row po-added: missing" "$PO_OUT"
+printf -- '---\nname: added-skill\ndescription: No trigger list.\nmetadata:\n  version: 0.2.0\n---\n\n# added-skill\n' \
+    > "$RUN_CWD/build/po-added/skills/added-skill/SKILL.md"
+PO5C="$(po_fixture addplugin-bad)"
+PO5C_ALL="$(tree_digest "$PO5C")"
+po_sync "$PO5C" addplugin-bad --add-plugin po-added
+assert_eq "--add-plugin of a build that fails validation exits 1" "1" "$PO_RC"
+assert_contains "…and names the build" "build/po-added" "$PO_ERR"
+assert_eq "…and writes nothing" "$PO5C_ALL" "$(tree_digest "$PO5C")"
+rm -rf "$RUN_CWD/build/po-added"
+
+# 6. --json prints one JSON object on stdout.
+PO6="$(po_fixture json)"
+po_sync "$PO6" json --json
+assert_eq "--json plain sync exits 0" "0" "$PO_RC"
+assert_eq "…and stdout is the JSON object: layout, validated, catalogue written" "plugin-only 1 written" \
+    "$(jq -r '"\(.layout) \(.validated) \(.catalogue)"' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+po_sync "$PO6" json-again --json
+assert_eq "…a second run reports catalogue clean" "clean" "$(jq -r '.catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+PO6T="$(po_fixture json-two)"
+mkdir -p "$PO6T/plugins/ph/.claude-plugin" "$PO6T/plugins/ph/skills/hs"
+echo '{"name": "ph", "version": "1.0.0", "description": "second fixture"}' > "$PO6T/plugins/ph/.claude-plugin/plugin.json"
+printf -- '---\nname: hs\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# hs\n' > "$PO6T/plugins/ph/skills/hs/SKILL.md"
+printf '# ph\n\n`hs`\n' > "$PO6T/plugins/ph/README.md"
+po_sync "$PO6T" json-two --json
+assert_eq "--json counts both plugins it validated (T7)" "0 2" "$PO_RC $(jq -r '.validated' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+PO6B="$(po_fixture json-dry)"
+po_sync "$PO6B" json-dry --json --dry-run
+assert_eq "…--dry-run --json on drift reports catalogue drift (exit 0)" "0 drift" \
+    "$PO_RC $(jq -r '.catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+PO6C="$(po_fixture json-refused)"
+po_sync "$PO6C" json-refused --json --init
+assert_eq "…a refused --json run exits 1 with an error in the JSON" "1 plugin-only" \
+    "$PO_RC $(jq -r 'select(.error != null) | .layout' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+assert_eq "…and catalogue not-run" "not-run" "$(jq -r '.catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+# F13: refusals that happen before the plugin-only mode starts still print the JSON object.
+PO6D="$(po_fixture json-standalone)"
+po_sync "$PO6D" json-standalone --json --add-plugin git-flow
+assert_eq "--json --add-plugin of a standalone plugin exits 1 with a JSON error (F13)" "1 not-run" \
+    "$PO_RC $(jq -r 'select(.error != null) | .catalogue' <<< "$PO_OUT" 2>/dev/null || echo NOT-JSON)"
+# --json is for the plugin-only layout only; anywhere else it is refused up front.
+JSON_MIXED="$SCRATCH_DIR/monorepo-json-mixed"
+mkdir -p "$JSON_MIXED"
+po_sync "$JSON_MIXED" json-mixed --json --skills demo-skill
+assert_eq "--json on a monorepo that is not plugin-only exits 1" "1" "$PO_RC"
+assert_contains "…and says so" "--json is only supported for a plugin-only monorepo" "$PO_ERR"
+assert_eq "…and writes nothing" "" "$(ls -A "$JSON_MIXED")"
+
+# 7. A top-level SYMLINK to a directory that holds a SKILL.md is not a candidate:
+# discovery (find -type d) skips symlinks, so this is still plugin-only (#167
+# review C-001), and a sync writes only the catalogue.
+SYM_MONO="$(po_fixture symlink)"
+SYM_EXTERNAL="$SCRATCH_DIR/symlink-external/foo"
+mkdir -p "$SYM_EXTERNAL"
+printf -- '---\nname: foo\ndescription: External skill reached by a symlink. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# foo\n' \
+    > "$SYM_EXTERNAL/SKILL.md"
+ln -s "$SYM_EXTERNAL" "$SYM_MONO/foo"
+SYM_REST="$(tree_digest_except_catalogue "$SYM_MONO")"
+SYM_EXT_DIGEST="$(tree_digest "$SCRATCH_DIR/symlink-external")"
+po_sync "$SYM_MONO" symlink
+assert_eq "a plugin-only monorepo with a top-level skill symlink syncs as plugin-only (exit 0)" "0" "$PO_RC"
+assert_line_present "…and writes the catalogue" "$PG_ROW" "$(cat "$SYM_MONO/README.md")"
+assert_eq "…and nothing else" "$SYM_REST" "$(tree_digest_except_catalogue "$SYM_MONO")"
+assert_eq "…and the symlinked skill is untouched" "$SYM_EXT_DIGEST" "$(tree_digest "$SCRATCH_DIR/symlink-external")"
+
+# 8. validate-pre-sync.sh on a plugin-only monorepo: every plugin, then catalogue.py --check.
+presync_run() {
+    local out="$1" err="$2" rc=0
+    shift 2
+    ( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$PRESYNC_SCRIPT" "$@" ) >"$out" 2>"$err" || rc=$?
+    return "$rc"
+}
+PRE_CLEAN="$(po_fixture pre-clean)"
+po_sync "$PRE_CLEAN" pre-clean-write
+PRE_CLEAN_ALL="$(tree_digest "$PRE_CLEAN")"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-clean.stdout" "$SCRATCH_DIR/pre-clean.stderr" "$PRE_CLEAN" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh on a clean plugin-only monorepo exits 0 (#190)" "0" "$PRE_RC"
+assert_contains "…and says it is safe to sync" "Safe to sync" "$(cat "$SCRATCH_DIR/pre-clean.stdout")"
+assert_eq "…and changes no file" "$PRE_CLEAN_ALL" "$(tree_digest "$PRE_CLEAN")"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-cleanj.stdout" "$SCRATCH_DIR/pre-cleanj.stderr" "$PRE_CLEAN" --json || PRE_RC=$?
+assert_eq "…--json keeps its shape and adds the layout" "0 plugin-only 1 1 0 clean" \
+    "$PRE_RC $(jq -r '"\(.layout) \(.total) \(.pass) \(.fail) \(.catalogue)"' < "$SCRATCH_DIR/pre-cleanj.stdout" 2>/dev/null || echo NOT-JSON)"
+PRE_DRIFT="$(po_fixture pre-drift)"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-drift.stdout" "$SCRATCH_DIR/pre-drift.stderr" "$PRE_DRIFT" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh on catalogue drift exits 1" "1" "$PRE_RC"
+assert_contains "…and prints the drift line" "README.md: row pg: missing" "$(cat "$SCRATCH_DIR/pre-drift.stdout")"
+assert_not_contains "…and never says \"Safe to sync\"" "Safe to sync" "$(cat "$SCRATCH_DIR/pre-drift.stdout")"
+# T5: the catalogue is made clean first, so only the failing plugin can make it exit 1.
+PRE_INV="$SCRATCH_DIR/monorepo-pre-invalid"
+cp -R "$PO4" "$PRE_INV"
+python3 "$(dirname "$SYNC_SCRIPT")/catalogue.py" "$PRE_INV" >/dev/null 2>&1 || true
+PRE_INV_CHECK=0
+python3 "$(dirname "$SYNC_SCRIPT")/catalogue.py" --check "$PRE_INV" >/dev/null 2>&1 || PRE_INV_CHECK=$?
+assert_eq "control: that fixture's catalogue is clean" "0" "$PRE_INV_CHECK"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-invalid.stdout" "$SCRATCH_DIR/pre-invalid.stderr" "$PRE_INV" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh with a plugin that fails validation exits 1" "1" "$PRE_RC"
+assert_contains "…and names it" "FAIL  plugins/pbad" "$(cat "$SCRATCH_DIR/pre-invalid.stdout")"
+assert_contains "…while the catalogue is clean" "catalogue.py --check: clean" "$(cat "$SCRATCH_DIR/pre-invalid.stdout")"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-nomark.stdout" "$SCRATCH_DIR/pre-nomark.stderr" "$NOSKILL_MONO" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh when catalogue.py cannot run (no markers) exits 1" "1" "$PRE_RC"
+assert_eq "…the #167 fixture is unchanged" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
+PRE_RC=0
+presync_run "$SCRATCH_DIR/pre-add.stdout" "$SCRATCH_DIR/pre-add.stderr" --add demo-skill "$PRE_CLEAN" || PRE_RC=$?
+assert_eq "validate-pre-sync.sh --add on a plugin-only monorepo is refused (exit 1)" "1" "$PRE_RC"
+assert_contains "…and says why" "plugin-only monorepo has no top-level skills" "$(cat "$SCRATCH_DIR/pre-add.stderr")"
+assert_eq "…and no validate-pre-sync.sh run changed a file" "$PRE_CLEAN_ALL" "$(tree_digest "$PRE_CLEAN")"
+
+# 9. A missing standalone-plugins.txt stops the sync before anything runs.
+NOSTAND_DIR="$SCRATCH_DIR/publish-no-standalone"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$NOSTAND_DIR"
+rm "$NOSTAND_DIR/scripts/standalone-plugins.txt"
+PO9="$(po_fixture nostandalone)"
+PO9_ALL="$(tree_digest "$PO9")"
+PO_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$NOSTAND_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user "$PO9" ) \
+    >"$SCRATCH_DIR/po-nostand.stdout" 2>"$SCRATCH_DIR/po-nostand.stderr" || PO_RC=$?
+assert_eq "sync-monorepo.sh with no standalone-plugins.txt exits 1" "1" "$PO_RC"
+assert_contains "…and names the file" "standalone-plugins.txt" "$(cat "$SCRATCH_DIR/po-nostand.stderr")"
+# catalogue.py would also stop on the missing file; this pins the earlier stop
+# in sync-monorepo.sh itself, before the plugin-only mode starts.
+assert_eq "…and stops before the plugin-only mode starts (stdout empty)" "" "$(cat "$SCRATCH_DIR/po-nostand.stdout")"
+assert_eq "…and writes nothing" "$PO9_ALL" "$(tree_digest "$PO9")"
+
+# F1: an unreadable standalone-plugins.txt is an error, never an empty list.
+UNREAD_DIR="$SCRATCH_DIR/publish-unreadable-standalone"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$UNREAD_DIR"
+chmod 000 "$UNREAD_DIR/scripts/standalone-plugins.txt"
+_unread_case() {
+    local label="$1" mono before rc=0
+    shift
+    mono="$(po_fixture "unread-$label")"
+    # A new, empty monorepo: the old code went on with an empty list there and
+    # planned the copy of a standalone plugin (exit 0).
+    if [[ "$label" == new-* ]]; then
+        mono="$SCRATCH_DIR/monorepo-unread-$label-empty"
+        mkdir -p "$mono"
+    fi
+    # A mixed-layout variant (a top-level skill too): there the old code went
+    # on with an empty list and planned the copy of a standalone plugin.
+    if [[ "$label" == mixed-* ]]; then
+        mkdir -p "$mono/mixed-top"
+        printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' > "$mono/mixed-top/SKILL.md"
+        printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$mono/mixed-top/CHANGELOG.md"
+    fi
+    before="$(tree_digest "$mono")"
+    ( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$UNREAD_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user "$@" "$mono" ) \
+        >"$SCRATCH_DIR/unread-$label.stdout" 2>"$SCRATCH_DIR/unread-$label.stderr" || rc=$?
+    assert_eq "an unreadable standalone-plugins.txt stops sync $label (exit 1, F1)" "1" "$rc"
+    assert_contains "…$label: names the file" "standalone-plugins.txt" "$(cat "$SCRATCH_DIR/unread-$label.stderr")"
+    assert_eq "…$label: writes nothing" "$before" "$(tree_digest "$mono")"
+}
+mkdir -p "$RUN_CWD/build/git-flow/.claude-plugin" "$RUN_CWD/build/git-flow/skills/gf"
+echo '{"name": "git-flow", "version": "1.0.0", "description": "standalone fixture"}' > "$RUN_CWD/build/git-flow/.claude-plugin/plugin.json"
+printf -- '---\nname: gf\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# gf\n' > "$RUN_CWD/build/git-flow/skills/gf/SKILL.md"
+printf '# git-flow\n\n`gf`\n' > "$RUN_CWD/build/git-flow/README.md"
+_unread_case plain
+_unread_case add-plugin-git-flow-dry --dry-run --add-plugin git-flow
+_unread_case add-plugin-git-flow --add-plugin git-flow
+_unread_case mixed-add-plugin-git-flow-dry --dry-run --add-plugin git-flow
+_unread_case new-add-plugin-git-flow-dry --dry-run --add-plugin git-flow
+_unread_case json --json
+rm -rf "$RUN_CWD/build/git-flow"
+assert_eq "…--json: still prints the JSON error object (F13)" "not-run" \
+    "$(jq -r 'select(.error != null) | .catalogue' < "$SCRATCH_DIR/unread-json.stdout" 2>/dev/null || echo NOT-JSON)"
+UNREAD_PRE_RC=0
+( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$UNREAD_DIR/scripts/validate-pre-sync.sh" "$PRE_CLEAN" ) \
+    >"$SCRATCH_DIR/unread-pre.stdout" 2>"$SCRATCH_DIR/unread-pre.stderr" || UNREAD_PRE_RC=$?
+assert_eq "validate-pre-sync.sh with an unreadable standalone-plugins.txt exits 1" "1" "$UNREAD_PRE_RC"
+assert_contains "…and names the file" "standalone-plugins.txt" "$(cat "$SCRATCH_DIR/unread-pre.stderr")"
+chmod 644 "$UNREAD_DIR/scripts/standalone-plugins.txt"
+
+# C-002: a CRLF standalone list is read the same way catalogue.py reads it.
+CRLF_DIR="$SCRATCH_DIR/publish-crlf-standalone"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$CRLF_DIR"
+printf '# Standalone plugins\r\ngit-flow\r\n  obsidian-brain  \r\n' > "$CRLF_DIR/scripts/standalone-plugins.txt"
+mkdir -p "$RUN_CWD/build/git-flow/.claude-plugin"
+echo '{"name": "git-flow", "version": "1.0.0", "description": "standalone fixture"}' > "$RUN_CWD/build/git-flow/.claude-plugin/plugin.json"
+CRLF_MONO="$SCRATCH_DIR/monorepo-crlf-empty"
+mkdir -p "$CRLF_MONO"
+CRLF_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRLF_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user --dry-run --add-plugin git-flow "$CRLF_MONO" ) \
+    >"$SCRATCH_DIR/crlf.stdout" 2>"$SCRATCH_DIR/crlf.stderr" || CRLF_RC=$?
+assert_eq "a CRLF standalone list still refuses --add-plugin git-flow (exit 1, C-002)" "1" "$CRLF_RC"
+assert_contains "…as a standalone plugin" "git-flow ships from its own marketplace" "$(cat "$SCRATCH_DIR/crlf.stderr")"
+printf 'git-flow # ships elsewhere\n' > "$CRLF_DIR/scripts/standalone-plugins.txt"
+BADLINE_RC=0
+( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRLF_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user --dry-run "$CRLF_MONO" ) \
+    >"$SCRATCH_DIR/badline.stdout" 2>"$SCRATCH_DIR/badline.stderr" || BADLINE_RC=$?
+assert_eq "a standalone list line that is not one plugin name stops the sync (exit 1)" "1" "$BADLINE_RC"
+assert_contains "…naming the line" "line 1: 'git-flow # ships elsewhere' is not a plugin name" "$(cat "$SCRATCH_DIR/badline.stderr")"
+rm -rf "$RUN_CWD/build/git-flow"
+
+# X-001: --add-plugin never writes through a symlink. A plugins/<name> (or the
+# --add-plugin destination) that is a symlink to a directory outside the repo
+# is refused before anything is copied, in plugin-only and mixed layouts, in a
+# real run and in --dry-run; the outside directory is left byte-identical.
+mkdir -p "$RUN_CWD/build/po-added/.claude-plugin" "$RUN_CWD/build/po-added/skills/added-skill"
+echo '{"name": "po-added", "version": "0.2.0", "description": "added fixture"}' > "$RUN_CWD/build/po-added/.claude-plugin/plugin.json"
+printf -- '---\nname: added-skill\ndescription: Fixture skill. Use when: testing.\nmetadata:\n  version: 0.2.0\n---\n\n# added-skill\n' > "$RUN_CWD/build/po-added/skills/added-skill/SKILL.md"
+printf '# po-added\n\n`added-skill`\n' > "$RUN_CWD/build/po-added/README.md"
+_decoy_case() {
+    local label="$1" layout="$2" link="$3" mono decoy before_mono before_decoy rc=0
+    shift 3
+    mono="$(po_fixture "decoy-$label")"
+    if [[ "$layout" == mixed ]]; then
+        mkdir -p "$mono/mixed-top"
+        printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' > "$mono/mixed-top/SKILL.md"
+        printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$mono/mixed-top/CHANGELOG.md"
+    fi
+    decoy="$SCRATCH_DIR/decoy-$label"
+    mkdir -p "$decoy/sub"
+    echo "SENTINEL" > "$decoy/SENTINEL.txt"; echo "x" > "$decoy/sub/keep.txt"
+    ln -s "$decoy" "$mono/plugins/$link"
+    before_mono="$(tree_digest "$mono")"; before_decoy="$(tree_digest "$decoy")"
+    po_sync "$mono" "decoy-$label" "$@"
+    assert_eq "a symlinked plugins/$link stops the sync ($label, exit 1, X-001)" "1" "$PO_RC"
+    assert_contains "…$label: says why" "plugins/$link is a symlink; refusing to write through it" "$PO_ERR"
+    assert_eq "…$label: the directory behind the link is byte-identical" "$before_decoy" "$(tree_digest "$decoy")"
+    assert_eq "…$label: the monorepo is byte-identical" "$before_mono" "$(tree_digest "$mono")"
+}
+_decoy_case po-dest-dry plugin-only po-added --dry-run --add-plugin po-added
+_decoy_case po-dest plugin-only po-added --add-plugin po-added
+_decoy_case po-other-dry plugin-only other --dry-run --add-plugin po-added
+_decoy_case mixed-dest-dry mixed po-added --dry-run --add-plugin po-added
+_decoy_case mixed-dest mixed po-added --add-plugin po-added
+_decoy_case mixed-other mixed other --add-plugin po-added
+# A symlink deeper inside a plugin is refused by the staging copy, which
+# never keeps or follows one.
+PO_DEEP="$(po_fixture deep-link)"
+DEEP_DECOY="$SCRATCH_DIR/decoy-deep"; mkdir -p "$DEEP_DECOY"; echo SENTINEL > "$DEEP_DECOY/SENTINEL.txt"
+ln -s "$DEEP_DECOY" "$PO_DEEP/plugins/pg/linked"
+PO_DEEP_ALL="$(tree_digest "$PO_DEEP")"; DEEP_DECOY_ALL="$(tree_digest "$DEEP_DECOY")"
+po_sync "$PO_DEEP" deep-link --dry-run --add-plugin po-added
+assert_eq "a symlink inside a plugin stops --dry-run --add-plugin (exit 1)" "1" "$PO_RC"
+assert_contains "…and says the staging copy refuses it" "plugins/pg/linked is a symlink; the staging copy refuses symlinks" "$PO_ERR"
+assert_eq "…and the directory behind it is byte-identical" "$DEEP_DECOY_ALL" "$(tree_digest "$DEEP_DECOY")"
+assert_eq "…and so is the monorepo" "$PO_DEEP_ALL" "$(tree_digest "$PO_DEEP")"
+# A symlinked plugins/<standalone> is skipped by catalogue.py, so the mixed
+# layout's own check at the start is what stops it.
+_decoy_case mixed-standalone mixed git-flow --dry-run
+# The build directory itself may not be a symlink either.
+BUILD_REAL="$SCRATCH_DIR/build-real-po-linked"
+cp -R "$RUN_CWD/build/po-added" "$BUILD_REAL"
+ln -s "$BUILD_REAL" "$RUN_CWD/build/po-linked"
+echo '{"name": "po-linked", "version": "0.2.0", "description": "linked fixture"}' > "$BUILD_REAL/.claude-plugin/plugin.json"
+PO_LB="$(po_fixture linked-build)"; PO_LB_ALL="$(tree_digest "$PO_LB")"
+po_sync "$PO_LB" linked-build --add-plugin po-linked
+assert_eq "a symlinked ./build/<name> is refused (exit 1)" "1" "$PO_RC"
+assert_contains "…and says why" "build/po-linked is a symlink; refusing to copy through it" "$PO_ERR"
+assert_eq "…and writes nothing" "$PO_LB_ALL" "$(tree_digest "$PO_LB")"
+rm "$RUN_CWD/build/po-linked"
+rm -rf "$RUN_CWD/build/po-added"
+
+# F11: a catalogue.py that crashes (exit 1 with a traceback) is "cannot run", not drift.
+CRASH_DIR="$SCRATCH_DIR/publish-crashing-catalogue"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$CRASH_DIR"
+printf 'import no_such_module_for_190\n' > "$CRASH_DIR/scripts/catalogue.py"
+PO11="$(po_fixture crash)"
+PO11_ALL="$(tree_digest "$PO11")"
+_crash_sync() {
+    local label="$1" rc=0
+    shift
+    ( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRASH_DIR/scripts/sync-monorepo.sh" --github-user harness-fixture-user "$@" "$PO11" ) \
+        >"$SCRATCH_DIR/crash-$label.stdout" 2>"$SCRATCH_DIR/crash-$label.stderr" || rc=$?
+    CRASH_RC=$rc
+}
+_crash_sync dry --dry-run
+assert_eq "--dry-run with a crashing catalogue.py exits 1, not 0 (F11)" "1" "$CRASH_RC"
+assert_contains "…and says catalogue.py cannot run" "catalogue.py cannot run" "$(cat "$SCRATCH_DIR/crash-dry.stderr")"
+_crash_sync plain
+assert_eq "a plain sync with a crashing catalogue.py exits 1" "1" "$CRASH_RC"
+assert_not_contains "…and does not report it as drift" "need a hand edit" "$(cat "$SCRATCH_DIR/crash-plain.stderr")"
+assert_eq "…and writes nothing" "$PO11_ALL" "$(tree_digest "$PO11")"
+CRASH_PRE_RC=0
+( cd "$RUN_CWD"; SKILLS_HOME="$SKILLS_HOME_FIXTURE" "$CRASH_DIR/scripts/validate-pre-sync.sh" --json "$PRE_CLEAN" ) \
+    >"$SCRATCH_DIR/crash-pre.stdout" 2>"$SCRATCH_DIR/crash-pre.stderr" || CRASH_PRE_RC=$?
+assert_eq "validate-pre-sync.sh with a crashing catalogue.py: exit 1, catalogue error" "1 error" \
+    "$CRASH_PRE_RC $(jq -r '.catalogue' < "$SCRATCH_DIR/crash-pre.stdout" 2>/dev/null || echo NOT-JSON)"
+
+# Controls: the plugin-only rule is about layout, not about whether skills were named.
+# A new empty directory with --skills still runs (a consumer monorepo built this way).
+NOSKILL_NAMED_MONO="$SCRATCH_DIR/monorepo-noskills-named"
+mkdir -p "$NOSKILL_NAMED_MONO"
+NOSKILL_NAMED_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$NOSKILL_NAMED_MONO" "$SCRATCH_DIR/noskill-named.stdout" "$SCRATCH_DIR/noskill-named.stderr" \
+    --skills demo-skill || NOSKILL_NAMED_RC=$?
+assert_eq "control: --skills demo-skill into an empty directory still runs" "0" "$NOSKILL_NAMED_RC"
+assert_not_contains "…and is not refused" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/noskill-named.stderr")"
+assert_file_exists "…and writes the skill at the top level" "$NOSKILL_NAMED_MONO/demo-skill/SKILL.md"
+# The CONTRIBUTING.md it writes must describe that layout, not plugins/ only.
+assert_contains "…and its CONTRIBUTING.md says to add a skill at the repo root" \
+    'Create a new directory at the repo root (e.g., `my-skill/`)' "$(cat "$NOSKILL_NAMED_MONO/CONTRIBUTING.md" 2>/dev/null || true)"
+assert_contains "…and where a plugin skill goes" \
+    'A skill that ships inside a plugin goes at `plugins/<plugin>/skills/<name>/` instead' "$(cat "$NOSKILL_NAMED_MONO/CONTRIBUTING.md" 2>/dev/null || true)"
+
+# A monorepo with a top-level skill AND plugins/ is not plugin-only: discovery runs.
+MIXED_MONO="$SCRATCH_DIR/monorepo-mixed"
+mkdir -p "$MIXED_MONO/plugins/pg/.claude-plugin" "$MIXED_MONO/mixed-top"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$MIXED_MONO/plugins/pg/.claude-plugin/plugin.json"
+printf '# pg\n' > "$MIXED_MONO/plugins/pg/README.md"
+printf -- '---\nname: mixed-top\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# mixed-top\n' \
+    > "$MIXED_MONO/mixed-top/SKILL.md"
+printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$MIXED_MONO/mixed-top/CHANGELOG.md"
+MIXED_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_MONO" "$SCRATCH_DIR/mixed.stdout" "$SCRATCH_DIR/mixed.stderr" --dry-run || MIXED_RC=$?
+assert_eq "control: discovery on a monorepo with a top-level skill and plugins/ runs" "0" "$MIXED_RC"
+assert_line_present "…and lists the top-level skill" "  - mixed-top" "$(cat "$SCRATCH_DIR/mixed.stdout")"
+
+# Mixed layout: marketplace.json is written by catalogue.py now. The old
+# string-built JSON broke on a description holding a quote or a backslash.
+MIXED_Q="$SCRATCH_DIR/monorepo-mixed-quotes"
+cp -R "$MIXED_MONO" "$MIXED_Q"
+python3 -c 'import json,sys; json.dump({"name": "pg", "version": "1.0.0", "description": "Say \"hi\" to C:\\dir."}, open(sys.argv[1], "w"))' \
+    "$MIXED_Q/plugins/pg/.claude-plugin/plugin.json"
+MIXED_Q_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_Q" "$SCRATCH_DIR/mixed-q.stdout" "$SCRATCH_DIR/mixed-q.stderr" || MIXED_Q_RC=$?
+assert_eq "mixed-layout sync with a quote and a backslash in a plugin description exits 0" "0" "$MIXED_Q_RC"
+assert_eq "…and marketplace.json is valid JSON holding that description" 'Say "hi" to C:\dir.' \
+    "$(jq -r '.plugins[] | select(.name == "pg") | .description' "$MIXED_Q/.claude-plugin/marketplace.json" 2>/dev/null || echo NOT-JSON)"
+assert_contains "…and the README plugin table sits between the catalogue markers" \
+    "$(printf '<!-- catalogue:start -->\n| Plugin | Version | Skills | Commands | Description |')" "$(cat "$MIXED_Q/README.md" 2>/dev/null || true)"
+assert_file_exists "…and catalogue.py is copied into the monorepo's scripts/" "$MIXED_Q/scripts/catalogue.py"
+assert_file_exists "…with standalone-plugins.txt beside it" "$MIXED_Q/scripts/standalone-plugins.txt"
+MIXED_Q_CHECK_RC=0
+python3 "$MIXED_Q/scripts/catalogue.py" --check "$MIXED_Q" >"$SCRATCH_DIR/mixed-q-check.out" 2>&1 || MIXED_Q_CHECK_RC=$?
+assert_eq "…and the copied catalogue.py --check is clean on the result" "0" "$MIXED_Q_CHECK_RC"
+assert_contains "…and the synced workflow runs the catalogue check only when plugins/ exists (F15)" \
+    'if [ -d plugins ]; then python3 scripts/catalogue.py --check .; fi' "$(cat "$MIXED_Q/.github/workflows/validate-skill.yml" 2>/dev/null || true)"
+
+# F3: in a mixed layout a plugin catalogue.py refuses stops the sync before its
+# first write, in a real run and in --dry-run.
+MIXED_BAD="$SCRATCH_DIR/monorepo-mixed-badplugin"
+cp -R "$MIXED_MONO" "$MIXED_BAD"
+echo '{"name": "pg", "version": "1.0.0", "description": "a | b"}' > "$MIXED_BAD/plugins/pg/.claude-plugin/plugin.json"
+MIXED_BAD_ALL="$(tree_digest "$MIXED_BAD")"
+for _mb in dry plain; do
+    MIXED_BAD_RC=0
+    if [[ "$_mb" == dry ]]; then _mb_args=(--dry-run); else _mb_args=(); fi
+    run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_BAD" "$SCRATCH_DIR/mixed-bad-$_mb.stdout" "$SCRATCH_DIR/mixed-bad-$_mb.stderr" ${_mb_args[@]+"${_mb_args[@]}"} || MIXED_BAD_RC=$?
+    assert_eq "mixed layout ($_mb) with a plugin catalogue.py refuses exits 1 (F3)" "1" "$MIXED_BAD_RC"
+    assert_contains "…$_mb: says why" "description contains '|'" "$(cat "$SCRATCH_DIR/mixed-bad-$_mb.stderr")"
+    assert_eq "…$_mb: and nothing was written" "$MIXED_BAD_ALL" "$(tree_digest "$MIXED_BAD")"
+done
+
+# X-002: a malformed marketplace.json in a mixed layout stops the sync before
+# its first write, in a real run and in --dry-run.
+MIXED_BADM="$SCRATCH_DIR/monorepo-mixed-badmarket"
+cp -R "$MIXED_MONO" "$MIXED_BADM"
+mkdir -p "$MIXED_BADM/.claude-plugin"
+printf '{\n' > "$MIXED_BADM/.claude-plugin/marketplace.json"
+MIXED_BADM_ALL="$(tree_digest "$MIXED_BADM")"
+for _mb in dry plain; do
+    MIXED_BADM_RC=0
+    if [[ "$_mb" == dry ]]; then _mb_args=(--dry-run); else _mb_args=(); fi
+    run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_BADM" "$SCRATCH_DIR/mixed-badm-$_mb.stdout" "$SCRATCH_DIR/mixed-badm-$_mb.stderr" ${_mb_args[@]+"${_mb_args[@]}"} || MIXED_BADM_RC=$?
+    assert_eq "mixed layout ($_mb) with a malformed marketplace.json exits 1 (X-002)" "1" "$MIXED_BADM_RC"
+    assert_contains "…$_mb: names the file" ".claude-plugin/marketplace.json" "$(cat "$SCRATCH_DIR/mixed-badm-$_mb.stderr")"
+    assert_eq "…$_mb: and nothing was written" "$MIXED_BADM_ALL" "$(tree_digest "$MIXED_BADM")"
+done
+
+# F3: catalogue drift that needs a hand edit does not hide a REFUSED skill (exit 3).
+REF_HOME="$SCRATCH_DIR/skills-home-refused-cat"
+REF_MONO="$SCRATCH_DIR/monorepo-refused-cat"
+mkdir -p "$REF_HOME/rs" "$REF_MONO/rs" "$REF_MONO/plugins/pg/.claude-plugin"
+printf -- '---\nname: rs\ndescription: Stale local copy. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# rs\n' > "$REF_HOME/rs/SKILL.md"
+printf -- '---\nname: rs\ndescription: Newer in-repo copy. Use when: testing.\nmetadata:\n  version: 2.0.0\n---\n\n# rs\n' > "$REF_MONO/rs/SKILL.md"
+printf '# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- Newer.\n' > "$REF_MONO/rs/CHANGELOG.md"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$REF_MONO/plugins/pg/.claude-plugin/plugin.json"
+REF_RC=0
+run_sync "$REF_HOME" "$REF_MONO" "$SCRATCH_DIR/refused-cat.stdout" "$SCRATCH_DIR/refused-cat.stderr" || REF_RC=$?
+assert_eq "a refused skill and catalogue hand-edit drift together exit 3, not 1" "3" "$REF_RC"
+assert_contains "…and the REFUSED summary prints" "REFUSED 1 skill(s)" "$(cat "$SCRATCH_DIR/refused-cat.stdout")"
+assert_contains "…and so does the catalogue drift" "plugins/pg/README.md: missing" "$(cat "$SCRATCH_DIR/refused-cat.stderr")"
+# A catalogue failure in the mixed layout is not swallowed: a plugin with no
+# README is drift catalogue.py cannot fix, so the sync exits 1 and says so.
+MIXED_NR="$SCRATCH_DIR/monorepo-mixed-noreadme"
+cp -R "$MIXED_MONO" "$MIXED_NR"
+rm "$MIXED_NR/plugins/pg/README.md"
+MIXED_NR_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_NR" "$SCRATCH_DIR/mixed-nr.stdout" "$SCRATCH_DIR/mixed-nr.stderr" || MIXED_NR_RC=$?
+assert_eq "mixed-layout sync with a plugin that has no README exits 1" "1" "$MIXED_NR_RC"
+assert_contains "…and says the catalogue was written but needs a hand edit" "catalogue written; these need a hand edit:" "$(cat "$SCRATCH_DIR/mixed-nr.stderr")"
+assert_contains "…and names it as needing a hand edit" "plugins/pg/README.md: missing" "$(cat "$SCRATCH_DIR/mixed-nr.stderr")"
+# …and a catalogue that cannot run (a plugin.json with no description) is exit 1 too.
+MIXED_ND="$SCRATCH_DIR/monorepo-mixed-nodesc"
+cp -R "$MIXED_MONO" "$MIXED_ND"
+echo '{"name": "pg", "version": "1.0.0"}' > "$MIXED_ND/plugins/pg/.claude-plugin/plugin.json"
+MIXED_ND_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$MIXED_ND" "$SCRATCH_DIR/mixed-nd.stdout" "$SCRATCH_DIR/mixed-nd.stderr" || MIXED_ND_RC=$?
+assert_eq "mixed-layout sync when catalogue.py cannot run exits 1" "1" "$MIXED_ND_RC"
+assert_contains "…and says why" "'description' missing or empty" "$(cat "$SCRATCH_DIR/mixed-nd.stderr")"
+
+# --init with no skill named: there is no default set any more (the old one named
+# deleted skills). Refused before the directory is created.
+INIT_NEW_MONO="$SCRATCH_DIR/monorepo-init-new"
+INIT_NEW_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$INIT_NEW_MONO" "$SCRATCH_DIR/init-new.stdout" "$SCRATCH_DIR/init-new.stderr" --init || INIT_NEW_RC=$?
+assert_eq "--init with no --skills or --add exits 1" "1" "$INIT_NEW_RC"
+assert_contains "…and says to name the skills" "--init needs the skills to publish, named with --skills or --add" "$(cat "$SCRATCH_DIR/init-new.stderr")"
+assert_eq "…and does not create the directory" "ABSENT" "$([[ -e "$INIT_NEW_MONO" ]] && echo PRESENT || echo ABSENT)"
+NODIR_RC=0
+run_sync "$SKILLS_HOME_FIXTURE" "$INIT_NEW_MONO" "$SCRATCH_DIR/nodir.stdout" "$SCRATCH_DIR/nodir.stderr" || NODIR_RC=$?
+assert_eq "a monorepo directory that does not exist, with no skill named, exits 1" "1" "$NODIR_RC"
+assert_eq "…and is not created" "ABSENT" "$([[ -e "$INIT_NEW_MONO" ]] && echo PRESENT || echo ABSENT)"
+
+# Controls: validate-pre-sync.sh on layouts that are not plugin-only.
+MIXED_PRE_RC=0
+presync_run "$SCRATCH_DIR/mixed-pre.stdout" "$SCRATCH_DIR/mixed-pre.stderr" "$MIXED_MONO" || MIXED_PRE_RC=$?
+assert_eq "control: validate-pre-sync.sh on a monorepo with a top-level skill and plugins/ passes" "0" "$MIXED_PRE_RC"
+assert_contains "…and checks the top-level skill" "PASS  mixed-top v1.0.0" "$(cat "$SCRATCH_DIR/mixed-pre.stdout")"
+EMPTY_PRE_MONO="$SCRATCH_DIR/monorepo-presync-empty"
+mkdir -p "$EMPTY_PRE_MONO"
+EMPTY_PRE_RC=0
+presync_run "$SCRATCH_DIR/empty-pre.stdout" "$SCRATCH_DIR/empty-pre.stderr" --add no-such-skill "$EMPTY_PRE_MONO" || EMPTY_PRE_RC=$?
+assert_eq "control: --add of an unresolvable name into an empty directory reports, as its help says (rc 0)" "0" "$EMPTY_PRE_RC"
+assert_not_contains "…and is not refused as plugin-only" "plugin-only monorepo" "$(cat "$SCRATCH_DIR/empty-pre.stderr")"
+
+# prepare-plugin.sh fails closed on a plugin that fails validate-plugin.sh (#167).
+# It used to run the validator with `|| true`, print "Plugin assembled" and exit 0.
+mkdir -p "$PREPARE_FIXTURE_DIR/validate-good" "$PREPARE_FIXTURE_DIR/validate-bad"
+printf -- '---\nname: validate-good\ndescription: Fixture skill that passes validate-skill.sh. Use when: testing prepare-plugin.sh validation.\nmetadata:\n  version: 0.1.0\n---\n\n# validate-good\n' \
+    > "$PREPARE_FIXTURE_DIR/validate-good/SKILL.md"
+printf -- '---\nname: validate-bad\ndescription: Fixture skill with no trigger list.\nversion: 0.1.0\n---\n\n# validate-bad\n' \
+    > "$PREPARE_FIXTURE_DIR/validate-bad/SKILL.md"
+for _v in good bad; do
+    printf '{"name": "validate-%s", "version": "0.1.0", "description": "Fixture plugin for prepare-plugin.sh validation.", "skills": [{"name": "validate-%s", "source": "."}], "commands": []}\n' \
+        "$_v" "$_v" > "$PREPARE_FIXTURE_DIR/validate-$_v/plugin-manifest.json"
+done
+_prep_validated() {
+    local v="$1" rc=0
+    (
+        cd "$RUN_CWD"
+        env -u SKILL_KIT_NO_PLUGIN_VALIDATION PATH="$GH_SHIM_DIR:$PATH" TMPDIR="$PREPARE_TMPDIR" \
+            "$PREPARE_SCRIPT" --output-dir "$PREPARE_OUT_DIR/validate-$v" --github-user harness-fixture-user \
+            "$PREPARE_FIXTURE_DIR/validate-$v/plugin-manifest.json"
+    ) >"$SCRATCH_DIR/prep-validate-$v.stdout" 2>"$SCRATCH_DIR/prep-validate-$v.stderr" || rc=$?
+    return "$rc"
+}
+PREP_VBAD_RC=0
+_prep_validated bad || PREP_VBAD_RC=$?
+assert_eq "prepare-plugin.sh exits 1 when the assembled plugin fails validate-plugin.sh (#167)" "1" "$PREP_VBAD_RC"
+assert_contains "…and says so" "fails validation (see the FAIL lines above)" "$(cat "$SCRATCH_DIR/prep-validate-bad.stderr")"
+assert_not_contains "…and does not print \"Plugin assembled\"" "Plugin assembled" "$(cat "$SCRATCH_DIR/prep-validate-bad.stdout")"
+PREP_VGOOD_RC=0
+_prep_validated good || PREP_VGOOD_RC=$?
+assert_eq "control: prepare-plugin.sh with a valid skill still exits 0 with validation on" "0" "$PREP_VGOOD_RC"
+assert_contains "…and ran the validator" "--- Validation ---" "$(cat "$SCRATCH_DIR/prep-validate-good.stdout")"
+
+# release-monorepo.sh counts skills in both layouts (#167)
+#
+# A top-level <name>/SKILL.md (what sync-monorepo.sh writes into a consumer
+# monorepo) and a plugins/<group>/skills/<name>/SKILL.md (this repo) are both
+# skills. A plugin skill is listed as <group>:<name>, so two plugins' skills
+# with the same short name stay apart. Zero skills is refused: the release used
+# to go out with "Skills: 0" and an empty inventory at exit 0.
+NOSKILL_REL="$SCRATCH_DIR/release-plugin-only"
+mkdir -p "$NOSKILL_REL/plugins/pg/.claude-plugin" "$NOSKILL_REL/plugins/pg/skills/inner" "$NOSKILL_REL/plugins/pg/skills/second" \
+         "$NOSKILL_REL/plugins/pg/skills/inner/references/deep/skills/x" "$NOSKILL_REL/plugins/pg/other/y"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$NOSKILL_REL/CHANGELOG.md"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$NOSKILL_REL/plugins/pg/.claude-plugin/plugin.json"
+for _sk in inner second; do
+    printf -- '---\nname: %s\ndescription: RELPLUG-%s-MARKER fixture skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' \
+        "$_sk" "$_sk" "$_sk" > "$NOSKILL_REL/plugins/pg/skills/$_sk/SKILL.md"
+done
+# A SKILL.md nested deeper inside a skill is a reference, not a skill: it must not be counted.
+echo "# nested" > "$NOSKILL_REL/plugins/pg/skills/inner/references/deep/skills/x/SKILL.md"
+# Same depth as a plugin skill but not under skills/: pins the -path filter.
+echo "# not a skill" > "$NOSKILL_REL/plugins/pg/other/y/SKILL.md"
+init_release_fixture "$NOSKILL_REL"
+NOSKILL_REL_RC=0
+run_release "$NOSKILL_REL" "$SCRATCH_DIR/release-plugin-only.stdout" "$SCRATCH_DIR/release-plugin-only.stderr" patch || NOSKILL_REL_RC=$?
+assert_line_present "release-monorepo.sh counts the plugin skills, not zero (#167)" \
+    "Skills:          2" "$(cat "$SCRATCH_DIR/release-plugin-only.stdout")"
+assert_contains "…and lists them in the CHANGELOG inventory as plugin:skill" \
+    '- `pg:second` v1.0.0 — RELPLUG-second-MARKER fixture skill.' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_not_contains "…without the nested reference SKILL.md" ':x` v' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_not_contains "…or a SKILL.md at skill depth outside skills/" ':y` v' "$(cat "$NOSKILL_REL/CHANGELOG.md" 2>/dev/null || true)"
+
+# Both layouts in one monorepo, and the same short name in two plugins.
+BOTH_REL="$SCRATCH_DIR/release-both-layouts"
+mkdir -p "$BOTH_REL/topskill" "$BOTH_REL/plugins/pa/skills/create" "$BOTH_REL/plugins/pb/skills/create" "$BOTH_REL/docs"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$BOTH_REL/CHANGELOG.md"
+echo "# docs" > "$BOTH_REL/docs/notes.md"
+for _p in topskill plugins/pa/skills/create plugins/pb/skills/create; do
+    printf -- '---\nname: x\ndescription: RELBOTH fixture skill at %s. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# x\n' \
+        "$_p" > "$BOTH_REL/$_p/SKILL.md"
+done
+init_release_fixture "$BOTH_REL"
+run_release "$BOTH_REL" "$SCRATCH_DIR/release-both.stdout" "$SCRATCH_DIR/release-both.stderr" patch || true
+BOTH_CL="$(cat "$BOTH_REL/CHANGELOG.md" 2>/dev/null || true)"
+assert_line_present "release-monorepo.sh counts top-level and plugin skills together (#167)" \
+    "Skills:          3" "$(cat "$SCRATCH_DIR/release-both.stdout")"
+assert_contains "…lists the top-level skill by its bare name" '- `topskill` v1.0.0 — RELBOTH fixture skill at topskill.' "$BOTH_CL"
+assert_contains "…and the two plugin skills named create apart" '- `pa:create` v1.0.0 — RELBOTH fixture skill at plugins/pa/skills/create.' "$BOTH_CL"
+assert_contains "…(the second one)" '- `pb:create` v1.0.0 — RELBOTH fixture skill at plugins/pb/skills/create.' "$BOTH_CL"
+assert_contains "…with the count in the inventory heading" "### Skill Inventory (3 skills)" "$BOTH_CL"
+
+# Zero skills: refused before anything is written.
+ZERO_REL="$SCRATCH_DIR/release-zero"
+mkdir -p "$ZERO_REL/docs" "$ZERO_REL/plugins/pg/.claude-plugin"
+printf '%s' "$RELEASE_BASE_CHANGELOG" > "$ZERO_REL/CHANGELOG.md"
+echo "# docs" > "$ZERO_REL/docs/notes.md"
+echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$ZERO_REL/plugins/pg/.claude-plugin/plugin.json"
+init_release_fixture "$ZERO_REL"
+ZERO_REL_RC=0
+run_release "$ZERO_REL" "$SCRATCH_DIR/release-zero.stdout" "$SCRATCH_DIR/release-zero.stderr" patch || ZERO_REL_RC=$?
+assert_eq "release-monorepo.sh with no skill in either layout exits 1 (#167)" "1" "$ZERO_REL_RC"
+assert_contains "…and says why" "no skills found in $ZERO_REL" "$(cat "$SCRATCH_DIR/release-zero.stderr")"
+assert_eq "…and leaves CHANGELOG.md alone" "$(printf '%s' "$RELEASE_BASE_CHANGELOG" | shasum)" "$(shasum < "$ZERO_REL/CHANGELOG.md")"
+assert_eq "…and creates no tag" "" "$(git -C "$ZERO_REL" tag -l)"
+
+# ============================================================
+# Issue #92 — drift checks resolve plugin skills through the manifest source
+# ============================================================
+#
+# prepare-plugin.sh finds a plugin's skills through each skills[] entry's
+# "source". The auto-build drift check and the plugin resync used to look the
+# skill NAME up as a directory instead (skill_source_dir). When the name and the
+# source directory differ, as in custom-statusline's manifest (skill
+# install-statusline, source the custom-statusline directory), they found
+# nothing and the plugin was never rebuilt or resynced, with no output at all.
+#
+# Fixture: a manifest in my-statusline/ declaring skill install-statusline with
+# source "." (the spec-creator style). Run 1 publishes it. Run 2 edits only
+# SKILL.md, which the auto-build drift check reads. Run 3 edits only scripts/
+# and CHANGELOG.md, which only the plugin resync reads.
+N92_HOME="$SCRATCH_DIR/skills-home-n92"
+N92_MONO="$SCRATCH_DIR/monorepo-n92"
+N92_SRC="$N92_HOME/my-statusline"
+N92_PUB="$N92_MONO/plugins/my-statusline"
+mkdir -p "$N92_SRC/scripts" "$N92_MONO"
+seed_top_level_skill "$N92_MONO"
+printf -- '---\nname: install-statusline\ndescription: Fixture skill whose plugin manifest names it differently from its directory. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# install-statusline\n\nFirst body.\n' \
+    > "$N92_SRC/SKILL.md"
+printf '#!/usr/bin/env bash\necho first\n' > "$N92_SRC/scripts/helper.sh"
+printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$N92_SRC/CHANGELOG.md"
+cat > "$N92_SRC/plugin-manifest.json" <<'EOF'
+{
+  "name": "my-statusline",
+  "version": "1.0.0",
+  "description": "Fixture plugin whose skill name differs from its source directory.",
+  "skills": [{"name": "install-statusline", "source": "."}],
+  "commands": []
+}
+EOF
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-1.stdout" "$SCRATCH_DIR/n92-1.stderr" || N92_RC=$?
+assert_eq "control: first sync of a manifest whose skill name differs from its directory exits 0 (#92)" "0" "$N92_RC"
+assert_file_exists "…and publishes the skill under its manifest name" "$N92_PUB/skills/install-statusline/SKILL.md"
+
+# Run 2: SKILL.md only. The edit changes the file's length, so rsync's
+# size-and-mtime quick check cannot skip it (see run 13's note above).
+printf '\nN92-SKILLMD-EDIT-MARKER, a longer second body.\n' >> "$N92_SRC/SKILL.md"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-2.stdout" "$SCRATCH_DIR/n92-2.stderr" || N92_RC=$?
+assert_eq "a SKILL.md edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
+assert_contains "…and the auto-build drift check rebuilds the plugin" \
+    "--- Auto-build plugin: my-statusline ---" "$(cat "$SCRATCH_DIR/n92-2.stdout")"
+assert_contains "…so the published SKILL.md holds the edit" \
+    "N92-SKILLMD-EDIT-MARKER" "$(cat "$N92_PUB/skills/install-statusline/SKILL.md" 2>/dev/null || true)"
+
+# Runs 3a and 3b: scripts/ only, then CHANGELOG.md only. SKILL.md matches, so
+# the auto-build stage does not fire and only the resync can carry these. Two
+# runs, because the resync stops checking at the first drift it finds: with
+# both edited at once, a broken scripts/ check would hide behind the CHANGELOG
+# one (#92 review).
+printf '#!/usr/bin/env bash\necho N92-SCRIPT-EDIT-MARKER\n' > "$N92_SRC/scripts/helper.sh"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-3a.stdout" "$SCRATCH_DIR/n92-3a.stderr" || N92_RC=$?
+N92_OUT3="$(cat "$SCRATCH_DIR/n92-3a.stdout")"
+assert_eq "a scripts/ edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
+assert_not_contains "…without an auto-build (SKILL.md did not change)" "Auto-build plugin: my-statusline" "$N92_OUT3"
+assert_contains "…and the plugin resync picks it up" "--- Plugin resync: my-statusline ---" "$N92_OUT3"
+assert_contains "…copying scripts/" "N92-SCRIPT-EDIT-MARKER" \
+    "$(cat "$N92_PUB/skills/install-statusline/scripts/helper.sh" 2>/dev/null || true)"
+printf '# Changelog\n\n## [1.0.1] - 2026-01-02\n\n- N92-CHANGELOG-EDIT-MARKER.\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$N92_SRC/CHANGELOG.md"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-3b.stdout" "$SCRATCH_DIR/n92-3b.stderr" || N92_RC=$?
+N92_OUT3="$(cat "$SCRATCH_DIR/n92-3b.stdout")"
+assert_eq "a CHANGELOG-only edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
+assert_contains "…and the plugin resync picks it up" "--- Plugin resync: my-statusline ---" "$N92_OUT3"
+assert_contains "…copying the skill CHANGELOG" "N92-CHANGELOG-EDIT-MARKER" \
+    "$(cat "$N92_PUB/skills/install-statusline/CHANGELOG.md" 2>/dev/null || true)"
+assert_contains "…and the plugin-root CHANGELOG" "N92-CHANGELOG-EDIT-MARKER" \
+    "$(cat "$N92_PUB/CHANGELOG.md" 2>/dev/null || true)"
+
+# Run 4: the reversion guard must see the source directory, not just the skill
+# name. The monorepo now holds a top-level my-statusline far newer than the
+# local one, so the main loop refuses my-statusline. The plugin is built from
+# that same stale directory, so it must be refused too. Before #92 this case
+# was safe only because the drift check could not see the plugin at all.
+mkdir -p "$N92_MONO/my-statusline"
+printf -- '---\nname: my-statusline\ndescription: In-repo copy, far newer than the local one. Use when: testing issue 92.\nmetadata:\n  version: 9.9.9\n---\n\n# my-statusline\n' \
+    > "$N92_MONO/my-statusline/SKILL.md"
+printf '\nN92-STALE-EDIT-MARKER\n' >> "$N92_SRC/SKILL.md"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-4.stdout" "$SCRATCH_DIR/n92-4.stderr" || N92_RC=$?
+N92_OUT4="$(cat "$SCRATCH_DIR/n92-4.stdout")"
+assert_eq "a refused source directory exits 3 (#92)" "3" "$N92_RC"
+assert_contains "…and the plugin built from it is skipped by the reversion guard" \
+    "SKIP (reversion guard)  plugins/my-statusline  —  stale local source for: install-statusline (source my-statusline)" "$N92_OUT4"
+assert_contains "…and by the resync" "SKIP (reversion guard)  plugins/my-statusline resync" "$N92_OUT4"
+assert_not_contains "…so the stale edit is not published" "N92-STALE-EDIT-MARKER" \
+    "$(cat "$N92_PUB/skills/install-statusline/SKILL.md" 2>/dev/null || true)"
+
+# The plugin-root CHANGELOG comes from the manifest's FIRST skill, as
+# prepare-plugin.sh builds it. The resync used to take the first skill
+# directory by name, so a manifest listing zeta before alpha had alpha's
+# CHANGELOG copied over the root one whenever alpha drifted.
+N92Z_HOME="$SCRATCH_DIR/skills-home-n92-zeta"
+N92Z_MONO="$SCRATCH_DIR/monorepo-n92-zeta"
+mkdir -p "$N92Z_HOME/zeta-pack/zeta" "$N92Z_HOME/zeta-pack/alpha" "$N92Z_MONO"
+seed_top_level_skill "$N92Z_MONO"
+for _z in zeta alpha; do
+    printf -- '---\nname: %s\ndescription: Fixture skill in a two-skill plugin. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' \
+        "$_z" "$_z" > "$N92Z_HOME/zeta-pack/$_z/SKILL.md"
+    printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- %s first.\n' "$_z" > "$N92Z_HOME/zeta-pack/$_z/CHANGELOG.md"
+done
+printf '{"name": "zeta-pack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "zeta", "source": "./zeta"}, {"name": "alpha", "source": "./alpha"}], "commands": []}\n' \
+    > "$N92Z_HOME/zeta-pack/plugin-manifest.json"
+N92Z_RC=0
+run_sync "$N92Z_HOME" "$N92Z_MONO" "$SCRATCH_DIR/n92z-1.stdout" "$SCRATCH_DIR/n92z-1.stderr" || N92Z_RC=$?
+assert_eq "control: a two-skill plugin listing zeta first publishes (#92)" "0" "$N92Z_RC"
+assert_eq "…with zeta's CHANGELOG as the plugin-root one" \
+    "$(cat "$N92Z_HOME/zeta-pack/zeta/CHANGELOG.md")" "$(cat "$N92Z_MONO/plugins/zeta-pack/CHANGELOG.md" 2>/dev/null || true)"
+printf '# Changelog\n\n## [1.0.1] - 2026-01-02\n\n- N92-ALPHA-CHANGELOG-MARKER.\n\n## [1.0.0] - 2026-01-01\n\n- alpha first.\n' \
+    > "$N92Z_HOME/zeta-pack/alpha/CHANGELOG.md"
+N92Z_RC=0
+run_sync "$N92Z_HOME" "$N92Z_MONO" "$SCRATCH_DIR/n92z-2.stdout" "$SCRATCH_DIR/n92z-2.stderr" || N92Z_RC=$?
+assert_eq "an edit to the second skill's CHANGELOG syncs at exit 0 (#92)" "0" "$N92Z_RC"
+assert_contains "…and the resync copies it to that skill" "N92-ALPHA-CHANGELOG-MARKER" \
+    "$(cat "$N92Z_MONO/plugins/zeta-pack/skills/alpha/CHANGELOG.md" 2>/dev/null || true)"
+assert_eq "…but the plugin-root CHANGELOG stays the first skill's" \
+    "$(cat "$N92Z_HOME/zeta-pack/zeta/CHANGELOG.md")" "$(cat "$N92Z_MONO/plugins/zeta-pack/CHANGELOG.md" 2>/dev/null || true)"
+
+# A published plugin whose declared skill source does not resolve is an error,
+# before anything is written, in a real run and in --dry-run. Name == directory
+# here on purpose: the old lookup by name found ghost/ and compared the plugin
+# against it, whatever the manifest said.
+N92G_HOME="$SCRATCH_DIR/skills-home-n92-ghost"
+N92G_MONO="$SCRATCH_DIR/monorepo-n92-ghost"
+mkdir -p "$N92G_HOME/ghost" "$N92G_MONO"
+seed_top_level_skill "$N92G_MONO"
+printf -- '---\nname: ghost\ndescription: Fixture skill whose manifest source later stops resolving. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# ghost\n' \
+    > "$N92G_HOME/ghost/SKILL.md"
+printf '{"name": "ghost", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ghost", "source": "."}], "commands": []}\n' \
+    > "$N92G_HOME/ghost/plugin-manifest.json"
+N92G_RC=0
+run_sync "$N92G_HOME" "$N92G_MONO" "$SCRATCH_DIR/n92g-1.stdout" "$SCRATCH_DIR/n92g-1.stderr" || N92G_RC=$?
+assert_eq "control: the ghost plugin publishes while its source resolves (#92)" "0" "$N92G_RC"
+assert_file_exists "…and is on disk" "$N92G_MONO/plugins/ghost/skills/ghost/SKILL.md"
+printf '{"name": "ghost", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ghost", "source": "./gone"}], "commands": []}\n' \
+    > "$N92G_HOME/ghost/plugin-manifest.json"
+# An edit to the old source too, so a run that wrongly went on would have
+# something to write, and "nothing was written" can fail.
+printf '\nN92-GHOST-EDIT, a longer body.\n' >> "$N92G_HOME/ghost/SKILL.md"
+N92G_DIGEST="$(tree_digest "$N92G_MONO")"
+for _n92 in dry plain; do
+    if [[ "$_n92" == dry ]]; then _n92_args=(--dry-run); else _n92_args=(); fi
+    N92G_RC=0
+    run_sync "$N92G_HOME" "$N92G_MONO" "$SCRATCH_DIR/n92g-$_n92.stdout" "$SCRATCH_DIR/n92g-$_n92.stderr" ${_n92_args[@]+"${_n92_args[@]}"} || N92G_RC=$?
+    assert_eq "a published plugin whose skill source does not resolve exits 1 ($_n92, #92)" "1" "$N92G_RC"
+    assert_contains "…naming the manifest and the source ($_n92)" \
+        "Error: $N92G_HOME/ghost/plugin-manifest.json: skill source ./gone does not resolve" \
+        "$(cat "$SCRATCH_DIR/n92g-$_n92.stderr")"
+    assert_eq "…and nothing was written ($_n92)" "$N92G_DIGEST" "$(tree_digest "$N92G_MONO")"
+done
+
+# ============================================================
+# Issue #93 — --skills re-syncs a subset but keeps the full catalogue
+# ============================================================
+#
+# `--skills alpha` used to rebuild the README catalogue from alpha alone: beta
+# and gamma stayed on disk but lost their rows, the "N reusable Agent Skills"
+# count and their install-all lines, and the README agreed with itself, so
+# nothing flagged it. Fixture: three skills synced fully, then alpha edited and
+# re-synced on its own. The template's generic install example has a fourth
+# "cp -r /tmp/claude-code-skills/SKILL_NAME" line, so the install-all count
+# below matches the three names only.
+N93_HOME="$SCRATCH_DIR/skills-home-n93"
+N93_MONO="$SCRATCH_DIR/monorepo-n93"
+mkdir -p "$N93_MONO"
+write_n93_skill() {
+    mkdir -p "$N93_HOME/$1"
+    printf -- '---\nname: %s\ndescription: %s Use when: testing issue 93.\nmetadata:\n  version: %s\n---\n\n# %s\n' \
+        "$1" "$3" "$2" "$1" > "$N93_HOME/$1/SKILL.md"
+}
+for _s in alpha beta gamma; do write_n93_skill "$_s" 1.0.0 "The $_s fixture skill."; done
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-0.stdout" "$SCRATCH_DIR/n93-0.stderr" --add alpha,beta,gamma || N93_RC=$?
+assert_eq "control: the three-skill fixture syncs (#93)" "0" "$N93_RC"
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-1.stdout" "$SCRATCH_DIR/n93-1.stderr" || N93_RC=$?
+assert_eq "control: a full sync of it exits 0 (#93)" "0" "$N93_RC"
+N93_README_FULL="$(cat "$N93_MONO/README.md")"
+assert_eq "control: the full sync lists 3 catalogue rows" "3" "$(skill_catalog_row_count "$N93_MONO/README.md")"
+
+write_n93_skill alpha 1.1.0 "The alpha fixture skill, N93-ALPHA-EDIT-MARKER."
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-2.stdout" "$SCRATCH_DIR/n93-2.stderr" --skills alpha || N93_RC=$?
+N93_README="$(cat "$N93_MONO/README.md")"
+assert_eq "--skills alpha after a full sync exits 0 (#93)" "0" "$N93_RC"
+assert_eq "…and the catalogue still has 3 rows" "3" "$(skill_catalog_row_count "$N93_MONO/README.md")"
+assert_contains "…and the count still reads 3" "A curated collection of 3 reusable" "$N93_README"
+assert_eq "…and the install-all block still has 3 lines" "3" \
+    "$(grep -cE '^cp -r /tmp/claude-code-skills/(alpha|beta|gamma) ' "$N93_MONO/README.md" || true)"
+for _s in beta gamma; do
+    assert_eq "…and $_s's row is byte-identical to the full sync's" \
+        "$(grep -F "| [$_s](./$_s/) |" <<< "$N93_README_FULL")" "$(grep -F "| [$_s](./$_s/) |" <<< "$N93_README" || true)"
+done
+assert_line_present "…and alpha's row carries the edit" \
+    "| [alpha](./alpha/) | 1.1.0 | The alpha fixture skill, N93-ALPHA-EDIT-MARKER. | — |" "$N93_README"
+assert_contains "…in alphabetical order, as a full sync writes it" \
+    "$(printf '| [alpha](./alpha/) | 1.1.0 | The alpha fixture skill, N93-ALPHA-EDIT-MARKER. | — |\n| [beta](./beta/)')" "$N93_README"
+assert_contains "…and only alpha was synced this run" "Synced 1 skills from local source." \
+    "$(cat "$N93_MONO/CHANGELOG.md")"
+
+# The whole README a --skills run writes is the one a full sync writes. Gamma
+# sorts last, so a --skills gamma run that kept the order rows were added in
+# (gamma, then the others) would differ.
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-full2.stdout" "$SCRATCH_DIR/n93-full2.stderr" || N93_RC=$?
+assert_eq "control: a full sync after the alpha edit exits 0 (#93)" "0" "$N93_RC"
+assert_eq "…and writes the README the --skills alpha run wrote" "$N93_README" "$(cat "$N93_MONO/README.md")"
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-gamma.stdout" "$SCRATCH_DIR/n93-gamma.stderr" --skills gamma || N93_RC=$?
+assert_eq "--skills gamma exits 0 (#93)" "0" "$N93_RC"
+assert_eq "…and writes the same README as a full sync, rows in name order" "$N93_README" "$(cat "$N93_MONO/README.md")"
+
+# --skills with a name that is not on disk: no phantom row or install line, and
+# naming nothing real is still refused with exit 1 and no write (#80).
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-3.stdout" "$SCRATCH_DIR/n93-3.stderr" --skills alpha,nosuch93 || N93_RC=$?
+assert_eq "--skills alpha,nosuch93 still syncs alpha at exit 0 (#93)" "0" "$N93_RC"
+assert_eq "…with 3 catalogue rows" "3" "$(skill_catalog_row_count "$N93_MONO/README.md")"
+assert_not_contains "…and no row or install line for the missing name" "nosuch93" "$(cat "$N93_MONO/README.md")"
+N93_DIGEST="$(tree_digest "$N93_MONO")"
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-4.stdout" "$SCRATCH_DIR/n93-4.stderr" --skills nosuch93 || N93_RC=$?
+assert_eq "--skills naming only a missing skill is still refused with exit 1 (#93)" "1" "$N93_RC"
+assert_eq "…and writes nothing" "$N93_DIGEST" "$(tree_digest "$N93_MONO")"
+
+# ============================================================
+# Issue #106 — no <placeholder> prose in generated plugin READMEs
+# ============================================================
+#
+# prepare-plugin.sh copies a few SKILL.md sections (Quick Check or Quick
+# Reference, Prerequisites, See Also) into the plugin README. Two defects put
+# template text such as https://github.com/<github-user>/<skill-name> there:
+#   1. extract_section and extract_headings also matched "## " lines inside
+#      fenced code blocks. skill-kit:publish's SKILL.md (was skill-publishing's) shows a "## See Also"
+#      template inside a ```markdown block, before its real See Also, so the
+#      template and the "### Step 4" block after it became the README's See Also.
+#   2. A section whose prose holds a <placeholder> was copied as is.
+# A section with a placeholder in its prose is now left out, with a note on
+# stderr. Placeholders inside fenced blocks and inline code are legitimate
+# (usage lines such as `tool <monorepo-dir>`) and stay.
+
+# (a) skill-kit:publish's own SKILL.md (was skill-publishing's), the case the issue was found on.
+mkdir -p "$PREPARE_FIXTURE_DIR/n106pub-plugin"
+cp "$REPO_ROOT/plugins/skill-kit/skills/publish/SKILL.md" "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md"
+printf '{"name": "n106pub-plugin", "version": "1.0.0", "description": "Fixture plugin built from skill-kit publish SKILL.md.", "skills": [{"name": "publish", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/n106pub-plugin/plugin-manifest.json"
+# Precondition: the copy still has the shape this case is about, a "## See
+# Also" inside a ```markdown block ahead of the real one. If the file ever
+# changes, this says so instead of the assertions below passing for nothing.
+assert_eq "precondition: skill-kit:publish's SKILL.md has two \"## See Also\" lines" "2" \
+    "$(grep -c '^## See Also$' "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md" || true)"
+assert_contains "precondition: …the first inside a \`\`\`markdown block" \
+    "$(printf '```markdown\n## See Also')" "$(cat "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md")"
+N106_RC=0
+run_prepare n106pub-plugin "$SCRATCH_DIR/n106pub.stdout" "$SCRATCH_DIR/n106pub.stderr" || N106_RC=$?
+N106_README="$(cat "$PREPARE_OUT_DIR/n106pub-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds skill-kit:publish's SKILL.md (#106)" "0" "$N106_RC"
+# Only the positive control below catches a fence regression: the three negative
+# asserts also pass without the fence check, because the placeholder rule drops
+# the wrongly matched section anyway.
+assert_not_contains "…with no <github-user> in the README" "<github-user>" "$N106_README"
+assert_not_contains "…and no <skill-name>" "<skill-name>" "$N106_README"
+assert_not_contains "…and no template block pulled in after a fenced heading" "### Step 4: Initialize Git and Push" "$N106_README"
+assert_contains "positive control: the README has the real See Also section" \
+    "$(printf '## See Also\n\n- `skill-kit:author` — how to structure and write skills (the content)')" "$N106_README"
+assert_contains "positive control: and the Quick Reference block as Usage" \
+    '"${CLAUDE_SKILL_DIR}/scripts/validate-pre-sync.sh" "<MONOREPO_DIR>"' "$N106_README"
+
+# (b) three sections: a placeholder in prose, a placeholder only in code, none.
+mkdir -p "$PREPARE_FIXTURE_DIR/n106mix-plugin"
+cat > "$PREPARE_FIXTURE_DIR/n106mix-plugin/SKILL.md" <<'EOF'
+---
+name: n106mix
+description: Fixture skill with one section per placeholder case. Use when: testing issue 106.
+metadata:
+  version: 1.0.0
+---
+
+# n106mix
+
+## Quick Check
+
+Run `n106-tool <monorepo-dir>` first. N106-CODE-ONLY-MARKER.
+
+```bash
+## N106 fenced comment, not a heading
+n106-tool --check <monorepo-dir>
+```
+
+~~~text
+n106-tool --list <monorepo-dir>
+~~~
+
+````text
+```
+## N106 inner heading in a long fence
+still code: <long-fence-inner>
+````
+
+```text
+~~~
+## N106 inner heading after tildes
+still code: <tilde-inner>
+```
+
+## Prerequisites
+
+The account must exist; see https://github.com/<user>/<repo> for setup. N106-PROSE-MARKER.
+
+## See Also
+
+- Plain link: https://example.com/n106-plain, press <kbd>Enter</kbd>. N106-PLAIN-MARKER.
+EOF
+printf '{"name": "n106mix-plugin", "version": "1.0.0", "description": "Fixture plugin for the placeholder cases.", "skills": [{"name": "n106mix", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/n106mix-plugin/plugin-manifest.json"
+N106_RC=0
+run_prepare n106mix-plugin "$SCRATCH_DIR/n106mix.stdout" "$SCRATCH_DIR/n106mix.stderr" || N106_RC=$?
+N106_README="$(cat "$PREPARE_OUT_DIR/n106mix-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds the three-case fixture (#106)" "0" "$N106_RC"
+assert_not_contains "a section with a placeholder in prose is dropped" "N106-PROSE-MARKER" "$N106_README"
+assert_not_contains "…with no Prerequisites heading left behind" "## Prerequisites" "$N106_README"
+assert_line_present "…and a note says so on stderr" \
+    'dropped section "Prerequisites": placeholder <user> in prose' "$(cat "$SCRATCH_DIR/n106mix.stderr")"
+assert_contains "positive control: a placeholder only in a fenced block and inline code stays" \
+    "$(printf '## Usage\n\nRun `n106-tool <monorepo-dir>` first. N106-CODE-ONLY-MARKER.\n\n```bash\n## N106 fenced comment, not a heading\nn106-tool --check <monorepo-dir>\n```\n\n~~~text\nn106-tool --list <monorepo-dir>\n~~~\n\n````text\n```\n## N106 inner heading in a long fence\nstill code: <long-fence-inner>\n````\n\n```text\n~~~\n## N106 inner heading after tildes\nstill code: <tilde-inner>\n```')" "$N106_README"
+assert_not_contains "…and a \"## \" line inside a fence is not a Key Feature" "**N106 fenced comment" "$N106_README"
+assert_not_contains "…nor one after a shorter fence line inside a longer fence" "**N106 inner heading in a long fence" "$N106_README"
+assert_not_contains "…nor one after a fence line of the other character" "**N106 inner heading after tildes" "$N106_README"
+assert_contains "positive control: a plain section with an HTML tag stays verbatim" \
+    "$(printf '## See Also\n\n- Plain link: https://example.com/n106-plain, press <kbd>Enter</kbd>. N106-PLAIN-MARKER.')" "$N106_README"
+assert_eq "…and only the one section is reported" "1" "$(grep -c '^dropped section' "$SCRATCH_DIR/n106mix.stderr" || true)"
+
+# (c) every extracted section has a placeholder in prose: the README still has
+# its heading, description and contents.
+mkdir -p "$PREPARE_FIXTURE_DIR/n106all-plugin"
+cat > "$PREPARE_FIXTURE_DIR/n106all-plugin/SKILL.md" <<'EOF'
+---
+name: n106all
+description: Fixture skill whose every extracted section has a placeholder. Use when: testing issue 106.
+metadata:
+  version: 1.0.0
+---
+
+# n106all
+
+## Quick Check
+
+Point it at <your-repo>.
+
+## Prerequisites
+
+Install <tool-name> first.
+
+## See Also
+
+- https://github.com/<github-user>/n106all
+EOF
+printf '{"name": "n106all-plugin", "version": "1.0.0", "description": "N106-ALL-PLUGIN-DESCRIPTION.", "skills": [{"name": "n106all", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/n106all-plugin/plugin-manifest.json"
+N106_RC=0
+run_prepare n106all-plugin "$SCRATCH_DIR/n106all.stdout" "$SCRATCH_DIR/n106all.stderr" || N106_RC=$?
+N106_README="$(cat "$PREPARE_OUT_DIR/n106all-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds a skill whose every section has a placeholder (#106)" "0" "$N106_RC"
+assert_eq "…and drops all three" "3" "$(grep -c '^dropped section' "$SCRATCH_DIR/n106all.stderr" || true)"
+assert_contains "…but the README keeps its heading and description" \
+    "$(printf '# n106all-plugin\n\nN106-ALL-PLUGIN-DESCRIPTION.')" "$N106_README"
+assert_contains "…and its What It Does and Contents" "- \`n106all\` — Fixture skill whose every extracted section has a placeholder." "$N106_README"
+assert_not_contains "…with no placeholder left" "<github-user>" "$N106_README"
+
+# (d) The placeholder check itself failing (perl broken for it) stops the build
+# rather than publishing the section unchecked. The fake perl fails only for
+# the placeholder check's script, so extract_section still works.
+N106_FAKEPERL="$SCRATCH_DIR/fake-perl-bin"
+mkdir -p "$N106_FAKEPERL"
+cat > "$N106_FAKEPERL/perl" <<EOF
+#!/usr/bin/env bash
+case "\$*" in *"qw(a abbr"*) exit 2 ;; esac
+exec "$(command -v perl)" "\$@"
+EOF
+chmod +x "$N106_FAKEPERL/perl"
+N106_RC=0
+( PATH="$N106_FAKEPERL:$PATH"; run_prepare n106mix-plugin "$SCRATCH_DIR/n106fail.stdout" "$SCRATCH_DIR/n106fail.stderr" \
+    "$PREPARE_TMPDIR" "$PREPARE_OUT_DIR/n106fail-plugin" ) || N106_RC=$?
+assert_eq "a placeholder check that fails stops prepare-plugin.sh with exit 1 (#106)" "1" "$N106_RC"
+assert_contains "…and says which section it could not check" \
+    'Error: could not check section "Quick Check"' "$(cat "$SCRATCH_DIR/n106fail.stderr")"
+assert_eq "…and writes no README" "ABSENT" \
+    "$([[ -f "$PREPARE_OUT_DIR/n106fail-plugin/README.md" ]] && echo PRESENT || echo ABSENT)"
+
+# Through a sync: the auto-build shows the child's log only on failure, so the
+# note is passed on when the generated README is published, and not when an
+# existing README is kept.
+N106S_HOME="$SCRATCH_DIR/skills-home-n106"
+N106S_MONO="$SCRATCH_DIR/monorepo-n106"
+mkdir -p "$N106S_HOME/n106sync" "$N106S_MONO"
+seed_top_level_skill "$N106S_MONO"
+printf -- '---\nname: n106sync\ndescription: Fixture skill with a placeholder in See Also. Use when: testing issue 106.\nmetadata:\n  version: 1.0.0\n---\n\n# n106sync\n\n## See Also\n\n- https://github.com/<github-user>/n106sync\n' \
+    > "$N106S_HOME/n106sync/SKILL.md"
+printf '{"name": "n106sync", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "n106sync", "source": "."}], "commands": []}\n' \
+    > "$N106S_HOME/n106sync/plugin-manifest.json"
+N106S_RC=0
+run_sync "$N106S_HOME" "$N106S_MONO" "$SCRATCH_DIR/n106s-1.stdout" "$SCRATCH_DIR/n106s-1.stderr" || N106S_RC=$?
+assert_eq "a sync that builds a plugin with a placeholder section exits 0 (#106)" "0" "$N106S_RC"
+assert_line_present "…and passes the dropped-section note on" \
+    '    NOTE: dropped section "See Also": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/n106s-1.stdout")"
+assert_not_contains "…and the published README has no placeholder" "<github-user>" \
+    "$(cat "$N106S_MONO/plugins/n106sync/README.md" 2>/dev/null || true)"
+printf '\nA longer body, so the rebuild is not skipped.\n' >> "$N106S_HOME/n106sync/SKILL.md"
+N106S_RC=0
+run_sync "$N106S_HOME" "$N106S_MONO" "$SCRATCH_DIR/n106s-2.stdout" "$SCRATCH_DIR/n106s-2.stderr" || N106S_RC=$?
+assert_contains "control: the rebuild keeps the existing README" "(README preserved)" "$(cat "$SCRATCH_DIR/n106s-2.stdout")"
+assert_not_contains "…and so prints no note about a README it did not publish" "dropped section" "$(cat "$SCRATCH_DIR/n106s-2.stdout")"
+
+# ============================================================
+# Plugin validation stays on (#106 acceptance, #190 follow-up)
+# ============================================================
+# The harness used to export SKILL_KIT_NO_PLUGIN_VALIDATION=1 for every case.
+# Now only run_prepare_unvalidated sets it, so ordinary builds are validated.
+assert_contains "an ordinary prepare-plugin.sh build in this harness runs validation" \
+    "--- Validation ---" "$(cat "$SCRATCH_DIR/prep-legacy.stdout")"
+assert_not_contains "…and does not skip it" "Validation skipped" "$(cat "$SCRATCH_DIR/prep-legacy.stdout")"
+assert_contains "control: run_prepare_unvalidated does skip it, and says so" \
+    "--- Validation skipped (SKILL_KIT_NO_PLUGIN_VALIDATION=1) ---" "$(cat "$SCRATCH_DIR/scalar-nodesc.stdout")"
+
+# ============================================================
+# PR #195 review, round 1 — #92, #93 and #106 follow-ups
+# ============================================================
+
+# --- #92: a two-skill plugin, one skill built from a refused, renamed source
+# directory, the other (not first) renamed skill drifting. The drifting one is
+# resynced; the refused one is not.
+R195P_HOME="$SCRATCH_DIR/skills-home-r195-pack"
+R195P_MONO="$SCRATCH_DIR/monorepo-r195-pack"
+mkdir -p "$R195P_HOME/pack" "$R195P_HOME/one-dir" "$R195P_HOME/two-dir" "$R195P_MONO"
+seed_top_level_skill "$R195P_MONO"
+for _p in one-dir:uno two-dir:dos; do
+    _d=${_p%%:*}; _n=${_p##*:}
+    printf -- '---\nname: %s\ndescription: Probe skill. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' "$_n" "$_n" > "$R195P_HOME/$_d/SKILL.md"
+    printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$R195P_HOME/$_d/CHANGELOG.md"
+done
+printf '{"name": "pack", "version": "1.0.0", "description": "Probe.", "skills": [{"name": "uno", "source": "../one-dir"}, {"name": "dos", "source": "../two-dir"}], "commands": []}\n' \
+    > "$R195P_HOME/pack/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195P_HOME" "$R195P_MONO" "$SCRATCH_DIR/r195p-1.stdout" "$SCRATCH_DIR/r195p-1.stderr" || R195_RC=$?
+assert_eq "control: a two-skill plugin with renamed sources publishes (#92)" "0" "$R195_RC"
+assert_file_exists "…with uno under its manifest name" "$R195P_MONO/plugins/pack/skills/uno/SKILL.md"
+mkdir -p "$R195P_MONO/one-dir"
+printf -- '---\nname: uno\ndescription: In-repo copy, far newer. Use when: testing issue 92.\nmetadata:\n  version: 9.9.9\n---\n\n# uno\n' > "$R195P_MONO/one-dir/SKILL.md"
+printf '\nR195-STALE-MARKER, a longer body.\n' >> "$R195P_HOME/one-dir/SKILL.md"
+printf '\nR195-DOS-EDIT, a longer body.\n' >> "$R195P_HOME/two-dir/SKILL.md"
+R195_RC=0
+run_sync "$R195P_HOME" "$R195P_MONO" "$SCRATCH_DIR/r195p-2.stdout" "$SCRATCH_DIR/r195p-2.stderr" || R195_RC=$?
+assert_eq "…a refused source directory exits 3" "3" "$R195_RC"
+assert_contains "…the second skill's edit is resynced" "R195-DOS-EDIT" \
+    "$(cat "$R195P_MONO/plugins/pack/skills/dos/SKILL.md" 2>/dev/null || true)"
+assert_not_contains "…and the refused first skill's stale edit is not" "R195-STALE-MARKER" \
+    "$(cat "$R195P_MONO/plugins/pack/skills/uno/SKILL.md" 2>/dev/null || true)"
+
+# --- #92 review K1: a published plugin whose manifest entry has no string
+# source (an object, an array, or no source at all) or no name, a null entry,
+# or a skills value that is not an array, is an error before anything is
+# written. It used to be skipped, and the plugin was then
+# checked against $SKILLS_HOME/<name>, which is #92 again.
+R195K_HOME="$SCRATCH_DIR/skills-home-r195-k1"
+R195K_MONO="$SCRATCH_DIR/monorepo-r195-k1"
+mkdir -p "$R195K_HOME/k1src" "$R195K_MONO"
+seed_top_level_skill "$R195K_MONO"
+printf -- '---\nname: k1skill\ndescription: Fixture skill for bad manifest entries. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# k1skill\n' \
+    > "$R195K_HOME/k1src/SKILL.md"
+R195K_GOOD='{"name": "k1src", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "k1skill", "source": "."}], "commands": []}'
+printf '%s\n' "$R195K_GOOD" > "$R195K_HOME/k1src/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195K_HOME" "$R195K_MONO" "$SCRATCH_DIR/r195k-0.stdout" "$SCRATCH_DIR/r195k-0.stderr" || R195_RC=$?
+assert_eq "control: the k1 plugin publishes (#92 review)" "0" "$R195_RC"
+printf '\nR195-K1-EDIT, a longer body.\n' >> "$R195K_HOME/k1src/SKILL.md"
+R195K_DIGEST="$(tree_digest "$R195K_MONO")"
+for _k in 'object:.skills[0].source = {"path": "."}' 'array:.skills[0].source = ["."]' \
+          'nosource:.skills[0] |= del(.source)' 'noname:.skills[0] |= del(.name)' \
+          'nullentry:.skills = [null]' 'skillsobject:.skills = {"a": {"name": "k1skill", "source": "."}}'; do
+    _kn=${_k%%:*}; _kf=${_k#*:}
+    jq "$_kf" <<< "$R195K_GOOD" > "$R195K_HOME/k1src/plugin-manifest.json"
+    R195_RC=0
+    run_sync "$R195K_HOME" "$R195K_MONO" "$SCRATCH_DIR/r195k-$_kn.stdout" "$SCRATCH_DIR/r195k-$_kn.stderr" || R195_RC=$?
+    assert_eq "a published plugin whose skills[] cannot be read exits 1 ($_kn)" "1" "$R195_RC"
+    assert_contains "…naming the manifest ($_kn)" \
+        "Error: $R195K_HOME/k1src/plugin-manifest.json: " "$(cat "$SCRATCH_DIR/r195k-$_kn.stderr")"
+    assert_eq "…and nothing was written ($_kn)" "$R195K_DIGEST" "$(tree_digest "$R195K_MONO")"
+done
+
+# --- #92 review K4: a manifest that is not a JSON object stops the run before
+# anything is written, with jq's own message. It used to abort with exit 5 and
+# an empty stderr, after the skills were written.
+for _k in published unpublished; do
+    _kh="$SCRATCH_DIR/skills-home-r195-k4-$_k"
+    _km="$SCRATCH_DIR/monorepo-r195-k4-$_k"
+    cp -R "$R195K_HOME" "$_kh"
+    printf '%s\n' "$R195K_GOOD" > "$_kh/k1src/plugin-manifest.json"
+    if [[ "$_k" == published ]]; then cp -R "$R195K_MONO" "$_km"; else mkdir -p "$_km"; seed_top_level_skill "$_km"; fi
+    # A second top-level skill with a local edit, so a run that went on would write.
+    mkdir -p "$_kh/seed-skill"
+    sed 's/^# seed-skill$/# seed-skill, edited locally/' "$_km/seed-skill/SKILL.md" > "$_kh/seed-skill/SKILL.md"
+    printf '{"name": "k1src", ' > "$_kh/k1src/plugin-manifest.json"
+    _kd="$(tree_digest "$_km")"
+    R195_RC=0
+    run_sync "$_kh" "$_km" "$SCRATCH_DIR/r195k4-$_k.stdout" "$SCRATCH_DIR/r195k4-$_k.stderr" || R195_RC=$?
+    assert_eq "a manifest that is not valid JSON exits 1 ($_k, #92 review)" "1" "$R195_RC"
+    assert_contains "…naming it ($_k)" "Error: $_kh/k1src/plugin-manifest.json is not valid JSON:" "$(cat "$SCRATCH_DIR/r195k4-$_k.stderr")"
+    assert_contains "…with jq's message ($_k)" "Unfinished JSON term" "$(cat "$SCRATCH_DIR/r195k4-$_k.stderr")"
+    assert_eq "…and nothing was written ($_k)" "$_kd" "$(tree_digest "$_km")"
+done
+printf '[]\n' > "$SCRATCH_DIR/skills-home-r195-k4-published/k1src/plugin-manifest.json"
+R195_RC=0
+run_sync "$SCRATCH_DIR/skills-home-r195-k4-published" "$SCRATCH_DIR/monorepo-r195-k4-published" \
+    "$SCRATCH_DIR/r195k4-array.stdout" "$SCRATCH_DIR/r195k4-array.stderr" || R195_RC=$?
+assert_eq "a manifest that is JSON but not an object exits 1 (#92 review)" "1" "$R195_RC"
+assert_contains "…and says so" "plugin-manifest.json is not a JSON object" "$(cat "$SCRATCH_DIR/r195k4-array.stderr")"
+
+# --- #92 review K1: a skill directory still under plugins/<p>/skills/ after
+# the manifest stopped listing it is not resynced from an unrelated
+# $SKILLS_HOME/<name>; the run says it skipped it.
+R195U_HOME="$SCRATCH_DIR/skills-home-r195-undeclared"
+R195U_MONO="$SCRATCH_DIR/monorepo-r195-undeclared"
+mkdir -p "$R195U_HOME/upack/ua" "$R195U_HOME/upack/ub" "$R195U_MONO"
+seed_top_level_skill "$R195U_MONO"
+for _u in ua ub; do
+    printf -- '---\nname: %s\ndescription: Fixture skill. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' "$_u" "$_u" > "$R195U_HOME/upack/$_u/SKILL.md"
+done
+printf '{"name": "upack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ua", "source": "./ua"}, {"name": "ub", "source": "./ub"}], "commands": []}\n' \
+    > "$R195U_HOME/upack/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195U_HOME" "$R195U_MONO" "$SCRATCH_DIR/r195u-1.stdout" "$SCRATCH_DIR/r195u-1.stderr" || R195_RC=$?
+assert_eq "control: a two-skill plugin publishes (#92 review)" "0" "$R195_RC"
+printf '{"name": "upack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ua", "source": "./ua"}], "commands": []}\n' \
+    > "$R195U_HOME/upack/plugin-manifest.json"
+mkdir -p "$R195U_HOME/ub"
+printf -- '---\nname: ub\ndescription: An unrelated local skill that happens to be named ub. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# ub\n\nR195-UNRELATED-MARKER\n' > "$R195U_HOME/ub/SKILL.md"
+R195_RC=0
+run_sync "$R195U_HOME" "$R195U_MONO" "$SCRATCH_DIR/r195u-2.stdout" "$SCRATCH_DIR/r195u-2.stderr" || R195_RC=$?
+assert_eq "a plugin skill its manifest no longer lists does not fail the sync" "0" "$R195_RC"
+assert_contains "…but is reported" "WARNING: plugins/upack/skills/ub/ is not in the plugin's manifest; not resynced" \
+    "$(cat "$SCRATCH_DIR/r195u-2.stdout")"
+assert_not_contains "…and is not resynced from an unrelated \$SKILLS_HOME/ub" "R195-UNRELATED-MARKER" \
+    "$(cat "$R195U_MONO/plugins/upack/skills/ub/SKILL.md" 2>/dev/null || true)"
+
+# --- #92 review K3: a source that is a symlink, with another name, to a refused
+# $SKILLS_HOME/<X> is refused too.
+R195L_HOME="$SCRATCH_DIR/skills-home-r195-link"
+R195L_MONO="$SCRATCH_DIR/monorepo-r195-link"
+mkdir -p "$R195L_HOME/xs" "$R195L_HOME/lnkpack" "$R195L_MONO"
+seed_top_level_skill "$R195L_MONO"
+ln -s "$R195L_HOME/xs" "$R195L_HOME/lnk"
+printf -- '---\nname: lnkskill\ndescription: Fixture skill reached through a symlink. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# lnkskill\n' > "$R195L_HOME/xs/SKILL.md"
+printf '{"name": "lnkpack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "lnkskill", "source": "../lnk"}], "commands": []}\n' \
+    > "$R195L_HOME/lnkpack/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195L_HOME" "$R195L_MONO" "$SCRATCH_DIR/r195l-1.stdout" "$SCRATCH_DIR/r195l-1.stderr" || R195_RC=$?
+assert_eq "control: a plugin whose source is a symlink publishes (#92 review)" "0" "$R195_RC"
+mkdir -p "$R195L_MONO/xs"
+printf -- '---\nname: xs\ndescription: In-repo copy, far newer. Use when: testing.\nmetadata:\n  version: 9.9.9\n---\n\n# xs\n' > "$R195L_MONO/xs/SKILL.md"
+printf '\nR195-LINK-STALE-MARKER, a longer body.\n' >> "$R195L_HOME/xs/SKILL.md"
+R195_RC=0
+run_sync "$R195L_HOME" "$R195L_MONO" "$SCRATCH_DIR/r195l-2.stdout" "$SCRATCH_DIR/r195l-2.stderr" || R195_RC=$?
+assert_eq "…a refused directory reached through the symlink exits 3" "3" "$R195_RC"
+assert_contains "…and the plugin is skipped by the reversion guard" \
+    "SKIP (reversion guard)  plugins/lnkpack  —  stale local source for: lnkskill (source xs)" "$(cat "$SCRATCH_DIR/r195l-2.stdout")"
+assert_not_contains "…so the stale edit is not published" "R195-LINK-STALE-MARKER" \
+    "$(cat "$R195L_MONO/plugins/lnkpack/skills/lnkskill/SKILL.md" 2>/dev/null || true)"
+
+# --- #93 review K6 and K7: three skills; beta has a repo, which only a working
+# gh can see.
+R195C_HOME="$SCRATCH_DIR/skills-home-r195-cat"
+R195C_MONO="$SCRATCH_DIR/monorepo-r195-cat"
+R195C_GH="$SCRATCH_DIR/shim-beta-repo"
+mkdir -p "$R195C_MONO" "$R195C_GH"
+for _s in alpha beta gamma; do
+    mkdir -p "$R195C_HOME/$_s"
+    printf -- '---\nname: %s\ndescription: The %s fixture skill. Use when: testing issue 93.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' "$_s" "$_s" "$_s" > "$R195C_HOME/$_s/SKILL.md"
+done
+cat > "$R195C_GH/gh" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1 $2 $3" == "repo view harness-fixture-user/beta" ]] && exit 0
+exit 1
+EOF
+chmod +x "$R195C_GH/gh"
+# The full sync runs with a gh that finds beta's repo; the --skills runs below
+# use the harness shim, where every gh call fails.
+R195_RC=0
+( cd "$RUN_CWD"; PATH="$R195C_GH:$PATH" SKILLS_HOME="$R195C_HOME" \
+    "$SYNC_SCRIPT" --github-user harness-fixture-user --add alpha,beta,gamma "$R195C_MONO" ) \
+    >"$SCRATCH_DIR/r195c-0.stdout" 2>"$SCRATCH_DIR/r195c-0.stderr" </dev/null || R195_RC=$?
+assert_eq "control: the three-skill fixture syncs with a working gh (#93 review)" "0" "$R195_RC"
+assert_line_present "control: …and beta's row links its repo" \
+    "| [beta](./beta/) | 1.0.0 | The beta fixture skill. | [repo](https://github.com/harness-fixture-user/beta) |" \
+    "$(cat "$R195C_MONO/README.md")"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-1.stdout" "$SCRATCH_DIR/r195c-1.stderr" --skills alpha || R195_RC=$?
+assert_eq "--skills alpha with gh failing exits 0 (#93 review)" "0" "$R195_RC"
+assert_line_present "…and beta keeps its repo link from the existing row" \
+    "| [beta](./beta/) | 1.0.0 | The beta fixture skill. | [repo](https://github.com/harness-fixture-user/beta) |" \
+    "$(cat "$R195C_MONO/README.md")"
+
+# C-004: the backfill builds a row by the main loop's rules (one function,
+# skill_row): a SKILL.md with no frontmatter gets 1.0.0 and an empty
+# description, with a warning, as a full sync writes it. An unreadable one
+# stops the run before anything is written.
+printf '# beta\n\nNo frontmatter.\n' > "$R195C_MONO/beta/SKILL.md"
+# delta lives only in the monorepo, with no frontmatter, so a full sync builds
+# its row in the main loop and a --skills run in the backfill.
+mkdir -p "$R195C_MONO/delta"
+printf '# delta\n\nNo frontmatter either.\n' > "$R195C_MONO/delta/SKILL.md"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-2.stdout" "$SCRATCH_DIR/r195c-2.stderr" --skills alpha || R195_RC=$?
+assert_eq "--skills when another skill's SKILL.md has no frontmatter exits 0, as a full sync does (#195 C-004)" "0" "$R195_RC"
+assert_contains "…with a warning naming the file" "WARNING: $R195C_MONO/beta/SKILL.md has no description" \
+    "$(cat "$SCRATCH_DIR/r195c-2.stderr")"
+assert_line_present "…and the main loop's row: 1.0.0, no description, the kept link" \
+    "| [beta](./beta/) | 1.0.0 |  | [repo](https://github.com/harness-fixture-user/beta) |" "$(cat "$R195C_MONO/README.md")"
+R195C_DELTA_SUBSET="$(grep -F '| [delta](./delta/) |' "$R195C_MONO/README.md" || true)"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-2f.stdout" "$SCRATCH_DIR/r195c-2f.stderr" || R195_RC=$?
+assert_eq "control: a full sync with the same monorepo-only skill exits 0" "0" "$R195_RC"
+assert_eq "…and writes the same row for it as the --skills run did" \
+    "$R195C_DELTA_SUBSET" "$(grep -F '| [delta](./delta/) |' "$R195C_MONO/README.md" || true)"
+assert_line_present "…which is 1.0.0 with no description" "| [delta](./delta/) | 1.0.0 |  | — |" "$(cat "$R195C_MONO/README.md")"
+rm -r "$R195C_MONO/delta"
+cp "$R195C_HOME/beta/SKILL.md" "$R195C_MONO/beta/SKILL.md"
+R195C_DIGEST="$(tree_digest "$R195C_MONO")"
+chmod 000 "$R195C_MONO/beta/SKILL.md"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-3.stdout" "$SCRATCH_DIR/r195c-3.stderr" --skills alpha || R195_RC=$?
+chmod 644 "$R195C_MONO/beta/SKILL.md"
+R195C_DIGEST2="$(tree_digest "$R195C_MONO")"
+assert_eq "--skills when another skill's SKILL.md cannot be read exits 1 (#93 review)" "1" "$R195_RC"
+assert_contains "…and names the file" "Error: cannot read $R195C_MONO/beta/SKILL.md for its catalogue row" \
+    "$(cat "$SCRATCH_DIR/r195c-3.stderr")"
+assert_eq "…and nothing was written" "$R195C_DIGEST" "$R195C_DIGEST2"
+
+# T7: the minimal README (no template beside the script) counts the whole
+# catalogue too under --skills.
+R195N_SKILL="$SCRATCH_DIR/publish-no-template"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$R195N_SKILL"
+rm -f "$R195N_SKILL/references/monorepo-readme-template.md"
+R195N_MONO="$SCRATCH_DIR/monorepo-r195-notemplate"
+mkdir -p "$R195N_MONO"
+R195_RC=0
+( SYNC_SCRIPT="$R195N_SKILL/scripts/sync-monorepo.sh"
+  run_sync "$R195C_HOME" "$R195N_MONO" "$SCRATCH_DIR/r195n-1.stdout" "$SCRATCH_DIR/r195n-1.stderr" --add alpha,beta,gamma &&
+  run_sync "$R195C_HOME" "$R195N_MONO" "$SCRATCH_DIR/r195n-2.stdout" "$SCRATCH_DIR/r195n-2.stderr" --skills alpha ) || R195_RC=$?
+assert_eq "control: syncs with no README template exit 0 (#93 review)" "0" "$R195_RC"
+assert_contains "control: …and use the minimal README" "generating minimal README" "$(cat "$SCRATCH_DIR/r195n-2.stdout")"
+assert_contains "…whose count under --skills is the whole catalogue" "A curated collection of 3 reusable Agent Skills." \
+    "$(cat "$R195N_MONO/README.md" 2>/dev/null || true)"
+
+# --- #106 review: placeholder and fence edge cases, through prepare-plugin.sh.
+r195_prep_fixture() { # <name> <body-file>
+    mkdir -p "$PREPARE_FIXTURE_DIR/$1-plugin"
+    printf -- '---\nname: %s\ndescription: Fixture skill for a placeholder edge case. Use when: testing issue 106.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n\n' "$1" "$1" \
+        > "$PREPARE_FIXTURE_DIR/$1-plugin/SKILL.md"
+    cat "$2" >> "$PREPARE_FIXTURE_DIR/$1-plugin/SKILL.md"
+    printf '{"name": "%s-plugin", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "%s", "source": "."}], "commands": []}\n' "$1" "$1" \
+        > "$PREPARE_FIXTURE_DIR/$1-plugin/plugin-manifest.json"
+}
+
+# K9: upper-case and spaced placeholders, and a stray backtick, are caught.
+cat > "$SCRATCH_DIR/r195-k9.body" <<'EOF'
+## Quick Check
+
+The ` character is a backtick. Visit https://github.com/<github-user>/x first.
+
+## Prerequisites
+
+Clone <your repo> first.
+
+## See Also
+
+- https://github.com/<GITHUB_USER>/x
+EOF
+r195_prep_fixture r195k9 "$SCRATCH_DIR/r195-k9.body"
+R195_RC=0
+run_prepare r195k9-plugin "$SCRATCH_DIR/r195k9.stdout" "$SCRATCH_DIR/r195k9.stderr" || R195_RC=$?
+R195_ERR="$(cat "$SCRATCH_DIR/r195k9.stderr")"
+assert_eq "prepare-plugin.sh builds the K9 fixture (#106 review)" "0" "$R195_RC"
+assert_line_present "a lone backtick does not hide a placeholder" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$R195_ERR"
+assert_line_present "a placeholder with a space is caught" \
+    'dropped section "Prerequisites": placeholder <your repo> in prose' "$R195_ERR"
+assert_line_present "an upper-case placeholder is caught" \
+    'dropped section "See Also": placeholder <GITHUB_USER> in prose' "$R195_ERR"
+cat > "$SCRATCH_DIR/r195-k9ok.body" <<'EOF'
+## See Also
+
+- Press <KBD>Enter</KBD>, then run `List<string>` and `tool <x>`. R195-K9-OK-MARKER.
+EOF
+r195_prep_fixture r195k9ok "$SCRATCH_DIR/r195-k9ok.body"
+R195_RC=0
+run_prepare r195k9ok-plugin "$SCRATCH_DIR/r195k9ok.stdout" "$SCRATCH_DIR/r195k9ok.stderr" || R195_RC=$?
+assert_eq "positive control: upper-case HTML and code spans build (#106 review)" "0" "$R195_RC"
+assert_contains "…and the section stays" "R195-K9-OK-MARKER" "$(cat "$PREPARE_OUT_DIR/r195k9ok-plugin/README.md" 2>/dev/null || true)"
+
+# T5: a placeholder in a Quick Reference section (the Usage fallback) is caught.
+cat > "$SCRATCH_DIR/r195-qref.body" <<'EOF'
+## Quick Reference
+
+Visit https://github.com/<github-user>/qref.
+EOF
+r195_prep_fixture r195qref "$SCRATCH_DIR/r195-qref.body"
+R195_RC=0
+run_prepare r195qref-plugin "$SCRATCH_DIR/r195qref.stdout" "$SCRATCH_DIR/r195qref.stderr" || R195_RC=$?
+assert_line_present "a Quick Reference section with a placeholder is dropped (#106 review)" \
+    'dropped section "Quick Reference": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195qref.stderr")"
+assert_not_contains "…and not published" "<github-user>" "$(cat "$PREPARE_OUT_DIR/r195qref-plugin/README.md" 2>/dev/null || true)"
+
+# K2: a fence closed by a CRLF line still closes, so the prose after it is checked.
+printf '## Quick Check\n\n```bash\r\nrun it\r\n```\r\n\nVisit https://github.com/<github-user>/crlf\n\n## See Also\n\n- R195-CRLF-OTHER\n' \
+    > "$SCRATCH_DIR/r195-crlf.body"
+r195_prep_fixture r195crlf "$SCRATCH_DIR/r195-crlf.body"
+R195_RC=0
+run_prepare r195crlf-plugin "$SCRATCH_DIR/r195crlf.stdout" "$SCRATCH_DIR/r195crlf.stderr" || R195_RC=$?
+assert_eq "prepare-plugin.sh builds a SKILL.md with a CRLF fence line (#106 review)" "0" "$R195_RC"
+assert_line_present "…and checks the prose after the fence" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195crlf.stderr")"
+assert_not_contains "…so it is not published" "<github-user>" "$(cat "$PREPARE_OUT_DIR/r195crlf-plugin/README.md" 2>/dev/null || true)"
+assert_contains "…and the next section is still found" "R195-CRLF-OTHER" "$(cat "$PREPARE_OUT_DIR/r195crlf-plugin/README.md" 2>/dev/null || true)"
+
+# K2: a fence that is never closed stops the build.
+printf '## Quick Check\n\n```bash\nrun it\n\n## See Also\n\n- https://github.com/<github-user>/x\n' > "$SCRATCH_DIR/r195-open.body"
+r195_prep_fixture r195open "$SCRATCH_DIR/r195-open.body"
+R195_RC=0
+run_prepare r195open-plugin "$SCRATCH_DIR/r195open.stdout" "$SCRATCH_DIR/r195open.stderr" || R195_RC=$?
+assert_eq "a section whose code fence is never closed stops prepare-plugin.sh with exit 1 (#106 review)" "1" "$R195_RC"
+assert_contains "…and says why" 'Error: section "Quick Check" of' "$(cat "$SCRATCH_DIR/r195open.stderr")"
+assert_contains "…naming the fence" "has a code fence that is never closed" "$(cat "$SCRATCH_DIR/r195open.stderr")"
+
+# K5: a failure while extracting a section stops the build instead of reading
+# as an empty section. The fake perl fails only for extract_section's trim.
+R195_FAKEPERL="$SCRATCH_DIR/fake-perl-trim"
+mkdir -p "$R195_FAKEPERL"
+cat > "$R195_FAKEPERL/perl" <<EOF
+#!/usr/bin/env bash
+for _a in "\$@"; do case "\$_a" in *'s/\\A\\s*\\n//'*) exit 2 ;; esac; done
+exec "$(command -v perl)" "\$@"
+EOF
+chmod +x "$R195_FAKEPERL/perl"
+R195_RC=0
+( PATH="$R195_FAKEPERL:$PATH"; run_prepare r195k9ok-plugin "$SCRATCH_DIR/r195trim.stdout" "$SCRATCH_DIR/r195trim.stderr" \
+    "$PREPARE_TMPDIR" "$PREPARE_OUT_DIR/r195trim-plugin" ) || R195_RC=$?
+assert_eq "a section that cannot be extracted stops prepare-plugin.sh with exit 1 (#106 review)" "1" "$R195_RC"
+assert_contains "…and says which" 'Error: could not read section "' "$(cat "$SCRATCH_DIR/r195trim.stderr")"
+
+# T6: skill-kit publish's own SKILL.md, the live file with the same fenced
+# "## See Also" shape.
+mkdir -p "$PREPARE_FIXTURE_DIR/r195pub-plugin"
+cp "$REPO_ROOT/plugins/skill-kit/skills/publish/SKILL.md" "$PREPARE_FIXTURE_DIR/r195pub-plugin/SKILL.md"
+printf '{"name": "r195pub-plugin", "version": "1.0.0", "description": "Fixture plugin built from skill-kit publish SKILL.md.", "skills": [{"name": "publish", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/r195pub-plugin/plugin-manifest.json"
+assert_eq "precondition: skill-kit publish's SKILL.md has two \"## See Also\" lines" "2" \
+    "$(grep -c '^## See Also$' "$PREPARE_FIXTURE_DIR/r195pub-plugin/SKILL.md" || true)"
+R195_RC=0
+run_prepare r195pub-plugin "$SCRATCH_DIR/r195pub.stdout" "$SCRATCH_DIR/r195pub.stderr" || R195_RC=$?
+R195_README="$(cat "$PREPARE_OUT_DIR/r195pub-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds skill-kit publish's SKILL.md (#106)" "0" "$R195_RC"
+assert_not_contains "…with no <github-user> in the README" "<github-user>" "$R195_README"
+assert_contains "…and its real See Also section" \
+    "$(printf '## See Also\n\n- `skill-kit:author` — how to structure and write skills (the content)')" "$R195_README"
+
+# ============================================================
+# PR #195 cross-model review — X-001 to X-003, C-001 to C-005
+# ============================================================
+
+# X-001: a --skills run still builds and resyncs every plugin, so the
+# reversion guard must see every plugin source, not only the skills it syncs.
+# Two shapes: the skill named like its directory (foo), and a renamed one
+# (install-statusline from my-statusline). Each publishes, then the monorepo
+# gets a newer top-level copy of the source directory and the local source a
+# stale edit, then `--skills alpha` runs.
+for _x in same:foo:foo renamed:my-statusline:install-statusline; do
+    _xv=${_x%%:*}; _xr=${_x#*:}; _xd=${_xr%%:*}; _xs=${_xr#*:}
+    _xh="$SCRATCH_DIR/skills-home-x001-$_xv"; _xm="$SCRATCH_DIR/monorepo-x001-$_xv"
+    mkdir -p "$_xh/alpha" "$_xh/$_xd" "$_xm"
+    seed_top_level_skill "$_xm"
+    printf -- '---\nname: alpha\ndescription: Alpha. Use when: testing X-001.\nmetadata:\n  version: 1.0.0\n---\n\n# alpha\n' > "$_xh/alpha/SKILL.md"
+    printf -- '---\nname: %s\ndescription: Fixture. Use when: testing X-001.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n\nFirst body.\n' "$_xs" "$_xs" > "$_xh/$_xd/SKILL.md"
+    printf '{"name": "%s", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "%s", "source": "."}], "commands": []}\n' \
+        "$_xd" "$_xs" > "$_xh/$_xd/plugin-manifest.json"
+    R195_RC=0
+    run_sync "$_xh" "$_xm" "$SCRATCH_DIR/x001-$_xv-1.stdout" "$SCRATCH_DIR/x001-$_xv-1.stderr" || R195_RC=$?
+    assert_eq "control: the X-001 plugin publishes ($_xv)" "0" "$R195_RC"
+    mkdir -p "$_xm/$_xd"
+    printf -- '---\nname: %s\ndescription: In-repo copy, far newer. Use when: testing X-001.\nmetadata:\n  version: 9.9.9\n---\n\n# %s\n' "$_xd" "$_xd" > "$_xm/$_xd/SKILL.md"
+    printf '\nX001-STALE-MARKER, a longer body.\n' >> "$_xh/$_xd/SKILL.md"
+    R195_RC=0
+    run_sync "$_xh" "$_xm" "$SCRATCH_DIR/x001-$_xv-2.stdout" "$SCRATCH_DIR/x001-$_xv-2.stderr" --skills alpha || R195_RC=$?
+    assert_eq "--skills alpha refuses a plugin built from a stale source and exits 3 ($_xv, X-001)" "3" "$R195_RC"
+    assert_contains "…saying which source ($_xv)" "REFUSED (plugin source)  $_xh/$_xd (v1.0.0) is older than $_xm/$_xd (v9.9.9)" \
+        "$(cat "$SCRATCH_DIR/x001-$_xv-2.stdout")"
+    assert_not_contains "…and does not publish the stale edit ($_xv)" "X001-STALE-MARKER" \
+        "$(cat "$_xm/plugins/$_xd/skills/$_xs/SKILL.md" 2>/dev/null || true)"
+    R195_RC=0
+    run_sync "$_xh" "$_xm" "$SCRATCH_DIR/x001-$_xv-3.stdout" "$SCRATCH_DIR/x001-$_xv-3.stderr" --skills alpha --force-local || R195_RC=$?
+    assert_eq "control: with --force-local the same run exits 0 ($_xv)" "0" "$R195_RC"
+    assert_contains "…says it builds anyway ($_xv)" "--force-local given, building it anyway" "$(cat "$SCRATCH_DIR/x001-$_xv-3.stdout")"
+    assert_contains "…and publishes the local copy ($_xv)" "X001-STALE-MARKER" \
+        "$(cat "$_xm/plugins/$_xd/skills/$_xs/SKILL.md" 2>/dev/null || true)"
+done
+
+# C-001: a skills[] entry that is a number, a boolean or an array stops the run
+# before anything is written, for a plugin that is not published yet too.
+for _c in 'number:7' 'boolean:true' 'array:["x"]'; do
+    _cn=${_c%%:*}; _cv=${_c#*:}
+    _ch="$SCRATCH_DIR/skills-home-c001-$_cn"; _cm="$SCRATCH_DIR/monorepo-c001-$_cn"
+    cp -R "$R195K_HOME" "$_ch"
+    mkdir -p "$_cm"; seed_top_level_skill "$_cm"
+    mkdir -p "$_ch/seed-skill"
+    sed 's/^# seed-skill$/# seed-skill, edited locally/' "$_cm/seed-skill/SKILL.md" > "$_ch/seed-skill/SKILL.md"
+    printf '{"name": "k1src", "version": "1.0.0", "description": "Fixture plugin.", "skills": [%s], "commands": []}\n' "$_cv" \
+        > "$_ch/k1src/plugin-manifest.json"
+    _cd="$(tree_digest "$_cm")"
+    R195_RC=0
+    run_sync "$_ch" "$_cm" "$SCRATCH_DIR/c001-$_cn.stdout" "$SCRATCH_DIR/c001-$_cn.stderr" || R195_RC=$?
+    assert_eq "a skills[] entry that is a $_cn exits 1 (C-001)" "1" "$R195_RC"
+    assert_contains "…naming the manifest and the problem ($_cn)" \
+        "Error: $_ch/k1src/plugin-manifest.json: a skills[] entry is $_cn, not a name or an object" "$(cat "$SCRATCH_DIR/c001-$_cn.stderr")"
+    assert_eq "…before anything is written ($_cn)" "$_cd" "$(tree_digest "$_cm")"
+done
+
+# X-002, X-003, C-002: CommonMark fences and code spans, and the wider
+# placeholder pattern. Each case runs through both readers: extract_headings
+# (awk) decides the Key Features, and the placeholder check (perl) decides
+# whether a section is dropped.
+cat > "$SCRATCH_DIR/r195-cm1.body" <<'EOF'
+## Quick Check
+
+```tool <repo>``` is an inline span, not a fence. Run ``tool <repo> uses a literal ` here`` too. R195-CM-KEPT-MARKER.
+
+## Next Heading After Span
+
+Text.
+EOF
+r195_prep_fixture r195cm1 "$SCRATCH_DIR/r195-cm1.body"
+R195_RC=0
+run_prepare r195cm1-plugin "$SCRATCH_DIR/r195cm1.stdout" "$SCRATCH_DIR/r195cm1.stderr" || R195_RC=$?
+R195_README="$(cat "$PREPARE_OUT_DIR/r195cm1-plugin/README.md" 2>/dev/null || true)"
+assert_eq "an inline \`\`\`span\`\`\` is not an unclosed fence (X-002)" "0" "$R195_RC"
+assert_contains "…so the heading after it is still a Key Feature (awk)" "**Next Heading After Span**" "$R195_README"
+assert_contains "…and a code span holding a literal backtick keeps its section (perl, X-003)" "R195-CM-KEPT-MARKER" "$R195_README"
+assert_eq "…with nothing dropped" "0" "$(grep -c '^dropped section' "$SCRATCH_DIR/r195cm1.stderr" || true)"
+
+printf '## Quick Check\n\n    ```\nVisit https://github.com/<github-user>/indented for setup.\n    ```\n\n## Prerequisites\n\n```js`x <github-user>\n\n## See Also\n\n- Clone <owner/repo>.\n\n## Indented Fence Heading\n\nText.\n\n    ```\n## Heading Between Indented Lines\n    ```\n' \
+    > "$SCRATCH_DIR/r195-cm2.body"
+r195_prep_fixture r195cm2 "$SCRATCH_DIR/r195-cm2.body"
+R195_RC=0
+run_prepare r195cm2-plugin "$SCRATCH_DIR/r195cm2.stdout" "$SCRATCH_DIR/r195cm2.stderr" || R195_RC=$?
+R195_ERR="$(cat "$SCRATCH_DIR/r195cm2.stderr")"
+assert_eq "4-space-indented and backtick-info \`\`\` lines are not fences (X-002)" "0" "$R195_RC"
+assert_line_present "…so prose between indented \`\`\` lines is checked (perl)" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$R195_ERR"
+assert_line_present "…and a backtick in the info string means no fence (perl)" \
+    'dropped section "Prerequisites": placeholder <github-user> in prose' "$R195_ERR"
+assert_line_present "…and <owner/repo> is a placeholder (C-002)" \
+    'dropped section "See Also": placeholder <owner/repo> in prose' "$R195_ERR"
+assert_contains "…and the heading after the indented lines is a Key Feature (awk)" "**Indented Fence Heading**" \
+    "$(cat "$PREPARE_OUT_DIR/r195cm2-plugin/README.md" 2>/dev/null || true)"
+assert_contains "…and so is a heading between two 4-space-indented \`\`\` lines (awk)" "**Heading Between Indented Lines**" \
+    "$(cat "$PREPARE_OUT_DIR/r195cm2-plugin/README.md" 2>/dev/null || true)"
+
+printf '## Prerequisites\n\nCheck < github-user> first.\n\n## See Also\n\n<details open><summary>More</summary>R195-DETAILS-MARKER</details>\n' \
+    > "$SCRATCH_DIR/r195-cm3.body"
+r195_prep_fixture r195cm3 "$SCRATCH_DIR/r195-cm3.body"
+R195_RC=0
+run_prepare r195cm3-plugin "$SCRATCH_DIR/r195cm3.stdout" "$SCRATCH_DIR/r195cm3.stderr" || R195_RC=$?
+assert_line_present "a placeholder with a space after < is caught (C-002)" \
+    'dropped section "Prerequisites": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195cm3.stderr")"
+assert_contains "…and <details open> is HTML, so its section stays (C-002)" "R195-DETAILS-MARKER" \
+    "$(cat "$PREPARE_OUT_DIR/r195cm3-plugin/README.md" 2>/dev/null || true)"
+
+# ============================================================
+# PR #195 cross-model recheck — X-004 and X-005
+# ============================================================
+
+# X-004: the HTML allow-list takes the whole tag name, so a placeholder that
+# starts with an HTML tag name is still a placeholder.
+for _t in 'code-dir:drop' 'table-name:drop' 'code:keep' 'br/:keep' 'details open:keep'; do
+    _tn=${_t%%:*}; _tw=${_t##*:}
+    _tf="r195x4$(printf '%s' "$_tn" | tr -cd 'a-z')"
+    printf '## See Also\n\n- Use <%s> here. R195-X004-MARKER.\n' "$_tn" > "$SCRATCH_DIR/$_tf.body"
+    r195_prep_fixture "$_tf" "$SCRATCH_DIR/$_tf.body"
+    R195_RC=0
+    run_prepare "$_tf-plugin" "$SCRATCH_DIR/$_tf.stdout" "$SCRATCH_DIR/$_tf.stderr" || R195_RC=$?
+    assert_eq "prepare-plugin.sh builds the <$_tn> fixture (X-004)" "0" "$R195_RC"
+    if [[ "$_tw" == drop ]]; then
+        assert_line_present "<$_tn> is a placeholder, not the HTML tag it starts with (X-004)" \
+            "dropped section \"See Also\": placeholder <$_tn> in prose" "$(cat "$SCRATCH_DIR/$_tf.stderr")"
+    else
+        assert_contains "<$_tn> is HTML, so its section stays (X-004)" "R195-X004-MARKER" \
+            "$(cat "$PREPARE_OUT_DIR/$_tf-plugin/README.md" 2>/dev/null || true)"
+    fi
+done
+
+# X-005: a fence indented under a list item is a fence (CommonMark), for both
+# readers. The perl check keeps the section whose only placeholder is inside
+# it; the awk reader sees the heading after it. The inner 3-space ``` line is
+# fence content: read on its own it would open a fence that never closes,
+# which used to stop the build (perl) and hide the next heading (awk).
+cat > "$SCRATCH_DIR/r195-x5.body" <<'EOF'
+## Quick Check
+
+- Example:
+
+    ````bash
+    run-it <monorepo-dir>
+   ```
+    ````
+
+R195-X005-KEPT-MARKER.
+
+## After List Fence
+
+Text.
+EOF
+r195_prep_fixture r195x5 "$SCRATCH_DIR/r195-x5.body"
+R195_RC=0
+run_prepare r195x5-plugin "$SCRATCH_DIR/r195x5.stdout" "$SCRATCH_DIR/r195x5.stderr" || R195_RC=$?
+R195_README="$(cat "$PREPARE_OUT_DIR/r195x5-plugin/README.md" 2>/dev/null || true)"
+assert_eq "a fence indented under a list item builds (X-005)" "0" "$R195_RC"
+assert_contains "…and its section is kept: the placeholder is code (perl)" "R195-X005-KEPT-MARKER" "$R195_README"
+assert_contains "…and the heading after it is a Key Feature (awk)" "**After List Fence**" "$R195_README"
+# Control: the same indent with no list item before it is still prose.
+printf '## Quick Check\n\nText.\n\n    ```bash\nVisit <github-user> now.\n    ```\n' > "$SCRATCH_DIR/r195-x5b.body"
+r195_prep_fixture r195x5b "$SCRATCH_DIR/r195-x5b.body"
+R195_RC=0
+run_prepare r195x5b-plugin "$SCRATCH_DIR/r195x5b.stdout" "$SCRATCH_DIR/r195x5b.stderr" || R195_RC=$?
+assert_line_present "control: a 4-space \`\`\` with no list item before it is still prose (X-005)" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195x5b.stderr")"
+# A list item's fence ends with the item: a line indented less than the item's
+# content is outside it, so a placeholder there is prose.
+printf '## Quick Check\n\n- Example:\n\n    ```bash\n    run-it\nVisit <github-user> after the item.\n\n## After Unclosed Item Fence\n\nText.\n' > "$SCRATCH_DIR/r195-x5c.body"
+r195_prep_fixture r195x5c "$SCRATCH_DIR/r195-x5c.body"
+R195_RC=0
+run_prepare r195x5c-plugin "$SCRATCH_DIR/r195x5c.stdout" "$SCRATCH_DIR/r195x5c.stderr" || R195_RC=$?
+assert_eq "a list item's fence ends with the item, not an unclosed fence (X-005)" "0" "$R195_RC"
+assert_line_present "…so text after the item is checked as prose" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195x5c.stderr")"
+assert_contains "…and the heading after the item is a Key Feature (awk)" "**After Unclosed Item Fence**" \
+    "$(cat "$PREPARE_OUT_DIR/r195x5c-plugin/README.md" 2>/dev/null || true)"
+
+# X-006: a fence after a list, indented less than the item's content column, is
+# top-level: the list context ends at that line, so the fence's own closing
+# line closes it and a "## " line inside it is code (both readers).
+# The two readers are called directly, from the _lib.sh beside SYNC_SCRIPT.
+r195_lib() { ( source "$(dirname "$SYNC_SCRIPT")/_lib.sh" && "$@" ); }
+cat > "$SCRATCH_DIR/r195-x6.body" <<'EOF'
+## Usage Notes
+
+- Example:
+
+```bash
+tool <repo>
+## Not a heading
+```
+
+R195-X006-REAL-TEXT.
+
+## Next After X6
+
+x
+EOF
+r195_prep_fixture r195x6 "$SCRATCH_DIR/r195-x6.body"
+R195_RC=0
+run_prepare r195x6-plugin "$SCRATCH_DIR/r195x6.stdout" "$SCRATCH_DIR/r195x6.stderr" || R195_RC=$?
+R195_X6_MD="$PREPARE_FIXTURE_DIR/r195x6-plugin/SKILL.md"
+assert_eq "a top-level fence after a list builds (X-006)" "0" "$R195_RC"
+assert_eq "…and the check sees a closed fence and no placeholder in prose (perl)" "1" \
+    "$(r195_lib section_has_prose_placeholder "$(r195_lib extract_section "$R195_X6_MD" "Usage Notes")" >/dev/null; echo $?)"
+assert_contains "…and extract_section keeps the fence and the text after it (awk)" \
+    "$(printf '```bash\ntool <repo>\n## Not a heading\n```\n\nR195-X006-REAL-TEXT.')" "$(r195_lib extract_section "$R195_X6_MD" "Usage Notes")"
+assert_line_absent "…and extract_headings does not list the fenced line (awk)" "Not a heading" "$(r195_lib extract_headings "$R195_X6_MD" 20)"
+assert_line_present "…but does list the next real heading" "Next After X6" "$(r195_lib extract_headings "$R195_X6_MD" 20)"
+# 1 to 3 spaces of indent, below the content column of a "1.  " item (4), is
+# still top-level.
+for _i in 1 2 3; do
+    _sp=$(printf '%*s' "$_i" '')
+    printf -- '---\nname: x6\n---\n\n## Usage Notes\n\n1.  Step:\n\n%s```bash\n%stool <repo>\n## Not a heading %s\n%s```\n\nR195-X006-REAL-%s.\n\n## Next After X6\n' \
+        "$_sp" "$_sp" "$_i" "$_sp" "$_i" > "$SCRATCH_DIR/r195-x6-$_i.md"
+    assert_line_absent "a fence indented $_i after a list, below its content column, is top-level (awk)" \
+        "Not a heading $_i" "$(r195_lib extract_headings "$SCRATCH_DIR/r195-x6-$_i.md" 20)"
+    assert_eq "…and closed, with no placeholder in prose (perl, indent $_i)" "1" \
+        "$(r195_lib section_has_prose_placeholder "$(r195_lib extract_section "$SCRATCH_DIR/r195-x6-$_i.md" "Usage Notes")" >/dev/null; echo $?)"
+done
+
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
-    if [[ "$SKIPPED_COUNT" -eq 0 ]]; then
-        echo "All assertions passed."
-    else
-        echo "All assertions passed ($SKIPPED_COUNT skipped)."
-    fi
+    echo "All assertions passed."
     exit 0
 else
     echo "$FAIL_COUNT assertion(s) failed."

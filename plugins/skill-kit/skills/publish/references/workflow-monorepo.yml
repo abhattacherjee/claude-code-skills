@@ -1,0 +1,170 @@
+name: Validate Skills & Plugins
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed skill directories
+        id: changed
+        run: |
+          # A failed diff (no origin/main, a shallow clone) must fail the step.
+          # It used to be hidden by `|| true` and read as "No skill directories changed".
+          if ! CHANGED_FILES=$(git diff --name-only origin/main...HEAD); then
+            echo "::error::git diff origin/main...HEAD failed, so the changed skills are unknown"
+            exit 1
+          fi
+
+          # Plugin skills: any changed file under plugins/<group>/skills/<name>/ (#167).
+          # sed -n …p prints only matching lines and exits 0 when none match.
+          PLUGIN_DIRS=$(printf '%s\n' "$CHANGED_FILES" | \
+            sed -n -E 's#^(plugins/[a-z][a-z0-9-]+/skills/[a-z][a-z0-9-]+)/.*#\1#p')
+
+          # Top-level skills: any changed file under <name>/ when <name>/SKILL.md
+          # exists now or existed at the merge base (a removed skill is listed,
+          # and the next step skips it). sync-monorepo.sh --skills/--add still
+          # writes skills there.
+          BASE=$(git merge-base origin/main HEAD)
+          TOP_DIRS=""
+          for d in $(printf '%s\n' "$CHANGED_FILES" | sed -n -E 's#^([a-z][a-z0-9-]+)/.*#\1#p' | sort -u); do
+            [[ "$d" == plugins ]] && continue
+            if [[ -f "$d/SKILL.md" ]] || git cat-file -e "$BASE:$d/SKILL.md" 2>/dev/null; then
+              TOP_DIRS=$(printf '%s\n%s' "$TOP_DIRS" "$d")
+            fi
+          done
+
+          ALL_DIRS=$(printf '%s\n%s\n' "$PLUGIN_DIRS" "$TOP_DIRS" | sed '/^$/d' | sort -u)
+
+          if [[ -z "$ALL_DIRS" ]]; then
+            echo "No skill directories changed"
+            echo "dirs=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed skill directories:"
+            echo "$ALL_DIRS"
+            echo "dirs<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$ALL_DIRS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate changed skills
+        if: steps.changed.outputs.dirs != ''
+        env:
+          DIRS: ${{ steps.changed.outputs.dirs }}
+        run: |
+          chmod +x scripts/validate-skill.sh
+          FAILED=0
+
+          while IFS= read -r dir; do
+            [[ -z "$dir" ]] && continue
+            if [[ ! -d "$dir" ]]; then
+              # The whole skill directory was removed in this PR: nothing to validate.
+              echo "Skipping $dir: removed in this PR"
+              continue
+            fi
+            if [[ ! -f "$dir/SKILL.md" ]]; then
+              # The directory is still there but SKILL.md is not: that is an error.
+              echo "::error::$dir exists but has no SKILL.md"
+              FAILED=1
+              continue
+            fi
+            echo ""
+            echo "=========================================="
+            echo "Validating: $dir"
+            echo "=========================================="
+            if ! scripts/validate-skill.sh "$dir"; then
+              FAILED=1
+            fi
+          done <<< "$DIRS"
+
+          if [[ $FAILED -ne 0 ]]; then
+            echo ""
+            echo "One or more skills failed validation"
+            exit 1
+          fi
+
+      - name: Skip message
+        if: steps.changed.outputs.dirs == ''
+        run: echo "No skill directories were modified — skipping validation"
+
+  validate-plugins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The README plugin table, marketplace.json and each plugin README's meta
+      # line must match every plugin.json. Fix drift with: python3 scripts/catalogue.py .
+      # A monorepo with no plugins/ has no catalogue, so the check is skipped there.
+      - name: Catalogue drift guard
+        run: if [ -d plugins ]; then python3 scripts/catalogue.py --check .; fi
+
+      - name: Detect changed plugin directories
+        id: changed
+        run: |
+          # A failed diff must fail the step, not read as "No plugin directories changed".
+          if ! CHANGED_FILES=$(git diff --name-only origin/main...HEAD); then
+            echo "::error::git diff origin/main...HEAD failed, so the changed plugins are unknown"
+            exit 1
+          fi
+          CHANGED_PLUGINS=$(printf '%s\n' "$CHANGED_FILES" | \
+            sed -n -E 's#^plugins/([a-z][a-z0-9-]+)/.*#\1#p' | \
+            sort -u)
+
+          if [[ -z "$CHANGED_PLUGINS" ]]; then
+            echo "No plugin directories changed"
+            echo "plugins=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed plugin directories:"
+            echo "$CHANGED_PLUGINS"
+            echo "plugins<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_PLUGINS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install jq
+        if: steps.changed.outputs.plugins != ''
+        run: sudo apt-get install -y jq
+
+      - name: Validate changed plugins
+        if: steps.changed.outputs.plugins != ''
+        env:
+          PLUGINS: ${{ steps.changed.outputs.plugins }}
+        run: |
+          chmod +x scripts/validate-plugin.sh
+          # validate-plugin.sh delegates to validate-skill.sh for embedded skills
+          chmod +x scripts/validate-skill.sh 2>/dev/null || true
+          FAILED=0
+
+          while IFS= read -r plugin; do
+            [[ -z "$plugin" ]] && continue
+            PLUGIN_DIR="plugins/$plugin"
+            if [[ ! -d "$PLUGIN_DIR" ]]; then
+              echo "Skipping $PLUGIN_DIR: removed in this PR"
+              continue
+            fi
+            echo ""
+            echo "=========================================="
+            echo "Validating plugin: $plugin"
+            echo "=========================================="
+            if ! scripts/validate-plugin.sh "$PLUGIN_DIR"; then
+              FAILED=1
+            fi
+          done <<< "$PLUGINS"
+
+          if [[ $FAILED -ne 0 ]]; then
+            echo ""
+            echo "One or more plugins failed validation"
+            exit 1
+          fi
+
+      - name: Skip message
+        if: steps.changed.outputs.plugins == ''
+        run: echo "No plugin directories were modified — skipping validation"

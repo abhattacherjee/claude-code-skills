@@ -19,7 +19,7 @@ Thank you for your interest in contributing! This guide covers the workflow for 
 
 ### Adding a new skill
 
-1. Create a new directory at the repo root (e.g., `my-skill/`)
+1. Create the skill at `plugins/<group>/skills/<name>/` (for example, a new dev-flow skill goes in `plugins/dev-flow/skills/<name>/`). A new plugin also needs `plugins/<group>/.claude-plugin/plugin.json`
 2. Add a `SKILL.md` with valid YAML frontmatter
 3. Optionally add `scripts/` and `references/` directories
 
@@ -51,6 +51,8 @@ Run the validation script before pushing:
 ```bash
 scripts/validate-skill.sh <skill-directory>
 ```
+
+The plugin catalogue is generated. The README plugin table, `.claude-plugin/marketplace.json` and the meta line at the top of each plugin README come from each plugin's `plugin.json`. After you change a `plugin.json`, run `python3 plugins/skill-kit/skills/publish/scripts/catalogue.py .` to write them. `scripts/check-docs.sh` checks the catalogue and every link, repo path and `plugin:skill` name in the docs. It runs in `scripts/commit-preflight.sh` and in CI.
 
 ## Submitting a Pull Request
 

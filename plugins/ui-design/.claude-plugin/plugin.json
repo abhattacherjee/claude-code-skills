@@ -1,0 +1,5 @@
+{
+  "name": "ui-design",
+  "version": "1.0.1",
+  "description": "Interactive Figma UI design, with the UX-expert agent it uses. ui-design:figma brainstorms with you, tracks progress, builds Figma-native mockups through the Figma MCP, and extracts existing Figma designs as input for specs, plans and code. It starts the figma-ux-expert agent (ui-design:figma-ux-expert) to research real-world references before it proposes design directions."
+}

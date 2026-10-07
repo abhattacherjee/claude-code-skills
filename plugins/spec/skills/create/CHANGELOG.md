@@ -1,0 +1,108 @@
+# Changelog
+
+All notable changes to the **create** skill (was `spec-creator`) are documented here.
+
+## [1.0.2] - 2026-10-04
+
+### Changed
+
+- The Figma mockup step names `ui-design:figma` and `/ui-design:figma` (was `figma-ui-designer`), after the skill moved into the `ui-design` plugin (#164).
+
+## [1.0.1] - 2026-10-04
+
+### Changed
+
+- The See Also line names `skill-kit:author` (was `skill-authoring`), after the skill-authoring skill moved into the `skill-kit` plugin (#161).
+
+## [1.0.0] - 2026-10-04
+
+### Changed
+
+- Moved into the `spec` plugin as `spec:create` (#160). Same five phases, workflow and templates as `spec-creator` 2.4.2. The slash command is `/spec:create`; the old name still matches as a trigger phrase.
+- Cross-references name the new skills: Phase 5 offers `/spec:review`, the spec template says "added by /spec:review", and the `task-manifest.sh` task descriptions say `/spec:review`.
+
+### Fixed
+
+- Every command calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`. The old `./scripts/<name>.sh` resolved against the user's project, not the skill, so the commands did not run as written.
+- `discover-conventions.sh --json` escapes every control character, takes only all-digit epic names (others are skipped, and named on stderr in text mode only), and checks a story number before doing arithmetic on it. An epic directory named `epic-q"z` used to make the JSON invalid.
+
+## History before 1.0.0 (as `spec-creator`)
+
+### spec-creator 2.4.2 - 2026-07-25
+
+#### Fixed
+
+- `discover-conventions.sh`: `detect_epic_structure` used `ls -d … | head -1 > /dev/null`
+  as its test, which evaluates `head`'s exit status and is therefore always true. Every
+  project with a spec directory — including an empty one — was reported as `epic-subdirs`,
+  which made `find_epics`' flat-layout branch unreachable and silently dropped every epic
+  in a `story-X.Y-name.md` project. Both the `epic-*` and the `numbered-subdirs` guard are
+  now direct glob tests. (#62)
+
+### spec-creator 2.4.1 - 2026-07-25
+
+#### Fixed
+
+- Replaced hardcoded `~/.claude/skills/spec-creator/scripts/` invocations with
+  skill-relative `./scripts/` paths, and added a "Path convention" note
+  recording that a leading `./` means this skill's base directory while a
+  bare path means the target project — the two conventions used the same
+  bare token ambiguously before this note (#59).
+- Corrected the stale `/review-spec` command reference to `/spec-review` and
+  the stale `implement-story` skill name to `spec-implement` in the "See Also"
+  section (#59).
+- Tightened the "Path convention" note to also cover `./references/…` paths
+  explicitly (previously only `./scripts/…` was called out, leaving bare
+  `references/...` ambiguous between skill-relative and target-project
+  meanings), and prefixed all skill-owned `references/spec-template.md` and
+  `references/codebase-verification.md` links accordingly (#60).
+- Noted that the `feature-dev:*` agent types (Feature Scout in Phase 2, and
+  the `feature-dev:code-explorer` row in the Integration table) require the
+  separately-installed `feature-dev` plugin, with `general-purpose` as the
+  documented fallback; added the same conditional escape hatch to the
+  Phase 4.4 Figma mockup gate for when `figma-ui-designer` isn't installed;
+  and removed the `excursion-pipeline` and `test-engineering` Integration
+  rows, which named private project skills that don't exist in this
+  marketplace or anywhere else (#59).
+
+#### Changed
+
+- Authoring source now lives in the `claude-code-skills` monorepo at
+  `spec-creator/`; `plugin-manifest.json` sources from the repo, not `~/.claude/skills`.
+- Extracted the Phase 4.3/4.3b codebase-verification and dependency-upgrade
+  pre-flight detail out of `SKILL.md` into `references/codebase-verification.md`
+  to bring the skill body under the 500-line validator limit (pre-existing
+  overage, unrelated to #59, surfaced by `commit-preflight.sh`'s validation gate).
+
+### spec-creator 2.4.0 - 2026-03-17
+
+#### Added
+- **Team Mode note** — Phase 2/3 agents can be persistent teammates when Agent Teams is enabled, allowing iterative refinement via SendMessage
+
+### spec-creator 2.3.0 - 2026-03-16
+
+#### Added
+- **UX design gate** (Phase 4.4) — conditional Figma mockup step using `/figma-ui-designer` for stories touching frontend UI; auto-skipped for backend/API/config changes
+- **Metrics Scout agent** (Phase 2, Agent 3) — parallel sub-agent discovers existing observability infrastructure, identifies success metrics, recommends capture methods (Sentry spans, custom metrics, Bruno assertions)
+- **Success Metrics section** (template Section 7) — tabular format with metric/type/current/target/capture-method; existing instrumentation reuse + new instrumentation needed
+- **Clarifying questions** (Phase 3.0) — 1-3 targeted questions about purpose, constraints, scope boundaries before proposing approaches
+- **YAGNI and design-for-isolation rules** in brainstorming phase
+- **Lead with recommendation** — present recommended option first with reasoning
+
+### spec-creator 2.0.0 - 2026-03-16
+
+#### Changed
+- **BREAKING: Implementation Tasks replace Detailed Sub-Tasks** — specs now include bite-sized TDD steps with complete code, exact run commands, expected output, checkbox syntax, and commit points (inspired by superpowers:writing-plans)
+- **File Structure Map** (template Section 8) — tabular overview of all files to create/modify with line numbers, listed before implementation tasks
+- Section numbering: 7→Success Metrics, 8→File Structure Map, 9→Implementation Tasks, 10→Testing Checklist, 11→Definition of Done
+
+### spec-creator 1.5.0 - 2026-03-14
+
+#### Added
+- Initial public version with 5-phase workflow
+- Convention discovery script
+- Parallel codebase research (Feature Scout + Convention Scanner)
+- Brainstorming with vertical splitting triggers
+- Codebase State verification gate
+- Dependency upgrade pre-flight (CJS/ESM compatibility check)
+- Post-creation review chaining to `/spec-review`

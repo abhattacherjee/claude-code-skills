@@ -103,17 +103,16 @@ def test_marketplace_lists_the_plugin():
     row = next(r for r in rows if r["name"] == "github-board")
     assert row["source"] == "./plugins/github-board"
     plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
-    assert row["version"] == plugin["version"] == "1.0.0"
+    # The two must agree; a literal here would break on every release.
+    assert row["version"] == plugin["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", plugin["version"])
 
 
 REPO = PLUGIN.parent.parent
-# skill-authoring used to name github-issue-triage; it was renamed once its SKILL.md was
-# trimmed under validate-skill.sh's 500-line limit (2.6.1).
-CALLERS = ["skill-authoring/SKILL.md", "skill-authoring/references/task-tracking-pattern.md",
-           "plugins/skill-authoring/skills/skill-authoring/SKILL.md",
-           "plugins/skill-authoring/skills/skill-authoring/references/task-tracking-pattern.md"]
-CALLERS += ["plugins/skill-publishing/skills/skill-publishing/scripts/validate-pre-sync.sh",
-            "README.md"]
+CALLERS = ["README.md",
+           "plugins/skill-kit/skills/author/SKILL.md",
+           "plugins/skill-kit/skills/author/references/task-tracking-pattern.md",
+           "plugins/skill-kit/skills/publish/scripts/validate-pre-sync.sh"]
 
 
 @pytest.mark.parametrize("rel", CALLERS)
@@ -129,15 +128,6 @@ def test_root_readme_lists_the_plugin():
     text = (REPO / "README.md").read_text()
     assert "[github-board](./plugins/github-board/)" in text
     assert "/github-board-move" not in text
-
-
-def test_the_two_skill_authoring_copies_are_identical():
-    import filecmp
-    root, plugin = REPO / "skill-authoring", REPO / "plugins" / "skill-authoring" / "skills" / "skill-authoring"
-    for rel in ("SKILL.md", "CHANGELOG.md", "references/agent-teams.md",
-                "references/skill-templates.md", "references/task-tracking-pattern.md",
-                "references/quality-checklist.md"):
-        assert filecmp.cmp(root / rel, plugin / rel, shallow=False), rel
 
 
 def test_old_root_skill_dir_is_gone():

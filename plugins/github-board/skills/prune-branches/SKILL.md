@@ -2,7 +2,7 @@
 name: prune-branches
 description: "Audits and cleans stale git branches across local and remote. Use when: (1) repository has accumulated stale feature/hotfix/release branches after merges, (2) Dependabot PRs pile up with superseded older versions, (3) temp branches from git-flow-finish scripts linger as orphans, (4) git branch -d fails with 'not fully merged' on squash-merged branches, (5) periodic repo hygiene after multiple releases or hotfix cycles, (6) Dependabot PRs have been triaged into GitHub issues and the original PRs are stale, (7) 'branch cleanup' or /git-branch-cleanup (the old name of this skill)."
 metadata:
-  version: 2.0.0
+  version: 2.0.1
 ---
 
 # Git Branch Cleanup
@@ -87,6 +87,6 @@ The script avoids `declare -A` (associative arrays, bash 4+) and `=~` with captu
 ## See Also
 
 - `release-and-git-flow` (separate skill, not in this plugin) — the git-flow-finish.sh script that creates temp branches
-- `worktree` (separate skill, not in this plugin) — worktree management (creates branches that should NOT be cleaned while in use)
+- `dev-flow:worktree` (separate plugin, not this one) — worktree management (creates branches that should NOT be cleaned while in use)
 - `dependabot-triage` agent (separate, not in this plugin) — creates GitHub issues for Category B PRs (upstream of Category 5)
 - `dependabot-pr-reviewer` agent (separate, not in this plugin) — batches safe Dependabot PRs into hotfix releases

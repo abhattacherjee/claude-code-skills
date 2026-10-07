@@ -1,0 +1,987 @@
+#!/usr/bin/env bash
+# _lib.sh — Shared utility functions for skill-publishing scripts
+# Source this file: source "$SCRIPT_DIR/_lib.sh"
+# Requires: DRY_RUN variable set by the caller (default: false)
+
+# Guard: prevent direct execution
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "Error: source this file, don't execute it directly" >&2
+  echo "Usage: source \"\$SCRIPT_DIR/_lib.sh\"" >&2
+  exit 1
+fi
+
+# ============================================================
+# Frontmatter extraction
+# ============================================================
+
+# Extract a top-level field from SKILL.md YAML frontmatter, decoding the YAML
+# scalar style it is written in.
+# Usage: extract_field <skill_md_path> <field_name>
+#
+# The previous implementation was `grep "^field:" | head -1 | sed` with two
+# unconditional quote strips, which had three defects at once (issues #37, #102,
+# and one unfiled). All three share a root cause — reading the line as raw text
+# rather than as a YAML scalar — so they are closed together:
+#
+#   >- / |-   a block scalar carries no text on its own line, so the old reader
+#             returned the literal indicator ">-" and prepare-plugin.sh wrote
+#             that into the generated README (#37). In Markdown ">-" renders as
+#             an empty blockquote, so the failure was silent.
+#   "\"…\""   only the OUTER quote pair was removed, so every internal \" was
+#             emitted verbatim into the README (#102).
+#   unfiled   `s/^["']//; s/["']$//` fires on the first and last character
+#             unconditionally and independently, so a PLAIN scalar that merely
+#             starts with a quote — `description: "quoted" is a word` — lost its
+#             leading ". Quotes are now stripped only when the value genuinely
+#             opens and closes with the same quote character.
+#
+# awk rather than a YAML library: awk is already a dependency of this file
+# (extract_section, extract_headings) and of validate-skill.sh, so this adds no
+# new runtime requirement. validate-skill.sh:96 has its OWN single-argument
+# extract_field which folds block scalars but does not unescape; it is the
+# reference for the folding logic here, not shared code — the signatures differ.
+#
+# Portability: POSIX awk only, so this runs on macOS BSD awk and gawk alike. The
+# quote characters are written as the octal escapes \047 and \042 so that no
+# literal ' has to appear inside the shell-single-quoted program body.
+#
+# SINGLE-LINE OUTPUT IS A CONTRACT, not an accident of the implementation. Every
+# consumer splices this value into a single-line context: sync-monorepo.sh:604
+# builds a Markdown TABLE ROW out of it, and prepare-plugin.sh emits it as a
+# `- \`name\` — <desc>` list item. A newline in the value breaks the table at
+# exit 0 — a corrupt artifact with a green run. The old `grep | head -1` reader
+# was structurally incapable of returning two lines; this one has to enforce
+# that deliberately, at the single point where the value is built rather than at
+# each of the five consumers. Three consequences, all intentional:
+#   - a LITERAL `|` block scalar is FOLDED to spaces exactly like `>`, so it does
+#     NOT preserve newlines the way YAML says it should. validate-skill.sh:121-131
+#     folds `|` and `>` identically too, so the two readers agree on this point.
+#     Folding a `|` block can CHANGE MEANING (two imperative lines become one
+#     run-on sentence), so a multi-line `|` now emits a note on stderr naming the
+#     file and field. It is a note rather than an error because the fold is the
+#     contract; the author who wrote `|` is simply not getting what they asked
+#     for and nothing else would tell them.
+#   - `\n`, `\t` and `\r` in a double-quoted scalar decode to a SPACE, not to the
+#     control character, so `"a\n\nb"` yields `a b`. The collapse acts on exactly
+#     the whitespace the decode introduced — see unescape_double below — so a
+#     deliberate double space anywhere in the value survives regardless of what
+#     escapes appear elsewhere in it.
+#   - a literal CR/VT/FF byte in the source line is replaced with a space at TWO
+#     points: on ENTRY, as each frontmatter line is collected, and again in
+#     emit(). None of the three is a YAML escape, so they otherwise travel into
+#     the value untouched and land inside a Markdown table cell.
+#
+#     THE ORDER IS THE WHOLE POINT, and getting it wrong is issue #102 reopened.
+#     An emit()-only scrub is the SINGLE output point — true, and it is exactly
+#     why it reads as sufficient — but it runs LAST, after every decision that
+#     depends on those bytes being absent has already been made, and each of
+#     those decisions only knows space and tab:
+#       * `sub(/[ \t]+$/, "", val)` does not match CR, so on a CRLF-terminated
+#         `description: "…"` line the last character of val is CR, the
+#         `f == DQ && l == DQ` closing-quote test fails, the value falls to the
+#         plain-scalar path and keeps BOTH outer quotes and every internal \".
+#         Measured before the entry scrub: `["CRPROOF — phrases like \"review
+#         this\" must survive." ]` where the same file without the CR gives
+#         `[CRPROOF — phrases like "review this" must survive.]`.
+#       * the block-scalar body trim leaves the CR in place, so the join
+#         double-spaces.
+#       * `line ~ /^[ \t]*$/` is false for a CR-only body line, so it becomes a
+#         content line (three spaces) and inflates nlines, which is the count
+#         reported in the `|`-fold stderr note.
+#       * a CRLF-terminated plain scalar gains a trailing space.
+#     Scrubbing on entry makes the trims, the blank test and the quote test all
+#     see normalised input. emit()'s gsub is KEPT as belt and braces — it is the
+#     backstop for any future path that builds a value from something other than
+#     fm[], and it costs one gsub on an already-clean string.
+#
+#     NOT scrubbed, stated rather than implied: the `$0 == "---"` delimiter test
+#     runs before the collection rule and is an exact compare, so a SKILL.md
+#     whose `---` fences are themselves CRLF-terminated never enters d == 1 and
+#     every field reads back empty. That is a different failure (empty, not
+#     corrupt) and is left alone here.
+#
+# UNRECOGNIZED BLOCK HEADERS FAIL, they do not fall through. A value that begins
+# with `|` or `>` but does not match the header grammar (`>10`, `>--`, `>2x`)
+# used to reach the plain-scalar path and be returned AS the description — the
+# literal indicator in the generated README, which is issue #37 exactly. That
+# fail-open shape has now produced #37 three times, so extract_field writes a
+# diagnostic to stderr and exits 3 instead.
+#
+# WHAT `exit 3` DOES IS A PROPERTY OF THE CALL SITE, NOT OF THIS FUNCTION. The
+# previous version of this paragraph analysed prepare-plugin.sh's four reads and
+# no others, which left three of the six calling scripts undescribed and implied
+# a uniformity the code does not have. Every call site, in the same table form
+# as the SKILLS_HOME analysis further down (line numbers are the assignment):
+#
+#     call site                          shape of the read            effect of exit 3
+#     prepare-plugin.sh:420              bare `X=$(extract_field …)`  ABORTS the run
+#     prepare-skill-repo.sh:69,70        bare `X=$(extract_field …)`  ABORTS the run
+#     sync-monorepo.sh:579,580           bare `X=$(extract_field …)`  ABORTS the run
+#     sync-monorepo.sh:1633              bare `X=$(extract_field …)`  ABORTS the run
+#     sync-individual-repos.sh:219,220   bare `X=$(extract_field …)`  ABORTS the run
+#     release-monorepo.sh:172            bare `X=$(extract_field …)`  ABORTS the run
+#     prepare-plugin.sh:462,481,502      `2>/dev/null || echo ""`     SUPPRESSED to ""
+#
+#   (validate-skill.sh:159/188 are NOT in this table: that script has its own
+#   single-argument extract_field — see the note above — and never calls this
+#   one.)
+#
+#   ABORTS is the intended contract: a description the reader cannot decode must
+#   stop the build, not become a corrupt artifact at exit 0. It holds only
+#   because each of those is a bare assignment from a SINGLE command
+#   substitution, whose rc is the command's and which `set -e` therefore acts
+#   on. Two rewrites of that shape silently give the rc away, and BOTH have
+#   already happened in this directory:
+#
+#     - `X=$(extract_field … | sed …)` — the rc is the PIPELINE's, i.e. the last
+#       command's, i.e. sed's, and no script here sets `pipefail`. exit 3
+#       arrived as rc 0 with an empty $X: a description-less CHANGELOG/release
+#       inventory row written at exit 0, which is precisely the fail-open shape
+#       this guard exists to remove. That was sync-monorepo.sh:1633 and
+#       release-monorepo.sh:172 until they were rewritten as two statements.
+#     - `X=$(short_desc "$(extract_field …)")` — measured, this swallows it too.
+#       The assignment's rc is the OUTER substitution's (short_desc's, i.e.
+#       sed's, i.e. 0); the inner substitution's 3 is discarded. So the fix is
+#       deliberately `X=$(extract_field …)` then `Y=$(short_desc "$X")`, and any
+#       future site that nests this read inside another command's word reopens
+#       the hole with no visible change at the call.
+#
+#   SUPPRESSED is prepare-plugin.sh's three SECONDARY reads (462/481/502), which
+#   already wrap the call in `2>/dev/null || echo ""`: for a non-primary skill,
+#   command or agent the guard degrades to an empty description with the
+#   diagnostic suppressed. Pre-existing behaviour, not introduced here, and named
+#   so the next reader does not mistake the guard for total coverage.
+#
+#   TEST COVERAGE OF THIS TABLE IS PARTIAL, stated rather than implied.
+#   scripts/test-sync-hygiene.sh drives a bad-header fixture through
+#   prepare-plugin.sh:420 (rc pinned to exactly 3), through sync-monorepo.sh's
+#   main loop at 579/580 (rc pinned to exactly 3, and no catalogue row or
+#   CHANGELOG written), and through release-monorepo.sh:172 (rc pinned to exactly
+#   3, and no versioned CHANGELOG entry written). sync-monorepo.sh:1633 has no
+#   rc assertion and cannot get one: its own main loop reads every description
+#   at 579/580 first, so a bad header can never reach line 1633 — what is pinned
+#   there is the OUTPUT of the rewrite (the short_desc trailing period), not its
+#   rc. prepare-skill-repo.sh and sync-individual-repos.sh have no harness
+#   coverage at all, and the SUPPRESSED row is asserted only indirectly.
+#
+# Not handled, deliberately. Treat this as the audit's findings at the time it
+# was run, NOT as a proof of exhaustiveness — the previous version of this
+# comment claimed to be exhaustive and was already missing the block-scalar
+# newline and blank-line cases now listed below:
+#   - a trailing `# comment` on a plain scalar is preserved rather than stripped
+#     (the old reader kept it too; changing that is unrelated scope);
+#   - flow collections/anchors/aliases are not parsed;
+#   - a QUOTED scalar wrapped across several lines (valid YAML line folding) is
+#     read as its first line only, so it keeps a leading quote and loses the
+#     rest. Block scalars are the supported way to wrap, and are handled above.
+#   - double-quoted \uXXXX / \xXX numeric escapes yield the literal letter, not
+#     the code point; only \n, \t, \r are given a meaning of their own (a space).
+#   - a BLANK LINE inside a block scalar is dropped rather than becoming the
+#     paragraph break YAML gives it, for the same single-line reason.
+#   - chomping and indentation indicators are ACCEPTED but ignored: `>`, `>-`,
+#     `>+`, `>2`, `>-2` and `>2-` all parse, and all fold the same way. Trailing
+#     newlines are meaningless once the value is one line. Anything else after a
+#     `|`/`>` is rejected rather than ignored — see the guard above.
+#   - a literal SOH (\001) byte in a double-quoted scalar becomes a space: that
+#     byte is used as the internal marker for decoded whitespace, so it is
+#     neutralised on entry. CR/VT/FF are mapped to a space on entry (and again
+#     in emit()); every other stray control byte reaches emit() and is passed
+#     through.
+# Audited across all 44 SKILL.md files in the monorepo: none uses a flow
+# collection, anchor, numeric escape, or a multi-line quoted scalar for a
+# top-level field, so every one of these is latent rather than live. Re-run that
+# audit before relying on this list.
+extract_field() {
+  local skill_md="$1"
+  local field="$2"
+  awk -v field="$field" '
+    BEGIN {
+      SQ = "\047"; DQ = "\042"
+      # Internal marker for whitespace this parser DECODED, so the collapse
+      # below can tell it apart from whitespace the author wrote. SOH is not
+      # legal content in a description; unescape_double neutralises any literal
+      # occurrence on entry so it cannot be confused with a marker.
+      SENT = "\001"
+      SENTRUN = "[ \t]*" SENT "([ \t]*" SENT ")*[ \t]*"
+    }
+
+    # The SINGLE output point — but being the single output point is NOT the
+    # same as being sufficient, and an earlier version of this comment implied
+    # that it was. This gsub is the SECOND of two scrubs; the load-bearing one
+    # is on ENTRY, in the `d == 1` collection rule below, because the trims,
+    # the blank-line test and the closing-quote test all run before this point
+    # and none of them knows about CR. See "THE ORDER IS THE WHOLE POINT" in
+    # the header comment for what an emit()-only scrub lets through (#102).
+    # This one is kept as the backstop for any future exit path that emits a
+    # value not built from fm[]. A literal CR, VT or FF byte is not a YAML
+    # escape, and the value is spliced into a Markdown table row
+    # (sync-monorepo.sh:604) and a list item, where a bare CR corrupts the cell.
+    # They become a space — the same meaning \r already has when written as an
+    # escape. printf "%s", never a bare value used as a format: descriptions
+    # contain %.
+    function emit(s) {
+      gsub(/[\r\v\f]/, " ", s)
+      printf "%s\n", s
+    }
+
+    # Double-quoted YAML: \n, \t and \r become a SPACE (see the single-line
+    # contract above — a control character here would break the Markdown table
+    # row this value ends up in); every other \<c> yields a literal <c>, which
+    # is what turns \" into " and \\ into \. Scanned left to right in ONE pass
+    # so a trailing \\" cannot be mistaken for an escaped quote.
+    #
+    # The decoded whitespace is written as SENT rather than as a space directly,
+    # so the collapse acts on EXACTLY the whitespace this function introduced.
+    # The earlier version set a `sawws` flag and then collapsed every run of
+    # spaces in the whole value, which made the rewrite NON-LOCAL: measured,
+    # "Cost:  100  USD." kept its double spaces, but appending "\tNote." to the
+    # END silently reformatted the BEGINNING. A run of SENT (with any literal
+    # spaces or tabs touching it) becomes one space; at either end it disappears.
+    # With no escape decoded there is no SENT, so nothing is rewritten and the
+    # value is returned byte-for-byte.
+    function unescape_double(s,   out, i, n, c) {
+      gsub(SENT, " ", s)
+      out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+          i++
+          c = substr(s, i, 1)
+          if (c == "n" || c == "t" || c == "r") out = out SENT
+          else                                  out = out c
+        } else {
+          out = out c
+        }
+      }
+      if (index(out, SENT)) {
+        sub("^" SENTRUN, "", out)
+        sub(SENTRUN "$", "", out)
+        gsub(SENTRUN, " ", out)
+      }
+      return out
+    }
+
+    # Single-quoted YAML has exactly one escape: a doubled quote.
+    function unescape_single(s,   out, i, n, c) {
+      out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == SQ && substr(s, i + 1, 1) == SQ) { out = out SQ; i++ }
+        else out = out c
+      }
+      return out
+    }
+
+    # Collect the frontmatter into an array rather than streaming it: a block
+    # scalar needs the lines AFTER the key, which a line-at-a-time reader
+    # cannot see.
+    #
+    # CR/VT/FF are neutralised HERE, on entry, not only at emit(). Everything
+    # downstream — the trailing-whitespace trims, the blank-line skip, the
+    # closing-quote test — matches only [ \t], so a CRLF-terminated line that
+    # reaches them unscrubbed defeats all three at once. That was #102.
+    $0 == "---" { d++; if (d >= 2) exit; next }
+    d == 1 { _l = $0; gsub(/[\r\v\f]/, " ", _l); fm[++nf] = _l }
+
+    END {
+      pat = "^" field ":"
+      for (i = 1; i <= nf; i++) if (fm[i] ~ pat) { idx = i; break }
+      if (!idx) exit 0
+
+      val = fm[idx]
+      sub(pat "[ \t]*", "", val)
+      sub(/[ \t]+$/, "", val)
+
+      # FAIL-CLOSED on a `|`/`>` that is not a legal block header. This test runs
+      # BEFORE the block branch on purpose: without it an unrecognized header
+      # falls through to the plain-scalar path and the INDICATOR is returned as
+      # the description — `description: >10` measured as `[>10]`, `>--` as
+      # `[>--]`. That is the failure mode of issue #37, and the fail-open shape has
+      # now produced it three times. See the caller analysis in the header
+      # comment for why exit 3 is the right contract at prepare-plugin.sh:420.
+      if (val ~ /^[|>]/ && val !~ /^[|>]([0-9][+-]?|[+-][0-9]?)?[ \t]*(#.*)?$/) {
+        printf "extract_field: %s: unrecognized block-scalar header for %s: %s\n", FILENAME, field, val > "/dev/stderr"
+        exit 3
+      }
+
+      # Block scalar: > or |, with optional indentation and chomping indicators
+      # and an optional trailing comment.
+      #
+      # The indicators may appear in EITHER order — YAML permits chomping before
+      # indentation — so `>-2` and `>2-` are both legal headers. The earlier
+      # `[0-9]*[+-]?` accepted only the second, which meant `description: >-2`
+      # fell through to the plain-scalar path and returned the literal ">-2":
+      # the exact failure of issue #37, reproduced inside the fix for #37. Hence the
+      # explicit two-branch alternation rather than a looser character class,
+      # which would also match nonsense like `>--` or `>22`.
+      if (val ~ /^[|>]([0-9][+-]?|[+-][0-9]?)?[ \t]*(#.*)?$/) {
+        # NOT `fold = (substr(val,1,1) == ">")`: | folds to spaces too, because
+        # the return value must stay single-line. See the contract above.
+        out = ""; first = 1; nlines = 0
+        for (i = idx + 1; i <= nf; i++) {
+          line = fm[i]
+          if (line ~ /^[^ \t]/) break        # a non-indented line ends the block
+          if (line ~ /^[ \t]*$/) continue    # skip blanks (no double separators)
+          sub(/^[ \t]+/, "", line)
+          sub(/[ \t]+$/, "", line)           # else the join would double-space
+          nlines++
+          if (first) { out = line; first = 0 }
+          else       { out = out " " line }
+        }
+        # Folding a LITERAL block is correct here (single-line contract) but it
+        # can change MEANING, and did so silently: measured, a `|` block of
+        # "Deletes the cache" / "Only when --force is given" comes back as one
+        # run-on sentence. An author who wrote `|` asked for newlines; nothing
+        # else in the pipeline would tell them they are not getting any. A note,
+        # not an error — the fold is deliberate.
+        if (substr(val, 1, 1) == "|" && nlines > 1) {
+          printf "extract_field: %s: %s is a literal (|) block scalar of %d lines, folded to one line to keep the value single-line; write it as > if the fold is intended\n", FILENAME, field, nlines > "/dev/stderr"
+        }
+        emit(out)
+        exit 0
+      }
+
+      # Quoted scalar: strip ONLY when the same quote both opens and closes the
+      # value. `"quoted" is a word` opens with a quote but does not close with
+      # one, so it is a plain scalar and is returned untouched.
+      #
+      # This NARROWS the ambiguity, it does not resolve it: `"a" and "b"` also
+      # opens and closes with `"` and is still stripped (to `a" and "b`), as is
+      # any plain scalar whose first and last characters happen to be the same
+      # quote. Distinguishing those needs a real YAML parse of the whole line;
+      # the old reader mangled both this case and the far commoner
+      # `"quoted" is a word`, and only the latter is closed here.
+      n = length(val)
+      if (n >= 2) {
+        f = substr(val, 1, 1); l = substr(val, n, 1)
+        if (f == DQ && l == DQ) { emit(unescape_double(substr(val, 2, n - 2))); exit 0 }
+        if (f == SQ && l == SQ) { emit(unescape_single(substr(val, 2, n - 2))); exit 0 }
+      }
+
+      emit(val)
+    }
+  ' "$skill_md"
+}
+
+# Extract metadata.version from SKILL.md frontmatter
+# Usage: extract_version <skill_md_path>
+extract_version() {
+  local skill_md="$1"
+  sed -n '/^---$/,/^---$/p' "$skill_md" | grep "version:" | head -1 | \
+    sed 's/.*version:[[:space:]]*//; s/^[\"'"'"']//; s/[\"'"'"']$//'
+}
+
+# Trim description at "Use when:" to produce a short description
+# Usage: short_desc <description_text>
+#
+# printf, not `echo "$1"`: bash's builtin echo consumes a leading -n/-e/-E as an
+# option, so a description legitimately starting with one would lose it (and,
+# for -n, the trailing newline too). Unreachable in today's catalogue, which is
+# exactly why it would not be noticed when it stops being unreachable.
+short_desc() {
+  printf '%s\n' "$1" | sed 's/\. Use when:.*/\./'
+}
+
+# Fenced code blocks (#106). A "## " line inside ``` or ~~~ is code, not a
+# heading: skill-publishing's SKILL.md shows a "## See Also" template inside a
+# ```markdown block, and extract_section used to take that as the See Also
+# section. The rules are CommonMark's: a fence opens with 3 or more backticks
+# or tildes after at most 3 spaces, and a backtick fence's info string holds no
+# backtick (so ```tool <repo>``` on one line is an inline code span, not a
+# fence). It closes with a line of only the same character, at least as many,
+# after at most 3 spaces. A tab or 4 spaces of indent is not a fence, except
+# right after a list item: when the previous non-blank line is a list item and
+# the fence line is indented at least to the item's content column (a line
+# indented less is outside the item, so a top-level fence after a list stays
+# top-level), a fence may be indented up to that column plus 3, and it ends at
+# its closing line or at the first non-blank line indented less than that
+# content column (the end of the item). Continuation text inside the item is
+# not tracked, so a fence after it is read as prose (it is dropped if it holds
+# a placeholder; it is never published unchecked). A trailing CR is ignored,
+# so a fence line saved with CRLF still closes. _MD_FENCE_AWK is shared by the two
+# awk readers below so they cannot disagree about where a fence ends;
+# section_has_prose_placeholder applies the same rule in perl.
+_MD_FENCE_AWK='
+  # fence_run <line>: "<char><count>" when the line, after its leading spaces,
+  # starts with 3 or more backticks or tildes; "" otherwise. Sets FENCE_IND
+  # (the number of leading spaces) and FENCE_REST (the text after the run).
+  function fence_run(s,   c, n) {
+    FENCE_IND = 0
+    while (substr(s, FENCE_IND + 1, 1) == " ") FENCE_IND++
+    s = substr(s, FENCE_IND + 1)
+    c = substr(s, 1, 1)
+    if (c != "`" && c != "~") return ""
+    n = 0
+    while (substr(s, n + 1, 1) == c) n++
+    if (n < 3) return ""
+    FENCE_REST = substr(s, n + 1)
+    return c n
+  }
+  # list_content <line>: the content column of a list item line ("- ", "* ",
+  # "+ ", "1. ", "1) "), or -1 when the line is not a list item.
+  function list_content(s) {
+    if (match(s, /^ *([-*+]|[0-9]+[.)]) +/)) return RLENGTH
+    return -1
+  }
+  # Returns 1 when this line opens, closes or sits inside a fence.
+  function in_fence(line,   s, f, allowed) {
+    s = line; sub(/\r$/, "", s)
+    if (fc != "") {
+      # A fence inside a list item ends with the item: a non-blank line
+      # indented less than the item content column.
+      if (fcont > 0 && s ~ /[^ \t]/ && match(s, /^ */) && RLENGTH < fcont) {
+        fc = ""
+      } else {
+        f = fence_run(s)
+        if (f != "" && FENCE_IND <= fmax && substr(f, 1, 1) == fc && substr(f, 2) + 0 >= fl && FENCE_REST ~ /^[ \t]*$/) {
+          fc = ""; plc = -1
+        }
+        return 1
+      }
+    }
+    # A non-blank line indented less than the list item content column is
+    # outside the item, so the list context ends before this line can open a
+    # fence (X-006).
+    if (plc >= 0 && s ~ /[^ \t]/ && match(s, /^ */) && RLENGTH < plc) plc = -1
+    f = fence_run(s)
+    allowed = (plc >= 0) ? plc + 3 : 3
+    # A backtick fence whose info string holds a backtick is not a fence
+    # (CommonMark): ```tool <repo>``` is an inline code span.
+    if (f != "" && FENCE_IND <= allowed && !(substr(f, 1, 1) == "`" && index(FENCE_REST, "`"))) {
+      fc = substr(f, 1, 1); fl = substr(f, 2) + 0; fmax = allowed
+      fcont = (plc >= 0) ? plc : 0
+      return 1
+    }
+    if (s ~ /[^ \t]/) plc = list_content(s)
+    return 0
+  }
+'
+
+# Extract content under a ## heading (returns lines until next ## or EOF)
+# Uses awk for BSD/GNU portability, perl for blank-line trimming. "## " lines
+# inside fenced code blocks are content, not headings. Returns non-zero when
+# awk or perl fails, so a failure is not read as an empty section.
+# Usage: extract_section <file> <heading_text>
+# Example: extract_section SKILL.md "Quick Check"
+extract_section() {
+  local file="$1"
+  local heading="$2"
+  local st
+  awk -v h="$heading" "$_MD_FENCE_AWK"'
+    BEGIN { fc = ""; plc = -1 }
+    {
+      if (in_fence($0)) { if (found) print; next }
+    }
+    $0 == "## " h && !found { found=1; next }
+    found && /^## / { exit }
+    found { print }
+  ' "$file" | perl -0777 -pe 's/\A\s*\n//; s/\n\s*\z//'
+  st="${PIPESTATUS[0]} ${PIPESTATUS[1]}"
+  [[ "$st" == "0 0" ]]
+}
+
+# Extract ## heading titles from markdown (after frontmatter), skipping "## "
+# lines inside fenced code blocks.
+# Usage: extract_headings <file> [max_count]
+# Returns one heading per line, frontmatter skipped
+extract_headings() {
+  local file="$1"
+  local max="${2:-10}"
+  awk "$_MD_FENCE_AWK"'
+    BEGIN { fc = ""; plc = -1 }
+    /^---$/ && fm < 2 { fm++; next }
+    fm < 2 { next }
+    { if (in_fence($0)) next }
+    /^## / { print }
+  ' "$file" 2>/dev/null | head -"$max" | sed 's/^## //'
+}
+
+# section_has_prose_placeholder <text>: looks for a template placeholder such
+# as <github-user> outside code (#106). Exit status:
+#   0  found one; prints the first
+#   1  none
+#   3  a fenced code block is still open at the end of the text
+#   anything else: the check itself failed (perl missing or broken); callers
+#      must not read that as "no placeholder"
+# What counts as a placeholder: "<", optional spaces, a letter, then letters,
+# digits, "_", "-", ".", "/" or spaces, then ">", in any case: <github-user>,
+# <GITHUB_USER>, <your repo>, <owner/repo>, < github-user>. Not caught: other
+# template styles such as {{NAME}}, $NAME or YOUR-USERNAME. A common HTML tag
+# is not a placeholder; the allow-list is checked on the tag name (the leading
+# letters and digits, followed by a space, "/" or ">"), in any case, so <br>,
+# <KBD>, <br/> and <details open> pass, and <code-dir> does not. Known false positives:
+# generic types in prose, such as List<string> (write them as inline code), and
+# a comparison written as "a < b > c".
+# What is ignored: fenced blocks (the CommonMark rules above), and inline code
+# spans, matched as CommonMark does within one line: a run of N backticks
+# closes at the next run of exactly N, and a run with no partner is a literal
+# backtick. So ``tool <repo> uses a literal ` here`` is code, and a lone
+# backtick cannot hide a placeholder after it. A span that runs over two lines
+# is not seen as code, so its text is checked as prose.
+section_has_prose_placeholder() {
+  printf '%s\n' "$1" | perl -0777 -ne '
+    # The same fence rules as _MD_FENCE_AWK above, line for line.
+    my ($fc, $fl, $fmax, $fcont, $plc, $prose) = ("", 0, 3, 0, -1, "");
+    for my $l (split /\n/, $_) {
+      $l =~ s/\r$//;
+      if ($fc ne "") {
+        my $ind = $l =~ /^( *)/ ? length($1) : 0;
+        if ($fcont > 0 && $l =~ /\S/ && $ind < $fcont) {
+          $fc = "";
+        } else {
+          if ($l =~ /^( *)(\Q$fc\E+)[ \t]*$/ && length($1) <= $fmax && length($2) >= $fl) {
+            $fc = ""; $plc = -1;
+          }
+          next;
+        }
+      }
+      # Same as the awk rule: a less-indented line ends the list context (X-006).
+      if ($plc >= 0 && $l =~ /\S/) {
+        my $lind = $l =~ /^( *)/ ? length($1) : 0;
+        $plc = -1 if $lind < $plc;
+      }
+      my $allowed = $plc >= 0 ? $plc + 3 : 3;
+      if (($l =~ /^( *)(`{3,})([^`]*)$/ || $l =~ /^( *)(~{3,})(.*)$/) && length($1) <= $allowed) {
+        $fc = substr($2, 0, 1); $fl = length($2); $fmax = $allowed;
+        $fcont = $plc >= 0 ? $plc : 0;
+        next;
+      }
+      if ($l =~ /\S/) { $plc = $l =~ /^( *(?:[-*+]|[0-9]+[.)]) +)/ ? length($1) : -1; }
+      # Code spans, as CommonMark matches them: a run of N backticks opens a
+      # span that closes at the next run of exactly N; a run with no such
+      # partner is a literal backtick and the scan goes on after it.
+      my ($out, $rest) = ("", $l);
+      while ($rest =~ /^(.*?)(?<!`)(`+)(?!`)(.*)$/s) {
+        my ($pre, $tick, $after) = ($1, $2, $3);
+        my $n = length $tick;
+        if ($after =~ /^.*?(?<!`)`{$n}(?!`)(.*)$/s) {
+          $out .= $pre . " ";
+          $rest = $1;
+        } else {
+          $out .= $pre . $tick;
+          $rest = $after;
+        }
+      }
+      $prose .= $out . $rest . "\n";
+    }
+    exit 3 if $fc ne "";
+    my %html = map { $_ => 1 } qw(a abbr b blockquote br center code dd del details div dl dt em hr i img ins kbd li mark ol p pre s small span strong sub summary sup table tbody td th thead tr u ul);
+    while ($prose =~ /<\s*([A-Za-z][A-Za-z0-9_.\/ -]*)>/g) {
+      my $ph = $1;
+      # The tag name is the whole leading run of letters and digits, and only
+      # counts when a space, "/" or the closing ">" follows it: <br/> and
+      # <details open> are HTML, <code-dir> and <table-name> are not.
+      my ($word) = $ph =~ /^([A-Za-z0-9]+)(?=[ \/]|$)/;
+      next if defined $word && $html{lc $word};
+      print "<$ph>";
+      exit 0;
+    }
+    exit 1;
+  '
+}
+
+# ============================================================
+# File operations (DRY_RUN-aware)
+# ============================================================
+
+# Write content to a file (skip if exists, unless overwrite=true)
+# Usage: write_file <filepath> <content> <label> [overwrite]
+# Requires: DRY_RUN variable in calling scope
+write_file() {
+  local filepath="$1"
+  local content="$2"
+  local label="$3"
+  local overwrite="${4:-false}"
+
+  if [[ -f "$filepath" ]] && [[ "$overwrite" != "true" ]]; then
+    echo "  SKIP    $label (already exists)"
+    return
+  fi
+
+  if $DRY_RUN; then
+    if [[ -f "$filepath" ]]; then
+      echo "  WOULD UPDATE  $label"
+    else
+      echo "  WOULD CREATE  $label"
+    fi
+  else
+    mkdir -p "$(dirname "$filepath")"
+    echo "$content" > "$filepath"
+    if [[ "$overwrite" == "true" ]]; then
+      echo "  SYNCED  $label"
+    else
+      echo "  CREATED $label"
+    fi
+  fi
+}
+
+# Copy a single file
+# Usage: copy_file <src> <dst> <label>
+# Requires: DRY_RUN variable in calling scope
+copy_file() {
+  local src="$1"
+  local dst="$2"
+  local label="$3"
+
+  if [[ ! -f "$src" ]]; then
+    return
+  fi
+
+  # Source and destination are the same file (in-repo source directory):
+  # `cp a a` fails, and under `set -e` that aborts the whole sync. `-ef`
+  # compares device + inode, so symlink and hardlink aliases are caught too.
+  if [[ "$src" -ef "$dst" ]]; then
+    return
+  fi
+
+  if $DRY_RUN; then
+    if [[ -f "$dst" ]]; then
+      echo "  WOULD UPDATE  $label"
+    else
+      echo "  WOULD COPY    $label"
+    fi
+  else
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+    echo "  SYNCED  $label"
+  fi
+}
+
+# Copy a directory via rsync (excluding .git, .claude, .DS_Store)
+# Usage: copy_dir <src> <dst> <label>
+# Requires: DRY_RUN variable in calling scope
+copy_dir() {
+  local src="$1"
+  local dst="$2"
+  local label="$3"
+
+  if [[ ! -d "$src" ]]; then
+    return
+  fi
+
+  if $DRY_RUN; then
+    local count
+    count=$(find "$src" -type f | wc -l | tr -d ' ')
+    echo "  WOULD COPY    $label ($count files)"
+  else
+    mkdir -p "$dst"
+    rsync -a --delete --exclude='.git' --exclude='.claude' --exclude='.DS_Store' "$src/" "$dst/"
+    echo "  SYNCED  $label"
+  fi
+}
+
+# ============================================================
+# GitHub / path utilities
+# ============================================================
+
+# Auto-detect GitHub username via gh CLI
+# Usage: resolve_github_user
+# Sets GITHUB_USER in caller scope (expects it to exist, possibly empty)
+resolve_github_user() {
+  if [[ -z "$GITHUB_USER" ]]; then
+    GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null || echo "")
+    if [[ -z "$GITHUB_USER" ]]; then
+      echo "Error: could not detect GitHub username. Use --github-user NAME" >&2
+      exit 1
+    fi
+  fi
+}
+
+# Expand ~ to $HOME in a path
+# Usage: resolve_tilde <path>
+resolve_tilde() {
+  echo "${1/#\~/$HOME}"
+}
+
+# Resolve a manifest-declared source path.
+#   $1 = the raw source string from the manifest
+#   $2 = the directory containing the manifest
+# A leading ~ expands to $HOME. An absolute path is returned unchanged. A
+# relative path resolves against the MANIFEST's directory, not the caller's
+# cwd, so in-repo-source manifests work from anywhere. An empty source stays
+# empty so callers report "source not found" rather than silently assembling
+# the manifest's own directory.
+resolve_source_path() {
+  local raw="$1" manifest_dir="$2" expanded
+  if [[ -z "$raw" ]]; then
+    echo ""
+    return
+  fi
+  expanded="$(resolve_tilde "$raw")"
+  case "$expanded" in
+    /*) echo "$expanded" ;;
+    *)  echo "${manifest_dir%/}/$expanded" ;;
+  esac
+}
+
+# Resolve a skill's authoring source: the local skills home if present, else an
+# in-repo top-level directory (the arrangement introduced when skills moved into
+# the monorepo). Local-first precedence keeps behaviour identical while both
+# copies exist, and hands over automatically once the local copy is removed.
+# Echoes nothing when the skill has no source anywhere.
+# Usage: skill_source_dir <skill-name>
+# Requires: SKILLS_HOME set by the caller. Deliberately unwrapped, unlike
+#   MONOREPO_DIR below — an unset SKILLS_HOME must abort rather than silently
+#   resolve to "/<name>/SKILL.md".
+#
+#   An earlier version said "every current caller sets it before sourcing this
+#   file". That is FALSE: "before sourcing this file" ties "caller" to the
+#   scripts that source _lib.sh, and two of the six do not set SKILLS_HOME.
+#   Measured, because the first correction of this comment ALSO got it wrong —
+#   it said three, having inherited the list from the MONOREPO_DIR paragraph
+#   below without re-deriving it:
+#
+#     script                     sets SKILLS_HOME   calls skill_source_dir
+#     prepare-plugin.sh                 no                   no
+#     prepare-skill-repo.sh             no                   no
+#     release-monorepo.sh               yes                  no
+#     sync-individual-repos.sh          yes                  no      <- sets it
+#     sync-monorepo.sh                  yes                  yes
+#     validate-pre-sync.sh              yes                  yes
+#
+#   What is true is narrower: every caller of this FUNCTION sets it. Sourcing
+#   is not calling, and the two that do not set it never call it.
+#
+#   Note this is the same shape as the MONOREPO_DIR case documented two
+#   paragraphs down — correct today only because the call site that would break
+#   it does not exist yet. Stated here too so the two read consistently rather
+#   than one carrying the caveat and the other implying a guarantee.
+#
+#   Hence the explicit guard below. `set -u` alone reports
+#   "_lib.sh: line NNN: SKILLS_HOME: unbound variable", which blames THIS file
+#   for a contract the caller broke; the guard names the calling script instead.
+#   It does not disturb the ratified bare-$SKILLS_HOME decision — an unset value
+#   still aborts loudly rather than silently resolving to "/<name>/SKILL.md".
+#
+# References ${MONOREPO_DIR:-}, not $MONOREPO_DIR: this file is sourced by
+# scripts (prepare-plugin.sh, prepare-skill-repo.sh, sync-individual-repos.sh)
+# that never set MONOREPO_DIR, and under `set -u` an unset variable referenced
+# inside a *called* function still aborts the script. Callers that do have a
+# monorepo directory (sync-monorepo.sh, validate-pre-sync.sh) already set
+# MONOREPO_DIR before calling this, so their behaviour is unchanged.
+#
+# The elif guards with `-n` explicitly rather than relying on `-f "${x:-}/…"`
+# alone: with MONOREPO_DIR unset, "${MONOREPO_DIR:-}/$name/SKILL.md" collapses
+# to "/$name/SKILL.md" — a root-relative path outside both trees that a
+# caller with no monorepo directory could still match by accident (e.g.
+# name=tmp against a real /tmp/SKILL.md). Unreachable today only because no
+# current caller without MONOREPO_DIR set calls this function at all — which
+# is exactly the "correct only because the next call site doesn't exist yet"
+# shape this batch exists to close.
+skill_source_dir() {
+  local name="$1"
+  if [[ -z "${SKILLS_HOME:-}" ]]; then
+    # rc 2, matching the usage-error code the entry-point scripts already use,
+    # because this IS a usage error — a caller-contract breach, not a lookup
+    # failure. $0 names the script that forgot, which is the whole point.
+    echo "Error: skill_source_dir() requires SKILLS_HOME; it is unset (caller: $0)." >&2
+    echo "       Sourcing _lib.sh does not set it. sync-monorepo.sh and" >&2
+    echo "       validate-pre-sync.sh default it to \$HOME/.claude/skills." >&2
+    return 2
+  fi
+  if [[ -f "$SKILLS_HOME/$name/SKILL.md" ]]; then
+    echo "$SKILLS_HOME/$name"
+  elif [[ -n "${MONOREPO_DIR:-}" && -f "${MONOREPO_DIR}/$name/SKILL.md" ]]; then
+    echo "${MONOREPO_DIR}/$name"
+  fi
+}
+
+# --- Plugin-only monorepo (issues #167, #190) ---------------------------------
+#
+# sync-monorepo.sh and validate-pre-sync.sh were written for the old layout:
+# skills as top-level <name>/ directories. A monorepo whose skills all live
+# under plugins/<group>/skills/<name>/ (this repo after #167) is "plugin-only".
+# #167 made both scripts refuse it, because the old flow found no skills there
+# and still rewrote README, CHANGELOG, catalogue and CI workflow. Since #190
+# both scripts handle it in its own mode instead: sync-monorepo.sh's
+# sync_plugin_only validates every plugin and then runs catalogue.py, and
+# writes nothing else; validate-pre-sync.sh validates every plugin and runs
+# catalogue.py --check. Any other monorepo (an empty or new directory, or one
+# with top-level skills, with or without plugins/) takes the old flow.
+
+# Prints the basename of every top-level directory of <monorepo-dir> that
+# discovery may consider a skill: real directories only (find -type d does NOT
+# follow symlinks, so a symlink named foo -> elsewhere/foo is skipped), no
+# hidden directories, and never plugins/ or scripts/. This is the ONE candidate
+# list: sync-monorepo.sh discover_skills (both scans), validate-pre-sync.sh and
+# has_top_level_skill_dirs below all read it, so the plugin-only predicate and
+# discovery cannot disagree about what a candidate is (#167 review C-001). The
+# decision was symlinks are skipped, exactly as discovery always skipped them.
+list_top_level_candidates() {
+  find "$1" -maxdepth 1 -mindepth 1 -type d \
+    ! -name '.git' ! -name '.github' ! -name '.*' \
+    ! -name 'plugins' ! -name 'scripts' \
+    -exec basename {} \; 2>/dev/null
+}
+
+# True when <monorepo-dir> has at least one top-level skill directory: a
+# candidate (list_top_level_candidates) that holds a SKILL.md, or whose name has
+# a SKILL.md under $SKILLS_HOME. That is the test discovery applies
+# (skill_source_dir), over the same candidate list, so a directory discovery
+# would sync is never called "not a skill" here.
+has_top_level_skill_dirs() {
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    [[ -f "$1/$name/SKILL.md" ]] && return 0
+    [[ -n "${SKILLS_HOME:-}" && -f "$SKILLS_HOME/$name/SKILL.md" ]] && return 0
+  done < <(list_top_level_candidates "$1")
+  return 1
+}
+
+# True when <monorepo-dir> has at least one plugins/*/.claude-plugin/plugin.json
+# and no top-level skill directory (as has_top_level_skill_dirs defines it).
+is_plugin_only_monorepo() {
+  local f
+  for f in "$1"/plugins/*/.claude-plugin/plugin.json; do
+    if [[ -f "$f" ]]; then
+      has_top_level_skill_dirs "$1" && return 1
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Usage: load_standalone_plugins <scripts-dir>
+# Sets STANDALONE_PLUGINS (space-separated) from <scripts-dir>/standalone-plugins.txt,
+# the one list catalogue.py reads too: plugins that ship from their own
+# marketplace, with no catalogue row here. # comments and blank lines are
+# ignored. A missing or unreadable file is an error (return 1), never an
+# empty list: an empty list would let a standalone plugin back into the
+# catalogue, or let --add-plugin copy one.
+load_standalone_plugins() {
+  local f="$1/standalone-plugins.txt" content
+  if [[ ! -f "$f" ]]; then
+    echo "Error: $f is missing; it lists the standalone plugins (#190)" >&2
+    return 1
+  fi
+  if [[ ! -r "$f" ]] || ! content="$(cat "$f" 2>/dev/null)"; then
+    echo "Error: $f cannot be read; it lists the standalone plugins (#190)" >&2
+    return 1
+  fi
+  # Parsed exactly as catalogue.py's parse_standalone: strip spaces and a CR at
+  # both ends (sed's [[:space:]] covers the CR), skip blank lines and # comments, and refuse any other line
+  # that is not one plugin name (#190 C-002). A CRLF file used to keep the CR,
+  # so "git-flow\r" never matched and --add-plugin git-flow got through.
+  local line n=0 names=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if ! [[ "$line" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      echo "Error: $f: line $n: '$line' is not a plugin name (lower-case letters, digits and hyphens)" >&2
+      return 1
+    fi
+    names="${names:+$names }$line"
+  done <<< "$content"
+  STANDALONE_PLUGINS="$names"
+}
+
+# Usage: run_catalogue <catalogue.py> [args...]
+# Runs catalogue.py and sets CAT_RC and CAT_OUT (stdout and stderr together).
+# catalogue.py exits 0, 1 or 2, and prints to stderr only with exit 2. So any
+# other exit, or exit 1 with something on stderr (a Python crash such as a
+# syntax or import error, which exits 1 too), is turned into CAT_RC=2:
+# "cannot run", never drift (#190).
+run_catalogue() {
+  local py="$1" err
+  shift
+  err="$(mktemp)"
+  CAT_RC=0
+  CAT_OUT="$(python3 "$py" "$@" 2>"$err")" || CAT_RC=$?
+  if [[ -s "$err" ]]; then
+    CAT_OUT="${CAT_OUT:+$CAT_OUT
+}$(cat "$err")"
+    if [[ $CAT_RC -eq 1 ]]; then
+      CAT_OUT="$CAT_OUT
+catalogue.py crashed (exit 1 with output on stderr); treated as: catalogue.py cannot run"
+      CAT_RC=2
+    fi
+  fi
+  rm -f "$err"
+  if [[ $CAT_RC -gt 2 ]]; then
+    CAT_OUT="${CAT_OUT:+$CAT_OUT
+}catalogue.py exited $CAT_RC; treated as: catalogue.py cannot run"
+    CAT_RC=2
+  fi
+}
+
+# Usage: validate_all_plugins <monorepo-dir> <validate-plugin.sh>
+# Runs validate-plugin.sh on every plugins/<name>/ directory that is not hidden
+# and not standalone (STANDALONE_PLUGINS must be set). A directory with no
+# plugin.json is validated too, and fails: it is never skipped. Prints one
+# "PASS  plugins/<name>" or "FAIL  plugins/<name>" line each, and the failing
+# validator's FAIL lines under it. Sets PLUGINS_VALIDATED (count) and
+# PLUGINS_FAILED (space-separated names). Returns 1 when any plugin failed.
+validate_all_plugins() {
+  local mono="$1" validator="$2" d name out sp skip
+  PLUGINS_VALIDATED=0
+  PLUGINS_FAILED=""
+  for d in "$mono"/plugins/*/; do
+    [[ -d "$d" ]] || continue
+    name="$(basename "$d")"
+    [[ "$name" == .* ]] && continue
+    skip=false
+    for sp in $STANDALONE_PLUGINS; do
+      [[ "$sp" == "$name" ]] && skip=true
+    done
+    $skip && continue
+    PLUGINS_VALIDATED=$((PLUGINS_VALIDATED + 1))
+    if out="$("$validator" "$mono/plugins/$name" 2>&1 </dev/null)"; then
+      echo "  PASS  plugins/$name"
+    else
+      echo "  FAIL  plugins/$name"
+      printf '%s\n' "$out" | grep -E '^ *FAIL|^Error' | sed 's/^ */        /' || true
+      PLUGINS_FAILED="${PLUGINS_FAILED:+$PLUGINS_FAILED }$name"
+    fi
+  done
+  [[ -z "$PLUGINS_FAILED" ]]
+}
+
+# --- Manifest shape (issue #73) ----------------------------------------------
+#
+# A legacy plugin-manifest.json declares skills as bare strings:
+#     "skills": ["my-skill"]
+# rather than the current object form:
+#     "skills": [{"name": "my-skill", "source": "."}]
+# A bare string means "the skill lives in this manifest's own directory", so
+# {"name": <string>, "source": "."} is the faithful normalisation —
+# resolve_source_path "." "$MANIFEST_DIR" yields the manifest's own directory.
+#
+# Bare strings are normalisable in skills[] ONLY. A skill's source is a
+# directory, so "." has a meaning there; commands[] and agents[] sources are
+# *files*, for which there is no defensible default. Callers reject a bare
+# string in those rather than guessing — see prepare-plugin.sh.
+
+# Write a shape-normalised copy of a manifest.
+#   $1 = source manifest, $2 = destination path (overwritten)
+# Callers point every subsequent `.skills[…]` read at the copy instead of
+# teaching each read site the legacy shape: prepare-plugin.sh has eight such
+# reads, and a fix that converts some of them still dies with
+# `jq: error … Cannot index string with "name"` from whichever it missed.
+#
+# `.skills = ((.skills // []) | map(…))`, deliberately not the terser
+# `(.skills // []) |= map(…)`: the latter is not a valid path expression when
+# `.skills` is absent — jq 1.7.1 fails with "Invalid path expression with
+# result []" — which would turn a manifest declaring no skills at all (legal
+# today: `.skills | length` is 0) into a hard error.
+normalize_manifest() {
+  local src="$1" dst="$2"
+  jq '.skills = ((.skills // []) | map(if type == "string" then {name: ., source: "."} else . end))' \
+    "$src" > "$dst"
+}
+
+# Emit a manifest's skill names, one per line, tolerating the legacy
+# bare-string form. For callers that need only the names and so do not need a
+# normalised copy on disk. Entries with no name are skipped rather than
+# emitting a blank line.
+manifest_skill_names() {
+  jq -r '(.skills // [])[] | (if type == "string" then . else .name end) // empty' "$1"
+}
+
+# Emit the bare-string entries of manifest $1's array $2 ("commands"/"agents"),
+# comma-joined; empty when the array is absent or fully object-form.
+manifest_bare_entries() {
+  jq -r --arg key "$2" \
+    '[(.[$key] // [])[] | select(type == "string")] | join(", ")' "$1"
+}

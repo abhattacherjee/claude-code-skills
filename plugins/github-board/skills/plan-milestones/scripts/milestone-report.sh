@@ -9,7 +9,7 @@
 # done, and newer work keeps landing in the open milestone by default.
 #
 # Context-gathering script: set -eu WITHOUT pipefail (head/grep in pipes are expected
-# to close early; see skill-authoring's set-flags pitfall).
+# to close early; see skill-kit:author's set-flags pitfall).
 set -eu
 
 usage() {

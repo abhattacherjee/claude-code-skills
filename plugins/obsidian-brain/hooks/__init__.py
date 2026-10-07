@@ -1,1 +1,0 @@
-# obsidian-brain hooks package

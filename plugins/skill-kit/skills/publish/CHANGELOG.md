@@ -1,0 +1,899 @@
+# Changelog
+
+All notable changes to the **publish** skill (was `skill-publishing`) are documented here.
+
+## [1.1.1] - 2026-10-06
+
+### Fixed
+
+- `publish`: `sync-monorepo.sh` finds each plugin skill through its manifest's `source` in the auto-build drift check and the plugin resync, as `prepare-plugin.sh` does. A manifest whose skill name differs from its source directory (`custom-statusline`: skill `install-statusline`) was never rebuilt or resynced, with no output. For a plugin with a manifest the skill is never looked up by name; a skill directory the manifest no longer lists is skipped with a warning. These stop the sync with exit 1 before anything is written, naming the manifest: a manifest that is not a valid JSON object (it used to abort with exit 5 and no message, after skills were written); a `skills[]` value that is not an array, or an entry that is not a name or an object with a string name and source (null, a number, a boolean, an array); and, for a published plugin, a source that does not resolve. The reversion guard now checks every plugin source on every run, before anything is written, including a `--skills` run, which used to rebuild a plugin from a stale local source at exit 0: a source older than the monorepo's copy is refused, under its own name, under another name or through a symlink, and the run exits 3. The resync takes the plugin-root `CHANGELOG.md` from the manifest's first skill, not the first directory by name (#92).
+- `publish`: `sync-monorepo.sh --skills <subset>` re-syncs those top-level skills and keeps the full catalogue. The README rows, the skill count and the install-all lines still list every top-level skill, in the order a full sync writes them; plugins are still checked and rebuilt. Before, the catalogue shrank to the named skills. A skill not synced in the run takes its row from its published `SKILL.md`, built by the same function as the main loop's rows (`skill_row`): no version gives 1.0.0 and no description gives an empty one with a warning, as a full sync writes them. When `gh` fails, a row keeps its repo link from the existing README, in both paths. If such a `SKILL.md` cannot be read, the run stops with exit 1 before anything is written. A `--skills` name with no `SKILL.md` gets no install line, and naming no real skill is still refused (#93).
+- `publish`: `prepare-plugin.sh` leaves a `SKILL.md` section out of the plugin README when its prose holds a placeholder, and prints `dropped section "<title>": placeholder <x> in prose` on stderr; `sync-monorepo.sh` passes the note on when it publishes that README. A placeholder is `<`, optional spaces, a letter, then letters, digits, `_`, `-`, `.`, `/` or spaces, then `>`, in any case (`<github-user>`, `<GITHUB_USER>`, `<your repo>`, `<owner/repo>`); other styles such as `{{NAME}}` are not caught. Common HTML tags are not placeholders; the allow-list is checked on the whole tag name followed by a space, `/` or `>`, so `<details open>` and `<br/>` pass and `<code-dir>` does not. Placeholders in fenced blocks and in inline code stay; fences and code spans follow CommonMark (at most 3 spaces of indent, or the item's content column plus 3 right after a list item; no backtick in a backtick fence's info string; a code span closes at the next backtick run of the same length). The build stops with exit 1 if a section cannot be read, if a section's code fence is never closed, or if the check itself fails, rather than publish the section unchecked. `extract_section` and `extract_headings` skip `## ` lines inside fenced code blocks, including a fence line saved with CRLF: skill-publishing's `SKILL.md` has a `## See Also` template in a code block, and it became that README's See Also (#106).
+- The repo's `scripts/test-sync-hygiene.sh`, which tests these scripts, no longer turns plugin validation off for every case. Its fixtures are valid skills now; only the 9 description-parsing fixtures that must be invalid skip validation, each with a reason (#106).
+
+## [1.1.0] - 2026-10-06
+
+### Added
+
+- `publish`: `scripts/catalogue.py` writes the plugin catalogue from each `plugin.json`: the root README plugin table (between `<!-- catalogue:start -->` and `<!-- catalogue:end -->`), `.claude-plugin/marketplace.json` and one meta line in each plugin README. `--check` writes nothing and reports drift, including any change a write would make (exit 0 clean, 1 drift, 2 cannot run). `--validate-plugins` only loads and checks the plugins, the write targets and `marketplace.json`. A write goes through temp files and renames, so a failed write leaves nothing half done, and it names any file it already replaced. A plugin README names a skill or agent only as `` `name` ``, `<plugin>:name` or `/name`. It also checks that each plugin README names its skills and agents, and that the README's install lines use this marketplace. It fails closed: a missing marker, a bad `plugin.json`, name or version, a name or description holding `<!--` or `-->`, a stray `plugins/` directory, an unreadable `skills/`, `agents/` or `commands/` directory, or a write target that is a symlink is exit 2 (#190).
+- `publish`: `scripts/standalone-plugins.txt` lists the standalone plugins (`git-flow`, `obsidian-brain`). `catalogue.py`, `sync-monorepo.sh` and `validate-pre-sync.sh` read it; both parse it the same way (spaces and CR stripped, `#` comments, one plugin name per line, any other line refused), and a missing or unreadable list is an error, never an empty list; it replaces the `STANDALONE_PLUGINS` line in `sync-monorepo.sh` (#190).
+- `publish`: `references/plugin-only-monorepo.md` describes the plugin-only mode and the catalogue (#190).
+
+### Changed
+
+- `publish`: `sync-monorepo.sh` syncs a plugin-only monorepo instead of refusing it. A plain sync runs `validate-plugin.sh` on every plugin (any failure: exit 1, nothing written) and then `catalogue.py`, and writes nothing else, except the plugin `--add-plugin` copies. `--dry-run` validates and prints the drift. `--add-plugin` validates the build and every plugin, and runs `catalogue.py --check` on a staging copy with the build in it, before it copies; a build whose `plugin.json` name is not the `--add-plugin` name is refused, and so is any symlink in `plugins/`, in `./build` or the build, so nothing is ever copied through one. A crashing `catalogue.py` counts as "cannot run", never drift. A refusal before the plugin-only mode starts still prints the JSON object, with `"catalogue": "not-run"`. `--skills`, `--add` and `--init` are refused. The new `--json` prints `{"layout", "validated", "catalogue"}` (#190).
+- `publish`: `validate-pre-sync.sh` on a plugin-only monorepo validates every plugin and runs `catalogue.py --check`; exit 1 if either fails. `--json` keeps its shape and adds `layout`, `catalogue` and `catalogue_lines` (#190).
+- `publish`: in every other layout, `catalogue.py` writes the README plugin table and `marketplace.json`, so one tool writes them. The old `marketplace.json` was built as a string and broke on a description with a quote or a backslash. `marketplace.json` keeps its `owner` and `metadata`; a sync no longer rewrites `metadata.version` with the date. The sync runs `catalogue.py --validate-plugins` before its first write and again before the README. A REFUSED skill (exit 3) is no longer hidden by catalogue drift, and `--init` does not initialise while the catalogue needs a hand edit. `catalogue.py` and `standalone-plugins.txt` are copied into the monorepo's `scripts/`, and the `workflow-monorepo.yml` template runs `catalogue.py --check` when the monorepo has `plugins/` (#190).
+- `publish`: `SKILL.md` describes the plugin-only mode in place of the #167 refusal (#190).
+
+## [1.0.2] - 2026-10-05
+
+### Fixed
+
+- `publish`: `sync-monorepo.sh` and `validate-pre-sync.sh` refuse a plugin-only monorepo in every mode (discovery, `--skills`, `--add`, `--add-plugin`, `--init`, `--dry-run`, `--json`): one that has `plugins/*/.claude-plugin/plugin.json` and no top-level skill directory, like this repo since #167. They exit 1 with one message before writing anything; `validate-pre-sync.sh --json` also prints a JSON error object. Before, an `--add-plugin` run on a copy of this repo rewrote its README, CHANGELOG, marketplace catalogue and CI workflow at exit 0. Any other monorepo is handled as before. Sync for plugin-only monorepos is being redesigned in #190. A top-level symlink to a skill directory does not count as a top-level skill, because discovery skips symlinks; the refusal test and discovery now read one shared candidate list (`list_top_level_candidates` in `_lib.sh`). Before, such a symlink let a sync of an otherwise plugin-only monorepo through, and it rewrote README.md, CHANGELOG.md, validate-skill.yml and marketplace.json.
+- `publish`: `--init`, or a monorepo directory that does not exist, with no skill named exits 1. The old default set (`conversation-search`, `skill-authoring`, `skill-publishing`) named top-level skills that #167 deleted (#167).
+- `publish`: `release-monorepo.sh` counts and lists skills in both layouts, top-level `<name>/SKILL.md` and `plugins/<plugin>/skills/<name>/SKILL.md`, and lists a plugin skill as `<plugin>:<name>`. With no skill in either layout it exits 1 without writing anything. It counted only top-level files and released "Skills: 0" once those were deleted (#167).
+- `publish`: the `workflow-monorepo.yml` template detects changed skills both under `plugins/<group>/skills/<name>/` and in top-level `<name>/` directories (sync still writes those). A failing `git diff origin/main...HEAD` fails the job instead of reading as "no skill changed". A removed skill or plugin directory is skipped with a note; a skill directory still there without `SKILL.md` fails (#167).
+- `publish`: `validate-plugin.sh` takes the skill validator's own exit code (it used to take `sed`'s, so a failing skill passed). A `skills/` directory with no skill in it is a FAIL, and so is a skill when `validate-skill.sh` is missing or not executable (it passed as "SKILL.md exists") (#167).
+- `publish`: `prepare-plugin.sh` exits 1 when the plugin it assembled fails `validate-plugin.sh`, or when the validator is missing. It used to run it with `|| true`, print "Plugin assembled" and let sync publish the plugin. `SKILL_KIT_NO_PLUGIN_VALIDATION=1` skips the step and says so; only the sync-hygiene test harness sets it (#167).
+- `publish`: the CONTRIBUTING text that `sync-monorepo.sh` writes says to add a skill at the repo root, and where a skill that ships inside a plugin goes (#167).
+- `publish`: `SKILL.md` states the plugin-only refusal and when sync still applies, tells that refusal apart from a CHANGELOG failure at the pre-sync gate, and drops deleted skills from the architecture diagram and `--init` examples (#167).
+- The bundled `validate-skill.sh` changed in comments and help text only: the usage example no longer names the deleted `changelog-keeper/` directory, and the NOTE names the skills that ship a copy and the frozen exception (#167).
+
+## [1.0.1] - 2026-10-05
+
+### Fixed
+
+- `scripts/sync-monorepo.sh` usage example: `--add-plugin <plugin-name>` instead of `--add-plugin obsidian-brain`, a plugin this repo no longer carries (#166).
+- `scripts/sync-monorepo.sh`: `obsidian-brain` is on the standalone skip list with `git-flow`, and `--add-plugin` refuses standalone plugins (exit 1, nothing written). It takes a bare lowercase name only, and it also reads the `name` in the built `plugin.json`, so `obsidian-brain/`, `Obsidian-Brain` or a differently named build dir is refused too. The names live in one variable, `STANDALONE_PLUGINS`.
+- `scripts/sync-monorepo.sh`: a regenerated root README builds the install note for each standalone plugin (`git-flow`, `obsidian-brain`) from `STANDALONE_PLUGINS`, one line each.
+
+## [1.0.0] - 2026-10-04
+
+### Changed
+
+- Moved into the `skill-kit` plugin as `skill-kit:publish` (#161). Same scripts as `skill-publishing` 4.5.0. The old name still matches as a trigger phrase. `plugins/skill-kit/skills/publish/` is the source of truth for the publishing scripts. The deprecated `plugins/skill-publishing/` copy is frozen until #167 and is not tested. The old loose `~/.claude/skills/skill-publishing` clone is removed at the post-merge cut-over (#105).
+- Every command in `SKILL.md` calls `"${CLAUDE_SKILL_DIR}/scripts/<name>.sh"`, with `<NAME>` placeholders for values known only at run time. The old text used `$SCRIPTS` and `~/.claude/skills/skill-publishing/scripts/`, which only worked from a loose copy.
+- `scripts/validate-skill.sh` is a copy of the repo-root `scripts/validate-skill.sh`.
+
+### Fixed
+
+- Step 7 told you to delete `~/.claude/skills/skill-publishing/build/`, a directory nothing writes. `prepare-plugin.sh` writes `./build/<plugin-name>` relative to where you ran it, and the auto-build in `sync-monorepo.sh` uses a temp dir. The step now names `./build/<plugin-name>` and says it applies to a manual Workflow E run.
+- Workflow E's consumer install ran `/tmp/ccs/scripts/install-plugin.sh`, a copy that exists only after the monorepo has been synced once. It now runs this skill's own `install-plugin.sh`.
+- `prepare-skill-repo.sh` given a directory that does not exist stopped on a bare `cd: No such file or directory` from line 59. It now says `Error: skill directory not found: <dir>` and exits 1.
+- `sync-individual-repos.sh` counted with `((ERRORS++))`, `((SKIPPED++))` and `((SYNCED++))` under `set -eu`. On a zero counter that returns status 1, so bash 4.1+ stopped after the first skill. It now uses `n=$((n + 1))`.
+
+## History before 1.0.0 (as `skill-publishing`)
+
+### skill-publishing 4.5.0 - 2026-10-02
+
+#### Changed
+
+- `validate-skill.sh` accepts the `disable-model-invocation` frontmatter field, which Claude Code uses for slash-command-only skills (#146). The repo-root copy and this copy stay byte-identical. The live authoring copy at `~/.claude/skills/skill-publishing/scripts/validate-skill.sh` is outside the repo and is not changed here.
+- `validate-pre-sync.sh`: a comment no longer names `github-board-move` as a live in-repo-only skill; it moved into the github-board plugin (#146).
+
+### skill-publishing 4.4.0 - 2026-08-05
+
+#### Fixed
+
+- `extract_field()` in `_lib.sh` read a frontmatter field as raw text rather than as a YAML scalar, which produced three defects at once. All are closed together by one awk-based scalar reader, because they share that root cause. (#37, #102)
+  - **Block scalars (#37).** A `description: >-` or `|-` carries no text on its own line, so the reader returned the literal indicator and `prepare-plugin.sh` wrote it into the generated README. In Markdown `>-` renders as an empty blockquote, so the corruption was invisible in the rendered page. No monorepo skill uses a folded description today, but four unpublished authoring skills do (`sentry-dashboard-builder`, `sentry-deploy-notifications`, `vercel-cli-agent-auth`, `vercel-rewrite-platform-routes`) and would have leaked on first sync.
+  - **Double-quoted scalars (#102).** Only the outer quote pair was stripped, so every internal `\"` reached the README verbatim. Live on exactly two files — both copies of `deep-review/SKILL.md`. The other 38 double-quoted descriptions in the repo are escape-free and so looked fine while traversing the same broken path.
+  - **Plain scalars that merely begin or end with a quote (previously unfiled).** `s/^["']//; s/["']$//` fired on the first and last character unconditionally and independently, so `description: "quoted" is a word` silently lost its leading `"`. Quotes are now stripped only when the same character both opens and closes the value.
+- `short_desc()` used `echo "$1"`, which mangles any value beginning with `-n`/`-e`. Now `printf '%s\n'`.
+
+- **`extract_field()` never returns more than one line, and that is now a stated contract.** `sync-monorepo.sh:604` splices the value into a Markdown **table row**, so a newline in it produces a broken table at exit `0`. Two consequences, both deliberate:
+  - a **literal** `|` block scalar is **folded to spaces** exactly like `>`, so it does *not* preserve newlines the way YAML specifies. `validate-skill.sh:121-131` folds `|` and `>` identically too, so the two readers agree on this point. The fold is correct but it can **change meaning** — measured, a `|` block of `Deletes the cache` / `Only when --force is given` comes back as one run-on sentence — and it used to do so in total silence, so a multi-line `|` now emits a note on stderr naming the file and field and suggesting `>`. A note, not an error: the fold is the contract, and the author who wrote `|` is simply not getting what they asked for.
+  - `\n`, `\t` and `\r` in a double-quoted scalar decode to a **space**, not to the control character; runs of *decoded* whitespace are collapsed to one space and vanish at either end of the value.
+- **`description: >-2` returned the literal `>-2`** — issue #37's exact failure mode surviving inside issue #37's own fix. YAML permits the chomping indicator *before* the indentation indicator, and the first block-header regex (`^[|>][0-9]*[+-]?…`) accepted only the reverse order, so `>-2` fell through to the plain-scalar path. The header regex is now `^[|>]([0-9][+-]?|[+-][0-9]?)?[ \t]*(#.*)?$`, which accepts `>`, `>-`, `>+`, `>2`, `>-2` and `>2-` and still rejects nonsense like `>--`.
+- **An unrecognized block header FAILED OPEN — issue #37's shape for the third time.** Tightening the regex above closed `>-2` but left the fall-through itself: measured, `description: >10` returned `[>10]` and `>--` returned `[>--]`, i.e. the indicator became the description, which is #37 exactly. `extract_field()` now tests for a leading `|`/`>` *before* the block branch, writes `extract_field: <file>: unrecognized block-scalar header for <field>: <value>` to stderr, and **exits 3**.
+
+  Chosen deliberately as a **hard failure at the primary read.** `prepare-plugin.sh:420` has no `|| true` and runs under `set -eu`, so the exit propagates and the build stops — which is the point: a description the reader cannot decode must stop the build rather than become a corrupt artifact at exit `0`, and `sync-monorepo.sh` has treated a failed plugin auto-build as fatal since 4.3.0. Named so it is not mistaken for total coverage: the three **secondary** reads (`prepare-plugin.sh:462/481/502`, for non-primary skills, commands and agents) already wrap the call in `2>/dev/null || echo ""`, so there the guard degrades to an empty description with the diagnostic suppressed. That is pre-existing behaviour, not introduced here.
+- **The whitespace collapse was NON-LOCAL: an escape at one end of a value silently reformatted the other.** The collapse ran under a `sawws` flag and then rewrote *every* run of spaces in the whole string. Measured: `"Cost:  100  USD."` kept its double spaces, but `"Cost:  100  USD.\tNote."` had its **beginning** reformatted because a `\t` appeared at the **end**. The decoder now emits an internal marker byte for each decoded `\n`/`\t`/`\r` and collapses only runs of that marker (plus any whitespace touching it), so a region the decode never reached is returned byte-for-byte. The `sawws` flag is gone.
+- **A literal CR, VT or FF byte in the source line travelled into the value** — none is a YAML escape, so nothing in the parser had reason to touch it, and it landed inside a Markdown table cell and a list item. `extract_field()` now has a single `emit()` output point that maps all three to a space, the same meaning `\r` already has when written as an escape.
+- **That `emit()`-only scrub was not enough, and #102 was live again because of it.** Being the *single output point* is true and is exactly why it read as sufficient — but it runs **last**, after every step that depends on those bytes being gone, and every one of those steps matches only `[ \t]`. Five decisions were defeated by one CR:
+  - `sub(/[ \t]+$/, "", val)` does not match CR, so on a **CRLF-terminated** `description: "…"` line the last character of `val` stayed a CR, the `f == DQ && l == DQ` closing-quote test failed, and the value fell through to the plain-scalar path keeping **both outer quotes and every internal `\"`** — #102's exact artifact, reproduced inside #102's own fix. Measured control pair: with the CR, `["CRPROOF — phrases like \"review this\" must survive." ]`; without it, `[CRPROOF — phrases like "review this" must survive.]`.
+  - the block-scalar body trim left the CR in place, so **every join in a CRLF block came back double-spaced** and the value ended in a stray space.
+  - the block **header** grammar was applied to `>-\r`, which is not a legal header, so a perfectly valid CRLF `SKILL.md` **aborted the build at `exit 3`** with `unrecognized block-scalar header for description: >-`.
+  - `line ~ /^[ \t]*$/` is false for an **indented CR-only** body line, so the blank-line skip did not fire: it became a content line (three spaces at the join) and incremented `nlines`, which is the count reported in the `|`-fold stderr note.
+  - `line ~ /^[^ \t]/` **matches** a leading CR, so a **bare CR-only** body line — the shape a real CRLF file's paragraph break actually has — terminated the block, silently dropping everything after it at exit `0`.
+
+  The scrub now happens on **entry**, as each frontmatter line is collected, so the trims, the blank test, the header grammar and the quote test all see normalised input. `emit()`'s `gsub` is **kept** as a second point, for any future exit path that emits a value not built from the collected lines. The order is the fix; both `_lib.sh` comments now say so, and the `emit()` comment no longer implies that being the single output point makes it sufficient.
+
+  Named rather than silently left: the `$0 == "---"` frontmatter delimiter test is an exact compare that runs *before* the collection rule, so a `SKILL.md` whose `---` fences are themselves CRLF-terminated never enters the frontmatter and every field reads back **empty** (measured: `rc 0`, empty value). That is a fail-empty, not a fail-corrupt, and is out of scope here.
+- **The `exit 3` guard was SWALLOWED at two of its ten call sites, and the header comment analysed only one script's reads.** `sync-monorepo.sh`'s CHANGELOG-inventory read and `release-monorepo.sh`'s release-inventory read were both `X=$(extract_field … | sed 's/\. Use when:.*//')`. A pipeline's exit status is its **last** command's, and no script in this directory sets `pipefail`, so `exit 3` arrived as rc `0` with an empty `$X` — a description-less inventory row published at exit `0`, which is the exact fail-open shape the guard was added to remove. Both are now two statements (`extract_field`, then `short_desc`), so the assignment is a simple command whose rc `set -e` acts on.
+
+  **`X=$(short_desc "$(extract_field …)")` does NOT fix this** — measured, not assumed: the assignment takes the **outer** substitution's rc (`short_desc`'s, i.e. `sed`'s, i.e. `0`) and discards the inner `3`. Hence two statements rather than one nested call; this is recorded in `_lib.sh` because any future site that nests the read inside another command's word reopens the hole with no visible change at the call.
+
+  `_lib.sh`'s header comment now carries a **caller-analysis table for all ten call sites**, in the same form as its `SKILLS_HOME` table, stating for each what `exit 3` actually does (`ABORTS` for the seven bare assignments; `SUPPRESSED` for `prepare-plugin.sh:462/481/502`'s `2>/dev/null || echo ""`), plus an explicit statement of which rows the test suite covers and which it does not. The previous version analysed `prepare-plugin.sh`'s four reads only, leaving three of the six calling scripts undescribed and implying a uniformity the code did not have.
+
+  Side effect, stated because it changes published output: `short_desc` keeps the sentence's period (`s/\. Use when:.*/\./`) where the deleted inline seds dropped it (`s/\. Use when:.*//`), so a CHANGELOG or release inventory row for any description carrying a `Use when:` clause now ends in `.` — the same text the README catalogue row has always had, which is now asserted as a byte-identity comparison rather than two independent needles. One inline copy of that sed remains at `release-monorepo.sh:185`, on the **plugin** inventory built from `plugin.json` via `jq`; it is a different data source with no `extract_field` exposure and was left alone.
+- **`validate-skill.sh` and `_lib.sh` had diverged on the block-header grammar**, which this change itself introduced: `_lib.sh` accepted `>-2` while `validate-skill.sh:121` still carried the old `^[|>][0-9]*[+-]?…`, so the same file could pass CI validation and publish corrupt (or the reverse). The alternation is ported to the **three copies that have a block-scalar branch at all**, which are byte-identical to each other: `scripts/validate-skill.sh`, `plugins/skill-publishing/skills/skill-publishing/scripts/validate-skill.sh`, and the live authoring copy at `~/.claude/skills/skill-publishing/scripts/validate-skill.sh`.
+
+  **Correction to an earlier wording of this entry, which said "all three copies" and implied there were only three.** The repo contains **eight** `validate-skill.sh` files. The other six — `skill-authoring/`, `changelog-keeper/`, `conversation-search/`, `worktree/`, `claudeception/`, and `plugins/skill-authoring/skills/skill-authoring/` — are a single older generation (310 lines, byte-identical to one another) that belongs to other skills and contains **no `[|>]` block-scalar handling whatsoever**, so there is no grammar in them to keep in step. They were deliberately not touched. One further copy sits outside the repo, `~/.claude/skills/skill-authoring/scripts/validate-skill.sh` (335 lines), which *is* an intermediate generation carrying the old `^[|>][0-9]*[+-]?…` grammar; it is skill-authoring's live copy, it is out of scope for this change, and it is named here so the next reader does not have to rediscover it.
+
+  The three updated copies remain deliberately *not* identical to `_lib.sh` in one respect, stated in both files: `_lib.sh` exits 3 on an unrecognized header because there the value becomes a published README, whereas in the validator the same value falls through to the plain-scalar branch and is caught by the ordinary length and `Use when:` rules.
+- **Known gaps, audited rather than sampled.** A **quoted** scalar wrapped across multiple lines is read as its first line only; block scalars are the supported way to wrap. `\uXXXX`/`\xXX` numeric escapes yield the literal letter. Flow collections, anchors, and aliases are unparsed. All four audited across the 44 monorepo `SKILL.md` files: zero occurrences, so latent rather than live.
+- `extract_version()` has the same class of defect independently — its `grep "version:"` is unanchored, so a description containing `version:` would hijack it, and it repeats the unconditional quote strip. Verified no `SKILL.md` triggers it today. Deliberately out of scope here to keep the fail-first evidence for #37/#102 unambiguous; filed separately.
+- `validate-skill.sh` still carries its own single-argument `extract_field` which folds block scalars but does not unescape, so it has defect 2 independently. The block-header **grammar** is now kept in step by hand (see above) and both files say so, but nothing enforces it — the two readers have already drifted once inside this very change. Merging them is a separate change.
+
+#### Changed
+
+- Minor rather than patch: output that was previously mangled now differs. Measured across all 44 `SKILL.md` files in the monorepo — **42 extract byte-identically, 2 change** (the `deep-review` pair, which is the bug being fixed). Plain-scalar behaviour is unchanged by construction and covered by a regression control.
+- `scripts/test-sync-hygiene.sh` gains **108 assertions** covering folded (`>`, `>-`, `>+`, `>2`, `>-2`), literal (`|-`), double-quoted (with and without escapes, and with `\n`/`\t` whitespace escapes), single-quoted, plain, plain-opening-with-a-quote, absent, empty, percent-bearing, `echo`-option-shaped, unrecognized-block-header, deliberate-double-space, and literal-CR descriptions. Each style carries a **positive control** as well as a leaked-syntax negative, because an `assert_not_contains`-only test passes identically for a working parser and one that returns nothing. The suite was 434 assertions in total and green at this point; round 3 below takes it to 455.
+
+  Three broad mutation arms were run, because no single one covers the section (counts are FAIL lines over the whole suite, with **both** copies of `_lib.sh` mutated so the authoring-parity assertion does not contribute a spurious red):
+
+  - **develop's `extract_field` restored** — 44 red. This is the fail-first evidence for the fix itself.
+  - **an empty-returning `extract_field` stub** — 70 red, and it is the only arm that trips the descriptionless-fallback guards (`- \`name\`` with no description). The old parser cannot trip those: it returned non-empty garbage, not nothing.
+  - **an awk compile error inside `extract_field`** — 214 red. It is the only arm that trips the run-level `assert_eq "…fixture builds" "0"` checks, and it also kills every sync that reads a skill *name* through the same function, which is why it is far the broadest.
+
+  Ten targeted arms were run on top, each reverting one specific guarantee. Every one turns at least two assertions red: deleting the block-scalar terminator (5), narrowing the block-header regex to `/^>-$/` (14), deleting the trailing-whitespace trim (3), restoring the literal-scalar newline join (2), restoring the pre-fix block-header regex (3), decoding `\n` to `"XX"` (2), reverting the fail-closed header guard (3), reverting the marker-based collapse to the `sawws` flag (3), deleting the literal-fold stderr note (2), and deleting the control-byte scrub (3).
+
+  One assertion in the new set is a deliberate **control that does not go red** under its own arm: the double-space fixture with *no* escape present is green under both the old flag-based collapse and the new marker-based one, which is exactly why it is paired with the escape-bearing fixture rather than standing alone.
+
+- `scripts/test-sync-hygiene.sh` gains **21 further assertions** (129 in the scalar section, **455 in the suite**, green), closing two coverage holes found in round 3:
+
+  - **A blank line inside a block scalar had no coverage at all.** Deleting `_lib.sh`'s `if (line ~ /^[ \t]*$/) continue` left all 434 assertions green, because every other block fixture is a run of *adjacent* non-blank lines and so never executed that branch. A `blankline-plugin` fixture now carries a blank line between two content lines and is asserted as a **whole row**: without the skip, the blank line is trimmed to `""` and still joined with a separator, so the paragraphs come back with a doubled space at the join, which a substring check on either side of it cannot see. Mutation-verified: **3 red** with the fixture present, **0 red** without it.
+  - **The `badblock` fixture reached exactly one of the ten call sites** (`prepare-plugin.sh:420`, via `run_prepare`) — it never touched a sync or a release. Three runs added: a bad-header skill driven through `sync-monorepo.sh` (rc pinned to exactly `3`, no catalogue row, no CHANGELOG row), a bad-header skill driven through `release-monorepo.sh` (rc pinned to exactly `3`, no versioned CHANGELOG entry), and a good skill with a `Use when:` clause through a sync, which is the only assertion that can observe `sync-monorepo.sh`'s inventory read at all — a bad header can never reach that line, because the same script's main loop reads every description earlier and aborts there first. Mutation-verified: reverting the sync inventory read to the pipeline reds **2**, reverting the release one reds **4** (including rc `128` instead of `3` — the release ran past the bad header and wrote a description-less row), both reds **6**; against the pre-round-3 suite the same reverts red **0**.
+
+- `scripts/test-sync-hygiene.sh` gains **23 further assertions** (152 in the scalar section, **478 in the suite**, green) for the CR positions above. The suite was green at 455 *while shipping* the defect, because its only CR fixture (`crbyte-plugin`) put the byte **mid-value in a plain scalar** — the one position where an `emit()`-only scrub is genuinely sufficient, since nothing between the read and `emit()` inspects the middle of a plain value. It is kept, relabelled in the harness as the control it always was. Five new fixtures, one per decision CR defeats, all written with `printf` so the bytes survive the file being written, linted and reviewed: `crquote-plugin` (CRLF-terminated double-quoted scalar carrying `\"` escapes — #102's direct regression), `crblock-plugin` (CRLF body lines, clean header, so the doubled join is isolated), `crhdr-plugin` (CRLF-terminated `>-` header, asserted on rc `0` and on stderr, because that failure was an aborted build rather than a wrong string), `cronly-plugin` (indented CR-only body line, asserted on the whole row **and** on the `|`-fold note's line count, which no row assertion can see), and `crblank-plugin` (bare CR-only body line, whose failure is a silent truncation). Mutation-verified against the shipped-and-defective shape — the entry `gsub` reverted, `emit()`'s kept — **17 of the 23 red** across all five fixtures (5 + 3 + 3 + 4 + 2); the six that stay green are rc and section-heading controls, present so that an empty or never-run parse cannot satisfy the block by doing nothing. Against the same mutant the 455 pre-existing assertions red **0**.
+
+  Correcting the round-2 claim above: its "deleting the control-byte scrub (3)" arm deleted `emit()`'s `gsub`, which the mid-value fixture *does* catch. It was never evidence that CR was handled anywhere else.
+
+  The `---` fences of all five fixtures are deliberately LF-terminated. The delimiter test is an exact `$0 == "---"` compare running before the collection rule, so CRLF fences would make every field read back empty and the fixtures would exercise nothing.
+
+- `plugins/deep-review/README.md` **stays hand-curated.** #102 asked for an explicit call. The generated form is a bare section-heading list where the curated one has written feature bullets, so regenerating would flatten it. It stays curated because the generated output is *worse*, not because a sync would clobber it.
+
+  **Correction to an earlier claim in this repo:** a routine `sync-monorepo.sh` run would **not** have `rsync --delete`d over it. `sync-monorepo.sh:1053-1068` (plugin auto-build) and again `:1177-1193` (`--add-plugin`) copy any existing `$_PLUGIN_DST/README.md` aside, rsync, then restore it — unconditionally, for **every** plugin. The deep-review and skill-publishing READMEs were never at risk from a sync.
+
+  That blanket preserve has a side effect worth naming: **no plugin README is ever refreshed by a generator improvement.** Every published `plugins/*/README.md` that already exists is frozen until someone deletes it or edits it by hand. Fixing the parser therefore does not propagate to any of them on its own.
+
+### skill-publishing 4.3.0 - 2026-07-30
+
+Minor, not patch. Five of the six defects below share one shape — a write path that
+reported success while not doing its job — and closing them introduces new
+**refusals**: `prepare-plugin.sh` and `sync-monorepo.sh` invocations that previously
+exited `0` while quietly skipping work now exit `1`. Anything scripted against a `0`
+from those paths needs re-checking before upgrading.
+
+#### Fixed
+
+- `prepare-plugin.sh` silently skipped a declared `hooks.source` that does not resolve
+  to a directory: the existence check had no `else`, unlike its skills/commands/agents
+  siblings, which all error and exit. The plugin was then assembled with no `hooks/`,
+  and `sync-monorepo.sh`'s `rsync -a --delete` removed the previously published `hooks/`
+  from `plugins/<name>/`. A declared, non-empty source that does not exist is now a
+  manifest error. `hooks` absent from the manifest, and `hooks.source` explicitly
+  `null`/empty, both remain legal no-ops.
+
+  **This is a latent guardrail in this repo, not the repair of an active breakage.**
+  All 14 `plugin-manifest.json` files on the authoring machine were audited and none
+  declares `hooks.source`, so nothing here was losing hooks. It protects other repos
+  that use this tooling and do ship hooks. (#77)
+
+- `sync-monorepo.sh`'s plugin auto-build stage invoked `prepare-plugin.sh` without
+  `--github-user`, so the child re-derived the value itself via `gh api user` and fell
+  back to the literal string `USERNAME` when unauthenticated. One run could therefore
+  advertise two different accounts — the parent's resolved user in the monorepo README
+  and `USERNAME` in every auto-built plugin's own README. `GITHUB_USER` is resolved well
+  before that stage, so it is now forwarded. Side effect: one fewer `gh` call per sync,
+  making the run less network-dependent. (#79)
+
+- A legacy manifest declaring its skills as bare strings (`"skills": ["name"]`) rather
+  than objects killed every one of `prepare-plugin.sh`'s eight `.skills[…]` reads with
+  `jq: error … Cannot index string with "name"`, and `sync-monorepo.sh` read the same
+  shape at two sites under `2>/dev/null` — so its reversion guard saw no skills to check
+  and its drift check saw no first skill, and the plugin was never rebuilt at all. The
+  "never rebuilt at all" class is **not fully closed**: `custom-statusline` still is not,
+  for the unrelated reason filed as **#92** — the drift detectors resolve a plugin's skills
+  by `name` while `prepare-plugin.sh` resolves them by `source`, so a manifest whose two
+  disagree stays permanently drift-blind. Pre-existing, and out of scope here, but do not
+  read this entry as shutting the class. The
+  manifest is now shape-normalised once into a temp copy that every read is pointed at
+  (`normalize_manifest()` in `_lib.sh`), with `MANIFEST_DIR` deliberately left pointing
+  at the *original* manifest's directory so relative `source` values still resolve; the
+  two sync-side reads go through `manifest_skill_names()`. A bare string in `commands[]`
+  or `agents[]` is refused rather than guessed at — those sources are files, so `"."`
+  has no defensible meaning. And a failed plugin auto-build is now fatal: the run reports
+  every broken manifest in one pass and exits `1` before any catalogue-regenerating
+  stage, rather than warning and going on to publish a README, CHANGELOG and marketplace
+  entry describing a plugin it could not build.
+
+  **Consequence worth stating plainly:** `github-release-board-promote` — the only real
+  legacy-shape manifest — has no `plugins/` directory and no marketplace entry today. It
+  was never published *at all*, not merely left stale. With the tooling fixed, the next
+  real sync run will publish it for the first time and add a new marketplace entry. This
+  release does not do that; publishing it is a separate, deliberate act. (#73)
+
+- `validate-pre-sync.sh` hardcoded each skill's source as `$SKILLS_HOME/<name>` and
+  `continue`d when that path had no `SKILL.md` — counting the skill as neither examined
+  nor failed, i.e. as a pass. Every skill whose only source is its in-repo directory was
+  therefore never validated, while the summary still printed "Safe to sync". It now
+  resolves through the same `skill_source_dir()` the sync uses, hoisted from
+  `sync-monorepo.sh` into `_lib.sh` so there is one definition of "where does this
+  skill's source live" instead of two that can disagree. A skill with no source anywhere
+  is still skipped rather than failed, but the skip is now announced on stderr instead of
+  being silent. Its `for SKILL_NAME in $SKILLS` loop was converted line-wise at the same
+  time (see #81 below). (#78)
+
+- `--skills` resolving to zero names republished an empty catalogue, silently. A value
+  that is nothing but separators (`--skills ,`) produced no names at all, exited `0`, and
+  regenerated the monorepo README with an empty catalogue table plus a CHANGELOG entry
+  claiming "Synced 0 skills"; `--skills nosuchskill` printed one inline `ERROR: no
+  SKILL.md` line and then did the same destructive rewrite. `discover_skills()` now
+  refuses the first case by name, and a second guard sited immediately after the main
+  sync loop — ahead of the plugin auto-build, which `rsync --delete`s into `plugins/` —
+  refuses the second. A discovery-driven run against a monorepo that genuinely contains
+  no skills is deliberately exempt and still exits `0`. `--add` and `--skills` are now
+  rejected as mutually exclusive rather than one silently winning, since the guard cannot
+  otherwise tell which flag's value it is refusing. (#80)
+
+- Unquoted `for` iteration over newline-delimited lists IFS-split any skill or plugin
+  name containing a space into fragments, none of which resolved. `filter_skill_candidates`
+  correctly accepted `my skill` as one entry; the loop then produced two loud `ERROR:` lines
+  and a closing summary that still claimed the full count had synced, with `rc=0`. All five
+  sites in `sync-monorepo.sh` — the main sync loop, the plugin reversion-guard check, the
+  plugin catalogue loop, the install-all command builder and the CHANGELOG skill inventory —
+  are now `while IFS= read -r … done <<< "$LIST"`, here-strings rather than pipes so the
+  loops keep assigning in the current shell.
+
+  The closing summary, the CHANGELOG's "Synced N skills" entry, and the `--init` commit
+  message now report the number of skills that actually resolved *and* were copied —
+  resolved minus refused — rather than the number discovered or requested. The README's
+  `{{SKILL_COUNT}}` (both the templated and no-template-fallback paths) instead reports the
+  number resolved, refusals included: a skill refused by the reversion guard still keeps its
+  catalogue row (built from the in-repo metadata, before the refusal `continue`), so that
+  figure has to match the catalogue's actual row count rather than how many were freshly
+  copied. The CHANGELOG's skill-inventory list likewise still lists a refused skill — it
+  didn't leave the monorepo, it just wasn't recopied this run — now annotated `(REFUSED —
+  stale local source, not synced this run)` so it doesn't read as a silent contradiction
+  next to a "Synced 0 skills" entry. Only the pre-loop "Skills to sync (N):" line keeps the
+  requested count, because it is a plan rather than a claim about what happened. (#81)
+
+- **The line-wise conversion above introduced a truncation the old `for` loops could not
+  have.** `done <<< "$LIST"` binds the list to the loop *body's* stdin, and those bodies
+  shell out to `gh`, `rsync`, `cp`, `diff`, `find`, `jq`, `sed` and `grep`. Any child that
+  reads stdin consumes the rest of the skill list; the loop then exits early having synced
+  only what it read, and reports success. The count fix above makes that self-consistent —
+  `{{SKILL_COUNT}}` is `SKILLS_RESOLVED_COUNT`, which counts the loop's own iterations — so
+  the catalogue, the published count and the CHANGELOG inventory all agree with each other
+  while the rest of the catalogue silently disappears. Demonstrated with a `gh` shim that
+  drains stdin: a three-skill monorepo synced **one** skill, rewrote the README to a single
+  catalogue row, and exited `0`.
+
+  Latent in production only because the real `gh repo view --json url` happens not to read
+  stdin — a property of today's `gh`, not a guarantee. All five sites in `sync-monorepo.sh`
+  and the one in `validate-pre-sync.sh` now bind the list to **fd 3** (`read … <&3` /
+  `done 3<<<`), leaving the body's stdin inherited from the caller so no child can reach
+  the list at all. Only the main sync loop and the plugin-catalogue loop have
+  stdin-consuming children today; the other four are defence in depth, and the regression
+  harness's mutants report that honestly rather than claiming a fail-first at all six. The
+  `marketplace.json` builder is now on fd 3 too — its `< <(find …)` is the loop body's
+  stdin exactly as a here-string is, and it is the one such loop that actually spawns
+  children (`dirname`, three `jq`s per iteration), so exempting it would have applied the
+  rule everywhere except where it most obviously belongs.
+
+  **fd 3 is a convention, not a barrier, and the comment saying otherwise was wrong.** It
+  claimed "no child can reach the list at all"; descriptors are inherited across `exec`, so
+  a child that deliberately reads `<&3` consumes the list exactly as a stdin-reading child
+  did — measured: a 4-line list drove 2 iterations when the body read one line from fd 3.
+  What fd 3 actually buys is that stdin is read by filters *by nature* while nothing reads
+  fd 3 unless written to. Every one of those loops therefore also runs its body with
+  `</dev/null`, which is the half that IS unconditional: every child gets immediate EOF, so
+  the reachable case is closed rather than merely made unlikely. It also removes the one
+  downside of moving the list off stdin — the body would otherwise inherit the caller's
+  stdin, turning a truncation into a hang on an interactive terminal. `--help` states both
+  halves and which one is load-bearing. (#81)
+
+- The `marketplace.json` builder — the only one of the eight converted loops reached through
+  a process substitution, and the last converted — had no control, so a botched conversion
+  of it was invisible. Reverting `3< <(…)` to `< <(…)` writes an empty `"plugins": []` and
+  exits 0, silently emptying the marketplace catalogue while the sole existing assertion
+  (file exists) stays green, because the file is written and merely empty. Measured: that
+  mutant passed all 279 assertions. Now asserted on contents, not existence. (#81)
+
+- **Process note, recorded because it caught a fifth instance.** Four half-true safety
+  comments shipped on this branch, and twice the correction produced another. The shape is
+  mechanical: an absolute — "no", "never", "always", "still", "only", "cannot" — describing
+  a property that is actually conditional. Grepping this branch's own added comment lines
+  for those words and testing each against a counterexample found one more that had
+  survived review: "`_UNREADABLE_MANIFESTS` is the only one of the three a `--dry-run` can
+  produce". It is not — `_BARE_ENTRY_MANIFESTS` is too, since the main sync loop's guard is
+  not gated on `DRY_RUN` either, verified by running a `--dry-run` over an already-published
+  plugin with `"agents": ["x"]` and getting exit 1. Two further absolutes were tightened in
+  the same pass.
+
+  **Run the sweep over the WHOLE FILE, not the diff.** The first pass was scoped to that
+  round's added lines, which structurally cannot catch a false absolute introduced by the
+  commit immediately before the one running the sweep — and one had been: `--help`'s
+  `Stdin:` block claimed "Every list-driven loop reads its list from fd 3", while
+  `filter_skill_candidates()` reads stdin and *must*, being a pipeline filter. That one was
+  a live trap rather than a nit: a maintainer converting it for the consistency the sentence
+  promised gets "Skills to sync (0)", "Sync complete. 0 skills synced", an emptied catalogue
+  and exit 0 — measured. A whole-file pass over 124 absolute-bearing lines found no others,
+  so this is a one-time audit rather than a recurring tax.
+
+  The two checks are complementary and neither subsumes the other: cross-reading two
+  descriptions of the same behaviour catches the class that produced the first four (a
+  comment disagreeing with another comment), while whole-file absolute-sweeping catches this
+  one, where the disagreement is between the documentation and the code. (#81)
+
+- **The line-wise conversion above had a sixth site with no test coverage at all.** It is
+  described everywhere as five sites in `sync-monorepo.sh`; the sixth is
+  `validate-pre-sync.sh`'s own skill loop, converted by the same issue but in a different
+  task, after which the space-name fixtures were built entirely sync-side. Reverting *that
+  loop alone* to `for SKILL_NAME in $SKILLS` left the regression harness fully green. No
+  behaviour changed here — the loop was already correct — but a correct loop with no test
+  is one refactor away from being an incorrect one, and this is the first N-1-of-N on this
+  work that crossed a file boundary rather than sitting inside one. Now covered by a third
+  presync fixture with space-named skills on both sides of the report. (#81)
+
+- The plugin auto-build stage's `manifest_skill_names … 2>/dev/null || true` was documented
+  as keeping "the pre-existing tolerance of an unreadable manifest". Only half true: the
+  base commit had *two* reads, and only one was tolerant. The reversion guard's was a
+  command substitution in a `for` word-list, which does not trip `set -e`; the drift
+  check's was an **assignment**, which did. Consolidating both onto one tolerant read
+  silently downgraded the second from fatal to skipped, on the destructive path — with the
+  name list empty the reversion guard cannot fire, so a plugin is rebuilt from the stale
+  local source the main loop just refused and `rsync -a --delete`'d over the published
+  copy under an `AUTO-SYNCED` line; and an already-published plugin is never rebuilt at
+  all. Reachable via `"skills": [123]`, which makes `jq` exit 5 while the `.name` read
+  earlier in the same stage succeeds on the same file, so nothing catches it first. A
+  failed read is now recorded as a build failure and joins the collected-failure exit,
+  relaying `jq`'s own message. (#73)
+
+- The collected-failure record was written *after* a command that can abort. `_BUILD_LOG`
+  is named from the manifest's `.name`, which is free text; a `/` in it makes the log
+  redirect fail, so the `sed` that reports the failure fails too, and `set -e` killed the
+  run before `_FAILED_BUILDS=` was ever assigned — losing the point of collecting failures,
+  since the summary naming every broken manifest in one pass never printed. The assignment
+  now precedes the `sed`, and the `sed` carries `|| true`: reporting a failure must not be
+  able to destroy the record of it. (#73)
+
+- The bare-entry rejection added to `prepare-plugin.sh` above landed there only, and
+  `sync-monorepo.sh`'s main sync loop runs **first** — so a manifest carrying
+  `"agents": ["x"]` killed the sync at `jq -r ".agents[$ai].name"` with a raw
+  `jq: error … Cannot index string with "name"` and rc=5, and the friendly explanation
+  never printed because the run never reached the auto-build stage. The same
+  `manifest_bare_entries` check, with the same message text, now runs in the main loop too,
+  scoped to `agents[]` — the only array that loop indexes. (#73)
+
+- **That bare-entry guard was itself non-fatal, and its own comment's safety net did not
+  hold.** It set `AGENT_COUNT=0` and left the run to the auto-build stage, on the stated
+  grounds that "the very next stage runs `prepare-plugin.sh` against this same manifest,
+  which exits 1 on it" — false whenever no build runs, since `prepare-plugin.sh` is invoked
+  only when the drift check sets `_NEEDS_BUILD`. Adding `"agents": ["x"]` to an
+  already-published plugin's manifest without touching its `SKILL.md` — the natural way to
+  add an agent, in exactly the legacy bare-string form this batch exists to tolerate —
+  therefore printed one `ERROR`, copied no agents, regenerated README/CHANGELOG/marketplace
+  and exited **0**. Three further paths `continue` before the build stage and bypassed it
+  identically: the standalone-marketplace skip, the `--add-plugin` skip and the
+  shadowed-manifest skip. A loudness **regression**: before the guard existed, the same
+  manifest died at `jq` with rc=5 — ugly, but fatal, and nothing downstream was written.
+  Now collected and exited on through the shared refusal gate, which also moved out of the
+  `[[ -x "$PREPARE_SCRIPT" ]]` block — two of its three lists are filled inside that block
+  but the third is not, so nesting it there let a missing `prepare-plugin.sh` disarm the
+  bare-entry refusal. (#73)
+
+- The refusal summary claimed more than had happened on two of the three paths it now
+  serves: it said `plugin build failed` for a manifest whose `skills[]` merely could not be
+  **read** (no build was attempted), and "Skills synced before this point are already
+  written" under `--dry-run`, which writes nothing. Each reason now has its own labelled
+  row, and the `--dry-run` path says plainly that nothing was written. In a change set
+  whose theme is that a message must not claim more than happened, this one did. (#73)
+
+- `manifest_skill_names`' stderr is captured separately instead of via `2>&1`. On the
+  **success** path that variable *is* the skill-name list, feeding the reversion guard and
+  the drift check's first skill; a diagnostic accompanying a zero exit would become a
+  phantom skill name, which resolves nowhere, so the drift check falls through and the
+  plugin is silently never rebuilt — #73 re-entering through its own fix. No such warning
+  is reachable for this filter today, so this is hardening rather than a repair, and it
+  carries no regression assertion for that reason: asserting a condition the code cannot
+  reach passes vacuously and reads as coverage. (#73)
+
+- `--add <unresolvable>` against a **populated** monorepo printed one inline
+  `ERROR: no SKILL.md` and exited `0` having regenerated the README, CHANGELOG and
+  marketplace — the same shape closed above for `--skills`, on the flag that is the
+  documented way to introduce a new skill. That guard cannot catch it: it fires only when
+  *every* name fails to resolve, and a populated monorepo always contributes resolvable
+  ones through the existing-directory scan. `discover_skills()` now rejects any
+  `--add`-contributed name with no `SKILL.md`, before anything is written, splitting on
+  commas so a legitimate `--add a,b` is unaffected. (#80, closes #85)
+
+- The `--skills` branch used `sort` where the `--add` branch used `sort -u`, under a
+  comment claiming it mirrored `--add`. `--skills alpha,alpha` therefore synced one skill
+  twice: two `--- alpha ---` stanzas, two identical catalogue rows, two identical `cp -r`
+  lines published as install instructions, and a doubled count in the summary, the README
+  and the CHANGELOG — every figure agreeing with every other, so nothing flagged it.
+  Now `sort -u`. (#80)
+
+#### Changed
+
+- Exit-status contract, now documented in `--help`:
+  `0` success; `1` usage/setup error — including a `--skills` value that resolves to no
+  valid skill, or an `--add` value naming a skill with no `SKILL.md` — or a failed plugin
+  auto-build, or a manifest whose `skills[]` cannot be read; `3` completed, but skills were
+  refused by the reversion guard. `1` wins over `3`: a run that both refused a skill and
+  failed a build stops at the build failure, so the end-of-run refusal summary never
+  prints. `--dry-run` cannot predict a `1` from a failed *build*, because plugins are not
+  assembled at all under `--dry-run`; it does predict a `3`, a bad `--skills`/`--add`
+  value, and an unreadable manifest (that read happens whether or not a build follows).
+
+- `--skills` and `--add` are refused on different thresholds, deliberately. `--skills` is
+  refused only when *every* named skill fails to resolve — a partial resolution is a
+  legitimate run. `--add` is refused when *any* name it contributes fails, because `--add`
+  names are typed to introduce a skill, so an unresolvable one is a typo rather than a
+  subset. (#80)
+
+- **`--skills` rewrites the published catalogue to exactly the named subset.** Skills left
+  out stay on disk but lose their catalogue row, their place in the skill count and their
+  CHANGELOG inventory entry until the next full sync. This is long-standing behaviour, now
+  stated plainly in `SKILL.md` — an earlier draft of that documentation promised `--skills`
+  would not "publish an empty/partial catalogue", which was true only of the empty half.
+  Use `--add` to introduce one skill without disturbing the rest. (#80)
+
+- `SKILL.md` never mentioned that `--add` and `--skills` are now **mutually exclusive**,
+  though `--help` did. That combination is rejected at parse time with exit 1 rather than
+  one flag silently winning — a user-visible contract change introduced by this batch, and
+  the same class of doc gap as the exit-code and manifest-shape ones closed earlier here.
+  Documented in the sentence users actually skim. (#80)
+
+- **#77's fatal `else` covered one of two branches.** It sits inside
+  `[[ -n "$HOOKS_SRC" ]] && [[ != null ]]`, so it only caught a source that was PRESENT and
+  unresolvable. A `hooks` object carrying no `source` KEY — the plausible typo
+  `{"src": "./hooks"}` — makes `.hooks.source` yield null, fails that test, and fell off
+  the end with no `else`: exit 0, no hooks copied, `--- Hooks ---` printed anyway so the
+  log read as if they had been, and `rsync -a --delete` then removed the published
+  `hooks/`. Identical consequence to #77, through the neighbouring branch.
+  `.hooks | has("source")` separates the two intents `jq` collapses into one null:
+  `{"source": null}` and `{"source": ""}` remain legal no-ops — a deliberate design
+  decision this check does NOT reverse — while a missing key is refused. The type test also
+  covers a non-object `hooks`, where `has()` would be a jq type error. The header now
+  prints only for a branch that does something. Zero live manifests declare `hooks`, so the
+  blast radius is nil. (#77)
+
+- **#79 forwarded `--github-user` and not `--author`, on the same command line.**
+  `--author "Jane Doe"` produced `Copyright (c) 2026 Jane Doe` in the monorepo LICENSE and
+  in `marketplace.json`'s `owner.name`, and `Copyright (c) 2026 Abhishek` in every
+  auto-built plugin's own LICENSE — #79's "one run advertises two identities" verbatim, in
+  a distributed MIT licence sitting beside a marketplace entry that contradicts it. The
+  whole invocation was audited rather than assuming these two were all: `prepare-plugin.sh`
+  accepts exactly four flags, three are now forwarded, and `--dry-run` deliberately is not
+  because the child is never invoked under `--dry-run`. A manifest-level `.author` still
+  wins inside the child. (#79)
+
+- **#78 fixed skill RESOLUTION but not DISCOVERY.** `validate-pre-sync.sh` still enumerated
+  the monorepo only, so a skill living solely in `$SKILLS_HOME` was structurally invisible
+  — which is every `sync-monorepo.sh --add <new-skill>`, the highest-risk case for the
+  mismatch this gate exists to catch. Measured: a `brandnew` skill at v2.0.0 whose newest
+  CHANGELOG entry was 1.0.0 gave "Total: 1 | Pass: 1 | Fail: 0 … Safe to sync." at rc=0,
+  and the next command published that exact mismatch. It now accepts `--add`, mirroring the
+  sync flag whose shape it could not see. Named skills are unioned in rather than
+  enumerating all of `$SKILLS_HOME`: a gate that fails on unrelated local work is a gate
+  people stop running, and no sync shape corresponds to "everything in the home". (#78)
+
+- **`--add` round-tripped the machine-discovered list through a comma-joined string.**
+  Lossy for a directory name containing a comma — legal on both platforms, and exactly the
+  "names are unconstrained free text" premise #81 rests on. Measured on a monorepo holding
+  `alpha,beta/`: the name split into two, neither resolved, and the skill was deleted from
+  the published catalogue while staying on disk, at rc=0, every downstream figure agreeing
+  with the loss. The new per-name `--add` guard cannot catch it — it checks only
+  user-typed names and trusts the discovered list, correctly, since that list was intact
+  until the join mangled it. Only the user-typed value is comma-split now. (#81)
+
+- **The `--add ,` guard tested emptiness on the UNION, so it fired only when the monorepo
+  was ALSO empty.** Against a populated monorepo, `$existing` kept the union non-empty,
+  `--add ,` contributed nothing, and the run completed at **rc=0 with the next-steps
+  banner** — the operator asked to add a skill, none was added, success reported. Measured:
+  rc=0 populated, rc=1 empty, so the guard fired only where nothing was at stake. Both
+  `sync-monorepo.sh` and `validate-pre-sync.sh` now test the **add-contributed** names.
+
+  The fixture was the root cause, not the guard: `MONOREPO_ADDCOMMA_FIXTURE` is created
+  bare, so the existing `--add ,` assertion looked like coverage while exercising only the
+  half that already worked. That is why the bug survived into the commit that fixed its
+  twin on the presync side — and why the fix is a second, POPULATED fixture rather than a
+  stricter assertion against the bare one. Two comments that claimed
+  `sync-monorepo.sh` "already refuses by name for this exact argument" are corrected; it
+  did not. (#81)
+
+- **`--add ""` was the same silent no-op, through a shorter argument.** Both `--add ,`
+  guards sit inside `if [[ -n "$ADD_SKILL" ]]`, so an EMPTY value never reached them — the
+  branch was skipped wholesale and the run came out byte-identical to one with no `--add`
+  at all: rc=0, "Sync complete. 1 skills synced". The operator passed `--add`, nothing was
+  added, success reported. Both scripts now gate on whether the flag was **passed**
+  (`ADD_GIVEN`) rather than on whether its value is non-empty, so the existing guard prints
+  the message it already had. The mutual-exclusion check moved to the same basis, since
+  `--add "" --skills x` passes both flags and that is the accurate diagnosis. Pre-existing;
+  landed rather than filed because shipping it fixed-for-one-degenerate-value-only would
+  re-instantiate the finding the previous entry describes. (#81)
+
+- `validate-pre-sync.sh --add` matches `sync-monorepo.sh --add`'s skill SET, not its
+  strictness: an unresolvable name is announced as a SKIP here and the run can still report
+  "Safe to sync", whereas the sync refuses outright. Deliberate — the sync is the gate that
+  refuses, this one reports — but the `--help` text claimed a plain "mirrors", which
+  overstated it. Now says which half it mirrors. (#78)
+
+- `validate-pre-sync.sh` printed its report with `printf "$RESULTS"`, treating accumulated
+  DATA as a format string: a directory named `pct%s-skill` was reported as `pct-skill`, so
+  the operator is told a name that is not on disk. Pre-existing, but #78 tripled what flows
+  through it. `printf '%b'` keeps the `\n` expansion and stops interpreting data as
+  format. (#78)
+
+- `_lib.sh`'s `skill_source_dir()` claimed "every current caller sets it before sourcing
+  this file" of `SKILLS_HOME`, and **contradicted the paragraph five lines below it**, which
+  correctly names three scripts that source the file without setting `MONOREPO_DIR`. Those
+  same three do not set `SKILLS_HOME` either; what is true is narrower — every caller of the
+  FUNCTION sets it, and those three never call it (verified, 0 references each). Sourcing is
+  not calling. Measured, because the FIRST correction of this comment was also wrong — it
+  said three scripts, having inherited the list from the `MONOREPO_DIR` paragraph below
+  without re-deriving it, when `sync-individual-repos.sh` does set `SKILLS_HOME`. Only two
+  of the six sourcers do not, and neither calls the function. The comment now carries the
+  measured table, and says explicitly that this is the same "correct only because the call
+  site that would break it does not exist yet" shape already flagged two paragraphs down,
+  so the two read consistently instead of one carrying the caveat and the other implying a
+  guarantee. The bare `set -u` abort also reported `_lib.sh: line NNN: SKILLS_HOME: unbound
+  variable`, blaming this file for a contract the caller broke; an explicit guard now names
+  the calling script and returns 2, matching the usage-error code the entry points already
+  use. The ratified bare-`$SKILLS_HOME` decision is untouched — an unset value still aborts
+  loudly rather than silently resolving. (#78)
+
+- **`SKILL.md`'s Quick Reference now states the `--skills`/`--add` asymmetry rather than
+  asserting parity.** The fix for the "partial catalogue" overclaim above introduced a
+  different false claim in its place — "both refuse an unresolvable name rather than
+  publish" — when in fact `--skills good,typo` exits 0 and publishes a one-row catalogue
+  while `--add good,typo` exits 1 and writes nothing. Someone trusting the shorter claim
+  could run `--skills prod-skill,typo-skll` expecting a safe refusal and publish a silently
+  shrunk catalogue instead. The correct asymmetry was already right in `--help` and in the
+  entry above; it simply had not propagated to the line users skim. Third pass on the same
+  sentence, so the whole block was re-read for the same shape — assertions of symmetry,
+  universality or guarantee over a conditional implementation — rather than patching the
+  one clause. The de-duplication half was verified true for both flags and kept. (#80)
+
+### skill-publishing 4.2.1 - 2026-07-26
+
+#### Fixed
+
+- `sync-monorepo.sh` treated every top-level directory in the monorepo as a skill, so
+  directories that exist for other reasons — `docs/`, `build/` — entered the sync loop and
+  produced a spurious `ERROR: no SKILL.md ...` line on every run. Both directory-scan sites
+  in `discover_skills()` now filter through `filter_skill_candidates()` — the plain scan,
+  and the `--add` branch's `existing=` scan, which runs only when `--add` is passed — each
+  applying the same test `skill_source_dir()` does and announcing what it dropped on stderr
+  instead of discarding it silently. The filter emits through `printf` rather than `echo`,
+  so a directory named `-n`/`-e`/`-E` cannot be eaten by `echo`'s option parsing and vanish
+  without even a SKIP line. (#74)
+- The plugin auto-build stage assembled each plugin into `./build/<name>` in the *caller's*
+  working directory, so a sync run from the monorepo root left an untracked `build/` tree
+  behind — which the script's own "Next steps: `git add -A`" banner would then commit.
+  Builds now go into a `mktemp -d` stage removed by an EXIT trap, passed through to
+  `prepare-plugin.sh` via `--output-dir`. (#74)
+- The `.gitignore` template written into a freshly `--init`-ed monorepo did not list
+  `build/`, so every newly generated monorepo shipped with the same defect. The pattern is
+  written root-anchored as `/build/`: unanchored, it matches at every depth, so a plugin
+  that legitimately ships a `build/` subdirectory would be silently excluded from the very
+  `git add -A` the ignore rule exists to protect. (#74)
+- The CHANGELOG-parsing step read its first line via `echo "$ALL_ENTRIES" | head -1`.
+  `head` exits after one line, so `echo` races it and takes EPIPE once the entry text is
+  well past the 64 KiB pipe buffer. With the auto-build EXIT trap now registered, bash no
+  longer leaves SIGPIPE at its default disposition in the command-substitution subshell —
+  the trap does not itself run there — so `echo`'s failed write is reported rather than
+  silently killing it: `echo: write error: Broken pipe` on stderr. It is a write/reader
+  race, not a hard threshold: measured 0/50 reproductions below 64 KiB, ~53% at 84 KiB and
+  10/10 at 154 KiB, so it reproduces reliably well past the buffer. Replaced with a
+  parameter expansion; generated output is byte-identical. (#74)
+- `Skills to sync (N)` counted an empty list as 1 and printed a bare `  - ` bullet,
+  because `echo ""` emits a newline for `wc -l` to count. Newly reachable now that
+  discovery filters non-skill directories: a monorepo holding only `docs/` and `build/`
+  yields an empty list. (#74)
+- The two remaining `echo` sites in `discover_skills()` ate a skill whose name begins
+  `-n`/`-e`/`-E`, the same class the filter fix above closed. `--skills -n` printed
+  `Skills to sync (0):`, synced nothing and still exited 0 — a silent no-op; `--add -n`
+  into a monorepo with no skills yet (the only case where the comma-join leaves the bare
+  name as the whole argument) produced no output at all, so the trailing `grep -v '^$'`
+  exited 1 and aborted the run under `set -e` with nothing on stderr to explain it. Both
+  now emit through `printf`. (#74)
+- The `--add -n` fix above cured the cause, not the shape: an `--add` argument that
+  reduces to nothing after comma-splitting (e.g. the literal argument `,`) still left the
+  trailing `grep -v '^$'` with nothing to match, so it still exited 1 and still aborted
+  the run under `set -e` — rc=1, empty stderr, no explanation. `discover_skills()` now
+  checks for that empty result itself and exits with `Error: --add produced no skill
+  names from: '<value>'` naming the offending argument, instead of letting `grep`'s exit
+  status propagate unexplained. (#74)
+- A failed plugin auto-build was undiagnosable. `prepare-plugin.sh` ran under
+  `>/dev/null 2>&1`, and on failure the only output was
+  `Warning: prepare-plugin.sh failed for <manifest>`. That was survivable while the build
+  stage was `./build/<name>/` in the caller's cwd — the partial tree stayed behind to
+  inspect and re-run by hand — but the temp-stage fix above deletes the stage on every
+  path including this one, leaving the discarded child output as the only evidence a
+  failure ever produced. The child's stdout and stderr are now captured to a log and
+  echoed to stderr, prefixed, when the build fails. The log lives in the stage root
+  rather than inside the build directory, which `prepare-plugin.sh` `rm -rf`s on entry —
+  a log written there would be unlinked out from under the open descriptor and read back
+  empty. The run still exits 0: that is a separate defect, tracked as #73, and is
+  deliberately unchanged here. (#74)
+- The `.gitignore` template fix above reaches a freshly `--init`-ed monorepo only.
+  `write_file` does not overwrite, so every already-published monorepo takes the
+  `SKIP    .gitignore (already exists)` branch instead — a line that reads exactly the
+  same whether the existing file carries the rule or not, so the fix reached nobody who
+  already had a monorepo and said nothing about it. A non-fatal `NOTE` now names the
+  missing `/build/` pattern and why it matters (the `git add -A` in the script's own
+  Next-steps banner). Advisory only: the file belongs to the monorepo, and refusing to
+  sync over a hand-edited `.gitignore` would be a worse failure than the untracked
+  `build/` tree it warns about. (#74)
+- The manifest-shadowing lookup read `$_SEEN_MANIFESTS` through an `awk` that `exit`s on
+  first match — the same early-exiting-reader shape as the `| head -1` removed above, and
+  likewise evaluated with the auto-build EXIT trap already registered, the condition that
+  turns a silent SIGPIPE into a reported `write error: Broken pipe`. The payload is a few
+  KiB at this repo's scale, far below the 64 KiB pipe buffer, so it could not fire; the
+  reader now drains its input (`$1==n && !f {print $2; f=1}`, first-match-wins preserved)
+  so it cannot start to. (#74)
+
+### skill-publishing 4.2.0 - 2026-07-25
+
+#### Fixed
+
+- `prepare-plugin.sh` resolved a relative manifest `source` against the caller's working
+  directory, so a manifest whose source lives beside it — the in-repo arrangement #59
+  introduced — only assembled when invoked from exactly the right cwd. Relative sources now
+  resolve against the manifest file's own directory. `~`-prefixed and absolute sources are
+  unchanged. (#61)
+- `sync-monorepo.sh` looked for every skill's source under `$SKILLS_HOME` only. Once a
+  skill's local copy is removed in favour of an in-repo source directory, drift went
+  undetected and the plugin quietly served stale content while the source looked updated.
+  Discovery, auto-build and drift-resync now fall back to `$MONOREPO_DIR/<name>`, and a
+  same-directory source is skipped rather than copied onto itself. (#61)
+- `copy_file` now returns early when source and destination are the same file (device +
+  inode comparison, so symlink/hardlink aliases count too). Previously `cp a a` failed and,
+  under `set -e`, aborted the entire sync mid-run — reachable for an in-repo skill whose
+  manifest declares agents, since the agents-copy block runs for in-place sources. (#61)
+- `resolve_source_path` no longer resolves an empty `"source": ""` to the manifest's own
+  directory; it returns empty so callers report "source not found" as they did before the
+  relative-source change. (#61)
+
+#### Added
+
+- Manifest-schema documentation for the in-repo `source` form and its resolution rule. (#61)
+- Reversion guard in `sync-monorepo.sh`: source resolution is local-first, so a stale local
+  copy left behind after a skill moved into the monorepo silently overwrote newer in-repo
+  content with older content — and then rebuilt the plugin from the reverted source, exiting
+  0. A skill whose in-repo `SKILL.md` version is strictly newer than the local one (semver
+  comparison via `sort -V`) is now REFUSED with both paths and both versions named, skipped
+  in both the main sync loop and the plugin auto-build, and reported in a closing summary
+  with exit status 3. Equal versions with differing content still sync forward (with a
+  note); an unknown or unparseable version never refuses. `--force-local` overrides. (#61)
+- Reversion guard now covers the plugin auto-resync stage as well, closing the path that
+  mattered most: the resync resolved its own sources through the same local-first lookup and
+  copied `SKILL.md`, `scripts/`, `references/`, the skill `CHANGELOG.md` and the plugin-root
+  `CHANGELOG.md` of a refused skill straight into `plugins/<name>/` — the copy installers
+  actually receive — so a run announced its refusal and then reverted the shipped plugin
+  anyway, leaving `marketplace.json` advertising a version the artifact no longer was. Its
+  drift detection is guarded too, so a refused skill alone no longer opens a resync at all,
+  and the root-CHANGELOG skill inventory is now read from the in-repo copy rather than
+  recording a version the monorepo never received. Refused skills are skipped individually,
+  so a plugin whose other skills legitimately drifted still resyncs those. (#61)
+
+#### Changed
+
+- `sync-monorepo.sh` skips the `git-flow` manifest during plugin discovery: that plugin is
+  distributed via its own standalone marketplace (`abhattacherjee/git-flow`), not this
+  monorepo. Previously shipped but undocumented.
+
+### skill-publishing 4.1.0 - 2026-03-17
+
+#### Added
+
+- **Team mode note** — when Agent Teams are enabled and publishing multiple skills, each skill's validation + sync can be assigned to a separate teammate for parallel processing
+
+### skill-publishing 4.0.0 - 2026-03-13
+
+#### Changed (BREAKING)
+
+- **Plugin-first publishing** — plugins are now the default distribution format. Every skill with a `plugin-manifest.json` is auto-assembled and synced as a plugin during `sync-monorepo.sh`. Bare skills (without manifests) remain supported as a secondary path.
+- **`sync-monorepo.sh` auto-discovers plugins** — scans `$SKILLS_HOME/*/plugin-manifest.json` during regular sync, runs `prepare-plugin.sh` automatically, and syncs built plugins to `plugins/`. The `--add-plugin` flag is now a manual override, no longer required for known plugins.
+- **SKILL.md rewritten for plugin-first** — frontmatter, architecture, interactive publishing flow, and key decisions table all updated to reflect plugins as primary, bare skills as secondary, individual repos as optional.
+- **Target selection defaults to Plugin** when a `plugin-manifest.json` exists (previously defaulted to Bare Skill)
+- **Quick Reference reordered** — monorepo sync (auto-discovers plugins) listed first, manual plugin commands second, individual repo last
+
+#### Added
+
+- **Auto-build on drift** — `sync-monorepo.sh` detects when plugin source skills have changed and rebuilds the plugin automatically, with README preservation
+- **Manifest creation prompt** — when publishing a skill without a `plugin-manifest.json`, the flow now suggests creating a minimal manifest with a JSON template
+
+### skill-publishing 3.6.0 - 2026-03-06
+
+#### Added
+
+- **`scripts/validate-pre-sync.sh`** — mandatory pre-sync gate that verifies each skill's CHANGELOG.md has an entry matching its SKILL.md version. Exits non-zero on mismatch, blocking sync until fixed. Supports `--fix` (remediation guidance) and `--json` (machine-readable) modes.
+- **Step 4: Pre-Sync Validation (MANDATORY GATE)** — new step in the Interactive Publishing Flow. Runs `validate-pre-sync.sh` before `sync-monorepo.sh` and blocks if any skill's CHANGELOG is behind its version.
+- **Step 6: Monorepo Release (MANDATORY)** — after every sync that changes skill content, ALWAYS create a monorepo release. No longer optional/ask-the-user. Includes bump level decision table.
+
+#### Changed
+
+- **Interactive Publishing Flow** — renumbered from 5 steps to 7 steps: added Step 4 (pre-sync validation) and Step 6 (mandatory release). Previous "Post-Publish" is now Step 7.
+- **Quick Reference** — added `validate-pre-sync.sh` commands
+
+#### Fixed
+
+- **Changelog drift on publish** — previously, syncing a skill with a bumped SKILL.md version but stale CHANGELOG.md went undetected. The new validation gate makes this impossible.
+- **Optional monorepo releases** — previously, the post-publish step "asked whether to create a release", making it easy to skip. Releases are now mandatory after content changes.
+
+### skill-publishing 3.5.1 - 2026-03-05
+
+#### Fixed
+
+- **Plugin CHANGELOG sync** — `sync-monorepo.sh` now syncs CHANGELOGs from source skills to plugin copies during auto-resync. Previously, plugin CHANGELOGs were preserved (stale) while bare-skill CHANGELOGs were updated, causing version history drift.
+- **CHANGELOG drift detection** — Added CHANGELOG diff check to the plugin drift detection phase, so CHANGELOG-only changes trigger a resync
+- **`--add-plugin` path** — No longer preserves stale plugin CHANGELOGs; only README is preserved (CHANGELOGs come from source skill)
+
+### skill-publishing 3.5.0 - 2026-02-28
+
+#### Added
+
+- **Auto GitHub releases** — `release-monorepo.sh` now creates a GitHub release (via `gh release create`) after pushing the tag, with categorized commit summary and skill/plugin inventory. Falls back gracefully if `gh` CLI fails.
+- **Auto plugin resync** — `sync-monorepo.sh` now detects when plugin copies of SKILL.md, scripts/, references/, or agents/ have drifted from their source skills and patches them automatically during sync. Eliminates the silent plugin-content-drift problem.
+
+#### Changed
+
+- **SKILL.md** — version bumped to 3.5.0
+- **plugin-manifest.json** — version bumped to 3.5.0
+
+### skill-publishing 3.4.0 - 2026-02-28
+
+#### Added
+
+- **Agent auto-discovery in bare skill sync** — `sync-monorepo.sh` now detects agent files referenced in SKILL.md (via `agents/*.md` path patterns) and copies them from `~/.claude/agents/` into the monorepo alongside their skills
+- **Plugin CHANGELOG preservation** — `sync-monorepo.sh` preserves both README.md and CHANGELOG.md in plugin destinations during `--add-plugin` rsync, preventing overwrite of hand-written content
+
+#### Fixed
+
+- **Bare-bones CHANGELOG enrichment** — when a plugin's CHANGELOG only has a template entry, it's replaced with the source skill's CHANGELOG content during sync
+
+### skill-publishing 3.3.0 - 2026-02-28
+
+#### Added
+
+- **Rich plugin README generation** — `prepare-plugin.sh` now extracts What It Does, Key Features, Usage, See Also, Prerequisites, and agent/command descriptions from SKILL.md frontmatter and headings. Plugin READMEs are now informative without hand-editing.
+
+#### Changed
+
+- **Contents section enhanced** — skills, commands, and agents now include short descriptions extracted from their YAML frontmatter
+- **`_lib.sh`** — added `extract_section()` and `extract_headings()` helpers for markdown section extraction
+
+### skill-publishing 3.2.3 - 2026-02-28
+
+#### Added
+
+- **Agent cross-reference validation** — `validate-plugin.sh` now scans SKILL.md files for agent path references (e.g., `agents/figma-ux-expert.md`) and warns if the referenced agent is not included in the plugin's `agents/` directory. Prevents silent omission of associated agents during plugin assembly.
+
+### skill-publishing 3.2.2 - 2026-02-27
+
+#### Fixed
+
+- **Plugin CHANGELOG preservation** — `sync-monorepo.sh --add-plugin` now preserves both README.md and CHANGELOG.md (previously only README was preserved)
+- **Bash 3.2 compatibility** — replaced `declare -A` associative array with temp files for macOS default bash
+
+### skill-publishing 3.2.1 - 2026-02-27
+
+#### Fixed
+
+- **Plugin README preservation** — `sync-monorepo.sh --add-plugin` now preserves hand-written README.md files instead of overwriting them with the auto-generated template
+
+### skill-publishing 3.2.0 - 2026-02-27
+
+#### Added
+
+- **Auto-sync on publish** — when Monorepo or Plugin targets are selected in the Interactive Publishing Flow, the skill now automatically runs `sync-monorepo.sh`, commits, and pushes instead of leaving it as a manual step
+- **Build artifact cleanup** — Post-Publish step now cleans up `build/` directories after publishing
+- **Push-blocked fallback** — documents workaround when `prevent-direct-push` hook blocks monorepo pushes
+
+#### Changed
+
+- **Interactive Publishing Flow** — Step 4 renamed from "Post-Publish" to "Auto-Sync to Monorepo", Step 5 is now "Post-Publish"
+- **SKILL.md** — version bumped to 3.2.0
+
+### skill-publishing 3.1.0 - 2026-02-27
+
+#### Added
+
+- **Interactive Publishing Flow** — when invoked, detects current publishing state and presents a multiSelect prompt for target selection (individual repo, monorepo, plugin)
+  - Dynamic labels show current state (e.g., "Monorepo (synced)", "Individual repo (published)")
+  - Deselecting a published target triggers removal with confirmation
+  - Post-publish step offers versioned release if monorepo was modified
+
+#### Changed
+
+- **SKILL.md** — added "Interactive Publishing Flow" section before individual workflows
+  - Version bumped to 3.1.0
+
+### skill-publishing 3.0.0 - 2026-02-27
+
+#### Added
+
+- **Plugin distribution support** — assemble, validate, and publish Claude Code plugins
+- **scripts/prepare-plugin.sh** — assembles plugin from a JSON build manifest (`plugin-manifest.json`)
+- **scripts/validate-plugin.sh** — validates assembled plugin structure (plugin.json, commands, skills)
+- **scripts/install-plugin.sh** — consumer-facing installer/uninstaller for plugins
+- **scripts/_lib.sh** — shared library extracted from all scripts (extract_field, extract_version, write_file, etc.)
+- **Workflow E** in SKILL.md — full plugin publishing workflow (manifest → assemble → validate → sync → install)
+- **Monorepo marketplace support** — auto-generates `.claude-plugin/marketplace.json` during sync
+- **`/plugin` install instructions** — README shows `/plugin marketplace add` as recommended install method
+- **Plugin section in monorepo README** — auto-generated table with plugin inventory
+- **Plugin inventory in releases** — release script includes plugin count and inventory in CHANGELOG, tag, and summary
+- **CI validation for plugins** — `validate-plugins` job in GitHub Actions workflow
+- **PR template plugin checkboxes** — plugin.json validation, bundled skills, command frontmatter checks
+
+#### Changed
+
+- **scripts/sync-monorepo.sh** — added `--add-plugin` flag, plugin discovery, README plugin section, marketplace.json generation
+- **scripts/release-monorepo.sh** — includes plugin inventory in CHANGELOG entry, commit message, tag annotation
+- **All existing scripts** — refactored to source `_lib.sh` shared library, removed duplicated helpers
+- **SKILL.md** — version bumped to 3.0.0, description updated for plugin triggers
+
+### skill-publishing 2.1.0 - 2026-02-24
+
+#### Added
+
+- **scripts/release-monorepo.sh** — creates versioned releases of the monorepo with semver tags
+  - `patch`, `minor`, `major` bump levels
+  - `--dry-run` to preview without changes
+  - `--github-user` override (auto-detects via `gh api`)
+  - Reads current version from latest `v*` tag, calculates next version
+  - Updates CHANGELOG top entry from "Monorepo sync" to versioned section
+  - Creates annotated tag with skill inventory
+  - Pushes branch + tag to origin
+
+#### Changed
+
+- **SKILL.md** — added Workflow D (monorepo release) with bump level table
+  - Updated Quick Reference with release commands
+  - Updated description to mention versioned releases
+  - Version bumped to 2.1.0
+
+#### Fixed
+
+- **scripts/sync-monorepo.sh** — CHANGELOG generation now produces audit-style entries instead of duplicating per-skill changelogs
+- **scripts/release-monorepo.sh** — version detection uses `git tag -l 'v[0-9]*'` instead of `git describe --tags` to avoid non-semver tags
+
+### skill-publishing 2.0.0 - 2026-02-24
+
+Monorepo support: publish skills to both individual repos and a shared `claude-code-skills` monorepo.
+
+#### Added
+
+- **scripts/sync-monorepo.sh** — syncs skills from local source into a monorepo directory
+  - `--init` flag to create and push the monorepo for the first time
+  - `--add` flag to add new skills to an existing monorepo
+  - `--dry-run`, `--skills`, `--github-user` flags
+  - Auto-generates root README with catalog table from SKILL.md frontmatter
+  - Auto-generates per-skill README with monorepo + individual install options
+  - Detects individual repos via `gh repo view` and links them in the catalog
+- **scripts/sync-individual-repos.sh** — syncs skills into their individual GitHub repos
+  - `--all` flag to sync all skills with `.git` directories
+  - `--push` flag to auto-commit and push changes
+  - Updates README.md with monorepo install option
+- **references/monorepo-readme-template.md** — template for the monorepo root README
+  - Placeholders: `{{SKILL_CATALOG_TABLE}}`, `{{GITHUB_USER}}`, `{{SKILL_COUNT}}`, `{{LAST_UPDATED}}`
+
+#### Changed
+
+- **SKILL.md** — added Workflow B (monorepo sync) and Workflow C (individual repo sync)
+  - Updated Quick Reference with new commands
+  - Added architecture diagram showing source-of-truth flow
+  - Updated description to mention monorepo support
+- **references/readme-template.md** — added "Via monorepo" installation section
+- **scripts/prepare-skill-repo.sh** — generated READMEs now include monorepo install option
+
+### skill-publishing 1.0.0 - 2026-02-22
+
+Initial public release.
+
+#### Included
+
+- **SKILL.md** — workflow for converting any skill directory into a GitHub repo
+  - Step-by-step guide: prepare files, review, init git, create repo, push
+  - Key decisions table (why `.claude/` is gitignored, why MIT, etc.)
+  - Known gotchas (`gh repo create` remote conflict, username discovery)
+- **scripts/prepare-skill-repo.sh** — generates `.gitignore`, `LICENSE`, `CHANGELOG.md`, `README.md` from `SKILL.md` frontmatter
+  - Dry-run mode, skip-existing safety, `--github-user` flag
+- **references/readme-template.md** — template with install/update/uninstall/compatibility sections

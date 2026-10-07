@@ -21,7 +21,7 @@ This repo's `.claude-plugin/marketplace.json` is named **`claude-code-skills`** 
 /plugin marketplace add /absolute/path/to/claude-code-skills
 
 # 4. Install / test a plugin from the local source
-/plugin install adversarial-review@claude-code-skills
+/plugin install review@claude-code-skills
 
 # 5. After editing files locally, refresh the catalog
 /plugin marketplace update claude-code-skills
@@ -29,9 +29,9 @@ This repo's `.claude-plugin/marketplace.json` is named **`claude-code-skills`** 
 
 ## Caveats
 
-- **Branch matters.** A `directory` marketplace reflects your **currently checked-out branch / working tree**. A plugin only on a feature branch (e.g. `adversarial-review` on `feature/adversarial-review-plugin`) is only available while that branch is checked out. Switching branches changes what the marketplace exposes.
+- **Branch matters.** A `directory` marketplace reflects your **currently checked-out branch / working tree**. A plugin that exists only on a feature branch (for example `feature/<N>-<slug>`) is only available while that branch is checked out. Switching branches changes what the marketplace exposes.
 - **Restart the session** after changing marketplaces/plugins if they don't appear.
-- **Re-point installed plugins.** Plugins previously installed from the remote (e.g. `obsidian-brain@claude-code-skills`) lose their source when you remove the remote; reinstall them from the local marketplace if you need them: `/plugin install <name>@claude-code-skills`.
+- **Re-point installed plugins.** Plugins previously installed from the remote (e.g. `skill-kit@claude-code-skills`) lose their source when you remove the remote; reinstall them from the local marketplace if you need them: `/plugin install <name>@claude-code-skills`.
 
 ## Restore the remote marketplace
 
@@ -43,4 +43,4 @@ This repo's `.claude-plugin/marketplace.json` is named **`claude-code-skills`** 
 ## Notes
 
 - A `directory`-source marketplace stays in sync with disk (same mechanism as the `obsidian-brain-repo` local marketplace).
-- Each plugin's `source` in `marketplace.json` is a path relative to the repo root (e.g. `./plugins/adversarial-review`), which resolves correctly for both local-directory and GitHub marketplace sources.
+- Each plugin's `source` in `marketplace.json` is a path relative to the repo root (e.g. `./plugins/review`), which resolves correctly for both local-directory and GitHub marketplace sources.

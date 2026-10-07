@@ -15,19 +15,21 @@ jobs:
       - name: Detect changed skill directories
         id: changed
         run: |
-          # Find skill directories that changed in this PR
-          CHANGED_DIRS=$(git diff --name-only origin/main...HEAD | \
-            grep -E '^[a-z][a-z0-9-]+/SKILL\.md' | \
-            sed 's|/SKILL\.md||' | \
-            sort -u || true)
+          # A failed diff (no origin/main, a shallow clone) must fail the step.
+          # It used to be hidden by `|| true` and read as "No skill directories changed".
+          if ! CHANGED_FILES=$(git diff --name-only origin/main...HEAD); then
+            echo "::error::git diff origin/main...HEAD failed, so the changed skills are unknown"
+            exit 1
+          fi
 
-          # Also check for changes to scripts/ within skill dirs
-          SCRIPT_DIRS=$(git diff --name-only origin/main...HEAD | \
-            grep -E '^[a-z][a-z0-9-]+/(scripts|references)/' | \
-            sed 's|/scripts/.*||; s|/references/.*||' | \
-            sort -u || true)
+          # Plugin skills: any changed file under plugins/<group>/skills/<name>/ (#167).
+          # sed -n …p prints only matching lines and exits 0 when none match.
+          PLUGIN_DIRS=$(printf '%s\n' "$CHANGED_FILES" | \
+            sed -n -E 's#^(plugins/[a-z][a-z0-9-]+/skills/[a-z][a-z0-9-]+)/.*#\1#p')
 
-          ALL_DIRS=$(printf "%s\n%s" "$CHANGED_DIRS" "$SCRIPT_DIRS" | sort -u | grep -v '^$' || true)
+          # This repo has no top-level skill directories since #167. The template
+          # that skill-kit:publish installs into other monorepos also detects them.
+          ALL_DIRS=$(printf '%s\n' "$PLUGIN_DIRS" | sed '/^$/d' | sort -u)
 
           if [[ -z "$ALL_DIRS" ]]; then
             echo "No skill directories changed"
@@ -42,21 +44,33 @@ jobs:
 
       - name: Validate changed skills
         if: steps.changed.outputs.dirs != ''
+        env:
+          DIRS: ${{ steps.changed.outputs.dirs }}
         run: |
           chmod +x scripts/validate-skill.sh
           FAILED=0
 
           while IFS= read -r dir; do
-            if [[ -d "$dir" ]] && [[ -f "$dir/SKILL.md" ]]; then
-              echo ""
-              echo "=========================================="
-              echo "Validating: $dir"
-              echo "=========================================="
-              if ! scripts/validate-skill.sh "$dir"; then
-                FAILED=1
-              fi
+            [[ -z "$dir" ]] && continue
+            if [[ ! -d "$dir" ]]; then
+              # The whole skill directory was removed in this PR: nothing to validate.
+              echo "Skipping $dir: removed in this PR"
+              continue
             fi
-          done <<< "${{ steps.changed.outputs.dirs }}"
+            if [[ ! -f "$dir/SKILL.md" ]]; then
+              # The directory is still there but SKILL.md is not: that is an error.
+              echo "::error::$dir exists but has no SKILL.md"
+              FAILED=1
+              continue
+            fi
+            echo ""
+            echo "=========================================="
+            echo "Validating: $dir"
+            echo "=========================================="
+            if ! scripts/validate-skill.sh "$dir"; then
+              FAILED=1
+            fi
+          done <<< "$DIRS"
 
           if [[ $FAILED -ne 0 ]]; then
             echo ""
@@ -78,11 +92,14 @@ jobs:
       - name: Detect changed plugin directories
         id: changed
         run: |
-          # Find plugin directories that changed in this PR
-          CHANGED_PLUGINS=$(git diff --name-only origin/main...HEAD | \
-            grep -E '^plugins/[a-z][a-z0-9-]+/' | \
-            sed 's|^plugins/||; s|/.*||' | \
-            sort -u || true)
+          # A failed diff must fail the step, not read as "No plugin directories changed".
+          if ! CHANGED_FILES=$(git diff --name-only origin/main...HEAD); then
+            echo "::error::git diff origin/main...HEAD failed, so the changed plugins are unknown"
+            exit 1
+          fi
+          CHANGED_PLUGINS=$(printf '%s\n' "$CHANGED_FILES" | \
+            sed -n -E 's#^plugins/([a-z][a-z0-9-]+)/.*#\1#p' | \
+            sort -u)
 
           if [[ -z "$CHANGED_PLUGINS" ]]; then
             echo "No plugin directories changed"
@@ -101,6 +118,8 @@ jobs:
 
       - name: Validate changed plugins
         if: steps.changed.outputs.plugins != ''
+        env:
+          PLUGINS: ${{ steps.changed.outputs.plugins }}
         run: |
           chmod +x scripts/validate-plugin.sh
           # validate-plugin.sh delegates to validate-skill.sh for embedded skills
@@ -108,17 +127,20 @@ jobs:
           FAILED=0
 
           while IFS= read -r plugin; do
+            [[ -z "$plugin" ]] && continue
             PLUGIN_DIR="plugins/$plugin"
-            if [[ -d "$PLUGIN_DIR" ]]; then
-              echo ""
-              echo "=========================================="
-              echo "Validating plugin: $plugin"
-              echo "=========================================="
-              if ! scripts/validate-plugin.sh "$PLUGIN_DIR"; then
-                FAILED=1
-              fi
+            if [[ ! -d "$PLUGIN_DIR" ]]; then
+              echo "Skipping $PLUGIN_DIR: removed in this PR"
+              continue
             fi
-          done <<< "${{ steps.changed.outputs.plugins }}"
+            echo ""
+            echo "=========================================="
+            echo "Validating plugin: $plugin"
+            echo "=========================================="
+            if ! scripts/validate-plugin.sh "$PLUGIN_DIR"; then
+              FAILED=1
+            fi
+          done <<< "$PLUGINS"
 
           if [[ $FAILED -ne 0 ]]; then
             echo ""
@@ -143,6 +165,48 @@ jobs:
       - name: Run discovery-guard regression harness
         run: ./scripts/test-discovery-guards.sh
 
+  validate-plugin-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      # Unconditional: scripts/** is outside the skill and plugin path filters above.
+      - name: Test validate-plugin.sh
+        run: ./scripts/test-validate-plugin.sh
+
+      - name: Test the changed-skill detection steps
+        run: ./scripts/test-ci-skill-detect.sh
+
+  docs-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 is the oldest Python the scripts support (standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      # Unconditional: any plugin.json, plugin directory or doc can cause drift (#190).
+      # The README plugin table, marketplace.json and plugin README meta lines must
+      # match every plugin.json, and every link, repo path and plugin:skill name in
+      # the current docs must exist.
+      - name: Docs drift guard
+        run: ./scripts/check-docs.sh
+
+      - name: catalogue.py tests
+        run: bash scripts/test-catalogue.sh
+
+      - name: check-doc-refs.py tests
+        run: bash scripts/test-check-doc-refs.sh
+
+      - name: check-docs.sh tests
+        run: bash scripts/test-check-docs.sh
+
   sync-hygiene:
     runs-on: ubuntu-latest
     steps:
@@ -159,7 +223,7 @@ jobs:
       - name: Run sync-hygiene regression harness
         run: ./scripts/test-sync-hygiene.sh
 
-  adversarial-review-tests:
+  review-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -170,10 +234,17 @@ jobs:
         with:
           python-version: "3.9"
 
-      # Unconditional, like the two harness jobs above. Before #135 this suite
-      # ran only by hand.
-      - name: Run adversarial-review test suite
-        run: bash plugins/adversarial-review/skills/adversarial-review/scripts/run-tests.sh
+      # Unconditional, like the harness jobs above.
+      #
+      # Run the path test first and by file name. A missing file is an error here;
+      # `unittest discover` would pass on zero tests before Python 3.12. A path or
+      # variable error in a SKILL.md then shows up as its own failure, not inside the
+      # long run-tests.sh log. run-tests.sh runs every test_*.py file again.
+      - name: Check that every skill command spells its script path
+        run: python3 plugins/review/skills/adversarial/scripts/test_skill_paths.py -v
+
+      - name: Run review test suite
+        run: bash plugins/review/skills/adversarial/scripts/run-tests.sh
 
   github-board-tests:
     runs-on: ubuntu-latest
@@ -207,3 +278,266 @@ jobs:
 
       - name: Clean-HOME smoke test
         run: bash plugins/github-board/tests/smoke-clean-home.sh
+
+  statusline-tests:
+    # macOS runs the bash 3.2 cases (/bin/bash there is 3.2); Ubuntu runs bash 5.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 is the oldest Python the plugin supports (standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Install jq (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Show the bash versions under test
+        run: |
+          bash --version | head -1
+          /bin/bash --version | head -1
+
+      # Unconditional, like the jobs above: lib/ and tests/ are outside the skill filters.
+      # The only skip allowed is the bash 3.2 one on Ubuntu, which has no bash 3.2; any
+      # other skip fails the job, so a skip can never pass as green.
+      - name: Run statusline test suite
+        shell: bash
+        run: |
+          python -m pytest plugins/statusline/tests -q -p no:cacheprovider -rs | tee pytest.out
+          if grep '^SKIPPED' pytest.out | grep -v 'bash 3.2 not on this host' | grep -q .; then
+            echo "::error::statusline tests were skipped (see the SKIPPED lines above)"
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = macOS ] && grep -q '^SKIPPED' pytest.out; then
+            echo "::error::macOS must run the bash 3.2 cases"
+            exit 1
+          fi
+
+  skill-commands:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.9 is the oldest Python the scripts support (standard library only).
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      # Unconditional, like the other harness jobs: the checker reads plugin text and
+      # the review plugin's analyzer, and neither is matched by the path filters above.
+      # Only `spec`, `review`, `skill-kit`, `context`, `dev-flow`, `ui-design` and `demo-video` opt in so far. Other plugins are tracked in #151.
+      - name: Test the skill-command checker
+        run: bash scripts/test-check-skill-commands.sh
+
+      - name: Check that every skill command runs as written
+        run: python3 scripts/check-skill-commands.py plugins/spec plugins/review plugins/skill-kit plugins/context plugins/dev-flow plugins/ui-design plugins/demo-video
+
+  spec-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir, the way its SKILL.md calls it.
+      - name: Run spec script smoke tests
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/spec/tests/run-tests.sh
+
+  skill-kit-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir, the way its SKILL.md calls it.
+      - name: Run skill-kit script smoke tests
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/skill-kit/tests/run-tests.sh
+
+  context-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir with HOME on a temp dir, the way its SKILL.md calls it.
+      - name: Run context script smoke tests (jq is preinstalled on both runners)
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/context/tests/run-tests.sh
+
+  dev-flow-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir with HOME on a temp dir, the way its SKILL.md calls it.
+      - name: Run dev-flow script smoke tests
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/dev-flow/tests/run-tests.sh
+
+  ui-design-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir with HOME on a temp dir, the way its SKILL.md calls it.
+      - name: Run ui-design script smoke tests (jq is preinstalled on both runners)
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/ui-design/tests/run-tests.sh
+
+  demo-video-tests:
+    # macOS runs the scripts under bash 3.2: /bin/bash there is 3.2, and the step below
+    # puts it first on PATH, so `#!/usr/bin/env bash` and `bash` both resolve to it.
+    # Ubuntu runs bash 5. The tests read EXPECT_BASH_MAJOR and fail if the bash that runs
+    # the scripts is another version.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bash_major: "5"
+          - os: macos-latest
+            bash_major: "3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional, like the other harness jobs. The tests run each script from a
+      # temp project dir with HOME on a temp dir, the way its SKILL.md calls it. They
+      # need no ffmpeg, opencv, screen or network: installers and npm are stubbed.
+      - name: Run demo-video script and wiring tests
+        shell: /bin/bash {0}
+        env:
+          EXPECT_BASH_MAJOR: ${{ matrix.bash_major }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p "$RUNNER_TEMP/bash32"
+            ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+            export PATH="$RUNNER_TEMP/bash32:$PATH"
+          fi
+          bash --version | head -1
+          /usr/bin/env bash --version | head -1
+          bash plugins/demo-video/tests/run-tests.sh
