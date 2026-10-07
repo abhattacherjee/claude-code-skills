@@ -40,8 +40,10 @@ generated root README containing a catalog table and plugin section.
 
 Options:
   --dry-run              Preview changes without writing
-  --skills <list>        Comma-separated skill names (default: all in monorepo)
-                         Mutually exclusive with --add.
+  --skills <list>        Comma-separated skill names to re-sync (default: all
+                         in monorepo). The README catalogue, count and
+                         install-all lines still list every skill in the
+                         monorepo. Mutually exclusive with --add.
   --add <skill-name>     Add a new skill to the monorepo. Mutually exclusive
                          with --skills.
   --add-plugin <name>    Add a plugin from ./build/<name>/ to plugins/
@@ -938,22 +940,34 @@ echo ""
 # write_file, copy_file, copy_dir from _lib.sh
 
 # --- Sync each skill ---
-CATALOG_ROWS=""
+# The skill catalogue: one name and one README table row per skill, in two
+# parallel arrays (bash 3.2 has no associative arrays). The main loop adds the
+# skills it syncs; skills already in the monorepo that this run did not sync
+# are added after it (#93), and the rows are then sorted by name.
+CAT_NAMES=()
+CAT_ROWS=()
+catalog_add() {
+  CAT_NAMES+=("$1")
+  CAT_ROWS+=("$2")
+}
+catalog_has() {
+  local i
+  for ((i = 0; i < ${#CAT_NAMES[@]}; i++)); do
+    [[ "${CAT_NAMES[$i]}" == "$1" ]] && return 0
+  done
+  return 1
+}
 
 # Counts every SKILLS_TO_SYNC entry that resolved to a real skill (found a
 # SKILL.md), whether it was ultimately copied or refused by the reversion
 # guard further down — a refusal is a legitimate outcome (exit 3), not the
 # "no such skill" case this counter exists to catch.
 #
-# FOUR readers, not one — an earlier version of this comment said "read only by
-# the explicit --skills guard after the loop (#80)", and that has been false
-# since #81's third pass. The other three are all catalogue-describing figures:
-# SKILLS_SYNCED_COUNT (this minus REFUSED_COUNT), the README template's
-# {{SKILL_COUNT}} substitution, and the minimal-README fallback's "N reusable
-# Agent Skills". Changing what this counts changes every published count in the
-# monorepo, not just one guard's threshold. The full reasoning for why the
-# catalogue-facing figure is this and NOT SKILLS_SYNCED_COUNT lives at the
-# {{SKILL_COUNT}} substitution site; read it before touching either.
+# Two readers: the explicit --skills guard after the loop (#80) and
+# SKILLS_SYNCED_COUNT (this minus REFUSED_COUNT). The README's skill count used
+# to read it too; since #93 that is CATALOG_COUNT, the catalogue's own row
+# count, because with --skills this counts only the named skills. The
+# reasoning lives at the {{SKILL_COUNT}} substitution site.
 SKILLS_RESOLVED_COUNT=0
 
 # Manifests the main sync loop refused for a bare-string agents[] entry.
@@ -967,7 +981,7 @@ _BARE_ENTRY_MANIFESTS=""
 # splitting breaks a skill directory whose name contains a space into separate
 # tokens, each of which fails to resolve — two loud "no SKILL.md" ERRORs where
 # there should have been one successful sync. A here-string, not a pipe: this
-# loop assigns CATALOG_ROWS, REFUSED_SKILLS, REFUSED_COUNT and
+# loop assigns CAT_NAMES/CAT_ROWS, REFUSED_SKILLS, REFUSED_COUNT and
 # SKILLS_RESOLVED_COUNT, all read after the loop, and a pipe would run the body
 # in a subshell and silently discard every one of them. A here-string on an
 # empty $SKILLS_TO_SYNC still feeds one blank line, hence the guard below.
@@ -977,11 +991,10 @@ _BARE_ENTRY_MANIFESTS=""
 # Any child that reads stdin — because it is a filter by nature, or because a
 # future version grows a prompt — consumes the rest of the skill list, and the
 # loop then exits early having synced only the skills read so far. It exits 0
-# while doing it, and every downstream figure agrees with the truncation:
-# {{SKILL_COUNT}} is SKILLS_RESOLVED_COUNT, the catalogue is built from the
-# same rows, and the CHANGELOG inventory iterates the same (already drained)
-# list — so a two-thirds-empty catalogue is internally self-consistent and
-# nothing flags it. The old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such
+# while doing it, and the CHANGELOG's "Synced N skills" and its inventory agree
+# with the truncation, so nothing flags it. (Since #93 the README catalogue
+# also lists skills already in the monorepo, so it would keep their rows, but
+# the run would still claim to have synced skills it never reached.) The old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such
 # exposure; converting to `while read` created it.
 #
 # TWO mechanisms, and they are not equally strong — an earlier version of this
@@ -1100,16 +1113,12 @@ while IFS= read -r SKILL_NAME <&3; do
   else
     REPO_LINK="—"
   fi
-  CATALOG_ROWS="${CATALOG_ROWS}| [$SKILL_NAME](./$SKILL_NAME/) | $VERSION | $SHORT | $REPO_LINK |
-"
+  catalog_add "$SKILL_NAME" "| [$SKILL_NAME](./$SKILL_NAME/) | $VERSION | $SHORT | $REPO_LINK |"
 
   # Refused above: the catalog row is kept (from the in-repo metadata), so
   # this skill's row is unchanged, but nothing is copied for this skill. The
   # README's overall "N reusable Agent Skills" figure (built further down)
-  # deliberately uses SKILLS_RESOLVED_COUNT, not SKILLS_SYNCED_COUNT, for
-  # exactly this reason: SKILLS_RESOLVED_COUNT counts every name that
-  # resolved to a real SKILL.md — refused or not — so it stays in step with
-  # the catalogue's actual row count regardless of how many were refused.
+  # is CATALOG_COUNT, the number of rows, so it counts this one too.
   # SKILLS_SYNCED_COUNT (resolved minus refused) undercounts the catalogue by
   # REFUSED_COUNT whenever anything here is refused, and shipped as exactly
   # that regression once already (issue #81, third pass) — do not repeat it.
@@ -1326,10 +1335,10 @@ fi
 # SKILL_COUNT is the discovered/requested count, printed above the loop as the
 # *plan* before anything has been attempted — legitimately SKILL_COUNT, left
 # alone. Every stage below that describes "how many skills" in the past
-# tense — the README template's {{SKILL_COUNT}} substitution, the minimal-
-# README fallback description, the CHANGELOG's "Synced N skills" entry, the
-# --init git commit message, and the closing "Sync complete." line — is a
-# claim about what actually happened, and must use this figure instead.
+# tense — the CHANGELOG's "Synced N skills" entry, the --init git commit
+# message, and the closing "Sync complete." line — is a claim about what
+# actually happened, and must use this figure instead. The README's count
+# describes the catalogue, not this run, and is CATALOG_COUNT.
 SKILLS_SYNCED_COUNT=$((SKILLS_RESOLVED_COUNT - REFUSED_COUNT))
 
 # --- Discover and sync plugins ---
@@ -1893,6 +1902,55 @@ if [[ $PLUGIN_COUNT -gt 0 ]]; then
   validate_catalogue_inputs "The skills and plugins synced above are already written; README.md, CHANGELOG.md and the other root files were not." no-build
 fi
 
+# --- Skills this run did not sync keep their catalogue rows (#93) ---
+# `--skills alpha` re-syncs alpha; it does not mean "the catalogue is now just
+# alpha". Every top-level skill already in the monorepo that the main loop did
+# not reach gets its row from its published SKILL.md, built exactly as the
+# main loop builds one, so the table, the count and the install-all lines
+# match what a full sync would write. A full sync or --add reaches every such
+# skill already, so this adds nothing there. A --skills name with no SKILL.md
+# has no directory here and gets no row.
+if [[ -d "$MONOREPO_DIR" ]]; then
+  while IFS= read -r _CAT_NAME <&3; do
+    [[ -z "$_CAT_NAME" ]] && continue
+    [[ -f "$MONOREPO_DIR/$_CAT_NAME/SKILL.md" ]] || continue
+    catalog_has "$_CAT_NAME" && continue
+    _CAT_MD="$MONOREPO_DIR/$_CAT_NAME/SKILL.md"
+    # Two statements each, as in the main loop, so extract_field's exit 3
+    # stops the run under set -e instead of leaving an empty description.
+    _CAT_DESC=$(extract_field "$_CAT_MD" "description")
+    _CAT_SHORT=$(short_desc "$_CAT_DESC")
+    _CAT_VERSION=$(extract_version "$_CAT_MD")
+    [[ -z "$_CAT_VERSION" ]] && _CAT_VERSION="1.0.0"
+    _CAT_LINK="—"
+    if gh repo view "$GITHUB_USER/$_CAT_NAME" --json url --jq '.url' >/dev/null 2>&1; then
+      _CAT_LINK="[repo](https://github.com/$GITHUB_USER/$_CAT_NAME)"
+    fi
+    catalog_add "$_CAT_NAME" "| [$_CAT_NAME](./$_CAT_NAME/) | $_CAT_VERSION | $_CAT_SHORT | $_CAT_LINK |"
+  done 3<<< "$(list_top_level_candidates "$MONOREPO_DIR")" </dev/null
+fi
+
+# Sorted by name with the same `sort` discovery uses, so a --skills run writes
+# the rows in the order a full sync does. CATALOG_NAMES (one per line) drives
+# the table, the install-all lines and CATALOG_COUNT.
+CATALOG_NAMES=""
+if [[ ${#CAT_NAMES[@]} -gt 0 ]]; then
+  CATALOG_NAMES=$(printf '%s\n' "${CAT_NAMES[@]}" | sort)
+fi
+CATALOG_ROWS=""
+CATALOG_COUNT=0
+while IFS= read -r _CAT_NAME <&3; do
+  [[ -z "$_CAT_NAME" ]] && continue
+  for ((_ci = 0; _ci < ${#CAT_NAMES[@]}; _ci++)); do
+    if [[ "${CAT_NAMES[$_ci]}" == "$_CAT_NAME" ]]; then
+      CATALOG_ROWS="${CATALOG_ROWS}${CAT_ROWS[$_ci]}
+"
+      CATALOG_COUNT=$((CATALOG_COUNT + 1))
+      break
+    fi
+  done
+done 3<<< "$CATALOG_NAMES" </dev/null
+
 # --- Generate root README ---
 echo "--- Root files ---"
 
@@ -1906,16 +1964,14 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # Extract everything after the --- separator (skip the template header)
   ROOT_README=$(sed '1,/^---$/d' "$TEMPLATE_DIR/monorepo-readme-template.md")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{GITHUB_USER}}|$GITHUB_USER|g")
-  # SKILLS_RESOLVED_COUNT, not SKILL_COUNT and NOT SKILLS_SYNCED_COUNT (issue
-  # #81, third pass): this placeholder describes the catalogue table right
-  # below it, so it must match the catalogue's actual row count. A refused
-  # skill still gets a catalog row (CATALOG_ROWS is built before the
-  # reversion guard's `continue`, deliberately — see the comment where that
-  # row is added, above), so the catalogue's row count is
-  # SKILLS_RESOLVED_COUNT (every name that resolved to a real SKILL.md,
-  # refused or not) rather than SKILLS_SYNCED_COUNT (resolved minus refused,
-  # which undercounts the catalogue whenever anything was refused).
-  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$SKILLS_RESOLVED_COUNT|g")
+  # CATALOG_COUNT: this placeholder describes the catalogue table right below
+  # it, so it is that table's row count, and nothing else. Not
+  # SKILLS_SYNCED_COUNT (issue #81, third pass): a refused skill keeps its row
+  # (the main loop adds it before the reversion guard's `continue`), so that
+  # figure undercounts the table whenever anything is refused. Not
+  # SKILLS_RESOLVED_COUNT either (#93): with --skills it counts only the named
+  # skills, while the table also lists every skill this run did not sync.
+  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$CATALOG_COUNT|g")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{LAST_UPDATED}}|$TODAY|g")
   # Build install-all commands (one cp -r per skill)
   INSTALL_ALL_CMDS=""
@@ -1927,11 +1983,14 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # main sync loop's comment — pure-bash body today, uniform treatment so a
   # later addition cannot reintroduce the STDIN truncation silently. It is not
   # proof against a child that names fd 3 outright; nothing here is.
+  # CATALOG_NAMES, not SKILLS_TO_SYNC (#93): one line per catalogue row, so a
+  # --skills run still lists every skill, and a --skills name with no
+  # SKILL.md gets no install line.
   while IFS= read -r SKILL_NAME <&3; do
     [[ -z "$SKILL_NAME" ]] && continue
     INSTALL_ALL_CMDS="${INSTALL_ALL_CMDS}cp -r /tmp/claude-code-skills/$SKILL_NAME ~/.claude/skills/$SKILL_NAME
 "
-  done 3<<< "$SKILLS_TO_SYNC" </dev/null
+  done 3<<< "$CATALOG_NAMES" </dev/null
 
   # Build plugin section (only if plugins exist)
   PLUGIN_SECTION=""
@@ -2007,13 +2066,11 @@ rm -rf /tmp/ccs
   rm -f "$TMPFILE"
 else
   echo "  Warning: monorepo-readme-template.md not found, generating minimal README"
-  # SKILLS_RESOLVED_COUNT (issue #81, third pass): same reasoning as the
-  # template branch above — this describes $CATALOG_TABLE's actual contents,
-  # immediately below it, and the catalogue's row count is
-  # SKILLS_RESOLVED_COUNT, not SKILLS_SYNCED_COUNT (see that comment).
+  # CATALOG_COUNT: same reasoning as the template branch above. This describes
+  # $CATALOG_TABLE's actual contents, immediately below it.
   ROOT_README="# Claude Code Skills
 
-A curated collection of $SKILLS_RESOLVED_COUNT reusable Agent Skills.
+A curated collection of $CATALOG_COUNT reusable Agent Skills.
 
 ## Skills
 

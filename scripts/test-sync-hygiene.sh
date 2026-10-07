@@ -6713,6 +6713,80 @@ for _n92 in dry plain; do
     assert_eq "…and nothing was written ($_n92)" "$N92G_DIGEST" "$(tree_digest "$N92G_MONO")"
 done
 
+# ============================================================
+# Issue #93 — --skills re-syncs a subset but keeps the full catalogue
+# ============================================================
+#
+# `--skills alpha` used to rebuild the README catalogue from alpha alone: beta
+# and gamma stayed on disk but lost their rows, the "N reusable Agent Skills"
+# count and their install-all lines, and the README agreed with itself, so
+# nothing flagged it. Fixture: three skills synced fully, then alpha edited and
+# re-synced on its own. The template's generic install example has a fourth
+# "cp -r /tmp/claude-code-skills/SKILL_NAME" line, so the install-all count
+# below matches the three names only.
+N93_HOME="$SCRATCH_DIR/skills-home-n93"
+N93_MONO="$SCRATCH_DIR/monorepo-n93"
+mkdir -p "$N93_MONO"
+write_n93_skill() {
+    mkdir -p "$N93_HOME/$1"
+    printf -- '---\nname: %s\ndescription: %s Use when: testing issue 93.\nmetadata:\n  version: %s\n---\n\n# %s\n' \
+        "$1" "$3" "$2" "$1" > "$N93_HOME/$1/SKILL.md"
+}
+for _s in alpha beta gamma; do write_n93_skill "$_s" 1.0.0 "The $_s fixture skill."; done
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-0.stdout" "$SCRATCH_DIR/n93-0.stderr" --add alpha,beta,gamma || N93_RC=$?
+assert_eq "control: the three-skill fixture syncs (#93)" "0" "$N93_RC"
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-1.stdout" "$SCRATCH_DIR/n93-1.stderr" || N93_RC=$?
+assert_eq "control: a full sync of it exits 0 (#93)" "0" "$N93_RC"
+N93_README_FULL="$(cat "$N93_MONO/README.md")"
+assert_eq "control: the full sync lists 3 catalogue rows" "3" "$(skill_catalog_row_count "$N93_MONO/README.md")"
+
+write_n93_skill alpha 1.1.0 "The alpha fixture skill, N93-ALPHA-EDIT-MARKER."
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-2.stdout" "$SCRATCH_DIR/n93-2.stderr" --skills alpha || N93_RC=$?
+N93_README="$(cat "$N93_MONO/README.md")"
+assert_eq "--skills alpha after a full sync exits 0 (#93)" "0" "$N93_RC"
+assert_eq "…and the catalogue still has 3 rows" "3" "$(skill_catalog_row_count "$N93_MONO/README.md")"
+assert_contains "…and the count still reads 3" "A curated collection of 3 reusable" "$N93_README"
+assert_eq "…and the install-all block still has 3 lines" "3" \
+    "$(grep -cE '^cp -r /tmp/claude-code-skills/(alpha|beta|gamma) ' "$N93_MONO/README.md" || true)"
+for _s in beta gamma; do
+    assert_eq "…and $_s's row is byte-identical to the full sync's" \
+        "$(grep -F "| [$_s](./$_s/) |" <<< "$N93_README_FULL")" "$(grep -F "| [$_s](./$_s/) |" <<< "$N93_README" || true)"
+done
+assert_line_present "…and alpha's row carries the edit" \
+    "| [alpha](./alpha/) | 1.1.0 | The alpha fixture skill, N93-ALPHA-EDIT-MARKER. | — |" "$N93_README"
+assert_contains "…in alphabetical order, as a full sync writes it" \
+    "$(printf '| [alpha](./alpha/) | 1.1.0 | The alpha fixture skill, N93-ALPHA-EDIT-MARKER. | — |\n| [beta](./beta/)')" "$N93_README"
+assert_contains "…and only alpha was synced this run" "Synced 1 skills from local source." \
+    "$(cat "$N93_MONO/CHANGELOG.md")"
+
+# The whole README a --skills run writes is the one a full sync writes. Gamma
+# sorts last, so a --skills gamma run that kept the order rows were added in
+# (gamma, then the others) would differ.
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-full2.stdout" "$SCRATCH_DIR/n93-full2.stderr" || N93_RC=$?
+assert_eq "control: a full sync after the alpha edit exits 0 (#93)" "0" "$N93_RC"
+assert_eq "…and writes the README the --skills alpha run wrote" "$N93_README" "$(cat "$N93_MONO/README.md")"
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-gamma.stdout" "$SCRATCH_DIR/n93-gamma.stderr" --skills gamma || N93_RC=$?
+assert_eq "--skills gamma exits 0 (#93)" "0" "$N93_RC"
+assert_eq "…and writes the same README as a full sync, rows in name order" "$N93_README" "$(cat "$N93_MONO/README.md")"
+
+# --skills with a name that is not on disk: no phantom row or install line, and
+# naming nothing real is still refused with exit 1 and no write (#80).
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-3.stdout" "$SCRATCH_DIR/n93-3.stderr" --skills alpha,nosuch93 || N93_RC=$?
+assert_eq "--skills alpha,nosuch93 still syncs alpha at exit 0 (#93)" "0" "$N93_RC"
+assert_eq "…with 3 catalogue rows" "3" "$(skill_catalog_row_count "$N93_MONO/README.md")"
+assert_not_contains "…and no row or install line for the missing name" "nosuch93" "$(cat "$N93_MONO/README.md")"
+N93_DIGEST="$(tree_digest "$N93_MONO")"
+N93_RC=0
+run_sync "$N93_HOME" "$N93_MONO" "$SCRATCH_DIR/n93-4.stdout" "$SCRATCH_DIR/n93-4.stderr" --skills nosuch93 || N93_RC=$?
+assert_eq "--skills naming only a missing skill is still refused with exit 1 (#93)" "1" "$N93_RC"
+assert_eq "…and writes nothing" "$N93_DIGEST" "$(tree_digest "$N93_MONO")"
+
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
     echo "All assertions passed."
