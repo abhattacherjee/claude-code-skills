@@ -1,6 +1,6 @@
 """Doc-contract tests for the review plugin: the skill steps run scripts that exist, and wire in
 the adversary. They read only plugins/review/ (the `adversarial` and `deep` skills, the agents and
-the README); the old adversarial-review plugin keeps its own copy (which also checks deep-review)."""
+the README); the old adversarial-review plugin (removed in v4.0.0) had its own copy."""
 import json
 import os
 import re

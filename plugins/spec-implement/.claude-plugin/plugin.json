@@ -1,5 +1,0 @@
-{
-  "name": "spec-implement",
-  "version": "1.0.1",
-  "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Implements a previously created and reviewed story spec end-to-end: feature branch, sub-task implementation with progress tracking, acceptance-criteria validation, and PR creation."
-}

@@ -130,8 +130,6 @@ def test_install_ships_the_three_tier_statusline():
 
 REPO = PLUGIN.parent.parent
 OLD_PLUGINS = ["context-bar", "custom-statusline", "statusline-creator"]
-DEPRECATED = ("Deprecated: use the statusline plugin "
-              "(statusline:install / statusline:create / statusline:context-bar).")
 
 
 def _market():
@@ -148,11 +146,10 @@ def test_marketplace_lists_the_plugin():
 
 
 @pytest.mark.parametrize("old", OLD_PLUGINS)
-def test_old_marketplace_entries_are_deprecated_but_still_installable(old):
-    row = _market()[old]
-    assert row["description"].startswith(DEPRECATED + " ")
-    assert row["source"] == f"./plugins/{old}"
-    assert (REPO / "plugins" / old / ".claude-plugin" / "plugin.json").is_file()
+def test_old_plugins_are_removed(old):
+    # The three old plugins were removed in v4.0.0 (#198).
+    assert old not in _market()
+    assert not (REPO / "plugins" / old).exists()
 
 
 def _readme_row(name):
@@ -170,8 +167,8 @@ def test_readme_catalogue_row_counts_match_the_plugin():
 
 
 @pytest.mark.parametrize("old", OLD_PLUGINS)
-def test_readme_marks_old_rows_deprecated(old):
-    assert _readme_row(old)[4].startswith("Deprecated")
+def test_readme_has_no_row_for_the_old_plugins(old):
+    assert f"(./plugins/{old}/)" not in (REPO / "README.md").read_text()
 
 
 def test_plugin_readme_counts_match():

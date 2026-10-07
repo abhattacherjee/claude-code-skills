@@ -100,10 +100,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # plugins/skill-kit/skills/publish/ is the source of truth for these scripts and
-# the skill around them, so this suite tests the files that ship. The deprecated
-# plugins/skill-publishing/ copy is frozen until #167 and is not tested. The old
-# loose ~/.claude/skills/skill-publishing clone is removed at the post-merge
-# cut-over.
+# the skill around them, so this suite tests the files that ship.
 SYNC_SCRIPT="${SYNC_SCRIPT:-$REPO_ROOT/plugins/skill-kit/skills/publish/scripts/sync-monorepo.sh}"
 
 # The harness runs under `set -euo pipefail`, so an unusable script under test
@@ -5924,7 +5921,7 @@ rm -rf "$RUN_CWD/build/ordinary-plugin"
 # meta lines. Nothing else is written. --skills, --add and --init are refused.
 
 # The #167 fixture, kept as it was: README with no catalogue markers. The
-# deprecated-copy cases further down also use it, and it is never synced into.
+# later cases also use it, and it is never synced into.
 NOSKILL_MONO="$SCRATCH_DIR/monorepo-noskills"
 mkdir -p "$NOSKILL_MONO/plugins/pg/.claude-plugin" "$NOSKILL_MONO/plugins/pg/skills/inner" "$NOSKILL_MONO/docs" \
          "$NOSKILL_MONO/.claude-plugin" "$NOSKILL_MONO/.github/workflows"
@@ -6226,6 +6223,7 @@ assert_contains "…while the catalogue is clean" "catalogue.py --check: clean" 
 PRE_RC=0
 presync_run "$SCRATCH_DIR/pre-nomark.stdout" "$SCRATCH_DIR/pre-nomark.stderr" "$NOSKILL_MONO" || PRE_RC=$?
 assert_eq "validate-pre-sync.sh when catalogue.py cannot run (no markers) exits 1" "1" "$PRE_RC"
+assert_eq "…the #167 fixture is unchanged" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
 PRE_RC=0
 presync_run "$SCRATCH_DIR/pre-add.stdout" "$SCRATCH_DIR/pre-add.stderr" --add demo-skill "$PRE_CLEAN" || PRE_RC=$?
 assert_eq "validate-pre-sync.sh --add on a plugin-only monorepo is refused (exit 1)" "1" "$PRE_RC"
@@ -6573,26 +6571,6 @@ _prep_validated good || PREP_VGOOD_RC=$?
 assert_eq "control: prepare-plugin.sh with a valid skill still exits 0 with validation on" "0" "$PREP_VGOOD_RC"
 assert_contains "…and ran the validator" "--- Validation ---" "$(cat "$SCRATCH_DIR/prep-validate-good.stdout")"
 
-# The deprecated plugins/skill-publishing copy refuses to run at all (#167): its
-# scripts still wrote the old layout, still ship in the marketplace until the next
-# release, and on a plugin-only monorepo said "Safe to sync" over nothing.
-DEPRECATED_SCRIPTS="$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/scripts"
-for _dep in "sync-monorepo.sh" "validate-pre-sync.sh" "release-monorepo.sh patch"; do
-    _dep_rc=0
-    # shellcheck disable=SC2086  # "release-monorepo.sh patch" splits into script + bump level
-    ( cd "$RUN_CWD"; PATH="$GH_SHIM_DIR:$PATH" SKILLS_HOME="$SKILLS_HOME_FIXTURE" \
-        "$DEPRECATED_SCRIPTS/${_dep%% *}" $( [[ "$_dep" == *" "* ]] && echo "${_dep#* }" ) "$NOSKILL_MONO" ) \
-        >"$SCRATCH_DIR/deprecated.stdout" 2>"$SCRATCH_DIR/deprecated.stderr" || _dep_rc=$?
-    assert_eq "deprecated skill-publishing ${_dep%% *} exits 1" "1" "$_dep_rc"
-    assert_eq "…and prints only the deprecation line" "deprecated: use skill-kit:publish (#161)" \
-        "$(cat "$SCRATCH_DIR/deprecated.stderr")"
-    assert_eq "…and nothing on stdout" "" "$(cat "$SCRATCH_DIR/deprecated.stdout")"
-    assert_eq "…and changes no file" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
-done
-_dep_rc=0
-"$DEPRECATED_SCRIPTS/sync-monorepo.sh" --help >/dev/null 2>&1 || _dep_rc=$?
-assert_eq "…even --help is refused" "1" "$_dep_rc"
-
 # release-monorepo.sh counts skills in both layouts (#167)
 #
 # A top-level <name>/SKILL.md (what sync-monorepo.sh writes into a consumer
@@ -6895,7 +6873,7 @@ assert_eq "…and writes nothing" "$N93_DIGEST" "$(tree_digest "$N93_MONO")"
 # Reference, Prerequisites, See Also) into the plugin README. Two defects put
 # template text such as https://github.com/<github-user>/<skill-name> there:
 #   1. extract_section and extract_headings also matched "## " lines inside
-#      fenced code blocks. skill-publishing's SKILL.md shows a "## See Also"
+#      fenced code blocks. skill-kit:publish's SKILL.md (was skill-publishing's) shows a "## See Also"
 #      template inside a ```markdown block, before its real See Also, so the
 #      template and the "### Step 4" block after it became the README's See Also.
 #   2. A section whose prose holds a <placeholder> was copied as is.
@@ -6903,30 +6881,32 @@ assert_eq "…and writes nothing" "$N93_DIGEST" "$(tree_digest "$N93_MONO")"
 # stderr. Placeholders inside fenced blocks and inline code are legitimate
 # (usage lines such as `tool <monorepo-dir>`) and stay.
 
-# (a) skill-publishing's own SKILL.md, the case the issue was found on.
+# (a) skill-kit:publish's own SKILL.md (was skill-publishing's), the case the issue was found on.
 mkdir -p "$PREPARE_FIXTURE_DIR/n106pub-plugin"
-cp "$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/SKILL.md" "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md"
-printf '{"name": "n106pub-plugin", "version": "1.0.0", "description": "Fixture plugin built from skill-publishing SKILL.md.", "skills": [{"name": "skill-publishing", "source": "."}], "commands": []}\n' \
+cp "$REPO_ROOT/plugins/skill-kit/skills/publish/SKILL.md" "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md"
+printf '{"name": "n106pub-plugin", "version": "1.0.0", "description": "Fixture plugin built from skill-kit publish SKILL.md.", "skills": [{"name": "publish", "source": "."}], "commands": []}\n' \
     > "$PREPARE_FIXTURE_DIR/n106pub-plugin/plugin-manifest.json"
 # Precondition: the copy still has the shape this case is about, a "## See
-# Also" inside a ```markdown block ahead of the real one. The file is frozen
-# (deprecated plugin), but if it ever changes this says so instead of the
-# assertions below passing for nothing.
-assert_eq "precondition: skill-publishing's SKILL.md has two \"## See Also\" lines" "2" \
+# Also" inside a ```markdown block ahead of the real one. If the file ever
+# changes, this says so instead of the assertions below passing for nothing.
+assert_eq "precondition: skill-kit:publish's SKILL.md has two \"## See Also\" lines" "2" \
     "$(grep -c '^## See Also$' "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md" || true)"
 assert_contains "precondition: …the first inside a \`\`\`markdown block" \
     "$(printf '```markdown\n## See Also')" "$(cat "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md")"
 N106_RC=0
 run_prepare n106pub-plugin "$SCRATCH_DIR/n106pub.stdout" "$SCRATCH_DIR/n106pub.stderr" || N106_RC=$?
 N106_README="$(cat "$PREPARE_OUT_DIR/n106pub-plugin/README.md" 2>/dev/null || true)"
-assert_eq "prepare-plugin.sh builds skill-publishing's SKILL.md (#106)" "0" "$N106_RC"
+assert_eq "prepare-plugin.sh builds skill-kit:publish's SKILL.md (#106)" "0" "$N106_RC"
+# Only the positive control below catches a fence regression: the three negative
+# asserts also pass without the fence check, because the placeholder rule drops
+# the wrongly matched section anyway.
 assert_not_contains "…with no <github-user> in the README" "<github-user>" "$N106_README"
 assert_not_contains "…and no <skill-name>" "<skill-name>" "$N106_README"
 assert_not_contains "…and no template block pulled in after a fenced heading" "### Step 4: Initialize Git and Push" "$N106_README"
 assert_contains "positive control: the README has the real See Also section" \
-    "$(printf '## See Also\n\n- `skill-authoring` — how to structure and write skills (the content)')" "$N106_README"
+    "$(printf '## See Also\n\n- `skill-kit:author` — how to structure and write skills (the content)')" "$N106_README"
 assert_contains "positive control: and the Quick Reference block as Usage" \
-    '$SCRIPTS/validate-pre-sync.sh ~/dev/claude-code-skills' "$N106_README"
+    '"${CLAUDE_SKILL_DIR}/scripts/validate-pre-sync.sh" "<MONOREPO_DIR>"' "$N106_README"
 
 # (b) three sections: a placeholder in prose, a placeholder only in code, none.
 mkdir -p "$PREPARE_FIXTURE_DIR/n106mix-plugin"

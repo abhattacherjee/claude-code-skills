@@ -1,5 +1,0 @@
-{
-  "name": "spec-review",
-  "version": "2.2.3",
-  "description": "Deprecated: use the spec plugin (spec:create / spec:review / spec:implement). Reviews and enriches story specifications with codebase-verified sub-tasks, architecture alignment, design simplification, and API test plans."
-}

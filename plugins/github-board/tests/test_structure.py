@@ -109,16 +109,10 @@ def test_marketplace_lists_the_plugin():
 
 
 REPO = PLUGIN.parent.parent
-# skill-authoring used to name github-issue-triage; it was renamed once its SKILL.md was
-# trimmed under validate-skill.sh's 500-line limit (2.6.1).
-CALLERS = ["plugins/skill-authoring/skills/skill-authoring/SKILL.md",
-           "plugins/skill-authoring/skills/skill-authoring/references/task-tracking-pattern.md"]
-CALLERS += ["plugins/skill-publishing/skills/skill-publishing/scripts/validate-pre-sync.sh",
-            "README.md"]
-# The same files in the skill-kit plugin.
-CALLERS += ["plugins/skill-kit/skills/author/SKILL.md",
-            "plugins/skill-kit/skills/author/references/task-tracking-pattern.md",
-            "plugins/skill-kit/skills/publish/scripts/validate-pre-sync.sh"]
+CALLERS = ["README.md",
+           "plugins/skill-kit/skills/author/SKILL.md",
+           "plugins/skill-kit/skills/author/references/task-tracking-pattern.md",
+           "plugins/skill-kit/skills/publish/scripts/validate-pre-sync.sh"]
 
 
 @pytest.mark.parametrize("rel", CALLERS)

@@ -2,9 +2,8 @@
 # validate-skill.sh — Validate a Claude Code skill directory against quality rules
 # NOTE: Copies of this validator ship in the monorepo root scripts/ and in the scripts/
 # of these plugin skills: context:search, dev-flow:changelog, dev-flow:worktree,
-# skill-kit:author, skill-kit:extract, skill-kit:publish, and the deprecated
-# skill-publishing. Keep those copies byte-identical when editing. The exception is
-# the deprecated skill-authoring plugin's copy: it is older, frozen, and not kept in step.
+# skill-kit:author, skill-kit:extract and skill-kit:publish. Keep those copies
+# byte-identical when editing.
 # Exit codes: 0 = pass, 1 = fail, 2 = usage error
 set -eu
 
@@ -91,7 +90,7 @@ pass "SKILL.md exists"
 # 2. Frontmatter extraction helpers
 # ============================================================
 # Extract ONLY the first frontmatter block (between first pair of --- delimiters)
-# This avoids matching example frontmatter in the body of skills like skill-authoring
+# This avoids matching example frontmatter in the body of skills like skill-kit:author
 get_frontmatter() {
   awk '/^---$/{n++; if(n==2) exit; next} n==1{print}' "$SKILL_MD"
 }

@@ -60,6 +60,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 - The stale `plugins/obsidian-brain` mirror (2.5.1) and its marketplace entry (#166). obsidian-brain ships from its own repo and marketplace `obsidian-brain-repo`.
 - The 11 bare top-level skill directories (75 files) and their README install steps (#167, epic #156): `changelog-keeper`, `claudeception`, `context-shield`, `conversation-search`, `deep-review`, `figma-ui-designer`, `skill-authoring`, `spec-creator`, `spec-implement`, `spec-review` and `worktree`. Every one has a plugin home and none had a commit after that home was created. The README "Skills" section and its count are gone, and CONTRIBUTING, `AGENTS.md` and `CLAUDE.md` now say skills live at `plugins/<group>/skills/<name>/`. The README facts the `spec` plugin lacked moved into `plugins/spec/README.md` (`spec` 1.0.4).
+- **The 14 deprecated plugins (#198).** The directories under `plugins/` (222 files) and their marketplace entries are gone, one release earlier than the consolidation design planned, because v4.0.0 is a major release. Move to: `deep-review` and `adversarial-review` to `review`; `context-bar`, `custom-statusline` and `statusline-creator` to `statusline`; `context-shield` to `context`; `figma-ui-designer` to `ui-design`; `product-video-creation` and `smart-screen-recorder` to `demo-video`; `skill-authoring` and `skill-publishing` to `skill-kit`; `spec-creator`, `spec-review` and `spec-implement` to `spec`. The `adversarial-review-tests` CI job is removed with them.
 
 ### Fixed
 
