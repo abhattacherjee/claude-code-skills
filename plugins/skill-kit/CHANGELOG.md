@@ -2,6 +2,15 @@
 
 All notable changes to the **skill-kit** plugin are documented here.
 
+## [1.1.1] - 2026-10-06
+
+### Fixed
+
+- `publish`: `sync-monorepo.sh` finds each plugin skill through its manifest's `source` in the auto-build drift check and the plugin resync, as `prepare-plugin.sh` does. A manifest whose skill name differs from its source directory (`custom-statusline`: skill `install-statusline`) was never rebuilt or resynced, with no output. A published plugin whose declared skill source does not resolve stops the sync with exit 1 before anything is written, and the error names the manifest. The reversion guard also refuses a plugin skill built from a refused directory of another name, and the resync takes the plugin-root `CHANGELOG.md` from the manifest's first skill, not the first directory by name (#92).
+- `publish`: `sync-monorepo.sh --skills <subset>` re-syncs those skills and keeps the full catalogue. The README rows, the skill count and the install-all lines still list every skill in the monorepo, in the order a full sync writes them. Before, they shrank to the named skills. A `--skills` name with no `SKILL.md` gets no install line, and naming no real skill is still refused (#93).
+- `publish`: `prepare-plugin.sh` leaves a `SKILL.md` section out of the plugin README when its prose holds a placeholder such as `<github-user>`, and prints `dropped section "<title>": placeholder <x> in prose` on stderr; `sync-monorepo.sh` passes the note on when it publishes that README. Placeholders in fenced blocks and inline code stay. `extract_section` and `extract_headings` skip `## ` lines inside fenced code blocks: skill-publishing's `SKILL.md` has a `## See Also` template in a code block, and it became that README's See Also (#106).
+- The repo's `scripts/test-sync-hygiene.sh`, which tests these scripts, no longer turns plugin validation off for every case. Its fixtures are valid skills now; only the 9 description-parsing fixtures that must be invalid skip validation, each with a reason (#106).
+
 ## [1.1.0] - 2026-10-06
 
 ### Added

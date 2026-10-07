@@ -1,7 +1,7 @@
 # skill-kit
 
 <!-- plugin-meta:start -->
-**Version:** 1.1.0 · **3** skills · **0** agents · **0** commands
+**Version:** 1.1.1 · **3** skills · **0** agents · **0** commands
 <!-- plugin-meta:end -->
 
 Three skills for the life of a Claude Code skill, in one install. `author` writes and optimizes it, `publish` packages it as a plugin and syncs it to a GitHub monorepo, and `extract` turns what a work session taught you into a new or updated skill.
