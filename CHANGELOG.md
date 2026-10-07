@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-07
+
 ### Added
 
 - Plugin consolidation design (`docs/superpowers/specs/2026-10-03-plugin-consolidation-design.md`, epic #156): one plugin per workflow, no bare skill copies, and the four standalone skill repos archived.
@@ -45,16 +47,6 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 - `skill-kit` 1.1.0 (#190): `sync-monorepo.sh` syncs a plugin-only monorepo instead of refusing it: it validates every plugin, then `catalogue.py` writes the catalogue, and nothing else is written, except the plugin `--add-plugin` copies. `--skills`, `--add` and `--init` are refused there. `validate-pre-sync.sh` validates every plugin and runs `catalogue.py --check`. In every layout `catalogue.py` now writes `marketplace.json`.
 - The 14 deprecated plugins carry their "Deprecated: …" description in `plugin.json`; only `marketplace.json` had it (#190). The 22 plugins other than `skill-kit` get a CHANGELOG line for the README meta line: 21 get a patch bump, and `skill-authoring` goes from 2.3.2 to 2.6.3, to match the version line of its CHANGELOG. The 14 deprecated plugins and `demo-video` keep each skill's version equal to the plugin's, so their 16 skills move with them and get a skill CHANGELOG entry (the same entry where the plugin and skill CHANGELOGs mirror each other). The skills of `context`, `dev-flow`, `github-board`, `review`, `spec`, `statusline` and `ui-design` keep their own versions.
 - Docs fixed by the new checks (#190): the README plugin table has catalogue markers; `smart-screen-recorder`'s README names its five agents; broken references in `CONTRIBUTING.md` and the `product-video-creation` and `skill-kit` READMEs point at real paths. `LOCAL-TESTING.md` no longer names an old feature branch as its example.
-
-### Deprecated
-
-- The `context-bar`, `custom-statusline` and `statusline-creator` plugins. Their marketplace entries stay one release, marked deprecated, and point at `statusline:install`, `statusline:create` and `statusline:context-bar`. They are removed in the next release (#158).
-- The `deep-review` and `adversarial-review` plugins. Their marketplace entries stay one release, marked deprecated, and point at `review:deep` and `review:adversarial`. They are removed in the next release (#159). The bare `deep-review/` directory goes with the other bare directories (#167).
-- The `spec-creator`, `spec-review` and `spec-implement` plugins. Their marketplace entries stay one release, marked deprecated, and point at `spec:create`, `spec:review` and `spec:implement`. They are removed in the next release (#167).
-- The `skill-authoring` and `skill-publishing` plugins, and the bare `claudeception` and `skill-authoring` skills. The two plugin entries stay one release in the marketplace, marked deprecated, and point at `skill-kit:author` and `skill-kit:publish` respectively. They are removed in the next release (#167).
-- The `context-shield` plugin, and the bare `context-shield` and `conversation-search` skills. The plugin entry stays one release in the marketplace, marked deprecated, and points at `context:shield`. It is removed in the next release (#167). The bare directories go with the others (#167).
-- The `figma-ui-designer` plugin, and the bare `worktree`, `changelog-keeper` and `figma-ui-designer` skills. The plugin entry stays one release in the marketplace, marked deprecated, and points at `ui-design:figma`. It is removed in the next release (#167). The bare directories go with it. `worktree` and `changelog-keeper` have no marketplace entry. Install `dev-flow` and `ui-design`, then remove the old ones, so the old names cannot win a plain-language request.
-- The `smart-screen-recorder` and `product-video-creation` plugins. Their marketplace entries stay one release, marked deprecated, and point at `demo-video:record` and `demo-video:produce`. They are removed in the next release (#167).
 
 ### Removed
 
