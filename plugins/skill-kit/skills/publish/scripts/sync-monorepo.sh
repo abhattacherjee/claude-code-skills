@@ -993,9 +993,9 @@ _BARE_ENTRY_MANIFESTS=""
 # loop then exits early having synced only the skills read so far. It exits 0
 # while doing it, and the CHANGELOG's "Synced N skills" and its inventory agree
 # with the truncation, so nothing flags it. (Since #93 the README catalogue
-# also lists skills already in the monorepo, so it would keep their rows, but
-# the run would still claim to have synced skills it never reached.) The old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such
-# exposure; converting to `while read` created it.
+# also lists skills already in the monorepo, so it would keep their rows.) The
+# old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such exposure; converting to
+# `while read` created it.
 #
 # TWO mechanisms, and they are not equally strong — an earlier version of this
 # comment claimed fd 3 alone meant "no child can reach the list at all", which

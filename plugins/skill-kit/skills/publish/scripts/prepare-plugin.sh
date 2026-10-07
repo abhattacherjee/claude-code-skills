@@ -415,14 +415,18 @@ PRIMARY_SKILL_MD="$PRIMARY_SKILL_SRC/SKILL.md"
 # people to visit https://github.com/<github-user>/<skill-name>. Placeholders
 # in fenced blocks and inline code stay (see section_has_prose_placeholder).
 readme_section() {
-  local text ph
+  local text ph rc
   text=$(extract_section "$1" "$2")
   [[ -z "$text" ]] && return 0
-  if ph=$(section_has_prose_placeholder "$text"); then
-    echo "dropped section \"$2\": placeholder $ph in prose" >&2
-    return 0
-  fi
-  printf '%s\n' "$text"
+  ph=$(section_has_prose_placeholder "$text") && rc=0 || rc=$?
+  case "$rc" in
+    0) echo "dropped section \"$2\": placeholder $ph in prose" >&2 ;;
+    1) printf '%s\n' "$text" ;;
+    # A failed check is not a clean section: stop rather than publish it
+    # unchecked. Under set -e the caller's assignment then stops the build.
+    *) echo "Error: could not check section \"$2\" of $1 for placeholders (exit $rc)" >&2
+       return 1 ;;
+  esac
 }
 
 # --- Extract data from primary skill ---

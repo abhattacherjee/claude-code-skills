@@ -6994,6 +6994,26 @@ assert_contains "…but the README keeps its heading and description" \
 assert_contains "…and its What It Does and Contents" "- \`n106all\` — Fixture skill whose every extracted section has a placeholder." "$N106_README"
 assert_not_contains "…with no placeholder left" "<github-user>" "$N106_README"
 
+# (d) The placeholder check itself failing (perl broken for it) stops the build
+# rather than publishing the section unchecked. The fake perl fails only for
+# the placeholder check's script, so extract_section still works.
+N106_FAKEPERL="$SCRATCH_DIR/fake-perl-bin"
+mkdir -p "$N106_FAKEPERL"
+cat > "$N106_FAKEPERL/perl" <<EOF
+#!/usr/bin/env bash
+case "\$*" in *"qw(a abbr"*) exit 2 ;; esac
+exec "$(command -v perl)" "\$@"
+EOF
+chmod +x "$N106_FAKEPERL/perl"
+N106_RC=0
+( PATH="$N106_FAKEPERL:$PATH"; run_prepare n106mix-plugin "$SCRATCH_DIR/n106fail.stdout" "$SCRATCH_DIR/n106fail.stderr" \
+    "$PREPARE_TMPDIR" "$PREPARE_OUT_DIR/n106fail-plugin" ) || N106_RC=$?
+assert_eq "a placeholder check that fails stops prepare-plugin.sh with exit 1 (#106)" "1" "$N106_RC"
+assert_contains "…and says which section it could not check" \
+    'Error: could not check section "Quick Check"' "$(cat "$SCRATCH_DIR/n106fail.stderr")"
+assert_eq "…and writes no README" "ABSENT" \
+    "$([[ -f "$PREPARE_OUT_DIR/n106fail-plugin/README.md" ]] && echo PRESENT || echo ABSENT)"
+
 # Through a sync: the auto-build shows the child's log only on failure, so the
 # note is passed on when the generated README is published, and not when an
 # existing README is kept.

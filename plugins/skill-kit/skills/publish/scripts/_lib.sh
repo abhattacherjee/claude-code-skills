@@ -448,9 +448,10 @@ extract_headings() {
   ' "$file" 2>/dev/null | head -"$max" | sed 's/^## //'
 }
 
-# section_has_prose_placeholder <text>: true (exit 0) when the text has a
-# template placeholder such as <github-user> outside code, and prints the first
-# one. Fenced blocks and inline code spans are removed first: a usage line such
+# section_has_prose_placeholder <text>: exit 0 when the text has a template
+# placeholder such as <github-user> outside code, and prints the first one;
+# exit 1 when it has none. Any other exit status means the check itself failed
+# (perl missing or broken), and callers must not read it as "no placeholder". Fenced blocks and inline code spans are removed first: a usage line such
 # as `tool <monorepo-dir>` is legitimate. A few common HTML tags (<br>,
 # <kbd>, <details>, ...) are not placeholders. Used by prepare-plugin.sh to
 # keep template text out of generated READMEs (#106).
