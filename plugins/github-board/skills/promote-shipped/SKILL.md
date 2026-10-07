@@ -242,7 +242,10 @@ If the candidate count is 0, exit cleanly — board is in sync with main.
 ```
 
 Always run dry-run first. The preview shows per-item: current → Done transition
-AND the resolved release tag that will appear in the issue comment. Its header
+AND the resolved release tag that will appear in the issue comment. For a `merged`
+item whose milestone is not the release milestone, it adds
+`would set milestone: <current|none> -> <target> (<tag>)`. No line means the
+milestone already matches (or no release contains the item yet). Its header
 names the **target column** (`Target column: <name> [<option id>]`), not just the
 opaque option id — the resolver's last tier is a substring match on
 `done|released|shipped`, and boards in this workflow legitimately contain columns
@@ -261,6 +264,11 @@ to proceed:
   currently unknown, not negative. The stderr `WARN:` line above carries the actual
   API error.
 
+A stderr `WARN: no milestone titled ...` means no milestone matches the release tag,
+so that item's milestone is left alone. Create the release milestone (for example
+`v4.0`), then re-run if you want it set. `milestone: UNAVAILABLE` means the release
+or the milestone list could not be read.
+
 ### Phase 5 — Confirm and apply
 
 Use `AskUserQuestion` with options:
@@ -274,9 +282,18 @@ the candidate JSON before calling `--apply`.
 "${CLAUDE_SKILL_DIR}/scripts/apply-promotions.sh" /tmp/release-board-cand.json --apply
 ```
 
-For each candidate the apply phase performs two writes:
+For each candidate the apply phase performs up to three writes:
 1. **Status mutation** — `updateProjectV2ItemFieldValue` to Done (primary).
-2. **Release comment** — posts `🚀 Released in [v1.6.2](url) (published 2026-04-22).
+2. **Release milestone** (`merged` items only) — when the item's milestone is not
+   the release milestone, `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`.
+   The release milestone is the one titled with the exact tag (`v3.18.1`), else its
+   minor version (`v3.18`); the leading `v` is optional on both sides. REST by number
+   works for a closed milestone, which the release milestone usually is. No match,
+   or two matches, prints a warning and changes nothing. `nopr` and `wontfix` items
+   keep their milestone: they did not ship in a release. Best-effort, like the
+   comment: a failure is reported and counted on the `Milestones:` summary line,
+   and never undoes the board move.
+3. **Release comment** — posts `🚀 Released in [v1.6.2](url) (published 2026-04-22).
    Moved to Done on the project board.` to the linked issue/PR (best-effort; a
    comment failure does NOT mark the promotion as failed — the board move is the
    primary side-effect).
@@ -303,14 +320,16 @@ no-merged-PR note (`nopr`/`wontfix`) is marker-deduplicated; the 🚀 release co
 is not. If most items succeeded, comment on the few by hand instead.
 
 Override flags:
-- `--release-tag <tag>` — skip auto-detect, use this tag for every comment.
-  Useful when the auto-detect picks the wrong release (e.g. you ran the skill
-  late and items were already in older releases).
-- `--no-release-comment` — skip commenting entirely. Just do the board move.
+- `--release-tag <tag>` — skip auto-detect, use this tag for every comment and
+  every release milestone. Useful when the auto-detect picks the wrong release
+  (e.g. you ran the skill late and items were already in older releases).
+- `--no-release-comment` — skip commenting entirely. The board move and the release
+  milestone still happen, so the release lookup still runs.
 
 ### Phase 6 — Summary
 
-Print: project title, items moved (count + #s), items skipped (count + reasons), and
+Print: project title, items moved (count + #s), items skipped (count + reasons), the
+`Milestones:` line (set, unchanged, skipped, failed), and
 a one-line "verify in browser" link to the board URL. Use the emoji-prefixed list
 format the user prefers (per `feedback_list_over_table_status` memory) — never a
 markdown table.
