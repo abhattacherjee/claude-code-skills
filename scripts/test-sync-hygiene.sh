@@ -7605,6 +7605,50 @@ assert_line_present "…so text after the item is checked as prose" \
 assert_contains "…and the heading after the item is a Key Feature (awk)" "**After Unclosed Item Fence**" \
     "$(cat "$PREPARE_OUT_DIR/r195x5c-plugin/README.md" 2>/dev/null || true)"
 
+# X-006: a fence after a list, indented less than the item's content column, is
+# top-level: the list context ends at that line, so the fence's own closing
+# line closes it and a "## " line inside it is code (both readers).
+# The two readers are called directly, from the _lib.sh beside SYNC_SCRIPT.
+r195_lib() { ( source "$(dirname "$SYNC_SCRIPT")/_lib.sh" && "$@" ); }
+cat > "$SCRATCH_DIR/r195-x6.body" <<'EOF'
+## Usage Notes
+
+- Example:
+
+```bash
+tool <repo>
+## Not a heading
+```
+
+R195-X006-REAL-TEXT.
+
+## Next After X6
+
+x
+EOF
+r195_prep_fixture r195x6 "$SCRATCH_DIR/r195-x6.body"
+R195_RC=0
+run_prepare r195x6-plugin "$SCRATCH_DIR/r195x6.stdout" "$SCRATCH_DIR/r195x6.stderr" || R195_RC=$?
+R195_X6_MD="$PREPARE_FIXTURE_DIR/r195x6-plugin/SKILL.md"
+assert_eq "a top-level fence after a list builds (X-006)" "0" "$R195_RC"
+assert_eq "…and the check sees a closed fence and no placeholder in prose (perl)" "1" \
+    "$(r195_lib section_has_prose_placeholder "$(r195_lib extract_section "$R195_X6_MD" "Usage Notes")" >/dev/null; echo $?)"
+assert_contains "…and extract_section keeps the fence and the text after it (awk)" \
+    "$(printf '```bash\ntool <repo>\n## Not a heading\n```\n\nR195-X006-REAL-TEXT.')" "$(r195_lib extract_section "$R195_X6_MD" "Usage Notes")"
+assert_line_absent "…and extract_headings does not list the fenced line (awk)" "Not a heading" "$(r195_lib extract_headings "$R195_X6_MD" 20)"
+assert_line_present "…but does list the next real heading" "Next After X6" "$(r195_lib extract_headings "$R195_X6_MD" 20)"
+# 1 to 3 spaces of indent, below the content column of a "1.  " item (4), is
+# still top-level.
+for _i in 1 2 3; do
+    _sp=$(printf '%*s' "$_i" '')
+    printf -- '---\nname: x6\n---\n\n## Usage Notes\n\n1.  Step:\n\n%s```bash\n%stool <repo>\n## Not a heading %s\n%s```\n\nR195-X006-REAL-%s.\n\n## Next After X6\n' \
+        "$_sp" "$_sp" "$_i" "$_sp" "$_i" > "$SCRATCH_DIR/r195-x6-$_i.md"
+    assert_line_absent "a fence indented $_i after a list, below its content column, is top-level (awk)" \
+        "Not a heading $_i" "$(r195_lib extract_headings "$SCRATCH_DIR/r195-x6-$_i.md" 20)"
+    assert_eq "…and closed, with no placeholder in prose (perl, indent $_i)" "1" \
+        "$(r195_lib section_has_prose_placeholder "$(r195_lib extract_section "$SCRATCH_DIR/r195-x6-$_i.md" "Usage Notes")" >/dev/null; echo $?)"
+done
+
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
     echo "All assertions passed."

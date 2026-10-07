@@ -390,8 +390,10 @@ short_desc() {
 # backtick (so ```tool <repo>``` on one line is an inline code span, not a
 # fence). It closes with a line of only the same character, at least as many,
 # after at most 3 spaces. A tab or 4 spaces of indent is not a fence, except
-# right after a list item: when the previous non-blank line is a list item, a
-# fence may be indented up to the item's content column plus 3, and it ends at
+# right after a list item: when the previous non-blank line is a list item and
+# the fence line is indented at least to the item's content column (a line
+# indented less is outside the item, so a top-level fence after a list stays
+# top-level), a fence may be indented up to that column plus 3, and it ends at
 # its closing line or at the first non-blank line indented less than that
 # content column (the end of the item). Continuation text inside the item is
 # not tracked, so a fence after it is read as prose (it is dropped if it holds
@@ -437,6 +439,10 @@ _MD_FENCE_AWK='
         return 1
       }
     }
+    # A non-blank line indented less than the list item content column is
+    # outside the item, so the list context ends before this line can open a
+    # fence (X-006).
+    if (plc >= 0 && s ~ /[^ \t]/ && match(s, /^ */) && RLENGTH < plc) plc = -1
     f = fence_run(s)
     allowed = (plc >= 0) ? plc + 3 : 3
     # A backtick fence whose info string holds a backtick is not a fence
@@ -528,6 +534,11 @@ section_has_prose_placeholder() {
           }
           next;
         }
+      }
+      # Same as the awk rule: a less-indented line ends the list context (X-006).
+      if ($plc >= 0 && $l =~ /\S/) {
+        my $lind = $l =~ /^( *)/ ? length($1) : 0;
+        $plc = -1 if $lind < $plc;
       }
       my $allowed = $plc >= 0 ? $plc + 3 : 3;
       if (($l =~ /^( *)(`{3,})([^`]*)$/ || $l =~ /^( *)(~{3,})(.*)$/) && length($1) <= $allowed) {
