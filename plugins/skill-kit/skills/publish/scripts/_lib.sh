@@ -389,18 +389,24 @@ short_desc() {
 # or tildes after at most 3 spaces, and a backtick fence's info string holds no
 # backtick (so ```tool <repo>``` on one line is an inline code span, not a
 # fence). It closes with a line of only the same character, at least as many,
-# after at most 3 spaces. A tab or 4 spaces of indent is not a fence (in a list
-# item that under-reports a fence; it never hides prose). A trailing CR is
-# ignored, so a fence line saved with CRLF still closes. _MD_FENCE_AWK is shared by the two
+# after at most 3 spaces. A tab or 4 spaces of indent is not a fence, except
+# right after a list item: when the previous non-blank line is a list item, a
+# fence may be indented up to the item's content column plus 3, and it ends at
+# its closing line or at the first non-blank line indented less than that
+# content column (the end of the item). Continuation text inside the item is
+# not tracked, so a fence after it is read as prose (it is dropped if it holds
+# a placeholder; it is never published unchecked). A trailing CR is ignored,
+# so a fence line saved with CRLF still closes. _MD_FENCE_AWK is shared by the two
 # awk readers below so they cannot disagree about where a fence ends;
 # section_has_prose_placeholder applies the same rule in perl.
 _MD_FENCE_AWK='
-  function fence_run(line,   s, c, n, ind) {
-    s = line; sub(/\r$/, "", s)
-    ind = 0
-    while (ind < 4 && substr(s, ind + 1, 1) == " ") ind++
-    if (ind > 3) return ""
-    s = substr(s, ind + 1)
+  # fence_run <line>: "<char><count>" when the line, after its leading spaces,
+  # starts with 3 or more backticks or tildes; "" otherwise. Sets FENCE_IND
+  # (the number of leading spaces) and FENCE_REST (the text after the run).
+  function fence_run(s,   c, n) {
+    FENCE_IND = 0
+    while (substr(s, FENCE_IND + 1, 1) == " ") FENCE_IND++
+    s = substr(s, FENCE_IND + 1)
     c = substr(s, 1, 1)
     if (c != "`" && c != "~") return ""
     n = 0
@@ -409,19 +415,39 @@ _MD_FENCE_AWK='
     FENCE_REST = substr(s, n + 1)
     return c n
   }
+  # list_content <line>: the content column of a list item line ("- ", "* ",
+  # "+ ", "1. ", "1) "), or -1 when the line is not a list item.
+  function list_content(s) {
+    if (match(s, /^ *([-*+]|[0-9]+[.)]) +/)) return RLENGTH
+    return -1
+  }
   # Returns 1 when this line opens, closes or sits inside a fence.
-  function in_fence(line,   f) {
-    f = fence_run(line)
-    if (fc == "") {
-      # A backtick fence whose info string holds a backtick is not a fence
-      # (CommonMark): ```tool <repo>``` is an inline code span.
-      if (f != "" && !(substr(f, 1, 1) == "`" && index(FENCE_REST, "`"))) {
-        fc = substr(f, 1, 1); fl = substr(f, 2) + 0; return 1
+  function in_fence(line,   s, f, allowed) {
+    s = line; sub(/\r$/, "", s)
+    if (fc != "") {
+      # A fence inside a list item ends with the item: a non-blank line
+      # indented less than the item content column.
+      if (fcont > 0 && s ~ /[^ \t]/ && match(s, /^ */) && RLENGTH < fcont) {
+        fc = ""
+      } else {
+        f = fence_run(s)
+        if (f != "" && FENCE_IND <= fmax && substr(f, 1, 1) == fc && substr(f, 2) + 0 >= fl && FENCE_REST ~ /^[ \t]*$/) {
+          fc = ""; plc = -1
+        }
+        return 1
       }
-      return 0
     }
-    if (f != "" && substr(f, 1, 1) == fc && substr(f, 2) + 0 >= fl && FENCE_REST ~ /^[ \t]*$/) fc = ""
-    return 1
+    f = fence_run(s)
+    allowed = (plc >= 0) ? plc + 3 : 3
+    # A backtick fence whose info string holds a backtick is not a fence
+    # (CommonMark): ```tool <repo>``` is an inline code span.
+    if (f != "" && FENCE_IND <= allowed && !(substr(f, 1, 1) == "`" && index(FENCE_REST, "`"))) {
+      fc = substr(f, 1, 1); fl = substr(f, 2) + 0; fmax = allowed
+      fcont = (plc >= 0) ? plc : 0
+      return 1
+    }
+    if (s ~ /[^ \t]/) plc = list_content(s)
+    return 0
   }
 '
 
@@ -436,7 +462,7 @@ extract_section() {
   local heading="$2"
   local st
   awk -v h="$heading" "$_MD_FENCE_AWK"'
-    BEGIN { fc = "" }
+    BEGIN { fc = ""; plc = -1 }
     {
       if (in_fence($0)) { if (found) print; next }
     }
@@ -456,7 +482,7 @@ extract_headings() {
   local file="$1"
   local max="${2:-10}"
   awk "$_MD_FENCE_AWK"'
-    BEGIN { fc = "" }
+    BEGIN { fc = ""; plc = -1 }
     /^---$/ && fm < 2 { fm++; next }
     fm < 2 { next }
     { if (in_fence($0)) next }
@@ -475,8 +501,9 @@ extract_headings() {
 # digits, "_", "-", ".", "/" or spaces, then ">", in any case: <github-user>,
 # <GITHUB_USER>, <your repo>, <owner/repo>, < github-user>. Not caught: other
 # template styles such as {{NAME}}, $NAME or YOUR-USERNAME. A common HTML tag
-# is not a placeholder; the allow-list is checked on the first word, in any
-# case, so <br>, <KBD>, <br/> and <details open> pass. Known false positives:
+# is not a placeholder; the allow-list is checked on the tag name (the leading
+# letters and digits, followed by a space, "/" or ">"), in any case, so <br>,
+# <KBD>, <br/> and <details open> pass, and <code-dir> does not. Known false positives:
 # generic types in prose, such as List<string> (write them as inline code), and
 # a comparison written as "a < b > c".
 # What is ignored: fenced blocks (the CommonMark rules above), and inline code
@@ -487,16 +514,28 @@ extract_headings() {
 # is not seen as code, so its text is checked as prose.
 section_has_prose_placeholder() {
   printf '%s\n' "$1" | perl -0777 -ne '
-    my ($fc, $fl, $prose) = ("", 0, "");
+    # The same fence rules as _MD_FENCE_AWK above, line for line.
+    my ($fc, $fl, $fmax, $fcont, $plc, $prose) = ("", 0, 3, 0, -1, "");
     for my $l (split /\n/, $_) {
       $l =~ s/\r$//;
       if ($fc ne "") {
-        $fc = "" if $l =~ /^ {0,3}(\Q$fc\E+)[ \t]*$/ && length($1) >= $fl;
+        my $ind = $l =~ /^( *)/ ? length($1) : 0;
+        if ($fcont > 0 && $l =~ /\S/ && $ind < $fcont) {
+          $fc = "";
+        } else {
+          if ($l =~ /^( *)(\Q$fc\E+)[ \t]*$/ && length($1) <= $fmax && length($2) >= $fl) {
+            $fc = ""; $plc = -1;
+          }
+          next;
+        }
+      }
+      my $allowed = $plc >= 0 ? $plc + 3 : 3;
+      if (($l =~ /^( *)(`{3,})([^`]*)$/ || $l =~ /^( *)(~{3,})(.*)$/) && length($1) <= $allowed) {
+        $fc = substr($2, 0, 1); $fl = length($2); $fmax = $allowed;
+        $fcont = $plc >= 0 ? $plc : 0;
         next;
       }
-      if ($l =~ /^ {0,3}(`{3,})([^`]*)$/ || $l =~ /^ {0,3}(~{3,})(.*)$/) {
-        $fc = substr($1, 0, 1); $fl = length($1); next;
-      }
+      if ($l =~ /\S/) { $plc = $l =~ /^( *(?:[-*+]|[0-9]+[.)]) +)/ ? length($1) : -1; }
       # Code spans, as CommonMark matches them: a run of N backticks opens a
       # span that closes at the next run of exactly N; a run with no such
       # partner is a literal backtick and the scan goes on after it.
@@ -518,8 +557,11 @@ section_has_prose_placeholder() {
     my %html = map { $_ => 1 } qw(a abbr b blockquote br center code dd del details div dl dt em hr i img ins kbd li mark ol p pre s small span strong sub summary sup table tbody td th thead tr u ul);
     while ($prose =~ /<\s*([A-Za-z][A-Za-z0-9_.\/ -]*)>/g) {
       my $ph = $1;
-      my ($word) = $ph =~ /^([A-Za-z0-9]+)/;
-      next if $html{lc $word};
+      # The tag name is the whole leading run of letters and digits, and only
+      # counts when a space, "/" or the closing ">" follows it: <br/> and
+      # <details open> are HTML, <code-dir> and <table-name> are not.
+      my ($word) = $ph =~ /^([A-Za-z0-9]+)(?=[ \/]|$)/;
+      next if defined $word && $html{lc $word};
       print "<$ph>";
       exit 0;
     }

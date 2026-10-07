@@ -7535,6 +7535,76 @@ assert_line_present "a placeholder with a space after < is caught (C-002)" \
 assert_contains "…and <details open> is HTML, so its section stays (C-002)" "R195-DETAILS-MARKER" \
     "$(cat "$PREPARE_OUT_DIR/r195cm3-plugin/README.md" 2>/dev/null || true)"
 
+# ============================================================
+# PR #195 cross-model recheck — X-004 and X-005
+# ============================================================
+
+# X-004: the HTML allow-list takes the whole tag name, so a placeholder that
+# starts with an HTML tag name is still a placeholder.
+for _t in 'code-dir:drop' 'table-name:drop' 'code:keep' 'br/:keep' 'details open:keep'; do
+    _tn=${_t%%:*}; _tw=${_t##*:}
+    _tf="r195x4$(printf '%s' "$_tn" | tr -cd 'a-z')"
+    printf '## See Also\n\n- Use <%s> here. R195-X004-MARKER.\n' "$_tn" > "$SCRATCH_DIR/$_tf.body"
+    r195_prep_fixture "$_tf" "$SCRATCH_DIR/$_tf.body"
+    R195_RC=0
+    run_prepare "$_tf-plugin" "$SCRATCH_DIR/$_tf.stdout" "$SCRATCH_DIR/$_tf.stderr" || R195_RC=$?
+    assert_eq "prepare-plugin.sh builds the <$_tn> fixture (X-004)" "0" "$R195_RC"
+    if [[ "$_tw" == drop ]]; then
+        assert_line_present "<$_tn> is a placeholder, not the HTML tag it starts with (X-004)" \
+            "dropped section \"See Also\": placeholder <$_tn> in prose" "$(cat "$SCRATCH_DIR/$_tf.stderr")"
+    else
+        assert_contains "<$_tn> is HTML, so its section stays (X-004)" "R195-X004-MARKER" \
+            "$(cat "$PREPARE_OUT_DIR/$_tf-plugin/README.md" 2>/dev/null || true)"
+    fi
+done
+
+# X-005: a fence indented under a list item is a fence (CommonMark), for both
+# readers. The perl check keeps the section whose only placeholder is inside
+# it; the awk reader sees the heading after it. The inner 3-space ``` line is
+# fence content: read on its own it would open a fence that never closes,
+# which used to stop the build (perl) and hide the next heading (awk).
+cat > "$SCRATCH_DIR/r195-x5.body" <<'EOF'
+## Quick Check
+
+- Example:
+
+    ````bash
+    run-it <monorepo-dir>
+   ```
+    ````
+
+R195-X005-KEPT-MARKER.
+
+## After List Fence
+
+Text.
+EOF
+r195_prep_fixture r195x5 "$SCRATCH_DIR/r195-x5.body"
+R195_RC=0
+run_prepare r195x5-plugin "$SCRATCH_DIR/r195x5.stdout" "$SCRATCH_DIR/r195x5.stderr" || R195_RC=$?
+R195_README="$(cat "$PREPARE_OUT_DIR/r195x5-plugin/README.md" 2>/dev/null || true)"
+assert_eq "a fence indented under a list item builds (X-005)" "0" "$R195_RC"
+assert_contains "…and its section is kept: the placeholder is code (perl)" "R195-X005-KEPT-MARKER" "$R195_README"
+assert_contains "…and the heading after it is a Key Feature (awk)" "**After List Fence**" "$R195_README"
+# Control: the same indent with no list item before it is still prose.
+printf '## Quick Check\n\nText.\n\n    ```bash\nVisit <github-user> now.\n    ```\n' > "$SCRATCH_DIR/r195-x5b.body"
+r195_prep_fixture r195x5b "$SCRATCH_DIR/r195-x5b.body"
+R195_RC=0
+run_prepare r195x5b-plugin "$SCRATCH_DIR/r195x5b.stdout" "$SCRATCH_DIR/r195x5b.stderr" || R195_RC=$?
+assert_line_present "control: a 4-space \`\`\` with no list item before it is still prose (X-005)" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195x5b.stderr")"
+# A list item's fence ends with the item: a line indented less than the item's
+# content is outside it, so a placeholder there is prose.
+printf '## Quick Check\n\n- Example:\n\n    ```bash\n    run-it\nVisit <github-user> after the item.\n\n## After Unclosed Item Fence\n\nText.\n' > "$SCRATCH_DIR/r195-x5c.body"
+r195_prep_fixture r195x5c "$SCRATCH_DIR/r195-x5c.body"
+R195_RC=0
+run_prepare r195x5c-plugin "$SCRATCH_DIR/r195x5c.stdout" "$SCRATCH_DIR/r195x5c.stderr" || R195_RC=$?
+assert_eq "a list item's fence ends with the item, not an unclosed fence (X-005)" "0" "$R195_RC"
+assert_line_present "…so text after the item is checked as prose" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195x5c.stderr")"
+assert_contains "…and the heading after the item is a Key Feature (awk)" "**After Unclosed Item Fence**" \
+    "$(cat "$PREPARE_OUT_DIR/r195x5c-plugin/README.md" 2>/dev/null || true)"
+
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
     echo "All assertions passed."
