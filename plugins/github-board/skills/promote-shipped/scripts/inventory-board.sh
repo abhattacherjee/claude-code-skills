@@ -198,6 +198,7 @@ ITEMS_QUERY='query($id:ID!, $cursor:String) {
               stateReason
               url
               repository { nameWithOwner }
+              milestone { number title state }
               closedByPullRequestsReferences(first:10, includeClosedPrs:true) {
                 pageInfo { hasNextPage }
                 nodes {
@@ -217,6 +218,7 @@ ITEMS_QUERY='query($id:ID!, $cursor:String) {
               baseRefName
               mergeCommit { oid }
               repository { nameWithOwner }
+              milestone { number title state }
             }
             ... on DraftIssue { title }
           }
@@ -276,6 +278,7 @@ ITEMS=$(echo "$ALL_NODES" | jq --arg sfid "$STATUS_FIELD_ID" '
             stateReason: ($c.stateReason // null),
             url: $c.url,
             repo: ($c.repository.nameWithOwner // null),
+            milestone: ($c.milestone // null),
             linkedPRsTruncated: ($c.closedByPullRequestsReferences.pageInfo.hasNextPage // false),
             linkedPRs: [
               ($c.closedByPullRequestsReferences.nodes // [])[]
@@ -295,7 +298,8 @@ ITEMS=$(echo "$ALL_NODES" | jq --arg sfid "$STATUS_FIELD_ID" '
             mergedAt: $c.mergedAt,
             baseRefName: $c.baseRefName,
             mergeCommitOid: ($c.mergeCommit.oid // null),
-            repo: ($c.repository.nameWithOwner // null)
+            repo: ($c.repository.nameWithOwner // null),
+            milestone: ($c.milestone // null)
           } else null end
         ),
         draftTitle: (if $c.__typename == "DraftIssue" then $c.title else null end)

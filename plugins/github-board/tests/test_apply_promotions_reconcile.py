@@ -6,11 +6,14 @@ prints "Promotions: 0 ok, 0 failed" and exits 0. That reads as "the board was
 already in sync" when in fact nothing was even attempted -- with a non-zero
 candidate count sitting right above it in the same output.
 
---dry-run + --no-release-comment keeps these tests entirely offline: neither
-path touches `gh`.
+--dry-run + --no-release-comment keeps the tests with `nopr` candidates entirely
+offline: neither path touches `gh` for them. The --release-tag tests do: a `merged` item looks up its release
+milestone (#203). They run with a `gh` stub that fails every call, so no test
+reaches GitHub; a failed milestone list is non-fatal.
 """
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,6 +25,24 @@ SCRIPT = Path(__file__).resolve().parent.parent / "skills" / "promote-shipped" /
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="apply-promotions.sh requires jq"
 )
+
+
+def _offline_env(tmp_path):
+    """PATH with a `gh` that logs each call and fails it, so nothing reaches GitHub."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    gh = bindir / "gh"
+    gh.write_text('#!/usr/bin/env bash\necho "$*" >> "$GH_LOG"\n'
+                  'echo "offline stub" >&2\nexit 1\n')
+    gh.chmod(0o755)
+    return dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}",
+                GH_LOG=str(tmp_path / "gh.log"))
+
+
+def _only_milestone_reads(tmp_path):
+    log = tmp_path / "gh.log"
+    calls = log.read_text().splitlines() if log.exists() else []
+    return all(c.startswith("api repos/o/r/milestones?") for c in calls)
 
 
 def _candidate(item_id, number, title="a title"):
@@ -140,8 +161,9 @@ def test_an_empty_column_does_not_shift_every_later_field(tmp_path, empty_field,
         cand["mergedPRs"][0]["repo"] = None
 
     # --release-tag skips the release lookup, so the preview prints a comment
-    # label with no `gh` involved. Without --no-release-comment, which would
-    # suppress the very label this asserts on.
+    # label without it. The milestone list is still read, through the failing stub
+    # (non-fatal). Without --no-release-comment, which would suppress the very
+    # label this asserts on.
     path = tmp_path / "cand.json"
     path.write_text(json.dumps({
         "project": {"id": "PVT_1", "title": "Board", "number": 1},
@@ -150,7 +172,8 @@ def test_an_empty_column_does_not_shift_every_later_field(tmp_path, empty_field,
     }))
     done = subprocess.run(
         ["bash", str(SCRIPT), str(path), "--dry-run", "--release-tag", "v1.0.0"],
-        capture_output=True, text=True, cwd=str(tmp_path))
+        capture_output=True, text=True, cwd=str(tmp_path), env=_offline_env(tmp_path))
+    assert _only_milestone_reads(tmp_path)
 
     assert done.returncode == 0, done.stdout + done.stderr
     # The preview names what it would comment. With the columns shifted, a merged
@@ -196,7 +219,8 @@ def test_a_hostile_field_value_cannot_split_a_row(tmp_path, hostile_title, why):
     }))
     done = subprocess.run(
         ["bash", str(SCRIPT), str(path), "--dry-run", "--release-tag", "v1.0.0"],
-        capture_output=True, text=True, cwd=str(tmp_path))
+        capture_output=True, text=True, cwd=str(tmp_path), env=_offline_env(tmp_path))
+    assert _only_milestone_reads(tmp_path)
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert "Promotions: 1 ok" in done.stdout, f"{why}: row count changed\n{done.stdout}"

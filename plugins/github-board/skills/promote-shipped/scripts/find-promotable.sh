@@ -166,6 +166,9 @@ COARSE=$(echo "$INV" | jq --arg doneOpt "$DONE_OPT" '
           title: (.issue.title // .pullRequest.title),
           url: (.issue.url // .pullRequest.url),
           repo: (.issue.repo // .pullRequest.repo),
+          # {number, title, state} or null. apply-promotions.sh compares it with the
+          # release milestone of a "merged" item.
+          milestone: (if .contentType == "Issue" then .issue.milestone else .pullRequest.milestone end),
           stateReason: (if .contentType == "Issue" then (.issue.stateReason // null) else null end),
           # ALL linked PRs, merged or not — the signal that separates a genuine
           # no-PR closure from work stalled in an unmerged PR.

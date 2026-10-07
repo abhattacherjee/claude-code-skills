@@ -4,6 +4,38 @@ All notable changes to the `promote-shipped` skill (named `github-release-board-
 before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-10-07
+
+### Added
+- **Each promoted `merged` item gets its release milestone (#203).** `apply-promotions.sh`
+  maps the release tag it resolves (or `--release-tag`) to a milestone: the exact
+  `vX.Y.Z` title first, then `vX.Y`, with the leading `v` optional on both sides. When
+  the item is in another milestone, or none, it is set after the board move with
+  `gh api -X PATCH repos/O/R/issues/N -F milestone=<number> --jq .milestone.number`.
+  Unlike `gh issue edit --milestone`, this can assign a closed milestone. A reply that
+  names another milestone counts as a failed write; on an HTTP error the response body
+  is printed. The milestone list (`state=all`, paginated) is read once per repo and run.
+  No match, two matches, or a tag that is not a version prints a warning and changes
+  nothing. `nopr` and `wontfix` items keep their milestone.
+- Dry run: `would set milestone: <current|none> -> <target> (<tag>)`, printed only when
+  the milestone would change, and `milestone: skipped — <reason>` when it is left alone.
+- Summary line, shown only when at least one item is `merged`. After `--apply`:
+  `Milestones: N set, N unchanged, N skipped, N failed`. After `--dry-run`:
+  `Milestones: N to set, N unchanged, N skipped, N cannot check`.
+- `inventory-board.sh` fetches `milestone { number title state }` for issues and PRs;
+  `find-promotable.sh` passes it through in each candidate.
+
+### Changed
+- `--no-release-comment` still looks up the release, so the milestone can be set.
+  `--release-tag` still skips the lookup and is used for the milestone too.
+- A failed milestone write, or a milestone list that cannot be read, is reported like a
+  comment failure: it is counted, and it never undoes the board move or changes the
+  exit code. A failed list, or an empty reply, is not cached as an empty one. The
+  `ACTION NEEDED` text says to re-run against the same candidates file with
+  `--apply --no-release-comment`.
+- A candidate repo with a `.` or `..` part gets no milestone write
+  (`FAILED — malformed issue number or repo`).
+
 ## [2.0.0] — 2026-10-02
 
 ### Security
