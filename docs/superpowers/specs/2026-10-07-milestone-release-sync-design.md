@@ -11,7 +11,7 @@ One milestone field carries two meanings. Work starts in the milestone of its **
 ## Decisions (2026-10-07)
 
 - **Two PRs.** PR A fixes milestones where the release is already known: `apply-plan.sh` and `promote-shipped`. PR B adds the next-release helper, move-card and plan-milestones step 0.
-- **The next-release milestone** is `milestones.next_release` in `~/.config/github-board/config.json` when set. Otherwise it is the open milestone with the lowest version, `vX.Y` or `vX.Y.Z`. It is sorted by version, not by milestone number: in this repo v4.2 is #9 and v4.1 is #13. With no candidate, the helper warns and returns nothing. No marker goes in the milestone description, because plan-milestones prints the description as the theme.
+- **The next-release milestone** is `milestones.next_release["O/R"]` in `~/.config/github-board/config.json` when set. It is a map keyed by repo, because one config serves every repo (corrected while planning PR B). Otherwise it is the open milestone with the lowest version, `vX.Y` or `vX.Y.Z`. It is sorted by version, not by milestone number: in this repo v4.2 is #9 and v4.1 is #13. With no candidate, the helper warns and returns nothing. No marker goes in the milestone description, because plan-milestones prints the description as the theme.
 - **/ship is out of scope.** Its post-merge step uses `~/.claude/skills/ship/scripts/board_move.py` (claude-code-config), not move-card. A claude-code-config issue switches it over once PR B lands.
 
 ## PR A: write the release milestone where the release is known
