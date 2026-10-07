@@ -592,6 +592,72 @@ if [[ -d "$MONOREPO_DIR" ]]; then
   validate_catalogue_inputs "Nothing was changed."
 fi
 
+# --- Where each manifest's skills come from (#92) ---
+# prepare-plugin.sh finds a plugin's skills through each skills[] entry's
+# "source". The auto-build drift check and the plugin resync below must look in
+# the same place. They used to look the skill NAME up as a directory
+# (skill_source_dir), so a manifest whose skill name differs from its source
+# directory (custom-statusline: skill install-statusline, source
+# custom-statusline/) was never rebuilt or resynced, with no output at all.
+#
+# MANIFEST_SKILL_SOURCES holds one "<plugin><TAB><skill><TAB><source-dir>" line
+# per resolvable skill. It reads the same manifests as the auto-build stage, in
+# the same order, with the same shadowing and standalone skips. A manifest whose
+# skills[] cannot be read is left out; the auto-build stage reports it.
+#
+# A declared source that does not resolve to a directory with a SKILL.md is an
+# error here, before anything is written, when the plugin is already published:
+# the drift checks are the only readers of a published plugin's source, and
+# they would otherwise skip it. An unpublished plugin is left to the build,
+# which fails with prepare-plugin.sh's own message and exit 1.
+MANIFEST_SKILL_SOURCES=""
+map_manifest_skill_sources() {
+  local m pname seen="" pairs sname ssrc dir bad=""
+  for m in "$SKILLS_HOME"/*/plugin-manifest.json "$MONOREPO_DIR"/*/plugin-manifest.json; do
+    [[ -f "$m" ]] || continue
+    pname=$(jq -r '.name // ""' "$m" 2>/dev/null || true)
+    [[ -z "$pname" ]] && pname=$(basename "$(dirname "$m")")
+    if printf '%s' "$seen" | grep -qxF -- "$pname"; then continue; fi
+    seen="${seen}${pname}"$'\n'
+    is_standalone_plugin "$pname" && continue
+    # A bare string means source "." (see manifest_skill_names in _lib.sh).
+    pairs=$(jq -r '(.skills // [])[]
+                   | if type == "string" then [., "."] else [(.name // ""), (.source // "")] end
+                   | @tsv' "$m" 2>/dev/null) || continue
+    while IFS=$'\t' read -r sname ssrc <&3; do
+      [[ -z "$sname" ]] && continue
+      dir=$(resolve_source_path "$ssrc" "$(dirname "$m")")
+      if [[ -n "$dir" && -f "$dir/SKILL.md" ]]; then
+        # Logical path, so source "." gives ".../my-skill", not ".../my-skill/.".
+        dir=$(cd "$dir" && pwd)
+        MANIFEST_SKILL_SOURCES="${MANIFEST_SKILL_SOURCES}${pname}"$'\t'"${sname}"$'\t'"${dir}"$'\n'
+      elif [[ -d "$MONOREPO_DIR/plugins/$pname/.claude-plugin" ]]; then
+        echo "Error: $m: skill source ${ssrc:-(empty)} does not resolve (no SKILL.md at ${dir:-(nothing)})" >&2
+        bad=1
+      fi
+    done 3<<< "$pairs" </dev/null
+  done
+  [[ -z "$bad" ]]
+}
+if ! map_manifest_skill_sources; then
+  echo "       Fix the manifest and re-run. Nothing was changed." >&2
+  exit 1
+fi
+
+# plugin_skill_source <plugin> <skill>: the directory a published plugin skill
+# is built from. The manifest's source when a manifest declares it, else the
+# name looked up as a directory (a plugin added with --add-plugin and no
+# manifest).
+plugin_skill_source() {
+  local hit
+  hit=$(printf '%s' "$MANIFEST_SKILL_SOURCES" | awk -F'\t' -v p="$1" -v s="$2" '$1==p && $2==s && !f {print $3; f=1}')
+  if [[ -n "$hit" ]]; then
+    printf '%s\n' "$hit"
+  else
+    skill_source_dir "$2"
+  fi
+}
+
 # skill_source_dir() now lives in _lib.sh (issue #78) — it is called from
 # validate-pre-sync.sh too, and having two definitions is exactly the
 # extract_field()-style duplication a fix once needed two rounds to fully close
@@ -630,6 +696,24 @@ REFUSED_COUNT=0
 skill_refused() {
   [[ -n "$REFUSED_SKILLS" ]] || return 1
   printf '%s' "$REFUSED_SKILLS" | grep -qxF "$1"
+}
+
+# plugin_skill_refused <plugin> <skill>: skill_refused for a plugin skill. The
+# refusal is recorded against the top-level directory name, and a plugin skill
+# can be built from a directory with another name (#92: skill
+# install-statusline, source my-statusline/). So the skill is refused when its
+# own name is, or when it is built from $SKILLS_HOME/<name> and <name> is.
+# Prints the source directory's name in that second case, for the SKIP line.
+plugin_skill_refused() {
+  skill_refused "$2" && return 0
+  local src
+  src=$(plugin_skill_source "$1" "$2")
+  [[ -n "$src" ]] || return 1
+  if skill_refused "$(basename "$src")" && [[ "$(dirname "$src")" -ef "$SKILLS_HOME" ]]; then
+    basename "$src"
+    return 0
+  fi
+  return 1
 }
 
 # --- Resolve GitHub user (via shared _lib.sh) ---
@@ -1390,8 +1474,10 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       # the one list whose truncation lets the guard miss its own refusal.
       while IFS= read -r _PLUGIN_SKILL <&3; do
         [[ -z "$_PLUGIN_SKILL" ]] && continue
-        if skill_refused "$_PLUGIN_SKILL"; then
-          _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
+        # Through the manifest's source, not just the name (#92): a skill built
+        # from a refused directory of another name is just as stale.
+        if _REFUSED_VIA=$(plugin_skill_refused "$_MANIFEST_NAME" "$_PLUGIN_SKILL"); then
+          _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL${_REFUSED_VIA:+ (source $_REFUSED_VIA)}"
         fi
       done 3<<< "$_MANIFEST_SKILL_NAMES" </dev/null
       if [[ -n "$_REFUSED_IN_PLUGIN" ]]; then
@@ -1414,7 +1500,10 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       # removed from the CHANGELOG stage below).
       _FIRST_SKILL="${_MANIFEST_SKILL_NAMES%%$'\n'*}"
       if [[ -n "$_FIRST_SKILL" ]]; then
-        _FIRST_SRC_DIR=$(skill_source_dir "$_FIRST_SKILL")
+        # The manifest's own source for this skill (#92), as prepare-plugin.sh
+        # reads it. A published plugin whose source does not resolve already
+        # stopped the run before the first write (map_manifest_skill_sources).
+        _FIRST_SRC_DIR=$(plugin_skill_source "$_MANIFEST_NAME" "$_FIRST_SKILL")
         _SRC_MD="${_FIRST_SRC_DIR:+$_FIRST_SRC_DIR/SKILL.md}"
         _DST_MD="$_PLUGIN_DST/skills/$_FIRST_SKILL/SKILL.md"
         if [[ -f "$_SRC_MD" && -f "$_DST_MD" ]]; then
@@ -1596,8 +1685,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
     for _PREF_DIR in "$_PLUGIN_DIR"skills/*/; do
       [[ ! -d "$_PREF_DIR" ]] && continue
       _PREF_NAME=$(basename "$_PREF_DIR")
-      if skill_refused "$_PREF_NAME"; then
-        _PLUGIN_REFUSED="${_PLUGIN_REFUSED:+$_PLUGIN_REFUSED }$_PREF_NAME"
+      if _REFUSED_VIA=$(plugin_skill_refused "$_PLUGIN_NAME" "$_PREF_NAME"); then
+        _PLUGIN_REFUSED="${_PLUGIN_REFUSED:+$_PLUGIN_REFUSED }$_PREF_NAME${_REFUSED_VIA:+ (source $_REFUSED_VIA)}"
       fi
     done
     if [[ -n "$_PLUGIN_REFUSED" ]]; then
@@ -1608,8 +1697,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
     for _PSKILL_MD in "$_PLUGIN_DIR"skills/*/SKILL.md; do
       [[ ! -f "$_PSKILL_MD" ]] && continue
       _SNAME=$(basename "$(dirname "$_PSKILL_MD")")
-      if skill_refused "$_SNAME"; then continue; fi
-      _SNAME_SRC=$(skill_source_dir "$_SNAME")
+      if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+      _SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
       _SRC_MD="${_SNAME_SRC:+$_SNAME_SRC/SKILL.md}"
       if [[ -f "$_SRC_MD" ]] && ! diff -q "$_PSKILL_MD" "$_SRC_MD" >/dev/null 2>&1; then
         _PLUGIN_DRIFTED=true; break
@@ -1621,8 +1710,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PSCRIPTS in "$_PLUGIN_DIR"skills/*/scripts; do
         [[ ! -d "$_PSCRIPTS" ]] && continue
         _SNAME=$(basename "$(dirname "$_PSCRIPTS")")
-        if skill_refused "$_SNAME"; then continue; fi
-        _SNAME_SRC=$(skill_source_dir "$_SNAME")
+        if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+        _SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
         _SRC_SCRIPTS="${_SNAME_SRC:+$_SNAME_SRC/scripts}"
         if [[ -n "$_SRC_SCRIPTS" && -d "$_SRC_SCRIPTS" ]]; then
           _SDIFF=$(diff -rq "$_PSCRIPTS" "$_SRC_SCRIPTS" 2>/dev/null | grep -v '.DS_Store' || true)
@@ -1648,8 +1737,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PCL in "$_PLUGIN_DIR"skills/*/CHANGELOG.md; do
         [[ ! -f "$_PCL" ]] && continue
         _SNAME=$(basename "$(dirname "$_PCL")")
-        if skill_refused "$_SNAME"; then continue; fi
-        _SNAME_SRC=$(skill_source_dir "$_SNAME")
+        if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+        _SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
         _SRC_CL="${_SNAME_SRC:+$_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_SRC_CL" ]] && ! diff -q "$_PCL" "$_SRC_CL" >/dev/null 2>&1; then
           _PLUGIN_DRIFTED=true; break
@@ -1667,8 +1756,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
         _SNAME=$(basename "$_PSKILL_DIR")
         # Guards SKILL.md, scripts/, references/ and CHANGELOG.md below in one
         # place — all four copy from the same refused local source.
-        if skill_refused "$_SNAME"; then continue; fi
-        _SRC=$(skill_source_dir "$_SNAME")
+        if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+        _SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
         [[ -z "$_SRC" ]] && continue
 
         # SKILL.md
@@ -1722,14 +1811,20 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       done
 
       # CHANGELOG.md — also sync to plugin root (top-level CHANGELOG)
-      # Use the first skill's CHANGELOG as the plugin-level CHANGELOG
-      _FIRST_SKILL_DIR=$(ls -d "$_PLUGIN_DIR"skills/*/ 2>/dev/null | head -1)
-      _FIRST_SNAME=""
-      [[ -n "$_FIRST_SKILL_DIR" ]] && _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
+      # Use the first skill's CHANGELOG as the plugin-level CHANGELOG. "First"
+      # is the manifest's skills[0], as prepare-plugin.sh reads it (#92); the
+      # first directory by name only for a plugin no manifest declares. By
+      # name alone, a manifest listing zeta before alpha got alpha's CHANGELOG
+      # copied over the root one on every resync.
+      _FIRST_SNAME=$(printf '%s' "$MANIFEST_SKILL_SOURCES" | awk -F'\t' -v p="$_PLUGIN_NAME" '$1==p && !f {print $2; f=1}')
+      if [[ -z "$_FIRST_SNAME" ]]; then
+        _FIRST_SKILL_DIR=$(ls -d "$_PLUGIN_DIR"skills/*/ 2>/dev/null | head -1)
+        [[ -n "$_FIRST_SKILL_DIR" ]] && _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
+      fi
       # A refused first skill would drag the plugin-root CHANGELOG backwards too,
       # leaving the plugin advertising a version its files no longer are.
-      if [[ -n "$_FIRST_SNAME" ]] && ! skill_refused "$_FIRST_SNAME"; then
-        _FIRST_SNAME_SRC=$(skill_source_dir "$_FIRST_SNAME")
+      if [[ -n "$_FIRST_SNAME" ]] && ! plugin_skill_refused "$_PLUGIN_NAME" "$_FIRST_SNAME" >/dev/null; then
+        _FIRST_SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_FIRST_SNAME")
         _FIRST_SRC_CL="${_FIRST_SNAME_SRC:+$_FIRST_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_FIRST_SRC_CL" && -f "$_PLUGIN_DIR/CHANGELOG.md" ]]; then
           if ! diff -q "$_PLUGIN_DIR/CHANGELOG.md" "$_FIRST_SRC_CL" >/dev/null 2>&1; then

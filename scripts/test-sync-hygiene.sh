@@ -6566,6 +6566,153 @@ assert_contains "…and says why" "no skills found in $ZERO_REL" "$(cat "$SCRATC
 assert_eq "…and leaves CHANGELOG.md alone" "$(printf '%s' "$RELEASE_BASE_CHANGELOG" | shasum)" "$(shasum < "$ZERO_REL/CHANGELOG.md")"
 assert_eq "…and creates no tag" "" "$(git -C "$ZERO_REL" tag -l)"
 
+# ============================================================
+# Issue #92 — drift checks resolve plugin skills through the manifest source
+# ============================================================
+#
+# prepare-plugin.sh finds a plugin's skills through each skills[] entry's
+# "source". The auto-build drift check and the plugin resync used to look the
+# skill NAME up as a directory instead (skill_source_dir). When the name and the
+# source directory differ, as in custom-statusline's manifest (skill
+# install-statusline, source the custom-statusline directory), they found
+# nothing and the plugin was never rebuilt or resynced, with no output at all.
+#
+# Fixture: a manifest in my-statusline/ declaring skill install-statusline with
+# source "." (the spec-creator style). Run 1 publishes it. Run 2 edits only
+# SKILL.md, which the auto-build drift check reads. Run 3 edits only scripts/
+# and CHANGELOG.md, which only the plugin resync reads.
+N92_HOME="$SCRATCH_DIR/skills-home-n92"
+N92_MONO="$SCRATCH_DIR/monorepo-n92"
+N92_SRC="$N92_HOME/my-statusline"
+N92_PUB="$N92_MONO/plugins/my-statusline"
+mkdir -p "$N92_SRC/scripts" "$N92_MONO"
+seed_top_level_skill "$N92_MONO"
+printf -- '---\nname: install-statusline\ndescription: Fixture skill whose plugin manifest names it differently from its directory. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# install-statusline\n\nFirst body.\n' \
+    > "$N92_SRC/SKILL.md"
+printf '#!/usr/bin/env bash\necho first\n' > "$N92_SRC/scripts/helper.sh"
+printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$N92_SRC/CHANGELOG.md"
+cat > "$N92_SRC/plugin-manifest.json" <<'EOF'
+{
+  "name": "my-statusline",
+  "version": "1.0.0",
+  "description": "Fixture plugin whose skill name differs from its source directory.",
+  "skills": [{"name": "install-statusline", "source": "."}],
+  "commands": []
+}
+EOF
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-1.stdout" "$SCRATCH_DIR/n92-1.stderr" || N92_RC=$?
+assert_eq "control: first sync of a manifest whose skill name differs from its directory exits 0 (#92)" "0" "$N92_RC"
+assert_file_exists "…and publishes the skill under its manifest name" "$N92_PUB/skills/install-statusline/SKILL.md"
+
+# Run 2: SKILL.md only. The edit changes the file's length, so rsync's
+# size-and-mtime quick check cannot skip it (see run 13's note above).
+printf '\nN92-SKILLMD-EDIT-MARKER, a longer second body.\n' >> "$N92_SRC/SKILL.md"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-2.stdout" "$SCRATCH_DIR/n92-2.stderr" || N92_RC=$?
+assert_eq "a SKILL.md edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
+assert_contains "…and the auto-build drift check rebuilds the plugin" \
+    "--- Auto-build plugin: my-statusline ---" "$(cat "$SCRATCH_DIR/n92-2.stdout")"
+assert_contains "…so the published SKILL.md holds the edit" \
+    "N92-SKILLMD-EDIT-MARKER" "$(cat "$N92_PUB/skills/install-statusline/SKILL.md" 2>/dev/null || true)"
+
+# Run 3: scripts/ and CHANGELOG.md only. SKILL.md matches, so the auto-build
+# stage does not fire and only the resync can carry these.
+printf '#!/usr/bin/env bash\necho N92-SCRIPT-EDIT-MARKER\n' > "$N92_SRC/scripts/helper.sh"
+printf '# Changelog\n\n## [1.0.1] - 2026-01-02\n\n- N92-CHANGELOG-EDIT-MARKER.\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$N92_SRC/CHANGELOG.md"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-3.stdout" "$SCRATCH_DIR/n92-3.stderr" || N92_RC=$?
+N92_OUT3="$(cat "$SCRATCH_DIR/n92-3.stdout")"
+assert_eq "a scripts/ and CHANGELOG edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
+assert_not_contains "…without an auto-build (SKILL.md did not change)" "Auto-build plugin: my-statusline" "$N92_OUT3"
+assert_contains "…and the plugin resync picks it up" "--- Plugin resync: my-statusline ---" "$N92_OUT3"
+assert_contains "…copying scripts/" "N92-SCRIPT-EDIT-MARKER" \
+    "$(cat "$N92_PUB/skills/install-statusline/scripts/helper.sh" 2>/dev/null || true)"
+assert_contains "…the skill CHANGELOG" "N92-CHANGELOG-EDIT-MARKER" \
+    "$(cat "$N92_PUB/skills/install-statusline/CHANGELOG.md" 2>/dev/null || true)"
+assert_contains "…and the plugin-root CHANGELOG" "N92-CHANGELOG-EDIT-MARKER" \
+    "$(cat "$N92_PUB/CHANGELOG.md" 2>/dev/null || true)"
+
+# Run 4: the reversion guard must see the source directory, not just the skill
+# name. The monorepo now holds a top-level my-statusline far newer than the
+# local one, so the main loop refuses my-statusline. The plugin is built from
+# that same stale directory, so it must be refused too. Before #92 this case
+# was safe only because the drift check could not see the plugin at all.
+mkdir -p "$N92_MONO/my-statusline"
+printf -- '---\nname: my-statusline\ndescription: In-repo copy, far newer than the local one. Use when: testing issue 92.\nmetadata:\n  version: 9.9.9\n---\n\n# my-statusline\n' \
+    > "$N92_MONO/my-statusline/SKILL.md"
+printf '\nN92-STALE-EDIT-MARKER\n' >> "$N92_SRC/SKILL.md"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-4.stdout" "$SCRATCH_DIR/n92-4.stderr" || N92_RC=$?
+N92_OUT4="$(cat "$SCRATCH_DIR/n92-4.stdout")"
+assert_eq "a refused source directory exits 3 (#92)" "3" "$N92_RC"
+assert_contains "…and the plugin built from it is skipped by the reversion guard" \
+    "SKIP (reversion guard)  plugins/my-statusline  —  stale local source for: install-statusline (source my-statusline)" "$N92_OUT4"
+assert_contains "…and by the resync" "SKIP (reversion guard)  plugins/my-statusline resync" "$N92_OUT4"
+assert_not_contains "…so the stale edit is not published" "N92-STALE-EDIT-MARKER" \
+    "$(cat "$N92_PUB/skills/install-statusline/SKILL.md" 2>/dev/null || true)"
+
+# The plugin-root CHANGELOG comes from the manifest's FIRST skill, as
+# prepare-plugin.sh builds it. The resync used to take the first skill
+# directory by name, so a manifest listing zeta before alpha had alpha's
+# CHANGELOG copied over the root one whenever alpha drifted.
+N92Z_HOME="$SCRATCH_DIR/skills-home-n92-zeta"
+N92Z_MONO="$SCRATCH_DIR/monorepo-n92-zeta"
+mkdir -p "$N92Z_HOME/zeta-pack/zeta" "$N92Z_HOME/zeta-pack/alpha" "$N92Z_MONO"
+seed_top_level_skill "$N92Z_MONO"
+for _z in zeta alpha; do
+    printf -- '---\nname: %s\ndescription: Fixture skill in a two-skill plugin. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' \
+        "$_z" "$_z" > "$N92Z_HOME/zeta-pack/$_z/SKILL.md"
+    printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- %s first.\n' "$_z" > "$N92Z_HOME/zeta-pack/$_z/CHANGELOG.md"
+done
+printf '{"name": "zeta-pack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "zeta", "source": "./zeta"}, {"name": "alpha", "source": "./alpha"}], "commands": []}\n' \
+    > "$N92Z_HOME/zeta-pack/plugin-manifest.json"
+N92Z_RC=0
+run_sync "$N92Z_HOME" "$N92Z_MONO" "$SCRATCH_DIR/n92z-1.stdout" "$SCRATCH_DIR/n92z-1.stderr" || N92Z_RC=$?
+assert_eq "control: a two-skill plugin listing zeta first publishes (#92)" "0" "$N92Z_RC"
+assert_eq "…with zeta's CHANGELOG as the plugin-root one" \
+    "$(cat "$N92Z_HOME/zeta-pack/zeta/CHANGELOG.md")" "$(cat "$N92Z_MONO/plugins/zeta-pack/CHANGELOG.md" 2>/dev/null || true)"
+printf '# Changelog\n\n## [1.0.1] - 2026-01-02\n\n- N92-ALPHA-CHANGELOG-MARKER.\n\n## [1.0.0] - 2026-01-01\n\n- alpha first.\n' \
+    > "$N92Z_HOME/zeta-pack/alpha/CHANGELOG.md"
+N92Z_RC=0
+run_sync "$N92Z_HOME" "$N92Z_MONO" "$SCRATCH_DIR/n92z-2.stdout" "$SCRATCH_DIR/n92z-2.stderr" || N92Z_RC=$?
+assert_eq "an edit to the second skill's CHANGELOG syncs at exit 0 (#92)" "0" "$N92Z_RC"
+assert_contains "…and the resync copies it to that skill" "N92-ALPHA-CHANGELOG-MARKER" \
+    "$(cat "$N92Z_MONO/plugins/zeta-pack/skills/alpha/CHANGELOG.md" 2>/dev/null || true)"
+assert_eq "…but the plugin-root CHANGELOG stays the first skill's" \
+    "$(cat "$N92Z_HOME/zeta-pack/zeta/CHANGELOG.md")" "$(cat "$N92Z_MONO/plugins/zeta-pack/CHANGELOG.md" 2>/dev/null || true)"
+
+# A published plugin whose declared skill source does not resolve is an error,
+# before anything is written, in a real run and in --dry-run. Name == directory
+# here on purpose: the old lookup by name found ghost/ and compared the plugin
+# against it, whatever the manifest said. SKILL.md is left unchanged, so that
+# lookup saw no drift and the run went on to exit 0.
+N92G_HOME="$SCRATCH_DIR/skills-home-n92-ghost"
+N92G_MONO="$SCRATCH_DIR/monorepo-n92-ghost"
+mkdir -p "$N92G_HOME/ghost" "$N92G_MONO"
+seed_top_level_skill "$N92G_MONO"
+printf -- '---\nname: ghost\ndescription: Fixture skill whose manifest source later stops resolving. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# ghost\n' \
+    > "$N92G_HOME/ghost/SKILL.md"
+printf '{"name": "ghost", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ghost", "source": "."}], "commands": []}\n' \
+    > "$N92G_HOME/ghost/plugin-manifest.json"
+N92G_RC=0
+run_sync "$N92G_HOME" "$N92G_MONO" "$SCRATCH_DIR/n92g-1.stdout" "$SCRATCH_DIR/n92g-1.stderr" || N92G_RC=$?
+assert_eq "control: the ghost plugin publishes while its source resolves (#92)" "0" "$N92G_RC"
+assert_file_exists "…and is on disk" "$N92G_MONO/plugins/ghost/skills/ghost/SKILL.md"
+printf '{"name": "ghost", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ghost", "source": "./gone"}], "commands": []}\n' \
+    > "$N92G_HOME/ghost/plugin-manifest.json"
+N92G_DIGEST="$(tree_digest "$N92G_MONO")"
+for _n92 in dry plain; do
+    if [[ "$_n92" == dry ]]; then _n92_args=(--dry-run); else _n92_args=(); fi
+    N92G_RC=0
+    run_sync "$N92G_HOME" "$N92G_MONO" "$SCRATCH_DIR/n92g-$_n92.stdout" "$SCRATCH_DIR/n92g-$_n92.stderr" ${_n92_args[@]+"${_n92_args[@]}"} || N92G_RC=$?
+    assert_eq "a published plugin whose skill source does not resolve exits 1 ($_n92, #92)" "1" "$N92G_RC"
+    assert_contains "…naming the manifest and the source ($_n92)" \
+        "Error: $N92G_HOME/ghost/plugin-manifest.json: skill source ./gone does not resolve" \
+        "$(cat "$SCRATCH_DIR/n92g-$_n92.stderr")"
+    assert_eq "…and nothing was written ($_n92)" "$N92G_DIGEST" "$(tree_digest "$N92G_MONO")"
+done
+
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then
     echo "All assertions passed."
