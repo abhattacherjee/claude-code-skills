@@ -339,13 +339,15 @@ exit 1
 EOF
 chmod +x "$GH_SHIM_DIR/gh"
 
-# prepare-plugin.sh now stops with exit 1 when the plugin it assembled fails
-# validate-plugin.sh (#167). Most fixtures below test description parsing and
-# build mechanics with skills that validate-skill.sh rejects on purpose (no
-# description, a top-level `version:`), so validation is switched off for the
-# whole harness with the variable prepare-plugin.sh documents for this. The
-# "prepare-plugin.sh fails closed" cases in the #167 section unset it.
-export SKILL_KIT_NO_PLUGIN_VALIDATION=1
+# prepare-plugin.sh stops with exit 1 when the plugin it assembled fails
+# validate-plugin.sh (#167), and validation stays on for this harness: every
+# sync fixture is a valid skill (a `metadata:` version and a "Use when:" list).
+# Only the description-scalar fixtures of defect 24 need a skill
+# validate-skill.sh rejects (no "Use when:" list, or no description at all),
+# and they go through run_prepare_unvalidated, which takes a reason per call.
+# Until #106 the whole harness exported SKILL_KIT_NO_PLUGIN_VALIDATION=1. It is
+# unset here so a value in the caller's environment cannot switch it off again.
+unset SKILL_KIT_NO_PLUGIN_VALIDATION
 
 # ============================================================
 # Fixtures
@@ -567,8 +569,9 @@ mkdir -p "$SKILLS_HOME_FIXTURE/demo-skill" \
 cat > "$SKILLS_HOME_FIXTURE/demo-skill/SKILL.md" <<'EOF'
 ---
 name: demo-skill
-description: Throwaway fixture skill used only by the sync-hygiene regression harness.
-version: 0.1.0
+description: Throwaway fixture skill used only by the sync-hygiene regression harness. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Demo Skill
@@ -581,8 +584,9 @@ EOF
 cat > "$SKILLS_HOME_FIXTURE/added-skill/SKILL.md" <<'EOF'
 ---
 name: added-skill
-description: Throwaway fixture skill used only by the sync-hygiene harness's --add invocation.
-version: 0.1.0
+description: Throwaway fixture skill used only by the sync-hygiene harness's --add invocation. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Added Skill
@@ -613,8 +617,9 @@ EOF
 # then takes its SKILL_IN_PLACE path (source == destination, nothing to copy).
 INREPO_SKILL_MD='---
 name: inrepo-skill
-description: Throwaway fixture skill sourced from the monorepo only — exercises skill_source_dir()'"'"'s in-repo branch.
-version: 0.1.0
+description: Throwaway fixture skill sourced from the monorepo only — exercises skill_source_dir()'"'"'s in-repo branch. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # In-repo Skill
@@ -637,8 +642,9 @@ echo "fixture" > "$MONOREPO_EMPTY_FIXTURE/docs/notes.md"
 cat > "$PRESYNC_SKILLS_HOME_FIXTURE/presync-local-skill/SKILL.md" <<'EOF'
 ---
 name: presync-local-skill
-description: Throwaway fixture — local-source skill, regression control for validate-pre-sync.sh.
-version: 1.0.0
+description: Throwaway fixture — local-source skill, regression control for validate-pre-sync.sh. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Local Skill
@@ -657,8 +663,9 @@ EOF
 # (version 2.0.0) in both monorepos; only the CHANGELOG differs below.
 PRESYNC_INREPO_SKILL_MD='---
 name: presync-inrepo-skill
-description: Throwaway fixture — in-repo-source-only skill exercising issue #78.
-version: 2.0.0
+description: Throwaway fixture — in-repo-source-only skill exercising issue #78. Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Presync In-repo Skill
@@ -697,8 +704,9 @@ EOF
 # reach either file for a local-source skill.
 PRESYNC_SHADOW_SKILL_MD='---
 name: presync-local-skill
-description: MUST NOT BE READ — shadows presync-local-skill in the monorepo so a local-first precedence violation in skill_source_dir() is distinguishable, not silently correct by construction.
-version: 9.9.9
+description: MUST NOT BE READ — shadows presync-local-skill in the monorepo so a local-first precedence violation in skill_source_dir() is distinguishable, not silently correct by construction. Use when: testing.
+metadata:
+  version: 9.9.9
 ---
 
 # Presync Local Skill (stale monorepo shadow — must not be read)'
@@ -723,8 +731,9 @@ echo "fixture" > "$PRESYNC_MONOREPO_PASS_FIXTURE/build/stale-artifact.txt"
 cat > "$SKILLS_HOME_FIXTURE/-n/SKILL.md" <<'EOF'
 ---
 name: dash-n
-description: Throwaway fixture skill in a directory named -n, guarding filter_skill_candidates against echo option-eating.
-version: 0.1.0
+description: Throwaway fixture skill in a directory named -n, guarding filter_skill_candidates against echo option-eating. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Dash-N Skill
@@ -827,8 +836,9 @@ for _hp in hooks-none-plugin hooks-null-plugin hooks-empty-plugin hooks-ok-plugi
     cat > "$SKILLS_HOME_HOOKS_FIXTURE/$_hp/SKILL.md" <<EOF
 ---
 name: $_hp
-description: Throwaway fixture skill backing the $_hp plugin manifest, used only by the sync-hygiene harness's hooks assertions.
-version: 0.1.0
+description: Throwaway fixture skill backing the $_hp plugin manifest, used only by the sync-hygiene harness's hooks assertions. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # ${_hp}
@@ -906,8 +916,9 @@ echo "# Throwaway fixture hook, present only to prove hooks/ survives the build.
 cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-sync-plugin
-description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
-version: 0.1.0
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # legacy-sync-plugin
@@ -933,8 +944,9 @@ EOF
 cat > "$MONOREPO_LEGACYREF_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-sync-plugin
-description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
-version: 9.9.9
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form. Use when: testing.
+metadata:
+  version: 9.9.9
 ---
 
 # legacy-sync-plugin
@@ -969,8 +981,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/legacy-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-plugin
-description: LEGACY-SOURCE-MARKER — throwaway fixture skill reached only through a legacy bare-string skills[] entry.
-version: 0.1.0
+description: LEGACY-SOURCE-MARKER — throwaway fixture skill reached only through a legacy bare-string skills[] entry. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # legacy-plugin
@@ -991,8 +1004,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/relsource-plugin/nested-src/SKILL.md" <<'EOF'
 ---
 name: relsource-skill
-description: RELSOURCE-MARKER — throwaway fixture skill reached only through a relative source that is not ".".
-version: 0.1.0
+description: RELSOURCE-MARKER — throwaway fixture skill reached only through a relative source that is not ".". Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # relsource-skill
@@ -1015,8 +1029,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/barecmd-plugin/SKILL.md" <<'EOF'
 ---
 name: barecmd-plugin
-description: Throwaway fixture skill backing the bare-string commands[] manifest.
-version: 0.1.0
+description: Throwaway fixture skill backing the bare-string commands[] manifest. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # barecmd-plugin
@@ -1039,8 +1054,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/bareagent-plugin/SKILL.md" <<'EOF'
 ---
 name: bareagent-plugin
-description: Throwaway fixture skill backing the bare-string agents[] manifest.
-version: 0.1.0
+description: Throwaway fixture skill backing the bare-string agents[] manifest. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # bareagent-plugin
@@ -1064,8 +1080,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/SKILL.md" <<'EOF'
 ---
 name: objentry-plugin
-description: Throwaway fixture skill backing the object-form commands[]/agents[] positive control.
-version: 0.1.0
+description: Throwaway fixture skill backing the object-form commands[]/agents[] positive control. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # objentry-plugin
@@ -1075,7 +1092,7 @@ EOF
 
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-command.md" <<'EOF'
 ---
-description: Throwaway fixture command, object-form.
+description: Throwaway fixture command, object-form. Use when: testing.
 ---
 
 Fixture command body.
@@ -1084,7 +1101,7 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-agent.md" <<'EOF'
 ---
 name: fixture-agent
-description: Throwaway fixture agent, object-form.
+description: Throwaway fixture agent, object-form. Use when: testing.
 ---
 
 Fixture agent body.
@@ -1217,8 +1234,9 @@ seed_top_level_skill() {
     cat > "$1/seed-skill/SKILL.md" <<'SEEDEOF'
 ---
 name: seed-skill
-description: Throwaway fixture skill that keeps a second sync from being refused as plugin-only (#167).
-version: 1.0.0
+description: Throwaway fixture skill that keeps a second sync from being refused as plugin-only (#167). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # seed-skill
@@ -1374,8 +1392,9 @@ SKILLSCOMMA_ROWS_AFTER="$(skill_catalog_row_count "$MONOREPO_SKILLSCOMMA_FIXTURE
 cat > "$SKILLS_HOME_SKILLSBAD_FIXTURE/demo-skill/SKILL.md" <<'EOF'
 ---
 name: demo-skill
-description: Throwaway fixture skill used only by the sync-hygiene harness's --skills-nosuchskill guard-placement assertion.
-version: 0.1.0
+description: Throwaway fixture skill used only by the sync-hygiene harness's --skills-nosuchskill guard-placement assertion. Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # Demo Skill
@@ -1494,8 +1513,9 @@ rm -rf "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/hooks-src"
 cat > "$SKILLS_HOME_HOOKS_FIXTURE/hooks-ok-plugin/SKILL.md" <<EOF
 ---
 name: hooks-ok-plugin
-description: Throwaway fixture skill backing the hooks-ok-plugin manifest, used only by the sync-hygiene harness's hooks assertions.
-version: 0.2.0
+description: Throwaway fixture skill backing the hooks-ok-plugin manifest, used only by the sync-hygiene harness's hooks assertions. Use when: testing.
+metadata:
+  version: 0.2.0
 ---
 
 # hooks-ok-plugin
@@ -1552,8 +1572,9 @@ LEGACY_PLUGIN_JSON_AFTER_RUN12="$(cat "$MONOREPO_LEGACY_FIXTURE/plugins/legacy-s
 cat > "$SKILLS_HOME_LEGACY_FIXTURE/legacy-sync-plugin/SKILL.md" <<'EOF'
 ---
 name: legacy-sync-plugin
-description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form.
-version: 0.2.0
+description: Throwaway fixture skill whose plugin manifest uses the legacy bare-string skills[] form. Use when: testing.
+metadata:
+  version: 0.2.0
 ---
 
 # legacy-sync-plugin
@@ -1618,6 +1639,19 @@ run_prepare() {
                 "$PREPARE_FIXTURE_DIR/$fixture/plugin-manifest.json"
     ) >"$stdout_log" 2>"$stderr_log" || rc=$?
     return "$rc"
+}
+
+# run_prepare_unvalidated <reason> <run_prepare args...>: run_prepare with
+# SKILL_KIT_NO_PLUGIN_VALIDATION=1, for a fixture that must be a skill
+# validate-skill.sh rejects. The reason is required, so each use says why.
+run_prepare_unvalidated() {
+    local reason="$1"
+    shift
+    if [[ -z "$reason" ]]; then
+        echo "FATAL: run_prepare_unvalidated needs a reason" >&2
+        exit 1
+    fi
+    ( export SKILL_KIT_NO_PLUGIN_VALIDATION=1; run_prepare "$@" )
 }
 
 PREPARE_LEGACY_RC=0
@@ -2689,8 +2723,9 @@ mkdir -p "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill" \
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my presync skill/SKILL.md" <<'EOF'
 ---
 name: my presync skill
-description: Throwaway fixture — space-named, CHANGELOG deliberately mismatched (#81, sixth site).
-version: 1.0.0
+description: Throwaway fixture — space-named, CHANGELOG deliberately mismatched (#81, sixth site). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Presync Skill
@@ -2706,8 +2741,9 @@ EOF
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/my passing skill/SKILL.md" <<'EOF'
 ---
 name: my passing skill
-description: Throwaway fixture — space-named, CHANGELOG matches (#81, sixth site).
-version: 1.0.0
+description: Throwaway fixture — space-named, CHANGELOG matches (#81, sixth site). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Passing Skill
@@ -2723,8 +2759,9 @@ EOF
 cat > "$PRESYNC_MONOREPO_SPACE_FIXTURE/presync-plain-skill/SKILL.md" <<'EOF'
 ---
 name: presync-plain-skill
-description: Throwaway fixture with an ordinary name — the control that survives word-splitting either way (#81, sixth site).
-version: 1.0.0
+description: Throwaway fixture with an ordinary name — the control that survives word-splitting either way (#81, sixth site). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Plain Skill
@@ -2831,8 +2868,9 @@ mkdir -p "$SKILLS_HOME_SPACE_FIXTURE/my skill/scripts" \
 cat > "$SKILLS_HOME_SPACE_FIXTURE/my skill/SKILL.md" <<'EOF'
 ---
 name: my skill
-description: Throwaway fixture skill in a directory named with a space, guarding sync-monorepo.sh's unquoted iteration sites against IFS word-splitting (#81).
-version: 1.0.0
+description: Throwaway fixture skill in a directory named with a space, guarding sync-monorepo.sh's unquoted iteration sites against IFS word-splitting (#81). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Skill
@@ -2848,8 +2886,9 @@ echo "SPACE-FIXTURE-SCRIPT-MARKER" > "$SKILLS_HOME_SPACE_FIXTURE/my skill/script
 cat > "$SKILLS_HOME_SPACE_FIXTURE/space-plain-skill/SKILL.md" <<'EOF'
 ---
 name: space-plain-skill
-description: Throwaway fixture skill with an ordinary name, synced alongside "my skill" as the positive control for issue #81.
-version: 1.0.0
+description: Throwaway fixture skill with an ordinary name, synced alongside "my skill" as the positive control for issue #81. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Space Plain Skill
@@ -2866,7 +2905,7 @@ EOF
 # before writing anything (asserted below, at site 3/5).
 SPACE_PLUGIN_NAME_MONO="$SCRATCH_DIR/monorepo-space-plugin-name"
 mkdir -p "$SPACE_PLUGIN_NAME_MONO/top-skill"
-printf -- '---\nname: top-skill\ndescription: Fixture top-level skill. Use when: testing.\nversion: 1.0.0\n---\n\n# top-skill\n' > "$SPACE_PLUGIN_NAME_MONO/top-skill/SKILL.md"
+printf -- '---\nname: top-skill\ndescription: Fixture top-level skill. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# top-skill\n' > "$SPACE_PLUGIN_NAME_MONO/top-skill/SKILL.md"
 printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$SPACE_PLUGIN_NAME_MONO/top-skill/CHANGELOG.md"
 cat > "$SPACE_PLUGIN_NAME_MONO/plugins/my plugin/.claude-plugin/plugin.json" <<'EOF'
 {
@@ -2887,8 +2926,9 @@ printf '# my plugin\n' > "$SPACE_PLUGIN_NAME_MONO/plugins/my plugin/README.md"
 cat > "$SKILLS_HOME_SPACE_PLUGIN_FIXTURE/my skill/SKILL.md" <<'EOF'
 ---
 name: my skill
-description: Throwaway fixture skill — stale local source, refused by the reversion guard (#81's manifest-skill-names loop).
-version: 1.0.0
+description: Throwaway fixture skill — stale local source, refused by the reversion guard (#81's manifest-skill-names loop). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # My Skill (stale local source)
@@ -2916,8 +2956,9 @@ EOF
 cat > "$MONOREPO_SPACE_PLUGIN_FIXTURE/my skill/SKILL.md" <<'EOF'
 ---
 name: my skill
-description: Throwaway fixture skill — the in-repo copy, newer than the local source, so the reversion guard must refuse to overwrite it.
-version: 2.0.0
+description: Throwaway fixture skill — the in-repo copy, newer than the local source, so the reversion guard must refuse to overwrite it. Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # My Skill (in-repo, newer)
@@ -3267,8 +3308,9 @@ write_fixround_skill() {
     cat > "$dir/$name/SKILL.md" <<EOF
 ---
 name: $name
-description: Throwaway fixture skill for the PR #91 deep-review fix round.
-version: $version
+description: Throwaway fixture skill for the PR #91 deep-review fix round. Use when: testing.
+metadata:
+  version: $version
 ---
 
 # $name
@@ -3523,8 +3565,9 @@ assert_eq "…and exactly one install-all cp line is published as an instruction
 cat > "$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: badmanifest-skill
-description: Throwaway fixture skill whose manifest declares skills[] as a number (#73; harness defect 12).
-version: 2.0.0
+description: Throwaway fixture skill whose manifest declares skills[] as a number (#73; harness defect 12). Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Bad Manifest Skill
@@ -3559,8 +3602,9 @@ EOF
 cat > "$MONOREPO_BADMANIFEST_FIXTURE/plugins/badmanifest-plugin/skills/badmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: badmanifest-skill
-description: STALE published copy — a correct drift check wants to rebuild this.
-version: 1.0.0
+description: STALE published copy — a correct drift check wants to rebuild this. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Bad Manifest Skill (stale)
@@ -3593,8 +3637,9 @@ assert_eq "…with the catalogue deliberately NOT regenerated on the way out" \
 cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: goodmanifest-skill
-description: Throwaway fixture skill — positive control for #73, harness defect 12; well-formed manifest.
-version: 2.0.0
+description: Throwaway fixture skill — positive control for #73, harness defect 12; well-formed manifest. Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Good Manifest Skill
@@ -3632,7 +3677,7 @@ mkdir -p "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src"
 cat > "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/agents-src/control-agent.md" <<'EOF'
 ---
 name: control-agent
-description: Throwaway fixture agent — proves a well-formed agents[] entry is still copied (#73, harness defect 14 positive control).
+description: Throwaway fixture agent — proves a well-formed agents[] entry is still copied (#73, harness defect 14 positive control). Use when: testing.
 ---
 
 GOODMANIFEST-AGENT-MARKER
@@ -3647,8 +3692,9 @@ EOF
 cat > "$MONOREPO_GOODMANIFEST_FIXTURE/plugins/goodmanifest-plugin/skills/goodmanifest-skill/SKILL.md" <<'EOF'
 ---
 name: goodmanifest-skill
-description: STALE published copy — the drift check must rebuild this.
-version: 1.0.0
+description: STALE published copy — the drift check must rebuild this. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Good Manifest Skill (stale)
@@ -3678,8 +3724,9 @@ assert_contains "…and the published copy is no longer the stale v1.0.0" \
 cat > "$SKILLS_HOME_BAREAGENT_FIXTURE/bareagent-skill/SKILL.md" <<'EOF'
 ---
 name: bareagent-skill
-description: Throwaway fixture skill whose manifest declares a bare-string agent (#73; harness defect 14).
-version: 1.0.0
+description: Throwaway fixture skill whose manifest declares a bare-string agent (#73; harness defect 14). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Bare Agent Skill
@@ -3756,8 +3803,9 @@ mkdir -p "$SKILLS_HOME_BAREPUB_FIXTURE/barepub-skill" \
 
 BAREPUB_SKILL_MD='---
 name: barepub-skill
-description: Throwaway fixture — already-published plugin whose manifest gains a bare agents[] entry (harness defect 18).
-version: 1.0.0
+description: Throwaway fixture — already-published plugin whose manifest gains a bare agents[] entry (harness defect 18). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Barepub Skill'
@@ -3867,8 +3915,9 @@ assert_contains "…with its real content, not an empty file" \
 cat > "$SKILLS_HOME_SLASHLOG_FIXTURE/slashlog-skill/SKILL.md" <<'EOF'
 ---
 name: slashlog-skill
-description: Throwaway fixture skill whose manifest name contains a slash (#73; harness defect 13).
-version: 1.0.0
+description: Throwaway fixture skill whose manifest name contains a slash (#73; harness defect 13). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Slash Log Skill
@@ -3959,8 +4008,9 @@ mkdir -p "$PREPARE_FIXTURE_DIR/hookstypo-plugin" "$PREPARE_FIXTURE_DIR/hooksnull
 cat > "$PREPARE_FIXTURE_DIR/hookstypo-plugin/SKILL.md" <<'EOF'
 ---
 name: hookstypo-plugin
-description: Throwaway fixture — manifest declares hooks with a misspelled key (harness defect 20).
-version: 0.1.0
+description: Throwaway fixture — manifest declares hooks with a misspelled key (harness defect 20). Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # hookstypo-plugin
@@ -3983,8 +4033,9 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/hooksnull-plugin/SKILL.md" <<'EOF'
 ---
 name: hooksnull-plugin
-description: Throwaway fixture — hooks.source explicitly null, a deliberate no-op (harness defect 20 control).
-version: 0.1.0
+description: Throwaway fixture — hooks.source explicitly null, a deliberate no-op (harness defect 20 control). Use when: testing.
+metadata:
+  version: 0.1.0
 ---
 
 # hooksnull-plugin
@@ -4044,8 +4095,9 @@ mkdir -p "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill" "$MONOREPO_AUTHOR_FIXTURE"
 cat > "$SKILLS_HOME_AUTHOR_FIXTURE/author-skill/SKILL.md" <<'EOF'
 ---
 name: author-skill
-description: Throwaway fixture backing the --author forwarding check (harness defect 21).
-version: 1.0.0
+description: Throwaway fixture backing the --author forwarding check (harness defect 21). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Author Skill
@@ -4097,8 +4149,9 @@ mkdir -p "$PRESYNC_ADD_HOME_FIXTURE/presync-brandnew" \
 cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-brandnew/SKILL.md" <<'EOF'
 ---
 name: presync-brandnew
-description: Throwaway fixture — home-only skill with a mismatched CHANGELOG (harness defect 22).
-version: 2.0.0
+description: Throwaway fixture — home-only skill with a mismatched CHANGELOG (harness defect 22). Use when: testing.
+metadata:
+  version: 2.0.0
 ---
 
 # Presync Brandnew
@@ -4116,8 +4169,9 @@ EOF
 cat > "$PRESYNC_ADD_HOME_FIXTURE/presync-addok/SKILL.md" <<'EOF'
 ---
 name: presync-addok
-description: Throwaway fixture — home-only skill whose CHANGELOG matches (harness defect 22 control).
-version: 1.0.0
+description: Throwaway fixture — home-only skill whose CHANGELOG matches (harness defect 22 control). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Addok
@@ -4132,8 +4186,9 @@ EOF
 
 PRESYNC_ONREPO_MD='---
 name: presync-onrepo
-description: Throwaway fixture — already in the monorepo, enumerated with or without --add.
-version: 1.0.0
+description: Throwaway fixture — already in the monorepo, enumerated with or without --add. Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Presync Onrepo'
@@ -4243,8 +4298,9 @@ PRESYNC_PCT_MONOREPO_FIXTURE="$SCRATCH_DIR/presync-pct-monorepo"
 mkdir -p "$PRESYNC_PCT_HOME_FIXTURE/pct%s-skill" "$PRESYNC_PCT_MONOREPO_FIXTURE/pct%s-skill"
 PCT_SKILL_MD='---
 name: pct%s-skill
-description: Throwaway fixture whose directory name contains a printf conversion (harness defect 24).
-version: 1.0.0
+description: Throwaway fixture whose directory name contains a printf conversion (harness defect 24). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Pct Skill'
@@ -4287,8 +4343,9 @@ mkdir -p "$SKILLS_HOME_COMMA_FIXTURE/alpha,beta" \
          "$MONOREPO_COMMA_FIXTURE/alpha,beta"
 COMMA_SKILL_MD='---
 name: alpha,beta
-description: Throwaway fixture skill whose directory name contains a comma (harness defect 23).
-version: 1.0.0
+description: Throwaway fixture skill whose directory name contains a comma (harness defect 23). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Alpha,Beta'
@@ -4297,8 +4354,9 @@ printf '%s\n' "$COMMA_SKILL_MD" > "$MONOREPO_COMMA_FIXTURE/alpha,beta/SKILL.md"
 cat > "$SKILLS_HOME_COMMA_FIXTURE/comma-newcomer/SKILL.md" <<'EOF'
 ---
 name: comma-newcomer
-description: Throwaway fixture skill brought in by --add alongside a comma-named sibling (harness defect 23).
-version: 1.0.0
+description: Throwaway fixture skill brought in by --add alongside a comma-named sibling (harness defect 23). Use when: testing.
+metadata:
+  version: 1.0.0
 ---
 
 # Comma Newcomer
@@ -4395,7 +4453,8 @@ name: foldedscalar-skill
 description: >-
   FOLDED-SCALAR-MARKER — a description written as a folded block scalar that
   spans two source lines. Use when: (1) the generator folds it into one line.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # foldedscalar-skill
@@ -4406,7 +4465,8 @@ cat > "$PREPARE_FIXTURE_DIR/dquotescalar-plugin/SKILL.md" <<'EOF'
 ---
 name: dquotescalar-skill
 description: "DQUOTE-SCALAR-MARKER — phrases like \"review this\" and \"converge to zero\" must survive intact. Use when: (1) the generator decodes a double-quoted scalar."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dquotescalar-skill
@@ -4419,7 +4479,8 @@ cat > "$PREPARE_FIXTURE_DIR/squotescalar-plugin/SKILL.md" <<'EOF'
 ---
 name: squotescalar-skill
 description: 'SQUOTE-SCALAR-MARKER — it''s a single-quoted scalar, kept whole. Use when: (1) the doubled quote collapses to one.'
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # squotescalar-skill
@@ -4433,7 +4494,8 @@ cat > "$PREPARE_FIXTURE_DIR/plainscalar-plugin/SKILL.md" <<'EOF'
 ---
 name: plainscalar-skill
 description: "PLAIN-OPENQUOTE-MARKER" stays whole when the scalar is plain. Use when: (1) nothing is stripped.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # plainscalar-skill
@@ -4456,7 +4518,8 @@ cat > "$PREPARE_FIXTURE_DIR/plainregress-plugin/SKILL.md" <<'EOF'
 ---
 name: plainregress-skill
 description: PLAINREGRESS-MARKER — an ordinary plain scalar with no quoting at all. Use when: (1) plain-scalar output is unchanged.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # plainregress-skill
@@ -4475,7 +4538,8 @@ description: |-
   LITERAL-SCALAR-MARKER — a description written as a literal block scalar whose
   two source lines must still arrive as one. Use when: (1) a literal block folds
   to spaces rather than preserving its newline.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # litscalar-skill
@@ -4497,7 +4561,8 @@ description: >-
   use-when clause, so nothing downstream trims an over-captured tail before the
   assertions see it.
 tagline: OVERCAPTURE-SENTINEL
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # overcapture-skill
@@ -4522,7 +4587,8 @@ description: >-
 
   And whose second paragraph follows a blank line, which must be dropped rather
   than folded in as an extra separator.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # blankline-skill
@@ -4540,7 +4606,8 @@ name: bareblock-skill
 description: >
   BAREBLOCK-MARKER — a folded scalar whose header carries no chomping and no
   indentation indicator. Use when: (1) the bare header parses.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # bareblock-skill
@@ -4552,7 +4619,8 @@ name: plusblock-skill
 description: >+
   PLUSBLOCK-MARKER — a folded scalar carrying the keep chomping indicator. Use
   when: (1) the keep indicator parses.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # plusblock-skill
@@ -4564,7 +4632,8 @@ name: chompindent-skill
 description: >-2
   CHOMPINDENT-MARKER — a folded scalar whose header writes chomping before the
   indentation indicator. Use when: (1) chomping-before-indentation parses.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # chompindent-skill
@@ -4579,7 +4648,8 @@ cat > "$PREPARE_FIXTURE_DIR/dquoteplain-plugin/SKILL.md" <<'EOF'
 ---
 name: dquoteplain-skill
 description: "DQUOTEPLAIN-MARKER — an escape-free double-quoted description, the shape 38 of the 40 double-quoted SKILL.md files in this repo use. Use when: (1) the outer quotes come off and nothing else changes."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dquoteplain-skill
@@ -4596,7 +4666,8 @@ cat > "$PREPARE_FIXTURE_DIR/escwsscalar-plugin/SKILL.md" <<'EOF'
 ---
 name: escwsscalar-skill
 description: "ESCWS-MARKER — a double-quoted description carrying a\nnewline escape, a\ttab escape and a\n\ndoubled newline escape, every one of which must decode to a single space. Use when: (1) the description stays on one line."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # escwsscalar-skill
@@ -4613,7 +4684,7 @@ EOF
 # lint hook, or reviewer.
 TRAILWS_DESC_LINE='description: "TRAILWS-MARKER — a double-quoted description carrying a \"nested\" quoted phrase, written with one trailing space after its closing quote. Use when: (1) the trailing space is trimmed before the quote test."'
 printf '%s\n%s\n%s \n%s\n%s\n\n%s\n' \
-    '---' 'name: trailws-skill' "$TRAILWS_DESC_LINE" 'version: 0.1.0' '---' \
+    '---' 'name: trailws-skill' "$TRAILWS_DESC_LINE" "$(printf 'metadata:\n  version: 0.1.0')" '---' \
     '# trailws-skill' > "$PREPARE_FIXTURE_DIR/trailws-plugin/SKILL.md"
 
 # A `%` in the description, including a bare printf conversion. Pins the
@@ -4623,7 +4694,8 @@ cat > "$PREPARE_FIXTURE_DIR/pctscalar-plugin/SKILL.md" <<'EOF'
 ---
 name: pctscalar-skill
 description: PCTSCALAR-MARKER — a plain description that is 100% printf conversions, %s included. Use when: (1) a percent is data, not a format.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # pctscalar-skill
@@ -4635,7 +4707,8 @@ EOF
 cat > "$PREPARE_FIXTURE_DIR/nodesc-plugin/SKILL.md" <<'EOF'
 ---
 name: nodesc-skill
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # nodesc-skill
@@ -4648,7 +4721,8 @@ cat > "$PREPARE_FIXTURE_DIR/emptydesc-plugin/SKILL.md" <<'EOF'
 ---
 name: emptydesc-skill
 description:
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # emptydesc-skill
@@ -4667,7 +4741,8 @@ cat > "$PREPARE_FIXTURE_DIR/dashescalar-plugin/SKILL.md" <<'EOF'
 ---
 name: dashescalar-skill
 description: -e
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dashescalar-skill
@@ -4692,7 +4767,8 @@ name: badblock-skill
 description: >10
   BADBLOCK-MARKER — the continuation text under an illegal block header, which
   must never reach the README because the build stops first.
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # badblock-skill
@@ -4706,7 +4782,8 @@ cat > "$PREPARE_FIXTURE_DIR/dblspace-plugin/SKILL.md" <<'EOF'
 ---
 name: dblspace-skill
 description: "DBLSPACE-MARKER — the cost is  100  USD and stays that way. Use when: (1) no escape appears anywhere in the value."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dblspace-skill
@@ -4725,7 +4802,8 @@ cat > "$PREPARE_FIXTURE_DIR/dblspaceesc-plugin/SKILL.md" <<'EOF'
 ---
 name: dblspaceesc-skill
 description: "DBLESC-MARKER — the cost is  100  USD and stays that way,\teven with a tab escape at the far END of the value. Use when: (1) the collapse is local to the decoded whitespace."
-version: 0.1.0
+metadata:
+  version: 0.1.0
 ---
 
 # dblspaceesc-skill
@@ -4748,7 +4826,7 @@ EOF
 # editor, lint hook, or reviewer.
 CRBYTE_DESC_LINE="$(printf 'description: CRBYTE-MARKER — a plain description carrying a literal carriage return byte right here:\rand ordinary text after it. Use when: (1) the byte is replaced with a space.')"
 printf '%s\n%s\n%s\n%s\n%s\n\n%s\n' \
-    '---' 'name: crbyte-skill' "$CRBYTE_DESC_LINE" 'version: 0.1.0' '---' \
+    '---' 'name: crbyte-skill' "$CRBYTE_DESC_LINE" "$(printf 'metadata:\n  version: 0.1.0')" '---' \
     '# crbyte-skill' > "$PREPARE_FIXTURE_DIR/crbyte-plugin/SKILL.md"
 
 # --- CR in the positions that DECIDE something (#102 reopened) -------------
@@ -4777,7 +4855,7 @@ printf '%s\n%s\n%s\n%s\n%s\n\n%s\n' \
 CRQUOTE_DESC_LINE='description: "CRQUOTE-MARKER — phrases like \"review this\" and \"converge to zero\" must survive a CRLF line ending. Use when: (1) the CR is scrubbed before the closing-quote test runs."'
 printf '%s\n%s\n' '---' 'name: crquote-skill' > "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
 printf '%s\r\n' "$CRQUOTE_DESC_LINE" >> "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crquote-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crquote-skill' \
     >> "$PREPARE_FIXTURE_DIR/crquote-plugin/SKILL.md"
 
 # 2. A block scalar whose BODY lines are CRLF-terminated (header left clean, so
@@ -4792,7 +4870,7 @@ printf '  %s\r\n' \
     'Each join between them must be a single space, never two.' \
     'And the value must not end in a stray space either.' \
     >> "$PREPARE_FIXTURE_DIR/crblock-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crblock-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crblock-skill' \
     >> "$PREPARE_FIXTURE_DIR/crblock-plugin/SKILL.md"
 
 # 3. The block HEADER line itself CRLF-terminated — a legal `>-` that arrives as
@@ -4807,7 +4885,7 @@ printf '  %s\n' \
     'CRHDR-MARKER — a folded description whose block header line is CRLF-terminated.' \
     'A legal header must stay legal with a CR on the end of it.' \
     >> "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crhdr-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crhdr-skill' \
     >> "$PREPARE_FIXTURE_DIR/crhdr-plugin/SKILL.md"
 
 # 4. An INDENTED body line holding nothing but a CR. `line ~ /^[ \t]*$/` is false
@@ -4825,7 +4903,7 @@ printf '  \r\n' >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
 printf '  %s\n' \
     'That line must be skipped as blank rather than folded in as content.' \
     >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# cronly-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# cronly-skill' \
     >> "$PREPARE_FIXTURE_DIR/cronly-plugin/SKILL.md"
 
 # 5. A BARE CR-only body line — the shape a real CRLF file's paragraph break
@@ -4844,7 +4922,7 @@ printf '\r\n' >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
 printf '  %s\n' \
     'This second paragraph must survive, because a bare CR line used to end the block.' \
     >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
-printf '%s\n%s\n\n%s\n' 'version: 0.1.0' '---' '# crblank-skill' \
+printf '%s\n%s\n\n%s\n' "$(printf 'metadata:\n  version: 0.1.0')" '---' '# crblank-skill' \
     >> "$PREPARE_FIXTURE_DIR/crblank-plugin/SKILL.md"
 
 for _sc in foldedscalar dquotescalar squotescalar plainscalar plainregress \
@@ -4894,7 +4972,8 @@ run_prepare litscalar-plugin "$SCRATCH_DIR/scalar-literal.stdout" \
 SCALAR_LITERAL_README="$(cat "$PREPARE_OUT_DIR/litscalar-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_OVERCAP_RC=0
-run_prepare overcapture-plugin "$SCRATCH_DIR/scalar-overcap.stdout" \
+run_prepare_unvalidated "the fixture needs a non-standard tagline: key after its block, and has no 'Use when:' list" \
+    overcapture-plugin "$SCRATCH_DIR/scalar-overcap.stdout" \
     "$SCRATCH_DIR/scalar-overcap.stderr" || SCALAR_OVERCAP_RC=$?
 SCALAR_OVERCAP_README="$(cat "$PREPARE_OUT_DIR/overcapture-plugin/README.md" 2>/dev/null || true)"
 
@@ -4934,17 +5013,20 @@ run_prepare pctscalar-plugin "$SCRATCH_DIR/scalar-pct.stdout" \
 SCALAR_PCT_README="$(cat "$PREPARE_OUT_DIR/pctscalar-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_NODESC_RC=0
-run_prepare nodesc-plugin "$SCRATCH_DIR/scalar-nodesc.stdout" \
+run_prepare_unvalidated "the fixture has no description, which validate-skill.sh requires" \
+    nodesc-plugin "$SCRATCH_DIR/scalar-nodesc.stdout" \
     "$SCRATCH_DIR/scalar-nodesc.stderr" || SCALAR_NODESC_RC=$?
 SCALAR_NODESC_README="$(cat "$PREPARE_OUT_DIR/nodesc-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_EMPTYDESC_RC=0
-run_prepare emptydesc-plugin "$SCRATCH_DIR/scalar-emptydesc.stdout" \
+run_prepare_unvalidated "the description is empty, which validate-skill.sh rejects" \
+    emptydesc-plugin "$SCRATCH_DIR/scalar-emptydesc.stdout" \
     "$SCRATCH_DIR/scalar-emptydesc.stderr" || SCALAR_EMPTYDESC_RC=$?
 SCALAR_EMPTYDESC_README="$(cat "$PREPARE_OUT_DIR/emptydesc-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_DASHE_RC=0
-run_prepare dashescalar-plugin "$SCRATCH_DIR/scalar-dashe.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    dashescalar-plugin "$SCRATCH_DIR/scalar-dashe.stdout" \
     "$SCRATCH_DIR/scalar-dashe.stderr" || SCALAR_DASHE_RC=$?
 SCALAR_DASHE_README="$(cat "$PREPARE_OUT_DIR/dashescalar-plugin/README.md" 2>/dev/null || true)"
 
@@ -4955,7 +5037,8 @@ SCALAR_BADBLOCK_STDERR="$(cat "$SCRATCH_DIR/scalar-badblock.stderr")"
 SCALAR_BADBLOCK_README="$(cat "$PREPARE_OUT_DIR/badblock-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_BLANKLINE_RC=0
-run_prepare blankline-plugin "$SCRATCH_DIR/scalar-blankline.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    blankline-plugin "$SCRATCH_DIR/scalar-blankline.stdout" \
     "$SCRATCH_DIR/scalar-blankline.stderr" || SCALAR_BLANKLINE_RC=$?
 SCALAR_BLANKLINE_README="$(cat "$PREPARE_OUT_DIR/blankline-plugin/README.md" 2>/dev/null || true)"
 
@@ -4980,7 +5063,8 @@ run_prepare crquote-plugin "$SCRATCH_DIR/scalar-crquote.stdout" \
 SCALAR_CRQUOTE_README="$(cat "$PREPARE_OUT_DIR/crquote-plugin/README.md" 2>/dev/null || true)"
 
 SCALAR_CRBLOCK_RC=0
-run_prepare crblock-plugin "$SCRATCH_DIR/scalar-crblock.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    crblock-plugin "$SCRATCH_DIR/scalar-crblock.stdout" \
     "$SCRATCH_DIR/scalar-crblock.stderr" || SCALAR_CRBLOCK_RC=$?
 SCALAR_CRBLOCK_README="$(cat "$PREPARE_OUT_DIR/crblock-plugin/README.md" 2>/dev/null || true)"
 
@@ -4988,19 +5072,22 @@ SCALAR_CRBLOCK_README="$(cat "$PREPARE_OUT_DIR/crblock-plugin/README.md" 2>/dev/
 # extract_field exited 3 on a CRLF-terminated `>-` header, so the failure was an
 # aborted run, not a wrong string.
 SCALAR_CRHDR_RC=0
-run_prepare crhdr-plugin "$SCRATCH_DIR/scalar-crhdr.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    crhdr-plugin "$SCRATCH_DIR/scalar-crhdr.stdout" \
     "$SCRATCH_DIR/scalar-crhdr.stderr" || SCALAR_CRHDR_RC=$?
 SCALAR_CRHDR_README="$(cat "$PREPARE_OUT_DIR/crhdr-plugin/README.md" 2>/dev/null || true)"
 SCALAR_CRHDR_STDERR="$(cat "$SCRATCH_DIR/scalar-crhdr.stderr")"
 
 SCALAR_CRONLY_RC=0
-run_prepare cronly-plugin "$SCRATCH_DIR/scalar-cronly.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    cronly-plugin "$SCRATCH_DIR/scalar-cronly.stdout" \
     "$SCRATCH_DIR/scalar-cronly.stderr" || SCALAR_CRONLY_RC=$?
 SCALAR_CRONLY_README="$(cat "$PREPARE_OUT_DIR/cronly-plugin/README.md" 2>/dev/null || true)"
 SCALAR_CRONLY_STDERR="$(cat "$SCRATCH_DIR/scalar-cronly.stderr")"
 
 SCALAR_CRBLANK_RC=0
-run_prepare crblank-plugin "$SCRATCH_DIR/scalar-crblank.stdout" \
+run_prepare_unvalidated "the description style under test has no 'Use when:' list, which validate-skill.sh requires" \
+    crblank-plugin "$SCRATCH_DIR/scalar-crblank.stdout" \
     "$SCRATCH_DIR/scalar-crblank.stderr" || SCALAR_CRBLANK_RC=$?
 SCALAR_CRBLANK_README="$(cat "$PREPARE_OUT_DIR/crblank-plugin/README.md" 2>/dev/null || true)"
 
@@ -6399,8 +6486,8 @@ done
 REF_HOME="$SCRATCH_DIR/skills-home-refused-cat"
 REF_MONO="$SCRATCH_DIR/monorepo-refused-cat"
 mkdir -p "$REF_HOME/rs" "$REF_MONO/rs" "$REF_MONO/plugins/pg/.claude-plugin"
-printf -- '---\nname: rs\ndescription: Stale local copy. Use when: testing.\nversion: 1.0.0\n---\n\n# rs\n' > "$REF_HOME/rs/SKILL.md"
-printf -- '---\nname: rs\ndescription: Newer in-repo copy. Use when: testing.\nversion: 2.0.0\n---\n\n# rs\n' > "$REF_MONO/rs/SKILL.md"
+printf -- '---\nname: rs\ndescription: Stale local copy. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# rs\n' > "$REF_HOME/rs/SKILL.md"
+printf -- '---\nname: rs\ndescription: Newer in-repo copy. Use when: testing.\nmetadata:\n  version: 2.0.0\n---\n\n# rs\n' > "$REF_MONO/rs/SKILL.md"
 printf '# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- Newer.\n' > "$REF_MONO/rs/CHANGELOG.md"
 echo '{"name": "pg", "version": "1.0.0", "description": "fixture"}' > "$REF_MONO/plugins/pg/.claude-plugin/plugin.json"
 REF_RC=0
@@ -6930,6 +7017,17 @@ N106S_RC=0
 run_sync "$N106S_HOME" "$N106S_MONO" "$SCRATCH_DIR/n106s-2.stdout" "$SCRATCH_DIR/n106s-2.stderr" || N106S_RC=$?
 assert_contains "control: the rebuild keeps the existing README" "(README preserved)" "$(cat "$SCRATCH_DIR/n106s-2.stdout")"
 assert_not_contains "…and so prints no note about a README it did not publish" "dropped section" "$(cat "$SCRATCH_DIR/n106s-2.stdout")"
+
+# ============================================================
+# Plugin validation stays on (#106 acceptance, #190 follow-up)
+# ============================================================
+# The harness used to export SKILL_KIT_NO_PLUGIN_VALIDATION=1 for every case.
+# Now only run_prepare_unvalidated sets it, so ordinary builds are validated.
+assert_contains "an ordinary prepare-plugin.sh build in this harness runs validation" \
+    "--- Validation ---" "$(cat "$SCRATCH_DIR/prep-legacy.stdout")"
+assert_not_contains "…and does not skip it" "Validation skipped" "$(cat "$SCRATCH_DIR/prep-legacy.stdout")"
+assert_contains "control: run_prepare_unvalidated does skip it, and says so" \
+    "--- Validation skipped (SKILL_KIT_NO_PLUGIN_VALIDATION=1) ---" "$(cat "$SCRATCH_DIR/scalar-nodesc.stdout")"
 
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then

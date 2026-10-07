@@ -687,9 +687,10 @@ write_file "$OUTPUT_DIR/README.md" "$README_CONTENT" "README.md"
 # caller (sync-monorepo.sh's auto-build) published it at exit 0.
 #
 # SKILL_KIT_NO_PLUGIN_VALIDATION=1 skips this step and says so. It exists for
-# scripts/test-sync-hygiene.sh, whose fixtures test description parsing with
-# skills validate-skill.sh rejects on purpose (no description, top-level
-# version:). Nothing else sets it.
+# scripts/test-sync-hygiene.sh, whose description-parsing fixtures must be
+# skills validate-skill.sh rejects (no description, no "Use when:" list). The
+# harness sets it only on those calls (run_prepare_unvalidated), each with a
+# reason. Nothing else sets it.
 echo ""
 VALIDATE_SCRIPT="$SCRIPT_DIR/validate-plugin.sh"
 if [[ "${SKILL_KIT_NO_PLUGIN_VALIDATION:-}" == 1 ]] && ! $DRY_RUN; then
