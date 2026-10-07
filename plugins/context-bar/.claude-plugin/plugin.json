@@ -1,5 +1,0 @@
-{
-  "name": "context-bar",
-  "version": "1.0.2",
-  "description": "Deprecated: use the statusline plugin (statusline:install / statusline:create / statusline:context-bar). Color-coded context window usage bar for Claude Code statusline and /context-bar command"
-}

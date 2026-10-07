@@ -37,6 +37,7 @@ The same runbook as #146 and #147:
 1. Inventory every caller of the old names across all of `~/.claude` and every repo before starting. Example callers: `deep-review` dispatches `adversarial-review:*` agents; `/ship` calls `/deep-review`.
 2. Build `plugins/<group>/` as the only source. Rename agents to `<group>:<agent>`.
 3. Keep the old marketplace entries for one release, with descriptions that say "Deprecated: moved to `<group>:<skill>`". Remove them in the next release.
+   - Changed 2026-10-07: the user chose to remove them in v4.0.0 itself, because it is a major release (#198).
 4. Bump `plugin.json` for every change, because `/plugin update` compares versions only.
 5. Live cut-over and dogfood:
    - Before merge, run each new skill by explicit invocation (`claude -p "/<plugin>:<skill> ..." --plugin-dir plugins/<group>`) from a temp project dir, and check that it runs its bundled scripts from the plugin dir. A plain-language request would reach the old loose copy, so it proves nothing at this stage.

@@ -1,5 +1,0 @@
-{
-  "name": "smart-screen-recorder",
-  "version": "4.3.1",
-  "description": "Deprecated: use the demo-video plugin (demo-video:record). AI-driven screen recording and demo production pipeline for macOS. Records screen + cursor, analyzes with AI vision, generates zoom scripts and voiceover narration, and produces polished demo videos."
-}

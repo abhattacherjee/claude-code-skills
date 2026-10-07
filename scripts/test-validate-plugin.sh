@@ -89,12 +89,12 @@ OUT="$("$NOVAL/validate-plugin.sh" "$P" 2>&1)" && RC=0 || RC=$?
 
 echo ""
 echo "copies of validate-plugin.sh"
-for c in plugins/skill-kit/skills/publish/scripts/validate-plugin.sh plugins/skill-publishing/skills/skill-publishing/scripts/validate-plugin.sh; do
+for c in plugins/skill-kit/skills/publish/scripts/validate-plugin.sh; do
   cmp -s "$REPO_ROOT/scripts/validate-plugin.sh" "$REPO_ROOT/$c" && ok "$c is byte-identical to scripts/validate-plugin.sh" || bad "$c is byte-identical to scripts/validate-plugin.sh" "they differ"
 done
 
-# validate-skill.sh's NOTE names the plugin skills that ship a copy and the one
-# frozen exception. Pin that list against the tree, so the NOTE cannot drift.
+# validate-skill.sh's NOTE names the plugin skills that ship a copy. Pin that
+# list against the tree, so the NOTE cannot drift.
 echo ""
 echo "copies of validate-skill.sh (the NOTE in its header)"
 EXPECTED_COPIES="$(printf '%s\n' \
@@ -103,18 +103,12 @@ EXPECTED_COPIES="$(printf '%s\n' \
   plugins/dev-flow/skills/worktree/scripts/validate-skill.sh \
   plugins/skill-kit/skills/author/scripts/validate-skill.sh \
   plugins/skill-kit/skills/extract/scripts/validate-skill.sh \
-  plugins/skill-kit/skills/publish/scripts/validate-skill.sh \
-  plugins/skill-publishing/skills/skill-publishing/scripts/validate-skill.sh)"
-FROZEN_COPY=plugins/skill-authoring/skills/skill-authoring/scripts/validate-skill.sh
-FOUND_COPIES="$(cd "$REPO_ROOT" && find plugins -name validate-skill.sh | LC_ALL=C sort | grep -vxF "$FROZEN_COPY" || true)"
+  plugins/skill-kit/skills/publish/scripts/validate-skill.sh)"
+FOUND_COPIES="$(cd "$REPO_ROOT" && find plugins -name validate-skill.sh | LC_ALL=C sort || true)"
 [[ "$FOUND_COPIES" == "$EXPECTED_COPIES" ]] && ok "the plugin copies are exactly the ones the NOTE names" || bad "the plugin copies are exactly the ones the NOTE names" "found: $FOUND_COPIES"
 while IFS= read -r c; do
   cmp -s "$REPO_ROOT/scripts/validate-skill.sh" "$REPO_ROOT/$c" && ok "$c is byte-identical to scripts/validate-skill.sh" || bad "$c is byte-identical to scripts/validate-skill.sh" "they differ"
 done <<< "$EXPECTED_COPIES"
-if [[ -f "$REPO_ROOT/$FROZEN_COPY" ]]; then
-  grep -q "the deprecated skill-authoring plugin's copy: it is older, frozen" "$REPO_ROOT/scripts/validate-skill.sh" \
-    && ok "the NOTE names the frozen skill-authoring copy as the exception" || bad "the NOTE names the frozen skill-authoring copy as the exception"
-fi
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

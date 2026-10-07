@@ -133,7 +133,7 @@ claude plugin uninstall review@claude-code-skills
 
 ## Moving from the old plugins
 
-The old `deep-review` and `adversarial-review` plugins are deprecated and stay published for one more release. Install `review`, then uninstall both old plugins, so the old names cannot win a plain-language request. Round-record files written by the old skills (for example a `round-N.json` reused with `recheck --prior`, or a Step 5 rerun) carry the skill values `deep-review` and `adversarial-review`; the scripts still read them.
+The old `deep-review` and `adversarial-review` plugins were removed in v4.0.0. Install `review`, then uninstall both old plugins if you still have them, so the old names cannot win a plain-language request. Round-record files written by the old skills (for example a `round-N.json` reused with `recheck --prior`, or a Step 5 rerun) carry the skill values `deep-review` and `adversarial-review`; the scripts still read them.
 
 ## See also
 

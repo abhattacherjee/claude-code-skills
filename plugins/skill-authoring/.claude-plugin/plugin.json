@@ -1,5 +1,0 @@
-{
-  "name": "skill-authoring",
-  "version": "2.6.3",
-  "description": "Deprecated: use the skill-kit plugin (skill-kit:author). Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism"
-}

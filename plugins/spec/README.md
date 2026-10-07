@@ -126,7 +126,7 @@ claude plugin uninstall spec@claude-code-skills
 
 ## Moving from the old plugins
 
-The old `spec-creator`, `spec-review` and `spec-implement` plugins are deprecated and stay published for one more release. Install `spec`, then uninstall all three, so the old names cannot win a plain-language request.
+The old `spec-creator`, `spec-review` and `spec-implement` plugins were removed in v4.0.0. Install `spec`, then uninstall all three if you still have them, so the old names cannot win a plain-language request.
 
 ## See also
 
