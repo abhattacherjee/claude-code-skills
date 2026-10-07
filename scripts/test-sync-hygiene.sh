@@ -3106,8 +3106,8 @@ assert_not_contains "the refused plugin is not built anyway" \
 # hand against the round-2 code: README said "0 reusable" above a 1-row
 # table, and the CHANGELOG said "Synced 0 skills" above a bullet for `my
 # skill` with no indication that entry wasn't part of the 0. Both fixed:
-# README/fallback now use SKILLS_RESOLVED_COUNT (matches the catalogue
-# unconditionally), and the CHANGELOG inventory annotates refused entries so
+# README/fallback now use CATALOG_COUNT, the catalogue's own row count (it was
+# SKILLS_RESOLVED_COUNT until #93), and the CHANGELOG inventory annotates refused entries so
 # "Synced 0" no longer reads as contradicted by a populated list. ---
 SPACE_PLUGIN_README="$(cat "$MONOREPO_SPACE_PLUGIN_FIXTURE/README.md" 2>/dev/null || true)"
 SPACE_PLUGIN_CHANGELOG="$(cat "$MONOREPO_SPACE_PLUGIN_FIXTURE/CHANGELOG.md" 2>/dev/null || true)"
@@ -3622,12 +3622,13 @@ BADMANIFEST_MANIFEST="$SKILLS_HOME_BADMANIFEST_FIXTURE/badmanifest-skill/plugin-
 # combined output contained no "ERROR" at all, and README.md was regenerated. ---
 assert_eq "a manifest whose skills[] cannot be read fails the run instead of being skipped" \
     "1" "$BADMANIFEST_RC"
+# Since the #195 review (C-001) the manifest pass that runs before the first
+# write catches this shape, so the messages are that pass's, not the
+# auto-build stage's "cannot read skills[]" (which stays as a backstop).
 assert_contains "…naming the manifest" \
-    "ERROR: cannot read skills[] from $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
-assert_contains "…and relaying jq's own diagnosis rather than swallowing it" \
-    "Cannot index number with string \"name\"" "$BADMANIFEST_STDERR"
-assert_contains "…joining the collected-failure summary that names every broken manifest in one pass" \
-    "skills[] could not be read: $BADMANIFEST_MANIFEST" "$BADMANIFEST_STDERR"
+    "Error: $BADMANIFEST_MANIFEST: a skills[] entry is number, not a name or an object" "$BADMANIFEST_STDERR"
+assert_contains "…and saying nothing was changed" \
+    "Fix the manifest and re-run. Nothing was changed." "$BADMANIFEST_STDERR"
 assert_not_contains "…and is NOT reported as a build failure, since no build was attempted" \
     "plugin build failed:" "$BADMANIFEST_STDERR"
 assert_eq "…with the catalogue deliberately NOT regenerated on the way out" \
@@ -3881,7 +3882,7 @@ DRYRUN_STDERR="$(cat "$SCRATCH_DIR/dryrun-stderr.log")"
 assert_eq "--dry-run over an unreadable manifest still refuses (the read happens either way)" \
     "1" "$BADMANIFEST_DRYRUN_RC"
 assert_contains "…saying plainly that nothing was written" \
-    "Nothing was written — this was a --dry-run." "$DRYRUN_STDERR"
+    "Nothing was changed." "$DRYRUN_STDERR"
 assert_not_contains "…and not repeating the real run's \"already written\" claim" \
     "Skills synced before this point are already written" "$DRYRUN_STDERR"
 assert_not_contains "…nor calling a read failure a build failure" \
@@ -7260,16 +7261,30 @@ assert_line_present "…and beta keeps its repo link from the existing row" \
     "| [beta](./beta/) | 1.0.0 | The beta fixture skill. | [repo](https://github.com/harness-fixture-user/beta) |" \
     "$(cat "$R195C_MONO/README.md")"
 
-# K7: a published SKILL.md that cannot give a row stops a --skills run before
-# anything is written.
+# C-004: the backfill builds a row by the main loop's rules (one function,
+# skill_row): a SKILL.md with no frontmatter gets 1.0.0 and an empty
+# description, with a warning, as a full sync writes it. An unreadable one
+# stops the run before anything is written.
 printf '# beta\n\nNo frontmatter.\n' > "$R195C_MONO/beta/SKILL.md"
-R195C_DIGEST="$(tree_digest "$R195C_MONO")"
+# delta lives only in the monorepo, with no frontmatter, so a full sync builds
+# its row in the main loop and a --skills run in the backfill.
+mkdir -p "$R195C_MONO/delta"
+printf '# delta\n\nNo frontmatter either.\n' > "$R195C_MONO/delta/SKILL.md"
 R195_RC=0
 run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-2.stdout" "$SCRATCH_DIR/r195c-2.stderr" --skills alpha || R195_RC=$?
-assert_eq "--skills when another skill's SKILL.md has no frontmatter exits 1 (#93 review)" "1" "$R195_RC"
-assert_contains "…and names the file" "Error: $R195C_MONO/beta/SKILL.md has no description or no version" \
+assert_eq "--skills when another skill's SKILL.md has no frontmatter exits 0, as a full sync does (#195 C-004)" "0" "$R195_RC"
+assert_contains "…with a warning naming the file" "WARNING: $R195C_MONO/beta/SKILL.md has no description" \
     "$(cat "$SCRATCH_DIR/r195c-2.stderr")"
-assert_eq "…and nothing was written" "$R195C_DIGEST" "$(tree_digest "$R195C_MONO")"
+assert_line_present "…and the main loop's row: 1.0.0, no description, the kept link" \
+    "| [beta](./beta/) | 1.0.0 |  | [repo](https://github.com/harness-fixture-user/beta) |" "$(cat "$R195C_MONO/README.md")"
+R195C_DELTA_SUBSET="$(grep -F '| [delta](./delta/) |' "$R195C_MONO/README.md" || true)"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-2f.stdout" "$SCRATCH_DIR/r195c-2f.stderr" || R195_RC=$?
+assert_eq "control: a full sync with the same monorepo-only skill exits 0" "0" "$R195_RC"
+assert_eq "…and writes the same row for it as the --skills run did" \
+    "$R195C_DELTA_SUBSET" "$(grep -F '| [delta](./delta/) |' "$R195C_MONO/README.md" || true)"
+assert_line_present "…which is 1.0.0 with no description" "| [delta](./delta/) | 1.0.0 |  | — |" "$(cat "$R195C_MONO/README.md")"
+rm -r "$R195C_MONO/delta"
 cp "$R195C_HOME/beta/SKILL.md" "$R195C_MONO/beta/SKILL.md"
 R195C_DIGEST="$(tree_digest "$R195C_MONO")"
 chmod 000 "$R195C_MONO/beta/SKILL.md"
@@ -7312,7 +7327,7 @@ r195_prep_fixture() { # <name> <body-file>
 cat > "$SCRATCH_DIR/r195-k9.body" <<'EOF'
 ## Quick Check
 
-The ` character starts code. Visit https://github.com/<github-user>/x and run `cmd`.
+The ` character is a backtick. Visit https://github.com/<github-user>/x first.
 
 ## Prerequisites
 
@@ -7327,7 +7342,7 @@ R195_RC=0
 run_prepare r195k9-plugin "$SCRATCH_DIR/r195k9.stdout" "$SCRATCH_DIR/r195k9.stderr" || R195_RC=$?
 R195_ERR="$(cat "$SCRATCH_DIR/r195k9.stderr")"
 assert_eq "prepare-plugin.sh builds the K9 fixture (#106 review)" "0" "$R195_RC"
-assert_line_present "a stray backtick does not hide a placeholder" \
+assert_line_present "a lone backtick does not hide a placeholder" \
     'dropped section "Quick Check": placeholder <github-user> in prose' "$R195_ERR"
 assert_line_present "a placeholder with a space is caught" \
     'dropped section "Prerequisites": placeholder <your repo> in prose' "$R195_ERR"
@@ -7409,6 +7424,116 @@ assert_eq "prepare-plugin.sh builds skill-kit publish's SKILL.md (#106)" "0" "$R
 assert_not_contains "…with no <github-user> in the README" "<github-user>" "$R195_README"
 assert_contains "…and its real See Also section" \
     "$(printf '## See Also\n\n- `skill-kit:author` — how to structure and write skills (the content)')" "$R195_README"
+
+# ============================================================
+# PR #195 cross-model review — X-001 to X-003, C-001 to C-005
+# ============================================================
+
+# X-001: a --skills run still builds and resyncs every plugin, so the
+# reversion guard must see every plugin source, not only the skills it syncs.
+# Two shapes: the skill named like its directory (foo), and a renamed one
+# (install-statusline from my-statusline). Each publishes, then the monorepo
+# gets a newer top-level copy of the source directory and the local source a
+# stale edit, then `--skills alpha` runs.
+for _x in same:foo:foo renamed:my-statusline:install-statusline; do
+    _xv=${_x%%:*}; _xr=${_x#*:}; _xd=${_xr%%:*}; _xs=${_xr#*:}
+    _xh="$SCRATCH_DIR/skills-home-x001-$_xv"; _xm="$SCRATCH_DIR/monorepo-x001-$_xv"
+    mkdir -p "$_xh/alpha" "$_xh/$_xd" "$_xm"
+    seed_top_level_skill "$_xm"
+    printf -- '---\nname: alpha\ndescription: Alpha. Use when: testing X-001.\nmetadata:\n  version: 1.0.0\n---\n\n# alpha\n' > "$_xh/alpha/SKILL.md"
+    printf -- '---\nname: %s\ndescription: Fixture. Use when: testing X-001.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n\nFirst body.\n' "$_xs" "$_xs" > "$_xh/$_xd/SKILL.md"
+    printf '{"name": "%s", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "%s", "source": "."}], "commands": []}\n' \
+        "$_xd" "$_xs" > "$_xh/$_xd/plugin-manifest.json"
+    R195_RC=0
+    run_sync "$_xh" "$_xm" "$SCRATCH_DIR/x001-$_xv-1.stdout" "$SCRATCH_DIR/x001-$_xv-1.stderr" || R195_RC=$?
+    assert_eq "control: the X-001 plugin publishes ($_xv)" "0" "$R195_RC"
+    mkdir -p "$_xm/$_xd"
+    printf -- '---\nname: %s\ndescription: In-repo copy, far newer. Use when: testing X-001.\nmetadata:\n  version: 9.9.9\n---\n\n# %s\n' "$_xd" "$_xd" > "$_xm/$_xd/SKILL.md"
+    printf '\nX001-STALE-MARKER, a longer body.\n' >> "$_xh/$_xd/SKILL.md"
+    R195_RC=0
+    run_sync "$_xh" "$_xm" "$SCRATCH_DIR/x001-$_xv-2.stdout" "$SCRATCH_DIR/x001-$_xv-2.stderr" --skills alpha || R195_RC=$?
+    assert_eq "--skills alpha refuses a plugin built from a stale source and exits 3 ($_xv, X-001)" "3" "$R195_RC"
+    assert_contains "…saying which source ($_xv)" "REFUSED (plugin source)  $_xh/$_xd (v1.0.0) is older than $_xm/$_xd (v9.9.9)" \
+        "$(cat "$SCRATCH_DIR/x001-$_xv-2.stdout")"
+    assert_not_contains "…and does not publish the stale edit ($_xv)" "X001-STALE-MARKER" \
+        "$(cat "$_xm/plugins/$_xd/skills/$_xs/SKILL.md" 2>/dev/null || true)"
+    R195_RC=0
+    run_sync "$_xh" "$_xm" "$SCRATCH_DIR/x001-$_xv-3.stdout" "$SCRATCH_DIR/x001-$_xv-3.stderr" --skills alpha --force-local || R195_RC=$?
+    assert_eq "control: with --force-local the same run exits 0 ($_xv)" "0" "$R195_RC"
+    assert_contains "…says it builds anyway ($_xv)" "--force-local given, building it anyway" "$(cat "$SCRATCH_DIR/x001-$_xv-3.stdout")"
+    assert_contains "…and publishes the local copy ($_xv)" "X001-STALE-MARKER" \
+        "$(cat "$_xm/plugins/$_xd/skills/$_xs/SKILL.md" 2>/dev/null || true)"
+done
+
+# C-001: a skills[] entry that is a number, a boolean or an array stops the run
+# before anything is written, for a plugin that is not published yet too.
+for _c in 'number:7' 'boolean:true' 'array:["x"]'; do
+    _cn=${_c%%:*}; _cv=${_c#*:}
+    _ch="$SCRATCH_DIR/skills-home-c001-$_cn"; _cm="$SCRATCH_DIR/monorepo-c001-$_cn"
+    cp -R "$R195K_HOME" "$_ch"
+    mkdir -p "$_cm"; seed_top_level_skill "$_cm"
+    mkdir -p "$_ch/seed-skill"
+    sed 's/^# seed-skill$/# seed-skill, edited locally/' "$_cm/seed-skill/SKILL.md" > "$_ch/seed-skill/SKILL.md"
+    printf '{"name": "k1src", "version": "1.0.0", "description": "Fixture plugin.", "skills": [%s], "commands": []}\n' "$_cv" \
+        > "$_ch/k1src/plugin-manifest.json"
+    _cd="$(tree_digest "$_cm")"
+    R195_RC=0
+    run_sync "$_ch" "$_cm" "$SCRATCH_DIR/c001-$_cn.stdout" "$SCRATCH_DIR/c001-$_cn.stderr" || R195_RC=$?
+    assert_eq "a skills[] entry that is a $_cn exits 1 (C-001)" "1" "$R195_RC"
+    assert_contains "…naming the manifest and the problem ($_cn)" \
+        "Error: $_ch/k1src/plugin-manifest.json: a skills[] entry is $_cn, not a name or an object" "$(cat "$SCRATCH_DIR/c001-$_cn.stderr")"
+    assert_eq "…before anything is written ($_cn)" "$_cd" "$(tree_digest "$_cm")"
+done
+
+# X-002, X-003, C-002: CommonMark fences and code spans, and the wider
+# placeholder pattern. Each case runs through both readers: extract_headings
+# (awk) decides the Key Features, and the placeholder check (perl) decides
+# whether a section is dropped.
+cat > "$SCRATCH_DIR/r195-cm1.body" <<'EOF'
+## Quick Check
+
+```tool <repo>``` is an inline span, not a fence. Run ``tool <repo> uses a literal ` here`` too. R195-CM-KEPT-MARKER.
+
+## Next Heading After Span
+
+Text.
+EOF
+r195_prep_fixture r195cm1 "$SCRATCH_DIR/r195-cm1.body"
+R195_RC=0
+run_prepare r195cm1-plugin "$SCRATCH_DIR/r195cm1.stdout" "$SCRATCH_DIR/r195cm1.stderr" || R195_RC=$?
+R195_README="$(cat "$PREPARE_OUT_DIR/r195cm1-plugin/README.md" 2>/dev/null || true)"
+assert_eq "an inline \`\`\`span\`\`\` is not an unclosed fence (X-002)" "0" "$R195_RC"
+assert_contains "…so the heading after it is still a Key Feature (awk)" "**Next Heading After Span**" "$R195_README"
+assert_contains "…and a code span holding a literal backtick keeps its section (perl, X-003)" "R195-CM-KEPT-MARKER" "$R195_README"
+assert_eq "…with nothing dropped" "0" "$(grep -c '^dropped section' "$SCRATCH_DIR/r195cm1.stderr" || true)"
+
+printf '## Quick Check\n\n    ```\nVisit https://github.com/<github-user>/indented for setup.\n    ```\n\n## Prerequisites\n\n```js`x <github-user>\n\n## See Also\n\n- Clone <owner/repo>.\n\n## Indented Fence Heading\n\nText.\n\n    ```\n## Heading Between Indented Lines\n    ```\n' \
+    > "$SCRATCH_DIR/r195-cm2.body"
+r195_prep_fixture r195cm2 "$SCRATCH_DIR/r195-cm2.body"
+R195_RC=0
+run_prepare r195cm2-plugin "$SCRATCH_DIR/r195cm2.stdout" "$SCRATCH_DIR/r195cm2.stderr" || R195_RC=$?
+R195_ERR="$(cat "$SCRATCH_DIR/r195cm2.stderr")"
+assert_eq "4-space-indented and backtick-info \`\`\` lines are not fences (X-002)" "0" "$R195_RC"
+assert_line_present "…so prose between indented \`\`\` lines is checked (perl)" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$R195_ERR"
+assert_line_present "…and a backtick in the info string means no fence (perl)" \
+    'dropped section "Prerequisites": placeholder <github-user> in prose' "$R195_ERR"
+assert_line_present "…and <owner/repo> is a placeholder (C-002)" \
+    'dropped section "See Also": placeholder <owner/repo> in prose' "$R195_ERR"
+assert_contains "…and the heading after the indented lines is a Key Feature (awk)" "**Indented Fence Heading**" \
+    "$(cat "$PREPARE_OUT_DIR/r195cm2-plugin/README.md" 2>/dev/null || true)"
+assert_contains "…and so is a heading between two 4-space-indented \`\`\` lines (awk)" "**Heading Between Indented Lines**" \
+    "$(cat "$PREPARE_OUT_DIR/r195cm2-plugin/README.md" 2>/dev/null || true)"
+
+printf '## Prerequisites\n\nCheck < github-user> first.\n\n## See Also\n\n<details open><summary>More</summary>R195-DETAILS-MARKER</details>\n' \
+    > "$SCRATCH_DIR/r195-cm3.body"
+r195_prep_fixture r195cm3 "$SCRATCH_DIR/r195-cm3.body"
+R195_RC=0
+run_prepare r195cm3-plugin "$SCRATCH_DIR/r195cm3.stdout" "$SCRATCH_DIR/r195cm3.stderr" || R195_RC=$?
+assert_line_present "a placeholder with a space after < is caught (C-002)" \
+    'dropped section "Prerequisites": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195cm3.stderr")"
+assert_contains "…and <details open> is HTML, so its section stays (C-002)" "R195-DETAILS-MARKER" \
+    "$(cat "$PREPARE_OUT_DIR/r195cm3-plugin/README.md" 2>/dev/null || true)"
 
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then

@@ -385,16 +385,22 @@ short_desc() {
 # Fenced code blocks (#106). A "## " line inside ``` or ~~~ is code, not a
 # heading: skill-publishing's SKILL.md shows a "## See Also" template inside a
 # ```markdown block, and extract_section used to take that as the See Also
-# section. A fence opens with 3 or more backticks or tildes and closes with a
-# line of only the same character, at least as many. This is looser than
-# CommonMark, which allows at most 3 spaces of indent: here any indent counts,
-# so a fence inside a list item is seen too. A trailing CR is ignored, so a
-# fence line saved with CRLF still closes. _MD_FENCE_AWK is shared by the two
+# section. The rules are CommonMark's: a fence opens with 3 or more backticks
+# or tildes after at most 3 spaces, and a backtick fence's info string holds no
+# backtick (so ```tool <repo>``` on one line is an inline code span, not a
+# fence). It closes with a line of only the same character, at least as many,
+# after at most 3 spaces. A tab or 4 spaces of indent is not a fence (in a list
+# item that under-reports a fence; it never hides prose). A trailing CR is
+# ignored, so a fence line saved with CRLF still closes. _MD_FENCE_AWK is shared by the two
 # awk readers below so they cannot disagree about where a fence ends;
 # section_has_prose_placeholder applies the same rule in perl.
 _MD_FENCE_AWK='
-  function fence_run(line,   s, c, n) {
-    s = line; sub(/\r$/, "", s); sub(/^[ \t]*/, "", s)
+  function fence_run(line,   s, c, n, ind) {
+    s = line; sub(/\r$/, "", s)
+    ind = 0
+    while (ind < 4 && substr(s, ind + 1, 1) == " ") ind++
+    if (ind > 3) return ""
+    s = substr(s, ind + 1)
     c = substr(s, 1, 1)
     if (c != "`" && c != "~") return ""
     n = 0
@@ -407,7 +413,11 @@ _MD_FENCE_AWK='
   function in_fence(line,   f) {
     f = fence_run(line)
     if (fc == "") {
-      if (f != "") { fc = substr(f, 1, 1); fl = substr(f, 2) + 0; return 1 }
+      # A backtick fence whose info string holds a backtick is not a fence
+      # (CommonMark): ```tool <repo>``` is an inline code span.
+      if (f != "" && !(substr(f, 1, 1) == "`" && index(FENCE_REST, "`"))) {
+        fc = substr(f, 1, 1); fl = substr(f, 2) + 0; return 1
+      }
       return 0
     }
     if (f != "" && substr(f, 1, 1) == fc && substr(f, 2) + 0 >= fl && FENCE_REST ~ /^[ \t]*$/) fc = ""
@@ -461,38 +471,56 @@ extract_headings() {
 #   3  a fenced code block is still open at the end of the text
 #   anything else: the check itself failed (perl missing or broken); callers
 #      must not read that as "no placeholder"
-# What counts as a placeholder: "<", a letter, then letters, digits, "_", "-",
-# "." or spaces, then ">", in any case: <github-user>, <GITHUB_USER>,
-# <your repo>, <YOUR-TOKEN>, <v1.2>. Not caught: other template styles such as
-# {{NAME}}, $NAME or YOUR-USERNAME. A few common HTML tags in any case (<br>,
-# <KBD>, <details>, ...) are not placeholders. Known false positive: generic
-# types in prose, such as List<string>; write them as inline code.
-# What is ignored: fenced blocks, and inline code spans, matched per line. A
-# line whose backticks do not pair up (a backtick-run length that occurs an odd
-# number of times) is checked whole, so a stray backtick cannot hide a
-# placeholder. A usage line such as `tool <monorepo-dir>` is legitimate.
+# What counts as a placeholder: "<", optional spaces, a letter, then letters,
+# digits, "_", "-", ".", "/" or spaces, then ">", in any case: <github-user>,
+# <GITHUB_USER>, <your repo>, <owner/repo>, < github-user>. Not caught: other
+# template styles such as {{NAME}}, $NAME or YOUR-USERNAME. A common HTML tag
+# is not a placeholder; the allow-list is checked on the first word, in any
+# case, so <br>, <KBD>, <br/> and <details open> pass. Known false positives:
+# generic types in prose, such as List<string> (write them as inline code), and
+# a comparison written as "a < b > c".
+# What is ignored: fenced blocks (the CommonMark rules above), and inline code
+# spans, matched as CommonMark does within one line: a run of N backticks
+# closes at the next run of exactly N, and a run with no partner is a literal
+# backtick. So ``tool <repo> uses a literal ` here`` is code, and a lone
+# backtick cannot hide a placeholder after it. A span that runs over two lines
+# is not seen as code, so its text is checked as prose.
 section_has_prose_placeholder() {
   printf '%s\n' "$1" | perl -0777 -ne '
     my ($fc, $fl, $prose) = ("", 0, "");
     for my $l (split /\n/, $_) {
       $l =~ s/\r$//;
       if ($fc ne "") {
-        $fc = "" if $l =~ /^[ \t]*(\Q$fc\E+)[ \t]*$/ && length($1) >= $fl;
+        $fc = "" if $l =~ /^ {0,3}(\Q$fc\E+)[ \t]*$/ && length($1) >= $fl;
         next;
       }
-      if ($l =~ /^[ \t]*(`{3,}|~{3,})/) { $fc = substr($1, 0, 1); $fl = length($1); next; }
-      my %runs;
-      $runs{length $1}++ while $l =~ /(?<!`)(`+)(?!`)/g;
-      unless (grep { $_ % 2 } values %runs) {
-        $l =~ s/(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)//g;
+      if ($l =~ /^ {0,3}(`{3,})([^`]*)$/ || $l =~ /^ {0,3}(~{3,})(.*)$/) {
+        $fc = substr($1, 0, 1); $fl = length($1); next;
       }
-      $prose .= "$l\n";
+      # Code spans, as CommonMark matches them: a run of N backticks opens a
+      # span that closes at the next run of exactly N; a run with no such
+      # partner is a literal backtick and the scan goes on after it.
+      my ($out, $rest) = ("", $l);
+      while ($rest =~ /^(.*?)(?<!`)(`+)(?!`)(.*)$/s) {
+        my ($pre, $tick, $after) = ($1, $2, $3);
+        my $n = length $tick;
+        if ($after =~ /^.*?(?<!`)`{$n}(?!`)(.*)$/s) {
+          $out .= $pre . " ";
+          $rest = $1;
+        } else {
+          $out .= $pre . $tick;
+          $rest = $after;
+        }
+      }
+      $prose .= $out . $rest . "\n";
     }
     exit 3 if $fc ne "";
     my %html = map { $_ => 1 } qw(a abbr b blockquote br center code dd del details div dl dt em hr i img ins kbd li mark ol p pre s small span strong sub summary sup table tbody td th thead tr u ul);
-    while ($prose =~ /<([A-Za-z][A-Za-z0-9_. -]*)>/g) {
-      next if $html{lc $1};
-      print "<$1>";
+    while ($prose =~ /<\s*([A-Za-z][A-Za-z0-9_.\/ -]*)>/g) {
+      my $ph = $1;
+      my ($word) = $ph =~ /^([A-Za-z0-9]+)/;
+      next if $html{lc $word};
+      print "<$ph>";
       exit 0;
     }
     exit 1;
