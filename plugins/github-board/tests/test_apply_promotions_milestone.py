@@ -28,7 +28,7 @@ V41 = {"number": 13, "title": "v4.1", "state": "OPEN"}
 
 # Logs each call. $REL_JSON holds the releases; compare answers $COMPARE (default ahead).
 # $MS_PAGES holds a JSON list of pages, printed back to back like an older gh does.
-# $MS_FAIL fails the milestone list; $PATCH_FAIL fails every PATCH.
+# $MS_FAIL fails the milestone list; $PATCH_FAIL fails every PATCH with a 422 body.
 _STUB = r'''#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 if [ "$1 $2" = "auth status" ]; then
@@ -36,8 +36,14 @@ if [ "$1 $2" = "auth status" ]; then
 fi
 case "$*" in
   "api -X PATCH "*)
-    [ -n "${PATCH_FAIL:-}" ] && { echo "HTTP 403: Must have admin rights to Repository." >&2; exit 1; }
-    echo '{}'; exit 0 ;;
+    # Prints what --jq .milestone.number prints: the number sent, 99 with $PATCH_WRONG.
+    # On an HTTP error gh prints the response body on stdout.
+    if [ -n "${PATCH_FAIL:-}" ]; then
+      echo '{"message":"Validation Failed","errors":[{"resource":"Issue","field":"milestone","code":"invalid"}]}'
+      echo "gh: Validation Failed (HTTP 422)" >&2; exit 1
+    fi
+    [ -n "${PATCH_WRONG:-}" ] && { echo 99; exit 0; }
+    echo "${6#milestone=}"; exit 0 ;;
   "api graphql"*) echo '{"data":{}}'; exit 0 ;;
   "issue comment"*) exit 0 ;;
   "issue view"*) echo 0; exit 0 ;;
@@ -112,10 +118,10 @@ def test_dry_run_lists_mismatch(tmp_path):
 def test_apply_fixes_into_closed_milestone_by_number(tmp_path):
     r, calls = _run(tmp_path, "--apply")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
     # The board move comes first; the milestone is annotation, like the comment.
     move = [i for i, c in enumerate(calls) if c.startswith("api graphql")][0]
-    assert move < calls.index("api -X PATCH repos/o/r/issues/7 -F milestone=15")
+    assert move < calls.index("api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number")
     assert "Milestones: 1 set, 0 unchanged, 0 skipped, 0 failed" in r.stdout
 
 
@@ -141,7 +147,7 @@ def test_candidate_without_milestone_field_reads_unknown(tmp_path):
     r, calls = _run(tmp_path, "--apply", candidates=[_candidate(milestone="absent")])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "unknown -> v4.0" in r.stdout
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
 
 
 def test_exact_patch_title_wins(tmp_path):
@@ -149,7 +155,7 @@ def test_exact_patch_title_wins(tmp_path):
           {"title": "v3.18.1", "number": 21, "state": "closed"}]
     r, calls = _run(tmp_path, "--apply", milestones=ms, tag="v3.18.1")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=21" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=21 --jq .milestone.number" in calls
 
 
 def test_minor_title_is_the_fallback(tmp_path):
@@ -157,7 +163,7 @@ def test_minor_title_is_the_fallback(tmp_path):
           {"title": "v3.18.2", "number": 22, "state": "open"}]
     r, calls = _run(tmp_path, "--apply", milestones=ms, tag="v3.18.1")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=20" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=20 --jq .milestone.number" in calls
 
 
 @pytest.mark.parametrize("title,tag", [("4.0", "v4.0.0"), ("v4.0", "4.0.0")])
@@ -165,7 +171,7 @@ def test_leading_v_is_optional_on_both_sides(tmp_path, title, tag):
     ms = [{"title": title, "number": 15, "state": "closed"}]
     r, calls = _run(tmp_path, "--apply", milestones=ms, tag=tag)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
 
 
 def test_two_matching_titles_are_refused(tmp_path):
@@ -208,14 +214,14 @@ def test_forced_tag_used_for_milestone(tmp_path):
     r, calls = _run(tmp_path, "--apply", "--release-tag", "v4.0.0", tag="v9.9.9", REL_FAIL="1")
     assert r.returncode == 0, r.stdout + r.stderr
     assert not [c for c in calls if "/releases" in c]
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
 
 
 def test_no_release_comment_still_fixes_milestone(tmp_path):
     r, calls = _run(tmp_path, "--apply", "--no-release-comment")
     assert r.returncode == 0, r.stdout + r.stderr
     assert [c for c in calls if "/releases" in c], "the release lookup was skipped"
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
     assert not [c for c in calls if c.startswith("issue comment")]
 
 
@@ -231,8 +237,9 @@ def test_milestone_write_failure_is_reported_not_fatal(tmp_path):
     assert [c for c in calls if c.startswith("api graphql")], "the board move did not run"
     assert "Promotions: 1 ok, 0 failed" in r.stdout
     assert "Milestones: 0 set, 0 unchanged, 0 skipped, 1 failed" in r.stdout
-    assert "403" in r.stdout
+    assert "422" in r.stdout and '"code":"invalid"' in r.stdout
     assert "ACTION NEEDED" in r.stdout
+    assert "--apply --no-release-comment" in r.stdout
 
 
 def test_failed_status_move_writes_no_milestone(tmp_path):
@@ -276,7 +283,7 @@ def test_milestone_on_a_later_page_is_found(tmp_path):
              [{"title": "v4.0", "number": 15, "state": "closed"}]]
     r, calls = _run(tmp_path, "--apply", pages=pages)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15" in calls
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
 
 
 def test_unavailable_release_counts_a_milestone_failure(tmp_path):
@@ -360,3 +367,54 @@ def test_empty_milestone_listing_is_a_failure_not_an_empty_list(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "could not list milestones" in r.stderr
     assert "Milestones: 0 set, 0 unchanged, 0 skipped, 1 failed" in r.stdout
+
+
+# ---- PR #205 review round 1 ---------------------------------------------------------------
+
+def test_forced_tag_with_no_comment_skips_the_lookup_and_sets_the_milestone(tmp_path):
+    r, calls = _run(tmp_path, "--apply", "--release-tag", "v4.0.0", "--no-release-comment",
+                    tag="v9.9.9", REL_FAIL="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not [c for c in calls if "/releases" in c]
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
+    assert not [c for c in calls if c.startswith("issue comment")]
+
+
+def test_two_part_tag_maps_to_the_exact_title(tmp_path):
+    ms = [{"title": "v4", "number": 4, "state": "closed"},
+          {"title": "v4.0", "number": 15, "state": "closed"}]
+    r, calls = _run(tmp_path, "--apply", milestones=ms, tag="v4.0")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "api -X PATCH repos/o/r/issues/7 -F milestone=15 --jq .milestone.number" in calls
+
+
+@pytest.mark.parametrize("repo", ["../..", "o/..", "./r"])
+def test_dot_segments_in_repo_get_no_patch(tmp_path, repo):
+    cand = _candidate(milestone=V41, repo=repo)
+    cand["mergedPRs"][0]["repo"] = repo
+    r, calls = _run(tmp_path, "--apply", "--release-tag", "v4.0.0", candidates=[cand])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _patches(calls) == [] and _ms_lists(calls) == []
+    assert "Milestones: 0 set, 0 unchanged, 0 skipped, 1 failed" in r.stdout
+
+
+def test_patch_reply_with_another_milestone_is_a_failure(tmp_path):
+    r, _ = _run(tmp_path, "--apply", PATCH_WRONG="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "99" in r.stdout
+    assert "Milestones: 0 set, 0 unchanged, 0 skipped, 1 failed" in r.stdout
+
+
+@pytest.mark.parametrize("why,kw,reason", [
+    pytest.param("no-match", dict(tag="v9.0.0"), "no milestone titled 9.0.0 or 9.0", id="no-match"),
+    pytest.param("two", dict(milestones=[{"title": "v4.0", "number": 15, "state": "closed"},
+                                         {"title": "4.0", "number": 16, "state": "open"}]),
+                 "ambiguous", id="two-matches"),
+    pytest.param("shape", dict(tag="nightly-1"), "is not vX.Y.Z or vX.Y", id="not-a-version"),
+])
+def test_dry_run_prints_why_the_milestone_is_skipped(tmp_path, why, kw, reason):
+    r, _ = _run(tmp_path, "--dry-run", **kw)
+    assert r.returncode == 0, r.stdout + r.stderr
+    line = [ln for ln in r.stdout.splitlines() if "milestone: skipped" in ln]
+    assert line and reason in line[0], r.stdout
+    assert "Milestones: 0 to set, 0 unchanged, 1 skipped, 0 cannot check" in r.stdout

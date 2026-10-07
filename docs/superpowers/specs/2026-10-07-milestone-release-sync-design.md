@@ -20,7 +20,7 @@ One milestone field carries two meanings. Work starts in the milestone of its **
 
 - Every milestone write goes through REST by number. `EXISTING` keeps `{title, number, state}` for each milestone (all states, paginated), so a closed target resolves to its number.
 - The new key is `closed_moves: [{issue, to}]`. It needs no rationale and posts no comment. Its targets go through the same exists check, and the dry run prints them apart from `moves`.
-- A failed write prints gh's stderr and adds the issue to a failure list. The run exits 1 when that list is not empty. Today stderr goes to `/dev/null`.
+- A failed write prints gh's stderr and the response body, and adds the issue number to a failure list. The run still writes the rest of the plan, then exits 1 with `completed with N failure(s): #11 #12` when that list is not empty. Before #203, stderr went to `/dev/null`.
 
 ### promote-shipped
 
@@ -51,7 +51,7 @@ One milestone field carries two meanings. Work starts in the milestone of its **
   3. For each closed issue named by a merged PR, it takes the PR's merge commit and finds the first tag that contains it: `git tag --contains <sha> --sort=v:refname | head -1`. Inside a tag, the issue belongs to that release's milestone, mapped as in PR A, even when that milestone is closed. After the last tag, it belongs to the next-release milestone.
   4. It lists each mismatch with its evidence (issue, PR, commit, tag, current and target milestone), and emits `closed_moves` JSON for `apply-plan.sh`.
   5. It flags a closed issue whose linked PR never merged when a merged PR names it (the claude-code-config#221 case).
-- SKILL.md gets step 0, and `task-manifest.sh` gets the new task. `references/triage-criteria.md:55` loses "a closed issue in the wrong milestone is harmless".
+- SKILL.md gets step 0, and `task-manifest.sh` gets the new task. (`references/triage-criteria.md` already lost "a closed issue in the wrong milestone is harmless" in PR A, #205, because it contradicted `closed_moves`.)
 
 ## Limits
 

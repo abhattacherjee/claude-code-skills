@@ -51,8 +51,9 @@ For each open issue in the milestone under review:
 | **Close** | Already resolved, obsolete, or duplicate | Not this skill's job — use `triage-issues` |
 
 Do the `triage-issues` pass **first** if the issue list has not been audited
-recently. Re-milestoning an issue that is already resolved is wasted motion, and a
-closed issue in the wrong milestone is harmless.
+recently. Re-milestoning an issue that is already resolved is wasted motion. A closed
+issue belongs in the milestone of the release that shipped it; fix it with
+`closed_moves`.
 
 ## Effort check before "keep"
 

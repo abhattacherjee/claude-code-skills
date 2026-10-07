@@ -6,8 +6,8 @@ prints "Promotions: 0 ok, 0 failed" and exits 0. That reads as "the board was
 already in sync" when in fact nothing was even attempted -- with a non-zero
 candidate count sitting right above it in the same output.
 
---dry-run + --no-release-comment keeps these tests entirely offline: neither
-path touches `gh`. The --release-tag tests do: a `merged` item looks up its release
+--dry-run + --no-release-comment keeps the tests with `nopr` candidates entirely
+offline: neither path touches `gh` for them. The --release-tag tests do: a `merged` item looks up its release
 milestone (#203). They run with a `gh` stub that fails every call, so no test
 reaches GitHub; a failed milestone list is non-fatal.
 """
@@ -161,8 +161,9 @@ def test_an_empty_column_does_not_shift_every_later_field(tmp_path, empty_field,
         cand["mergedPRs"][0]["repo"] = None
 
     # --release-tag skips the release lookup, so the preview prints a comment
-    # label with no `gh` involved. Without --no-release-comment, which would
-    # suppress the very label this asserts on.
+    # label without it. The milestone list is still read, through the failing stub
+    # (non-fatal). Without --no-release-comment, which would suppress the very
+    # label this asserts on.
     path = tmp_path / "cand.json"
     path.write_text(json.dumps({
         "project": {"id": "PVT_1", "title": "Board", "number": 1},

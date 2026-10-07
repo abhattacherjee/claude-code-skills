@@ -96,10 +96,14 @@ for a in "$@"; do [ "$prev" = "--jq" ] && jqf="$a"; prev="$a"; done
 case "$1 $2" in
   "api repos/octo/app/milestones"*)
     [ -n "${MS_FAIL:-}" ] && { echo "HTTP 502" >&2; exit 1; }
+    # GitHub lists open milestones only without state=all, and gh reads past the first
+    # page only with --paginate.
+    pf='.'; case "$*" in *state=all*) ;; *) pf='map(select(.state != "closed"))' ;; esac
+    pages='.'; case "$*" in *--paginate*) ;; *) pages='.[0:1]' ;; esac
     if [ -n "$jqf" ]; then
-      jq -c '.[]' "$PAGES" | while IFS= read -r page; do printf '%s' "$page" | jq -c "$jqf"; done
-    elif [ "$MERGE" = 1 ]; then jq -c 'add' "$PAGES"
-    else jq -c '.[]' "$PAGES"; fi
+      jq -c "$pages | .[] | $pf" "$PAGES" | while IFS= read -r page; do printf '%s' "$page" | jq -c "$jqf"; done
+    elif [ "$MERGE" = 1 ]; then jq -c "$pages | map($pf) | add" "$PAGES"
+    else jq -c "$pages | .[] | $pf" "$PAGES"; fi
     exit 0 ;;
 esac
 exit 1'''

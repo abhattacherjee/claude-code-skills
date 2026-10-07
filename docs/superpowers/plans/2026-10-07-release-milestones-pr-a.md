@@ -16,14 +16,14 @@
 - Exactly 3 `gh auth status` call sites in `promote-shipped/scripts/*.sh` (`tests/test_read_scripts_scope_preflight.py`). Add none.
 - Exactly 9 promote classes (`tests/test_structure.py`). Add none.
 - Do not add a column to apply-promotions' `\037` projection that `tests/test_apply_promotions_reconcile.py` pins. Read the milestone from the candidate JSON by item id.
-- A comment failure, and now a milestone failure, never undoes the board move (apply-promotions.sh:28-30 contract).
+- A comment failure, and now a milestone failure, never undoes the board move (the apply-promotions.sh header contract: "Comment failure is reported but does NOT count as a promotion failure — the board move is the primary side-effect").
 - No test touches GitHub. Every `gh` call is stubbed.
 - Run every job in `.github/workflows/validate-skill.yml` locally before pushing, plus `./scripts/commit-preflight.sh`. Stage files by name.
 - Commit trailer: `Co-Authored-By: <the model you are> <noreply@anthropic.com>`.
 
 ## Review Focus
 
-1. A milestone title that exists twice, once open and once closed (GitHub allows this after a rename). Resolve by exact title, and refuse ambiguity instead of picking one.
+1. A milestone title that exists twice. GitHub rejects duplicate titles, even when one is closed, so this should not happen; the guard is defensive. Resolve by exact title, and refuse ambiguity instead of picking one. In promote-shipped the real case is the optional `v`: `v4.0` and `4.0` both match `v4.0.0`.
 2. A tag with no matching milestone (`v4.0.0` with only `v4.0`, or neither). Exact `vX.Y.Z` first, then `vX.Y`. No match means a warning and no write.
 3. `--release-tag` forced, and `--no-release-comment` given. The forced tag is used for the milestone. With no-comment, the lookup still runs.
 4. An item already in the right milestone gets no write and no preview line.
@@ -67,7 +67,7 @@
 
 **Interfaces:**
 - Each candidate gains `milestone: {number, title, state} | null`.
-- New function `milestone_for_tag <repo> <tag>`: prints `<number>\t<title>` or nothing. It tries an exact `vX.Y.Z` title, then `vX.Y`, with the leading `v` optional on both sides. The milestone list (`repos/R/milestones?state=all&per_page=100 --paginate`) is cached in `CACHE_DIR` as `milestones_<slug>`. A failed list warns once and is not cached.
+- New function `milestone_for_tag <repo> <tag>`: prints `<number>\t<title>`, or `skip\t<reason>` when no single milestone matches, and returns 2 when the list cannot be read. It tries an exact `vX.Y.Z` title, then `vX.Y`, with the leading `v` optional on both sides. The milestone list (`repos/R/milestones?state=all&per_page=100 --paginate`) is cached in `CACHE_DIR` as `milestones_<slug>`. A failed list warns once and is never cached as empty; the failure is remembered for the run.
 
 - [ ] **Step 1: Write the failing tests.** Stub releases so commit `aaa` is in `v4.0.0`, and stub milestones `[{"title":"v4.0","number":15,"state":"closed"},{"title":"v4.1","number":13,"state":"open"}]`.
   - `test_dry_run_lists_mismatch`: a `merged` candidate whose milestone is `v4.1` and whose PR merge commit is `aaa`. The `--dry-run` output has `would set milestone: v4.1 -> v4.0 (v4.0.0)`, and the log has no PATCH.

@@ -12,23 +12,25 @@
 #   --no-release-comment     Skip release comment entirely (still moves to Done, and
 #                            still looks up the release to set the milestone)
 #
+# Release tag ("merged" class only): the OLDEST GitHub Release whose tag contains
+# the merge commit (per-repo+SHA cached), or --release-tag when given. Steps 2 and 3
+# both use it.
+#
 # For each promoted item the script:
 #   1. updateProjectV2ItemFieldValue → Status = Done (mutation)
-#   2. Comments, branching on the candidate's .promoteClass:
-#      - "merged"          → looks up the OLDEST GitHub Release whose tag contains
-#                            the merge commit (per-repo+SHA cached) and posts
-#                            "🚀 Released in <tag> ..."
+#   2. "merged" class only: sets the item's milestone to the release milestone of
+#      the tag: the exact vX.Y.Z title, else vX.Y, leading v optional. Written
+#      through REST by number (gh api -X PATCH repos/O/R/issues/N
+#      -F milestone=<number>); unlike `gh issue edit --milestone`, that can assign
+#      a closed milestone. The reply must name the number sent. No change when it
+#      already matches; a skip line and a warning, and no write, when no single
+#      milestone matches. nopr/wontfix keep their milestone.
+#   3. Comments, branching on the candidate's .promoteClass:
+#      - "merged"          → posts "🚀 Released in <tag> ..."
 #      - "nopr"/"wontfix"  → posts a fixed note explaining why the card was
 #                            promoted without a merged PR (see nopr_comment_body).
 #                            Idempotent via an HTML marker, so re-running a release
 #                            does not stack duplicate comments.
-#
-#   3. "merged" class only: sets the item's milestone to the release milestone of
-#      the tag from step 2 (or --release-tag): the exact vX.Y.Z title, else vX.Y,
-#      leading v optional. Written through REST by number
-#      (gh api -X PATCH repos/O/R/issues/N -F milestone=<number>), so a closed
-#      milestone works. No change when it already matches; a warning and no write
-#      when no single milestone matches. nopr/wontfix keep their milestone.
 #
 # Ordering is deliberate: the board move happens FIRST, then the milestone and the
 # comment. The comment asserts "Promoted to Done", so it must never exist for an
@@ -240,9 +242,9 @@ find_release_for_commit() {
 
 # milestone_for_tag <repo> <tag>
 # Prints "<number><TAB><title>" of the release milestone for <tag>: the exact X.Y.Z
-# title first, then X.Y, with the leading "v" optional on both sides. Prints nothing,
-# with one WARN per repo and tag, when no milestone matches, more than one does, or
-# the tag is not shaped like a version. Returns 2 when the milestone list could not
+# title first, then X.Y, with the leading "v" optional on both sides. Prints
+# "skip<TAB><reason>", with one WARN per repo and tag, when no milestone matches,
+# more than one does, or the tag is not shaped like a version. Returns 2 when the milestone list could not
 # be read. Like the release listing, a failed list is never cached as an empty one:
 # that would report every item in the repo as "no milestone matches".
 milestone_for_tag() {
@@ -282,6 +284,7 @@ milestone_for_tag() {
   else
     [ -f "$warned" ] || echo "WARN: release tag '${tag}' is not vX.Y.Z or vX.Y; no release milestone set for ${repo}." >&2
     : > "$warned"
+    printf 'skip\t%s\n' "tag '${tag}' is not vX.Y.Z or vX.Y"
     return 0
   fi
 
@@ -299,10 +302,12 @@ milestone_for_tag() {
   case "$hit" in
     none)
       [ -f "$warned" ] || echo "WARN: no milestone titled ${exact}${minor:+ or ${minor}} (leading v optional) in ${repo}; release milestone for ${tag} not set." >&2
-      : > "$warned" ;;
+      : > "$warned"
+      printf 'skip\t%s\n' "no milestone titled ${exact}${minor:+ or ${minor}} for ${tag}" ;;
     ambiguous*)
       [ -f "$warned" ] || echo "WARN: ${hit} in ${repo} for ${tag}; release milestone not set." >&2
-      : > "$warned" ;;
+      : > "$warned"
+      printf 'skip\t%s\n' "${hit} for ${tag}" ;;
     *) printf '%s\n' "$hit" ;;
   esac
   return 0
@@ -479,14 +484,16 @@ while IFS=$'\037' read -r ITEM_ID NUMBER TITLE STATUS URL REPO PCLASS MERGE_SHA 
     elif [ "$RELEASE_JSON" = "null" ]; then
       MS_ACTION="skip"; MS_NOTE="skipped — no release contains $MERGE_SHA"
     elif ! printf '%s' "$NUMBER" | grep -Eq '^[1-9][0-9]*$' \
-         || ! printf '%s' "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
-      # Both go into a REST path; "7/lock" would PATCH another endpoint.
+         || ! printf '%s' "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
+         || case "/$REPO/" in */./*|*/../*) true ;; *) false ;; esac; then
+      # Both go into a REST path; "7/lock" or a "." or ".." part would PATCH another
+      # endpoint.
       MS_ACTION="fail"; MS_NOTE="FAILED — malformed issue number or repo ('$NUMBER' in '$REPO')"
     else
       MS_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag')
       if MS_HIT=$(milestone_for_tag "$REPO" "$MS_TAG"); then
-        if [ -z "$MS_HIT" ]; then
-          MS_ACTION="skip"; MS_NOTE="skipped — no single milestone matches $MS_TAG (see WARN)"
+        if [ -z "$MS_HIT" ] || [ "${MS_HIT%%$'\t'*}" = "skip" ]; then
+          MS_ACTION="skip"; MS_NOTE="skipped — ${MS_HIT#*$'\t'}"
         else
           MS_NUM="${MS_HIT%%$'\t'*}"; MS_TITLE="${MS_HIT#*$'\t'}"
           CUR_JSON=$(echo "$DATA" | jq -c --arg id "$ITEM_ID" "$JQ_CLEAN"'
@@ -519,8 +526,8 @@ while IFS=$'\037' read -r ITEM_ID NUMBER TITLE STATUS URL REPO PCLASS MERGE_SHA 
     [ "$SKIP_COMMENT" = "false" ] && echo "    would comment: $RELEASE_LABEL"
     # Printed only when the milestone would change, or cannot be checked.
     case "$MS_ACTION" in
-      set)  echo "    would set milestone: $CUR_LABEL -> $MS_TITLE ($MS_TAG)" ;;
-      fail) echo "    milestone: $MS_NOTE" ;;
+      set)       echo "    would set milestone: $CUR_LABEL -> $MS_TITLE ($MS_TAG)" ;;
+      skip|fail) echo "    milestone: $MS_NOTE" ;;
     esac
     OK=$((OK + 1))
     continue
@@ -552,11 +559,22 @@ while IFS=$'\037' read -r ITEM_ID NUMBER TITLE STATUS URL REPO PCLASS MERGE_SHA 
   # Phase 2: release milestone (best-effort, like the comment; never undoes the move).
   case "$MS_ACTION" in
     set)
-      # REST by number: the only call that can assign a closed milestone.
-      if MERR=$(gh api -X PATCH "repos/$REPO/issues/$NUMBER" -F milestone="$MS_NUM" 2>&1 >/dev/null); then
+      # Unlike `gh issue edit --milestone`, REST by number can assign a closed
+      # milestone. The reply must name the number sent. On an HTTP error gh prints the
+      # response body on stdout (a 422 carries its errors[] there), so keep both.
+      MS_ERRF="$CACHE_DIR/patch_err"
+      MRC=0
+      MGOT=$(gh api -X PATCH "repos/$REPO/issues/$NUMBER" -F milestone="$MS_NUM" \
+               --jq '.milestone.number' 2>"$MS_ERRF") || MRC=$?
+      if [ "$MRC" -eq 0 ] && [ "$MGOT" = "$MS_NUM" ]; then
         echo "    milestone: set — $CUR_LABEL -> $MS_TITLE ($MS_TAG)"
       else
-        echo "    milestone: FAILED — $(echo "${MERR:-}" | head -1) (item still moved to Done)"
+        if [ "$MRC" -ne 0 ]; then
+          MREASON="$(tr '\n' ' ' < "$MS_ERRF")$(printf '%s' "${MGOT:-}" | tr '\n' ' ' | cut -c1-300)"
+        else
+          MREASON="GitHub reports milestone '$(printf '%s' "${MGOT:-}" | tr '\n' ' ')', not $MS_NUM"
+        fi
+        echo "    milestone: FAILED — $MREASON (item still moved to Done)"
         MS_SET=$((MS_SET - 1)); MS_FAIL=$((MS_FAIL + 1))
       fi ;;
     skip) echo "    milestone: $MS_NOTE" ;;
@@ -694,7 +712,10 @@ if [ "$MODE" = "--apply" ] && [ "$MS_FAIL" -gt 0 ]; then
   echo ""
   echo "ACTION NEEDED: $MS_FAIL release milestone(s) not set — the board moves"
   echo "               themselves succeeded. Re-check the items marked 'milestone:'"
-  echo "               above and fix them by hand, or re-run this command."
+  echo "               above, then re-run apply-promotions.sh against the SAME"
+  echo "               candidates file with --apply --no-release-comment. A fresh"
+  echo "               run drops items already in Done, and a plain re-run posts"
+  echo "               the release comment again."
 fi
 
 if [ "$FAIL" -gt 0 ]; then

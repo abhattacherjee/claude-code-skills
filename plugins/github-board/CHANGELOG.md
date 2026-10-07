@@ -6,21 +6,30 @@ All notable changes to the **github-board** plugin are documented here.
 
 ### Added
 
-- `plan-milestones` 2.1.0: `apply-plan.sh` accepts `closed_moves: [{issue, to}]`, which set the milestone of a closed issue with no rationale and no comment (#203).
-- `promote-shipped` 2.1.0: `apply-promotions.sh` sets the release milestone of each promoted `merged` item. It maps the release tag (auto-detected, or `--release-tag`) to the milestone titled with the exact `vX.Y.Z`, else `vX.Y`, with the leading `v` optional. The dry run shows `would set milestone: <current|none> -> <target> (<tag>)`, and the summary gets a `Milestones:` line. `nopr` and `wontfix` items keep their milestone. No match, or two matches, prints a warning and changes nothing (#203).
+- `plan-milestones` 2.1.0: `apply-plan.sh` accepts `closed_moves: [{issue, to}]`, which set the milestone of a closed issue with no rationale and no comment. Each `closed_moves` issue's state is read before any write; an open issue, or one whose state cannot be read, is refused (#203).
+- `promote-shipped` 2.1.0: `apply-promotions.sh` sets the release milestone of each promoted `merged` item. It maps the release tag (auto-detected, or `--release-tag`) to the milestone titled with the exact `vX.Y.Z`, else `vX.Y`, with the leading `v` optional. The dry run shows `would set milestone: <current|none> -> <target> (<tag>)`, or `milestone: skipped — <reason>` when no milestone matches, two match, or the tag is not a version; each skip also prints a warning and changes nothing. A `Milestones:` summary line appears when at least one item is `merged`. `nopr` and `wontfix` items keep their milestone (#203).
 
 ### Changed
 
-- `apply-plan.sh` and `apply-promotions.sh` write milestones with `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`, so a closed milestone works. `gh issue edit --milestone` cannot assign one (#203).
-- `apply-plan.sh` prints gh's error when a milestone write fails, runs the rest of the plan, and exits 1. It used to send gh's error to `/dev/null`. It refuses, before any write, a target title that two milestones share, an issue that is not a positive integer, a repo that is not `OWNER/REPO`, and an issue listed more than once (#203).
-- `apply-promotions.sh --no-release-comment` still looks up the release, to set the milestone. A failed milestone write or milestone list is reported and counted, and never undoes the board move or changes the exit code (#203).
+- `apply-plan.sh` and `apply-promotions.sh` write milestones with `gh api -X PATCH repos/O/R/issues/N -F milestone=<number> --jq .milestone.number`. Unlike `gh issue edit --milestone`, this can assign a closed milestone. A reply that names another milestone counts as a failed write, and on an HTTP error the response body (a 422's `errors[]`) is printed with gh's error (#203).
+- `apply-plan.sh` prints gh's error when a write fails, runs the rest of the plan, and exits 1 with `completed with N failure(s): #11 #12`. It used to send gh's error to `/dev/null` (#203).
+- `apply-plan.sh` checks the whole plan before any write and exits 1 on: a `moves`, `closed_moves`, `create_milestones` or `keep` that is not a list, or an entry that is not an object (this used to crash jq with exit 5); a repo that is not `OWNER/REPO` or has a `.` or `..` part; an issue that is not a positive integer; a `create_milestones` entry without a non-empty string title; an issue listed more than once; a target title that two milestones share; and an empty milestone-list reply (#203).
+- `apply-plan.sh` dry run marks a `create_milestones` title that already exists `EXISTS (<state>), will not create`, as `--apply` does (#203).
+- `apply-promotions.sh --no-release-comment` still looks up the release, to set the milestone. A failed milestone write or milestone list is reported and counted, and never undoes the board move or changes the exit code. Its `ACTION NEEDED` text says to re-run against the same candidates file with `--apply --no-release-comment` (#203).
+- `apply-promotions.sh` refuses a milestone write for a candidate repo with a `.` or `..` part (#203).
 - `inventory-board.sh` fetches `milestone { number title state }` for issues and pull requests, and `find-promotable.sh` passes it through in each candidate (#203).
+- `plan-milestones` `references/triage-criteria.md` no longer says a closed issue in the wrong milestone is harmless: it belongs in the milestone of the release that shipped it, fixed with `closed_moves` (#203).
 
 ### Fixed
 
 - `apply-plan.sh` posted a rationale with a newline or a tab as the two characters `\n` or `\t`. The comment now keeps them (#203).
 - `apply-plan.sh --plan` or `--repo` with no value exited 1 with no message. It now says which flag needs a value and exits 2, the documented usage code (#203).
+- `apply-plan.sh` captured a milestone-create reply together with gh's stderr, so a warning on stderr crashed the run after the first create (exit 2). stderr is now read apart, the whole reply must be a number, and a failed create is printed, counted, and the run goes on (#203).
+
+### Internal
+
 - The two forced-tag test groups in `test_apply_promotions_reconcile.py` run with a `gh` stub that fails every call. The new milestone lookup would otherwise have called the real `gh` (#203).
+- The `apply-plan.sh` test stubs list closed milestones only with `state=all`, and pages after the first only with `--paginate`, so dropping either flag fails a test (#203).
 
 ## [1.0.2] - 2026-10-06
 

@@ -128,16 +128,32 @@ Write the plan, dry-run it, then apply:
 "${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh"                       # verify the resulting split
 ```
 
-The script **refuses** a plan whose move lacks a real rationale (≥10 chars), and refuses
-a target milestone that neither exists nor is being created — a typo'd title otherwise
-fails silently per-issue. It also refuses a target title that two milestones share, and
-an issue listed twice.
+The script checks the whole plan before it writes anything, and exits 1 without a
+write when any check fails. It **refuses**:
+
+- a plan with the wrong shape: `moves`, `closed_moves`, `create_milestones` or `keep`
+  that is not a list, or an entry that is not an object;
+- a repo that is not `OWNER/REPO`, or has a `.` or `..` part;
+- a move without a real rationale (≥10 chars);
+- an issue that is not a positive integer, or a move with no target title;
+- a `create_milestones` entry without a non-empty string title;
+- an issue listed more than once across `moves` and `closed_moves`;
+- a target milestone that neither exists nor is being created (a typo'd title is
+  caught here, before any write);
+- a target title that two milestones share. GitHub rejects duplicate titles (see
+  step 7), so this guard is defensive: it refuses rather than pick one;
+- a `closed_moves` issue that is open, or whose state cannot be read. Put an open
+  issue in `moves`, with a rationale.
+
+A `create_milestones` title that already exists is not created again; the dry run
+says `EXISTS (<state>), will not create`.
 
 `closed_moves` fix the milestone of a **closed** issue, usually to the release that
 shipped it. They need no rationale and post no comment. The target may be a closed
-milestone: every write goes through REST by number, so it works where
-`gh issue edit --milestone` cannot. A failed write prints gh's error, the rest of the
-plan still runs, and the script exits 1.
+milestone: unlike `gh issue edit --milestone`, REST by number can assign one. A write
+counts as failed when gh fails (its error and the response body are printed) or when
+the reply names another milestone. The rest of the plan still runs, and the script
+exits 1 with `completed with N failure(s): #11 #12`.
 
 ### 7. After a pivot: reconcile the version sequence
 

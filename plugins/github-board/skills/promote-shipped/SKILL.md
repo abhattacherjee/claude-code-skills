@@ -244,9 +244,13 @@ If the candidate count is 0, exit cleanly — board is in sync with main.
 Always run dry-run first. The preview shows per-item: current → Done transition
 AND the resolved release tag that will appear in the issue comment. For a `merged`
 item whose milestone is not the release milestone, it adds
-`would set milestone: <current|none> -> <target> (<tag>)`. No line means the
-milestone already matches (or no release contains the item yet). Its header
-names the **target column** (`Target column: <name> [<option id>]`), not just the
+`would set milestone: <current|none> -> <target> (<tag>)`. When the milestone is
+left alone it says why in a `milestone: skipped — <reason>` line, and when it
+cannot be checked in a `milestone: UNAVAILABLE — …` or `milestone: FAILED — …`
+line. No milestone line at all means the milestone already matches, or the item is
+`nopr`/`wontfix`.
+
+The preview header names the **target column** (`Target column: <name> [<option id>]`), not just the
 opaque option id — the resolver's last tier is a substring match on
 `done|released|shipped`, and boards in this workflow legitimately contain columns
 like "Done in develop". Check that line before approving.
@@ -264,10 +268,25 @@ to proceed:
   currently unknown, not negative. The stderr `WARN:` line above carries the actual
   API error.
 
-A stderr `WARN: no milestone titled ...` means no milestone matches the release tag,
-so that item's milestone is left alone. Create the release milestone (for example
-`v4.0`), then re-run if you want it set. `milestone: UNAVAILABLE` means the release
-or the milestone list could not be read.
+Milestone lines, and the stderr `WARN:` each skip also prints once per repo and tag:
+
+- **`skipped — no milestone titled X.Y.Z or X.Y for <tag>`**
+  (`WARN: no milestone titled …`) — no milestone matches the release tag, so the milestone is left alone.
+- **`skipped — ambiguous: <title> #<n>, <title> #<n> for <tag>`** (`WARN: ambiguous: …`)
+  — two milestones match, for example `v4.0` and `4.0`. Rename one; the script never
+  picks.
+- **`skipped — tag '<tag>' is not vX.Y.Z or vX.Y`**
+  (`WARN: release tag … is not vX.Y.Z or vX.Y`) — the tag has no version to map.
+- **`skipped — no release contains <sha>`** — as for the comment above.
+- **`UNAVAILABLE — …`** — the release or the milestone list could not be read.
+- **`FAILED — malformed issue number or repo (…)`** — the candidate's number or repo
+  cannot go into a REST path (not a positive integer, not `OWNER/REPO`, or a `.` or
+  `..` part). Nothing is written.
+
+To set a skipped milestone later (for example after creating `v4.0`), re-run
+`apply-promotions.sh` against the SAME candidates file with
+`--apply --no-release-comment`. A fresh Phase 3 run no longer lists items already in
+Done, and a plain re-run posts the release comment a second time.
 
 ### Phase 5 — Confirm and apply
 
@@ -287,12 +306,17 @@ For each candidate the apply phase performs up to three writes:
 2. **Release milestone** (`merged` items only) — when the item's milestone is not
    the release milestone, `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`.
    The release milestone is the one titled with the exact tag (`v3.18.1`), else its
-   minor version (`v3.18`); the leading `v` is optional on both sides. REST by number
-   works for a closed milestone, which the release milestone usually is. No match,
-   or two matches, prints a warning and changes nothing. `nopr` and `wontfix` items
-   keep their milestone: they did not ship in a release. Best-effort, like the
-   comment: a failure is reported and counted on the `Milestones:` summary line,
-   and never undoes the board move.
+   minor version (`v3.18`); the leading `v` is optional on both sides. Unlike
+   `gh issue edit --milestone`, REST by number can assign a closed milestone, which
+   the release milestone usually is. The reply must name the milestone number sent,
+   or the write counts as failed; on an HTTP error the response body (a 422's
+   `errors[]`) is printed. No match, or two matches, prints a skip line and a
+   warning and changes nothing. `nopr` and `wontfix` items keep their milestone:
+   they did not ship in a release. Best-effort, like the comment: a failure is
+   reported and counted on the `Milestones:` summary line, and never undoes the
+   board move. The summary is `Milestones: N set, N unchanged, N skipped, N failed`
+   after `--apply` and `Milestones: N to set, N unchanged, N skipped, N cannot check`
+   after `--dry-run`, and appears only when at least one item is `merged`.
 3. **Release comment** — posts `🚀 Released in [v1.6.2](url) (published 2026-04-22).
    Moved to Done on the project board.` to the linked issue/PR (best-effort; a
    comment failure does NOT mark the promotion as failed — the board move is the
@@ -371,7 +395,9 @@ markdown table.
 ## Anti-patterns
 
 - **Skipping the dry-run preview** — write mutations are reversible (re-run with the
-  prior option ID), but a surprised user is worse than a 5-second preview.
+  prior option ID), but a surprised user is worse than a 5-second preview. The
+  milestone write replaces the item's old milestone, and only the preview shows
+  what that old value was.
 - **Hardcoding a board number** — boards get archived, replaced, renumbered. Always
   discover first.
 - **Promoting items where the linked PR isn't merged yet** — the filter prevents
