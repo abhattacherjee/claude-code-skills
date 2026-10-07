@@ -385,14 +385,16 @@ short_desc() {
 # Fenced code blocks (#106). A "## " line inside ``` or ~~~ is code, not a
 # heading: skill-publishing's SKILL.md shows a "## See Also" template inside a
 # ```markdown block, and extract_section used to take that as the See Also
-# section. A fence opens with 3 or more backticks or tildes (any indent) and
-# closes with a line of only the same character, at least as many, as
-# CommonMark has it. _MD_FENCE_AWK is shared by the two awk readers below so
-# they cannot disagree about where a fence ends; section_has_prose_placeholder
-# applies the same rule in perl.
+# section. A fence opens with 3 or more backticks or tildes and closes with a
+# line of only the same character, at least as many. This is looser than
+# CommonMark, which allows at most 3 spaces of indent: here any indent counts,
+# so a fence inside a list item is seen too. A trailing CR is ignored, so a
+# fence line saved with CRLF still closes. _MD_FENCE_AWK is shared by the two
+# awk readers below so they cannot disagree about where a fence ends;
+# section_has_prose_placeholder applies the same rule in perl.
 _MD_FENCE_AWK='
   function fence_run(line,   s, c, n) {
-    s = line; sub(/^[ \t]*/, "", s)
+    s = line; sub(/\r$/, "", s); sub(/^[ \t]*/, "", s)
     c = substr(s, 1, 1)
     if (c != "`" && c != "~") return ""
     n = 0
@@ -415,12 +417,14 @@ _MD_FENCE_AWK='
 
 # Extract content under a ## heading (returns lines until next ## or EOF)
 # Uses awk for BSD/GNU portability, perl for blank-line trimming. "## " lines
-# inside fenced code blocks are content, not headings.
+# inside fenced code blocks are content, not headings. Returns non-zero when
+# awk or perl fails, so a failure is not read as an empty section.
 # Usage: extract_section <file> <heading_text>
 # Example: extract_section SKILL.md "Quick Check"
 extract_section() {
   local file="$1"
   local heading="$2"
+  local st
   awk -v h="$heading" "$_MD_FENCE_AWK"'
     BEGIN { fc = "" }
     {
@@ -429,7 +433,9 @@ extract_section() {
     $0 == "## " h && !found { found=1; next }
     found && /^## / { exit }
     found { print }
-  ' "$file" 2>/dev/null | perl -0777 -pe 's/\A\s*\n//; s/\n\s*\z//'
+  ' "$file" | perl -0777 -pe 's/\A\s*\n//; s/\n\s*\z//'
+  st="${PIPESTATUS[0]} ${PIPESTATUS[1]}"
+  [[ "$st" == "0 0" ]]
 }
 
 # Extract ## heading titles from markdown (after frontmatter), skipping "## "
@@ -448,28 +454,44 @@ extract_headings() {
   ' "$file" 2>/dev/null | head -"$max" | sed 's/^## //'
 }
 
-# section_has_prose_placeholder <text>: exit 0 when the text has a template
-# placeholder such as <github-user> outside code, and prints the first one;
-# exit 1 when it has none. Any other exit status means the check itself failed
-# (perl missing or broken), and callers must not read it as "no placeholder". Fenced blocks and inline code spans are removed first: a usage line such
-# as `tool <monorepo-dir>` is legitimate. A few common HTML tags (<br>,
-# <kbd>, <details>, ...) are not placeholders. Used by prepare-plugin.sh to
-# keep template text out of generated READMEs (#106).
+# section_has_prose_placeholder <text>: looks for a template placeholder such
+# as <github-user> outside code (#106). Exit status:
+#   0  found one; prints the first
+#   1  none
+#   3  a fenced code block is still open at the end of the text
+#   anything else: the check itself failed (perl missing or broken); callers
+#      must not read that as "no placeholder"
+# What counts as a placeholder: "<", a letter, then letters, digits, "_", "-",
+# "." or spaces, then ">", in any case: <github-user>, <GITHUB_USER>,
+# <your repo>, <YOUR-TOKEN>, <v1.2>. Not caught: other template styles such as
+# {{NAME}}, $NAME or YOUR-USERNAME. A few common HTML tags in any case (<br>,
+# <KBD>, <details>, ...) are not placeholders. Known false positive: generic
+# types in prose, such as List<string>; write them as inline code.
+# What is ignored: fenced blocks, and inline code spans, matched per line. A
+# line whose backticks do not pair up (a backtick-run length that occurs an odd
+# number of times) is checked whole, so a stray backtick cannot hide a
+# placeholder. A usage line such as `tool <monorepo-dir>` is legitimate.
 section_has_prose_placeholder() {
   printf '%s\n' "$1" | perl -0777 -ne '
     my ($fc, $fl, $prose) = ("", 0, "");
     for my $l (split /\n/, $_) {
+      $l =~ s/\r$//;
       if ($fc ne "") {
         $fc = "" if $l =~ /^[ \t]*(\Q$fc\E+)[ \t]*$/ && length($1) >= $fl;
         next;
       }
       if ($l =~ /^[ \t]*(`{3,}|~{3,})/) { $fc = substr($1, 0, 1); $fl = length($1); next; }
+      my %runs;
+      $runs{length $1}++ while $l =~ /(?<!`)(`+)(?!`)/g;
+      unless (grep { $_ % 2 } values %runs) {
+        $l =~ s/(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)//g;
+      }
       $prose .= "$l\n";
     }
-    $prose =~ s/(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)//gs;
+    exit 3 if $fc ne "";
     my %html = map { $_ => 1 } qw(a abbr b blockquote br center code dd del details div dl dt em hr i img ins kbd li mark ol p pre s small span strong sub summary sup table tbody td th thead tr u ul);
-    while ($prose =~ /<([a-z][a-z0-9_-]*)>/g) {
-      next if $html{$1};
+    while ($prose =~ /<([A-Za-z][A-Za-z0-9_. -]*)>/g) {
+      next if $html{lc $1};
       print "<$1>";
       exit 0;
     }

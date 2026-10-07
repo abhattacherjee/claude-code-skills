@@ -342,9 +342,11 @@ chmod +x "$GH_SHIM_DIR/gh"
 # prepare-plugin.sh stops with exit 1 when the plugin it assembled fails
 # validate-plugin.sh (#167), and validation stays on for this harness: every
 # sync fixture is a valid skill (a `metadata:` version and a "Use when:" list).
-# Only the description-scalar fixtures of defect 24 need a skill
-# validate-skill.sh rejects (no "Use when:" list, or no description at all),
-# and they go through run_prepare_unvalidated, which takes a reason per call.
+# Only nine description-scalar fixtures need a skill validate-skill.sh
+# rejects: nodesc and emptydesc (no description), overcapture (an extra
+# tagline: key), and blankline, crblank, crblock, crhdr, cronly and
+# dashescalar (no "Use when:" list). They go through run_prepare_unvalidated,
+# which takes a reason per call.
 # Until #106 the whole harness exported SKILL_KIT_NO_PLUGIN_VALIDATION=1. It is
 # unset here so a value in the caller's environment cannot switch it off again.
 unset SKILL_KIT_NO_PLUGIN_VALIDATION
@@ -6703,19 +6705,27 @@ assert_contains "…and the auto-build drift check rebuilds the plugin" \
 assert_contains "…so the published SKILL.md holds the edit" \
     "N92-SKILLMD-EDIT-MARKER" "$(cat "$N92_PUB/skills/install-statusline/SKILL.md" 2>/dev/null || true)"
 
-# Run 3: scripts/ and CHANGELOG.md only. SKILL.md matches, so the auto-build
-# stage does not fire and only the resync can carry these.
+# Runs 3a and 3b: scripts/ only, then CHANGELOG.md only. SKILL.md matches, so
+# the auto-build stage does not fire and only the resync can carry these. Two
+# runs, because the resync stops checking at the first drift it finds: with
+# both edited at once, a broken scripts/ check would hide behind the CHANGELOG
+# one (#92 review).
 printf '#!/usr/bin/env bash\necho N92-SCRIPT-EDIT-MARKER\n' > "$N92_SRC/scripts/helper.sh"
-printf '# Changelog\n\n## [1.0.1] - 2026-01-02\n\n- N92-CHANGELOG-EDIT-MARKER.\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$N92_SRC/CHANGELOG.md"
 N92_RC=0
-run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-3.stdout" "$SCRATCH_DIR/n92-3.stderr" || N92_RC=$?
-N92_OUT3="$(cat "$SCRATCH_DIR/n92-3.stdout")"
-assert_eq "a scripts/ and CHANGELOG edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-3a.stdout" "$SCRATCH_DIR/n92-3a.stderr" || N92_RC=$?
+N92_OUT3="$(cat "$SCRATCH_DIR/n92-3a.stdout")"
+assert_eq "a scripts/ edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
 assert_not_contains "…without an auto-build (SKILL.md did not change)" "Auto-build plugin: my-statusline" "$N92_OUT3"
 assert_contains "…and the plugin resync picks it up" "--- Plugin resync: my-statusline ---" "$N92_OUT3"
 assert_contains "…copying scripts/" "N92-SCRIPT-EDIT-MARKER" \
     "$(cat "$N92_PUB/skills/install-statusline/scripts/helper.sh" 2>/dev/null || true)"
-assert_contains "…the skill CHANGELOG" "N92-CHANGELOG-EDIT-MARKER" \
+printf '# Changelog\n\n## [1.0.1] - 2026-01-02\n\n- N92-CHANGELOG-EDIT-MARKER.\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$N92_SRC/CHANGELOG.md"
+N92_RC=0
+run_sync "$N92_HOME" "$N92_MONO" "$SCRATCH_DIR/n92-3b.stdout" "$SCRATCH_DIR/n92-3b.stderr" || N92_RC=$?
+N92_OUT3="$(cat "$SCRATCH_DIR/n92-3b.stdout")"
+assert_eq "a CHANGELOG-only edit to a renamed plugin skill syncs at exit 0 (#92)" "0" "$N92_RC"
+assert_contains "…and the plugin resync picks it up" "--- Plugin resync: my-statusline ---" "$N92_OUT3"
+assert_contains "…copying the skill CHANGELOG" "N92-CHANGELOG-EDIT-MARKER" \
     "$(cat "$N92_PUB/skills/install-statusline/CHANGELOG.md" 2>/dev/null || true)"
 assert_contains "…and the plugin-root CHANGELOG" "N92-CHANGELOG-EDIT-MARKER" \
     "$(cat "$N92_PUB/CHANGELOG.md" 2>/dev/null || true)"
@@ -6772,8 +6782,7 @@ assert_eq "…but the plugin-root CHANGELOG stays the first skill's" \
 # A published plugin whose declared skill source does not resolve is an error,
 # before anything is written, in a real run and in --dry-run. Name == directory
 # here on purpose: the old lookup by name found ghost/ and compared the plugin
-# against it, whatever the manifest said. SKILL.md is left unchanged, so that
-# lookup saw no drift and the run went on to exit 0.
+# against it, whatever the manifest said.
 N92G_HOME="$SCRATCH_DIR/skills-home-n92-ghost"
 N92G_MONO="$SCRATCH_DIR/monorepo-n92-ghost"
 mkdir -p "$N92G_HOME/ghost" "$N92G_MONO"
@@ -6788,6 +6797,9 @@ assert_eq "control: the ghost plugin publishes while its source resolves (#92)" 
 assert_file_exists "…and is on disk" "$N92G_MONO/plugins/ghost/skills/ghost/SKILL.md"
 printf '{"name": "ghost", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ghost", "source": "./gone"}], "commands": []}\n' \
     > "$N92G_HOME/ghost/plugin-manifest.json"
+# An edit to the old source too, so a run that wrongly went on would have
+# something to write, and "nothing was written" can fail.
+printf '\nN92-GHOST-EDIT, a longer body.\n' >> "$N92G_HOME/ghost/SKILL.md"
 N92G_DIGEST="$(tree_digest "$N92G_MONO")"
 for _n92 in dry plain; do
     if [[ "$_n92" == dry ]]; then _n92_args=(--dry-run); else _n92_args=(); fi
@@ -6895,6 +6907,14 @@ mkdir -p "$PREPARE_FIXTURE_DIR/n106pub-plugin"
 cp "$REPO_ROOT/plugins/skill-publishing/skills/skill-publishing/SKILL.md" "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md"
 printf '{"name": "n106pub-plugin", "version": "1.0.0", "description": "Fixture plugin built from skill-publishing SKILL.md.", "skills": [{"name": "skill-publishing", "source": "."}], "commands": []}\n' \
     > "$PREPARE_FIXTURE_DIR/n106pub-plugin/plugin-manifest.json"
+# Precondition: the copy still has the shape this case is about, a "## See
+# Also" inside a ```markdown block ahead of the real one. The file is frozen
+# (deprecated plugin), but if it ever changes this says so instead of the
+# assertions below passing for nothing.
+assert_eq "precondition: skill-publishing's SKILL.md has two \"## See Also\" lines" "2" \
+    "$(grep -c '^## See Also$' "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md" || true)"
+assert_contains "precondition: …the first inside a \`\`\`markdown block" \
+    "$(printf '```markdown\n## See Also')" "$(cat "$PREPARE_FIXTURE_DIR/n106pub-plugin/SKILL.md")"
 N106_RC=0
 run_prepare n106pub-plugin "$SCRATCH_DIR/n106pub.stdout" "$SCRATCH_DIR/n106pub.stderr" || N106_RC=$?
 N106_README="$(cat "$PREPARE_OUT_DIR/n106pub-plugin/README.md" 2>/dev/null || true)"
@@ -6932,6 +6952,18 @@ n106-tool --check <monorepo-dir>
 n106-tool --list <monorepo-dir>
 ~~~
 
+````text
+```
+## N106 inner heading in a long fence
+still code: <long-fence-inner>
+````
+
+```text
+~~~
+## N106 inner heading after tildes
+still code: <tilde-inner>
+```
+
 ## Prerequisites
 
 The account must exist; see https://github.com/<user>/<repo> for setup. N106-PROSE-MARKER.
@@ -6951,8 +6983,10 @@ assert_not_contains "…with no Prerequisites heading left behind" "## Prerequis
 assert_line_present "…and a note says so on stderr" \
     'dropped section "Prerequisites": placeholder <user> in prose' "$(cat "$SCRATCH_DIR/n106mix.stderr")"
 assert_contains "positive control: a placeholder only in a fenced block and inline code stays" \
-    "$(printf '## Usage\n\nRun `n106-tool <monorepo-dir>` first. N106-CODE-ONLY-MARKER.\n\n```bash\n## N106 fenced comment, not a heading\nn106-tool --check <monorepo-dir>\n```\n\n~~~text\nn106-tool --list <monorepo-dir>\n~~~')" "$N106_README"
+    "$(printf '## Usage\n\nRun `n106-tool <monorepo-dir>` first. N106-CODE-ONLY-MARKER.\n\n```bash\n## N106 fenced comment, not a heading\nn106-tool --check <monorepo-dir>\n```\n\n~~~text\nn106-tool --list <monorepo-dir>\n~~~\n\n````text\n```\n## N106 inner heading in a long fence\nstill code: <long-fence-inner>\n````\n\n```text\n~~~\n## N106 inner heading after tildes\nstill code: <tilde-inner>\n```')" "$N106_README"
 assert_not_contains "…and a \"## \" line inside a fence is not a Key Feature" "**N106 fenced comment" "$N106_README"
+assert_not_contains "…nor one after a shorter fence line inside a longer fence" "**N106 inner heading in a long fence" "$N106_README"
+assert_not_contains "…nor one after a fence line of the other character" "**N106 inner heading after tildes" "$N106_README"
 assert_contains "positive control: a plain section with an HTML tag stays verbatim" \
     "$(printf '## See Also\n\n- Plain link: https://example.com/n106-plain, press <kbd>Enter</kbd>. N106-PLAIN-MARKER.')" "$N106_README"
 assert_eq "…and only the one section is reported" "1" "$(grep -c '^dropped section' "$SCRATCH_DIR/n106mix.stderr" || true)"
@@ -7048,6 +7082,333 @@ assert_contains "an ordinary prepare-plugin.sh build in this harness runs valida
 assert_not_contains "…and does not skip it" "Validation skipped" "$(cat "$SCRATCH_DIR/prep-legacy.stdout")"
 assert_contains "control: run_prepare_unvalidated does skip it, and says so" \
     "--- Validation skipped (SKILL_KIT_NO_PLUGIN_VALIDATION=1) ---" "$(cat "$SCRATCH_DIR/scalar-nodesc.stdout")"
+
+# ============================================================
+# PR #195 review, round 1 — #92, #93 and #106 follow-ups
+# ============================================================
+
+# --- #92: a two-skill plugin, one skill built from a refused, renamed source
+# directory, the other (not first) renamed skill drifting. The drifting one is
+# resynced; the refused one is not.
+R195P_HOME="$SCRATCH_DIR/skills-home-r195-pack"
+R195P_MONO="$SCRATCH_DIR/monorepo-r195-pack"
+mkdir -p "$R195P_HOME/pack" "$R195P_HOME/one-dir" "$R195P_HOME/two-dir" "$R195P_MONO"
+seed_top_level_skill "$R195P_MONO"
+for _p in one-dir:uno two-dir:dos; do
+    _d=${_p%%:*}; _n=${_p##*:}
+    printf -- '---\nname: %s\ndescription: Probe skill. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' "$_n" "$_n" > "$R195P_HOME/$_d/SKILL.md"
+    printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- First.\n' > "$R195P_HOME/$_d/CHANGELOG.md"
+done
+printf '{"name": "pack", "version": "1.0.0", "description": "Probe.", "skills": [{"name": "uno", "source": "../one-dir"}, {"name": "dos", "source": "../two-dir"}], "commands": []}\n' \
+    > "$R195P_HOME/pack/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195P_HOME" "$R195P_MONO" "$SCRATCH_DIR/r195p-1.stdout" "$SCRATCH_DIR/r195p-1.stderr" || R195_RC=$?
+assert_eq "control: a two-skill plugin with renamed sources publishes (#92)" "0" "$R195_RC"
+assert_file_exists "…with uno under its manifest name" "$R195P_MONO/plugins/pack/skills/uno/SKILL.md"
+mkdir -p "$R195P_MONO/one-dir"
+printf -- '---\nname: uno\ndescription: In-repo copy, far newer. Use when: testing issue 92.\nmetadata:\n  version: 9.9.9\n---\n\n# uno\n' > "$R195P_MONO/one-dir/SKILL.md"
+printf '\nR195-STALE-MARKER, a longer body.\n' >> "$R195P_HOME/one-dir/SKILL.md"
+printf '\nR195-DOS-EDIT, a longer body.\n' >> "$R195P_HOME/two-dir/SKILL.md"
+R195_RC=0
+run_sync "$R195P_HOME" "$R195P_MONO" "$SCRATCH_DIR/r195p-2.stdout" "$SCRATCH_DIR/r195p-2.stderr" || R195_RC=$?
+assert_eq "…a refused source directory exits 3" "3" "$R195_RC"
+assert_contains "…the second skill's edit is resynced" "R195-DOS-EDIT" \
+    "$(cat "$R195P_MONO/plugins/pack/skills/dos/SKILL.md" 2>/dev/null || true)"
+assert_not_contains "…and the refused first skill's stale edit is not" "R195-STALE-MARKER" \
+    "$(cat "$R195P_MONO/plugins/pack/skills/uno/SKILL.md" 2>/dev/null || true)"
+
+# --- #92 review K1: a published plugin whose manifest entry has no string
+# source (an object, an array, or no source at all) or no name, a null entry,
+# or a skills value that is not an array, is an error before anything is
+# written. It used to be skipped, and the plugin was then
+# checked against $SKILLS_HOME/<name>, which is #92 again.
+R195K_HOME="$SCRATCH_DIR/skills-home-r195-k1"
+R195K_MONO="$SCRATCH_DIR/monorepo-r195-k1"
+mkdir -p "$R195K_HOME/k1src" "$R195K_MONO"
+seed_top_level_skill "$R195K_MONO"
+printf -- '---\nname: k1skill\ndescription: Fixture skill for bad manifest entries. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# k1skill\n' \
+    > "$R195K_HOME/k1src/SKILL.md"
+R195K_GOOD='{"name": "k1src", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "k1skill", "source": "."}], "commands": []}'
+printf '%s\n' "$R195K_GOOD" > "$R195K_HOME/k1src/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195K_HOME" "$R195K_MONO" "$SCRATCH_DIR/r195k-0.stdout" "$SCRATCH_DIR/r195k-0.stderr" || R195_RC=$?
+assert_eq "control: the k1 plugin publishes (#92 review)" "0" "$R195_RC"
+printf '\nR195-K1-EDIT, a longer body.\n' >> "$R195K_HOME/k1src/SKILL.md"
+R195K_DIGEST="$(tree_digest "$R195K_MONO")"
+for _k in 'object:.skills[0].source = {"path": "."}' 'array:.skills[0].source = ["."]' \
+          'nosource:.skills[0] |= del(.source)' 'noname:.skills[0] |= del(.name)' \
+          'nullentry:.skills = [null]' 'skillsobject:.skills = {"a": {"name": "k1skill", "source": "."}}'; do
+    _kn=${_k%%:*}; _kf=${_k#*:}
+    jq "$_kf" <<< "$R195K_GOOD" > "$R195K_HOME/k1src/plugin-manifest.json"
+    R195_RC=0
+    run_sync "$R195K_HOME" "$R195K_MONO" "$SCRATCH_DIR/r195k-$_kn.stdout" "$SCRATCH_DIR/r195k-$_kn.stderr" || R195_RC=$?
+    assert_eq "a published plugin whose skills[] cannot be read exits 1 ($_kn)" "1" "$R195_RC"
+    assert_contains "…naming the manifest ($_kn)" \
+        "Error: $R195K_HOME/k1src/plugin-manifest.json: " "$(cat "$SCRATCH_DIR/r195k-$_kn.stderr")"
+    assert_eq "…and nothing was written ($_kn)" "$R195K_DIGEST" "$(tree_digest "$R195K_MONO")"
+done
+
+# --- #92 review K4: a manifest that is not a JSON object stops the run before
+# anything is written, with jq's own message. It used to abort with exit 5 and
+# an empty stderr, after the skills were written.
+for _k in published unpublished; do
+    _kh="$SCRATCH_DIR/skills-home-r195-k4-$_k"
+    _km="$SCRATCH_DIR/monorepo-r195-k4-$_k"
+    cp -R "$R195K_HOME" "$_kh"
+    printf '%s\n' "$R195K_GOOD" > "$_kh/k1src/plugin-manifest.json"
+    if [[ "$_k" == published ]]; then cp -R "$R195K_MONO" "$_km"; else mkdir -p "$_km"; seed_top_level_skill "$_km"; fi
+    # A second top-level skill with a local edit, so a run that went on would write.
+    mkdir -p "$_kh/seed-skill"
+    sed 's/^# seed-skill$/# seed-skill, edited locally/' "$_km/seed-skill/SKILL.md" > "$_kh/seed-skill/SKILL.md"
+    printf '{"name": "k1src", ' > "$_kh/k1src/plugin-manifest.json"
+    _kd="$(tree_digest "$_km")"
+    R195_RC=0
+    run_sync "$_kh" "$_km" "$SCRATCH_DIR/r195k4-$_k.stdout" "$SCRATCH_DIR/r195k4-$_k.stderr" || R195_RC=$?
+    assert_eq "a manifest that is not valid JSON exits 1 ($_k, #92 review)" "1" "$R195_RC"
+    assert_contains "…naming it ($_k)" "Error: $_kh/k1src/plugin-manifest.json is not valid JSON:" "$(cat "$SCRATCH_DIR/r195k4-$_k.stderr")"
+    assert_contains "…with jq's message ($_k)" "Unfinished JSON term" "$(cat "$SCRATCH_DIR/r195k4-$_k.stderr")"
+    assert_eq "…and nothing was written ($_k)" "$_kd" "$(tree_digest "$_km")"
+done
+printf '[]\n' > "$SCRATCH_DIR/skills-home-r195-k4-published/k1src/plugin-manifest.json"
+R195_RC=0
+run_sync "$SCRATCH_DIR/skills-home-r195-k4-published" "$SCRATCH_DIR/monorepo-r195-k4-published" \
+    "$SCRATCH_DIR/r195k4-array.stdout" "$SCRATCH_DIR/r195k4-array.stderr" || R195_RC=$?
+assert_eq "a manifest that is JSON but not an object exits 1 (#92 review)" "1" "$R195_RC"
+assert_contains "…and says so" "plugin-manifest.json is not a JSON object" "$(cat "$SCRATCH_DIR/r195k4-array.stderr")"
+
+# --- #92 review K1: a skill directory still under plugins/<p>/skills/ after
+# the manifest stopped listing it is not resynced from an unrelated
+# $SKILLS_HOME/<name>; the run says it skipped it.
+R195U_HOME="$SCRATCH_DIR/skills-home-r195-undeclared"
+R195U_MONO="$SCRATCH_DIR/monorepo-r195-undeclared"
+mkdir -p "$R195U_HOME/upack/ua" "$R195U_HOME/upack/ub" "$R195U_MONO"
+seed_top_level_skill "$R195U_MONO"
+for _u in ua ub; do
+    printf -- '---\nname: %s\ndescription: Fixture skill. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' "$_u" "$_u" > "$R195U_HOME/upack/$_u/SKILL.md"
+done
+printf '{"name": "upack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ua", "source": "./ua"}, {"name": "ub", "source": "./ub"}], "commands": []}\n' \
+    > "$R195U_HOME/upack/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195U_HOME" "$R195U_MONO" "$SCRATCH_DIR/r195u-1.stdout" "$SCRATCH_DIR/r195u-1.stderr" || R195_RC=$?
+assert_eq "control: a two-skill plugin publishes (#92 review)" "0" "$R195_RC"
+printf '{"name": "upack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "ua", "source": "./ua"}], "commands": []}\n' \
+    > "$R195U_HOME/upack/plugin-manifest.json"
+mkdir -p "$R195U_HOME/ub"
+printf -- '---\nname: ub\ndescription: An unrelated local skill that happens to be named ub. Use when: testing.\nmetadata:\n  version: 1.0.0\n---\n\n# ub\n\nR195-UNRELATED-MARKER\n' > "$R195U_HOME/ub/SKILL.md"
+R195_RC=0
+run_sync "$R195U_HOME" "$R195U_MONO" "$SCRATCH_DIR/r195u-2.stdout" "$SCRATCH_DIR/r195u-2.stderr" || R195_RC=$?
+assert_eq "a plugin skill its manifest no longer lists does not fail the sync" "0" "$R195_RC"
+assert_contains "…but is reported" "WARNING: plugins/upack/skills/ub/ is not in the plugin's manifest; not resynced" \
+    "$(cat "$SCRATCH_DIR/r195u-2.stdout")"
+assert_not_contains "…and is not resynced from an unrelated \$SKILLS_HOME/ub" "R195-UNRELATED-MARKER" \
+    "$(cat "$R195U_MONO/plugins/upack/skills/ub/SKILL.md" 2>/dev/null || true)"
+
+# --- #92 review K3: a source that is a symlink, with another name, to a refused
+# $SKILLS_HOME/<X> is refused too.
+R195L_HOME="$SCRATCH_DIR/skills-home-r195-link"
+R195L_MONO="$SCRATCH_DIR/monorepo-r195-link"
+mkdir -p "$R195L_HOME/xs" "$R195L_HOME/lnkpack" "$R195L_MONO"
+seed_top_level_skill "$R195L_MONO"
+ln -s "$R195L_HOME/xs" "$R195L_HOME/lnk"
+printf -- '---\nname: lnkskill\ndescription: Fixture skill reached through a symlink. Use when: testing issue 92.\nmetadata:\n  version: 1.0.0\n---\n\n# lnkskill\n' > "$R195L_HOME/xs/SKILL.md"
+printf '{"name": "lnkpack", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "lnkskill", "source": "../lnk"}], "commands": []}\n' \
+    > "$R195L_HOME/lnkpack/plugin-manifest.json"
+R195_RC=0
+run_sync "$R195L_HOME" "$R195L_MONO" "$SCRATCH_DIR/r195l-1.stdout" "$SCRATCH_DIR/r195l-1.stderr" || R195_RC=$?
+assert_eq "control: a plugin whose source is a symlink publishes (#92 review)" "0" "$R195_RC"
+mkdir -p "$R195L_MONO/xs"
+printf -- '---\nname: xs\ndescription: In-repo copy, far newer. Use when: testing.\nmetadata:\n  version: 9.9.9\n---\n\n# xs\n' > "$R195L_MONO/xs/SKILL.md"
+printf '\nR195-LINK-STALE-MARKER, a longer body.\n' >> "$R195L_HOME/xs/SKILL.md"
+R195_RC=0
+run_sync "$R195L_HOME" "$R195L_MONO" "$SCRATCH_DIR/r195l-2.stdout" "$SCRATCH_DIR/r195l-2.stderr" || R195_RC=$?
+assert_eq "…a refused directory reached through the symlink exits 3" "3" "$R195_RC"
+assert_contains "…and the plugin is skipped by the reversion guard" \
+    "SKIP (reversion guard)  plugins/lnkpack  —  stale local source for: lnkskill (source xs)" "$(cat "$SCRATCH_DIR/r195l-2.stdout")"
+assert_not_contains "…so the stale edit is not published" "R195-LINK-STALE-MARKER" \
+    "$(cat "$R195L_MONO/plugins/lnkpack/skills/lnkskill/SKILL.md" 2>/dev/null || true)"
+
+# --- #93 review K6 and K7: three skills; beta has a repo, which only a working
+# gh can see.
+R195C_HOME="$SCRATCH_DIR/skills-home-r195-cat"
+R195C_MONO="$SCRATCH_DIR/monorepo-r195-cat"
+R195C_GH="$SCRATCH_DIR/shim-beta-repo"
+mkdir -p "$R195C_MONO" "$R195C_GH"
+for _s in alpha beta gamma; do
+    mkdir -p "$R195C_HOME/$_s"
+    printf -- '---\nname: %s\ndescription: The %s fixture skill. Use when: testing issue 93.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n' "$_s" "$_s" "$_s" > "$R195C_HOME/$_s/SKILL.md"
+done
+cat > "$R195C_GH/gh" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1 $2 $3" == "repo view harness-fixture-user/beta" ]] && exit 0
+exit 1
+EOF
+chmod +x "$R195C_GH/gh"
+# The full sync runs with a gh that finds beta's repo; the --skills runs below
+# use the harness shim, where every gh call fails.
+R195_RC=0
+( cd "$RUN_CWD"; PATH="$R195C_GH:$PATH" SKILLS_HOME="$R195C_HOME" \
+    "$SYNC_SCRIPT" --github-user harness-fixture-user --add alpha,beta,gamma "$R195C_MONO" ) \
+    >"$SCRATCH_DIR/r195c-0.stdout" 2>"$SCRATCH_DIR/r195c-0.stderr" </dev/null || R195_RC=$?
+assert_eq "control: the three-skill fixture syncs with a working gh (#93 review)" "0" "$R195_RC"
+assert_line_present "control: …and beta's row links its repo" \
+    "| [beta](./beta/) | 1.0.0 | The beta fixture skill. | [repo](https://github.com/harness-fixture-user/beta) |" \
+    "$(cat "$R195C_MONO/README.md")"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-1.stdout" "$SCRATCH_DIR/r195c-1.stderr" --skills alpha || R195_RC=$?
+assert_eq "--skills alpha with gh failing exits 0 (#93 review)" "0" "$R195_RC"
+assert_line_present "…and beta keeps its repo link from the existing row" \
+    "| [beta](./beta/) | 1.0.0 | The beta fixture skill. | [repo](https://github.com/harness-fixture-user/beta) |" \
+    "$(cat "$R195C_MONO/README.md")"
+
+# K7: a published SKILL.md that cannot give a row stops a --skills run before
+# anything is written.
+printf '# beta\n\nNo frontmatter.\n' > "$R195C_MONO/beta/SKILL.md"
+R195C_DIGEST="$(tree_digest "$R195C_MONO")"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-2.stdout" "$SCRATCH_DIR/r195c-2.stderr" --skills alpha || R195_RC=$?
+assert_eq "--skills when another skill's SKILL.md has no frontmatter exits 1 (#93 review)" "1" "$R195_RC"
+assert_contains "…and names the file" "Error: $R195C_MONO/beta/SKILL.md has no description or no version" \
+    "$(cat "$SCRATCH_DIR/r195c-2.stderr")"
+assert_eq "…and nothing was written" "$R195C_DIGEST" "$(tree_digest "$R195C_MONO")"
+cp "$R195C_HOME/beta/SKILL.md" "$R195C_MONO/beta/SKILL.md"
+R195C_DIGEST="$(tree_digest "$R195C_MONO")"
+chmod 000 "$R195C_MONO/beta/SKILL.md"
+R195_RC=0
+run_sync "$R195C_HOME" "$R195C_MONO" "$SCRATCH_DIR/r195c-3.stdout" "$SCRATCH_DIR/r195c-3.stderr" --skills alpha || R195_RC=$?
+chmod 644 "$R195C_MONO/beta/SKILL.md"
+R195C_DIGEST2="$(tree_digest "$R195C_MONO")"
+assert_eq "--skills when another skill's SKILL.md cannot be read exits 1 (#93 review)" "1" "$R195_RC"
+assert_contains "…and names the file" "Error: cannot read $R195C_MONO/beta/SKILL.md for its catalogue row" \
+    "$(cat "$SCRATCH_DIR/r195c-3.stderr")"
+assert_eq "…and nothing was written" "$R195C_DIGEST" "$R195C_DIGEST2"
+
+# T7: the minimal README (no template beside the script) counts the whole
+# catalogue too under --skills.
+R195N_SKILL="$SCRATCH_DIR/publish-no-template"
+cp -R "$(dirname "$(dirname "$SYNC_SCRIPT")")" "$R195N_SKILL"
+rm -f "$R195N_SKILL/references/monorepo-readme-template.md"
+R195N_MONO="$SCRATCH_DIR/monorepo-r195-notemplate"
+mkdir -p "$R195N_MONO"
+R195_RC=0
+( SYNC_SCRIPT="$R195N_SKILL/scripts/sync-monorepo.sh"
+  run_sync "$R195C_HOME" "$R195N_MONO" "$SCRATCH_DIR/r195n-1.stdout" "$SCRATCH_DIR/r195n-1.stderr" --add alpha,beta,gamma &&
+  run_sync "$R195C_HOME" "$R195N_MONO" "$SCRATCH_DIR/r195n-2.stdout" "$SCRATCH_DIR/r195n-2.stderr" --skills alpha ) || R195_RC=$?
+assert_eq "control: syncs with no README template exit 0 (#93 review)" "0" "$R195_RC"
+assert_contains "control: …and use the minimal README" "generating minimal README" "$(cat "$SCRATCH_DIR/r195n-2.stdout")"
+assert_contains "…whose count under --skills is the whole catalogue" "A curated collection of 3 reusable Agent Skills." \
+    "$(cat "$R195N_MONO/README.md" 2>/dev/null || true)"
+
+# --- #106 review: placeholder and fence edge cases, through prepare-plugin.sh.
+r195_prep_fixture() { # <name> <body-file>
+    mkdir -p "$PREPARE_FIXTURE_DIR/$1-plugin"
+    printf -- '---\nname: %s\ndescription: Fixture skill for a placeholder edge case. Use when: testing issue 106.\nmetadata:\n  version: 1.0.0\n---\n\n# %s\n\n' "$1" "$1" \
+        > "$PREPARE_FIXTURE_DIR/$1-plugin/SKILL.md"
+    cat "$2" >> "$PREPARE_FIXTURE_DIR/$1-plugin/SKILL.md"
+    printf '{"name": "%s-plugin", "version": "1.0.0", "description": "Fixture plugin.", "skills": [{"name": "%s", "source": "."}], "commands": []}\n' "$1" "$1" \
+        > "$PREPARE_FIXTURE_DIR/$1-plugin/plugin-manifest.json"
+}
+
+# K9: upper-case and spaced placeholders, and a stray backtick, are caught.
+cat > "$SCRATCH_DIR/r195-k9.body" <<'EOF'
+## Quick Check
+
+The ` character starts code. Visit https://github.com/<github-user>/x and run `cmd`.
+
+## Prerequisites
+
+Clone <your repo> first.
+
+## See Also
+
+- https://github.com/<GITHUB_USER>/x
+EOF
+r195_prep_fixture r195k9 "$SCRATCH_DIR/r195-k9.body"
+R195_RC=0
+run_prepare r195k9-plugin "$SCRATCH_DIR/r195k9.stdout" "$SCRATCH_DIR/r195k9.stderr" || R195_RC=$?
+R195_ERR="$(cat "$SCRATCH_DIR/r195k9.stderr")"
+assert_eq "prepare-plugin.sh builds the K9 fixture (#106 review)" "0" "$R195_RC"
+assert_line_present "a stray backtick does not hide a placeholder" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$R195_ERR"
+assert_line_present "a placeholder with a space is caught" \
+    'dropped section "Prerequisites": placeholder <your repo> in prose' "$R195_ERR"
+assert_line_present "an upper-case placeholder is caught" \
+    'dropped section "See Also": placeholder <GITHUB_USER> in prose' "$R195_ERR"
+cat > "$SCRATCH_DIR/r195-k9ok.body" <<'EOF'
+## See Also
+
+- Press <KBD>Enter</KBD>, then run `List<string>` and `tool <x>`. R195-K9-OK-MARKER.
+EOF
+r195_prep_fixture r195k9ok "$SCRATCH_DIR/r195-k9ok.body"
+R195_RC=0
+run_prepare r195k9ok-plugin "$SCRATCH_DIR/r195k9ok.stdout" "$SCRATCH_DIR/r195k9ok.stderr" || R195_RC=$?
+assert_eq "positive control: upper-case HTML and code spans build (#106 review)" "0" "$R195_RC"
+assert_contains "…and the section stays" "R195-K9-OK-MARKER" "$(cat "$PREPARE_OUT_DIR/r195k9ok-plugin/README.md" 2>/dev/null || true)"
+
+# T5: a placeholder in a Quick Reference section (the Usage fallback) is caught.
+cat > "$SCRATCH_DIR/r195-qref.body" <<'EOF'
+## Quick Reference
+
+Visit https://github.com/<github-user>/qref.
+EOF
+r195_prep_fixture r195qref "$SCRATCH_DIR/r195-qref.body"
+R195_RC=0
+run_prepare r195qref-plugin "$SCRATCH_DIR/r195qref.stdout" "$SCRATCH_DIR/r195qref.stderr" || R195_RC=$?
+assert_line_present "a Quick Reference section with a placeholder is dropped (#106 review)" \
+    'dropped section "Quick Reference": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195qref.stderr")"
+assert_not_contains "…and not published" "<github-user>" "$(cat "$PREPARE_OUT_DIR/r195qref-plugin/README.md" 2>/dev/null || true)"
+
+# K2: a fence closed by a CRLF line still closes, so the prose after it is checked.
+printf '## Quick Check\n\n```bash\r\nrun it\r\n```\r\n\nVisit https://github.com/<github-user>/crlf\n\n## See Also\n\n- R195-CRLF-OTHER\n' \
+    > "$SCRATCH_DIR/r195-crlf.body"
+r195_prep_fixture r195crlf "$SCRATCH_DIR/r195-crlf.body"
+R195_RC=0
+run_prepare r195crlf-plugin "$SCRATCH_DIR/r195crlf.stdout" "$SCRATCH_DIR/r195crlf.stderr" || R195_RC=$?
+assert_eq "prepare-plugin.sh builds a SKILL.md with a CRLF fence line (#106 review)" "0" "$R195_RC"
+assert_line_present "…and checks the prose after the fence" \
+    'dropped section "Quick Check": placeholder <github-user> in prose' "$(cat "$SCRATCH_DIR/r195crlf.stderr")"
+assert_not_contains "…so it is not published" "<github-user>" "$(cat "$PREPARE_OUT_DIR/r195crlf-plugin/README.md" 2>/dev/null || true)"
+assert_contains "…and the next section is still found" "R195-CRLF-OTHER" "$(cat "$PREPARE_OUT_DIR/r195crlf-plugin/README.md" 2>/dev/null || true)"
+
+# K2: a fence that is never closed stops the build.
+printf '## Quick Check\n\n```bash\nrun it\n\n## See Also\n\n- https://github.com/<github-user>/x\n' > "$SCRATCH_DIR/r195-open.body"
+r195_prep_fixture r195open "$SCRATCH_DIR/r195-open.body"
+R195_RC=0
+run_prepare r195open-plugin "$SCRATCH_DIR/r195open.stdout" "$SCRATCH_DIR/r195open.stderr" || R195_RC=$?
+assert_eq "a section whose code fence is never closed stops prepare-plugin.sh with exit 1 (#106 review)" "1" "$R195_RC"
+assert_contains "…and says why" 'Error: section "Quick Check" of' "$(cat "$SCRATCH_DIR/r195open.stderr")"
+assert_contains "…naming the fence" "has a code fence that is never closed" "$(cat "$SCRATCH_DIR/r195open.stderr")"
+
+# K5: a failure while extracting a section stops the build instead of reading
+# as an empty section. The fake perl fails only for extract_section's trim.
+R195_FAKEPERL="$SCRATCH_DIR/fake-perl-trim"
+mkdir -p "$R195_FAKEPERL"
+cat > "$R195_FAKEPERL/perl" <<EOF
+#!/usr/bin/env bash
+for _a in "\$@"; do case "\$_a" in *'s/\\A\\s*\\n//'*) exit 2 ;; esac; done
+exec "$(command -v perl)" "\$@"
+EOF
+chmod +x "$R195_FAKEPERL/perl"
+R195_RC=0
+( PATH="$R195_FAKEPERL:$PATH"; run_prepare r195k9ok-plugin "$SCRATCH_DIR/r195trim.stdout" "$SCRATCH_DIR/r195trim.stderr" \
+    "$PREPARE_TMPDIR" "$PREPARE_OUT_DIR/r195trim-plugin" ) || R195_RC=$?
+assert_eq "a section that cannot be extracted stops prepare-plugin.sh with exit 1 (#106 review)" "1" "$R195_RC"
+assert_contains "…and says which" 'Error: could not read section "' "$(cat "$SCRATCH_DIR/r195trim.stderr")"
+
+# T6: skill-kit publish's own SKILL.md, the live file with the same fenced
+# "## See Also" shape.
+mkdir -p "$PREPARE_FIXTURE_DIR/r195pub-plugin"
+cp "$REPO_ROOT/plugins/skill-kit/skills/publish/SKILL.md" "$PREPARE_FIXTURE_DIR/r195pub-plugin/SKILL.md"
+printf '{"name": "r195pub-plugin", "version": "1.0.0", "description": "Fixture plugin built from skill-kit publish SKILL.md.", "skills": [{"name": "publish", "source": "."}], "commands": []}\n' \
+    > "$PREPARE_FIXTURE_DIR/r195pub-plugin/plugin-manifest.json"
+assert_eq "precondition: skill-kit publish's SKILL.md has two \"## See Also\" lines" "2" \
+    "$(grep -c '^## See Also$' "$PREPARE_FIXTURE_DIR/r195pub-plugin/SKILL.md" || true)"
+R195_RC=0
+run_prepare r195pub-plugin "$SCRATCH_DIR/r195pub.stdout" "$SCRATCH_DIR/r195pub.stderr" || R195_RC=$?
+R195_README="$(cat "$PREPARE_OUT_DIR/r195pub-plugin/README.md" 2>/dev/null || true)"
+assert_eq "prepare-plugin.sh builds skill-kit publish's SKILL.md (#106)" "0" "$R195_RC"
+assert_not_contains "…with no <github-user> in the README" "<github-user>" "$R195_README"
+assert_contains "…and its real See Also section" \
+    "$(printf '## See Also\n\n- `skill-kit:author` — how to structure and write skills (the content)')" "$R195_README"
 
 echo ""
 if [[ "$FAIL_COUNT" -eq 0 ]]; then

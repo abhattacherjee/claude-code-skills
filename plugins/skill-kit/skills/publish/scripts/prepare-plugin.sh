@@ -416,12 +416,19 @@ PRIMARY_SKILL_MD="$PRIMARY_SKILL_SRC/SKILL.md"
 # in fenced blocks and inline code stay (see section_has_prose_placeholder).
 readme_section() {
   local text ph rc
-  text=$(extract_section "$1" "$2")
+  if ! text=$(extract_section "$1" "$2"); then
+    echo "Error: could not read section \"$2\" of $1" >&2
+    return 1
+  fi
   [[ -z "$text" ]] && return 0
   ph=$(section_has_prose_placeholder "$text") && rc=0 || rc=$?
   case "$rc" in
     0) echo "dropped section \"$2\": placeholder $ph in prose" >&2 ;;
     1) printf '%s\n' "$text" ;;
+    # An unclosed fence would leave the README's fence open too, and it hides
+    # whatever prose follows it from the check.
+    3) echo "Error: section \"$2\" of $1 has a code fence that is never closed" >&2
+       return 1 ;;
     # A failed check is not a clean section: stop rather than publish it
     # unchecked. Under set -e the caller's assignment then stops the build.
     *) echo "Error: could not check section \"$2\" of $1 for placeholders (exit $rc)" >&2
