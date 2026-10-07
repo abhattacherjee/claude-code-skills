@@ -2,7 +2,7 @@
 name: publish
 description: "Was the skill-publishing skill. Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos. Use when: (1) user says 'publish', 'share', or 'sync' a skill, (2) a skill needs to be made installable by others, (3) syncing skills/plugins to the monorepo, (4) creating a versioned monorepo release, (5) assembling a plugin from skills + commands, (6) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 1.1.0
+  version: 1.1.1
 ---
 
 # Publish Skills & Plugins
@@ -363,9 +363,9 @@ git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
 "${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --add my-new-skill "<MONOREPO_DIR>"
 ```
 
-`--skills a,b` replaces the synced set; `--add` appends. **They are mutually exclusive** — passing both is rejected at parse time with exit 1, rather than one silently winning. Both de-duplicate repeats, but they refuse on **different thresholds**: `--add` refuses if *any* name it contributes is unresolvable; `--skills` refuses only if *all* of them are — so a typo in a `--skills` list still publishes the rest. And **`--skills` rewrites the catalogue to exactly the named subset**: skills left out stay on disk but lose their catalogue row, the published count and their CHANGELOG entry until the next full sync. Prefer `--add` to introduce one skill without disturbing the rest.
+`--skills a,b` replaces the synced set; `--add` appends. **They are mutually exclusive** — passing both is rejected at parse time with exit 1, rather than one silently winning. Both de-duplicate repeats, but they refuse on **different thresholds**: `--add` refuses if *any* name it contributes is unresolvable; `--skills` refuses only if *all* of them are — so a typo in a `--skills` list still publishes the rest. `--skills` re-syncs only the named top-level skills. Plugins are still checked and rebuilt, and a plugin whose source is older than the monorepo's copy is refused (exit 3) as in a full sync; the README catalogue, its skill count and the install-all lines still list every top-level skill (#93). The CHANGELOG's sync entry covers only the skills synced in that run.
 
-**Exit codes**: `0` success; `1` usage/setup error (bad names) or a manifest that could not be published — build failed, unreadable `skills[]`, or a bare-string `agents[]` entry — and `1` beats `3` (completed, refused above). `--dry-run` predicts `3` and both manifest-shape `1`s, but not a build-failure `1`.
+**Exit codes**: `0` success; `3` completed, but a stale local source was refused (a top-level skill, or a plugin's source, on every run including `--skills`); `1` usage/setup error (bad names) or a manifest that could not be published, and `1` beats `3`. These `1`s stop the run before anything is written: a `plugin-manifest.json` that is not a valid JSON object; a `skills[]` value that is not an array, or an entry that is not a name or an object with a string name and source; a published plugin whose skill source does not resolve; and, with `--skills`, another top-level skill whose `SKILL.md` cannot be read. These stop it after the skills are written: a build that failed, and a bare-string `agents[]` entry. `--dry-run` predicts `3` and every `1` except a build failure.
 
 ## Workflow C: Sync Individual Repos
 

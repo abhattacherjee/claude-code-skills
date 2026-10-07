@@ -40,8 +40,13 @@ generated root README containing a catalog table and plugin section.
 
 Options:
   --dry-run              Preview changes without writing
-  --skills <list>        Comma-separated skill names (default: all in monorepo)
-                         Mutually exclusive with --add.
+  --skills <list>        Comma-separated top-level skill names to re-sync
+                         (default: all in monorepo). Plugins are still checked
+                         and rebuilt; one built from a local source older than
+                         the monorepo's copy is refused (exit 3), as in a full
+                         sync. The README catalogue, count and install-all
+                         lines still list every top-level skill. Mutually
+                         exclusive with --add.
   --add <skill-name>     Add a new skill to the monorepo. Mutually exclusive
                          with --skills.
   --add-plugin <name>    Add a plugin from ./build/<name>/ to plugins/
@@ -592,6 +597,118 @@ if [[ -d "$MONOREPO_DIR" ]]; then
   validate_catalogue_inputs "Nothing was changed."
 fi
 
+# --- Where each manifest's skills come from (#92) ---
+# prepare-plugin.sh finds a plugin's skills through each skills[] entry's
+# "source". The auto-build drift check and the plugin resync below must look in
+# the same place. They used to look the skill NAME up as a directory
+# (skill_source_dir), so a manifest whose skill name differs from its source
+# directory (custom-statusline: skill install-statusline, source
+# custom-statusline/) was never rebuilt or resynced, with no output at all.
+#
+# MANIFEST_SKILL_SOURCES holds one "<plugin> US <skill> US <source-dir>" line
+# per resolvable skill, US being the 0x1f unit separator, which no name or path
+# here holds (a tab-separated `read` would merge an empty field into the next).
+# MANIFEST_PLUGINS lists every plugin that has a manifest, one per line. Both
+# read the same manifests as the auto-build stage, in the same order, with the
+# same shadowing and standalone skips. The source directory is the physical
+# path (`pwd -P`), so the reversion guard can compare it with -ef.
+#
+# Errors here stop the run with exit 1 before anything is written:
+#   - a manifest that is not a valid JSON object. The auto-build stage would
+#     otherwise abort on it later with no message, after skills are written;
+#   - a skills value that is not an array, or a skills[] entry that is not a
+#     name (a string) or an object with a non-empty string name and source:
+#     null, a number, a boolean, an array, or an object without them. The
+#     drift checks would skip it, and the build would fail only after the
+#     skills were written;
+#   - for a plugin that is already published, a source that does not resolve
+#     to a directory with a SKILL.md. The drift checks are the only readers of
+#     a published plugin's source and would otherwise skip it. For an
+#     unpublished plugin the build reports it, with prepare-plugin.sh's own
+#     message and exit 1.
+MANIFEST_SKILL_SOURCES=""
+MANIFEST_PLUGINS=""
+map_manifest_skill_sources() {
+  local m pname seen="" pairs sname ssrc sok dir bad="" jqerr published
+  local us=$'\037'
+  for m in "$SKILLS_HOME"/*/plugin-manifest.json "$MONOREPO_DIR"/*/plugin-manifest.json; do
+    [[ -f "$m" ]] || continue
+    if ! jqerr=$(jq empty "$m" 2>&1); then
+      echo "Error: $m is not valid JSON:" >&2
+      printf '%s\n' "$jqerr" | sed 's/^/    | /' >&2
+      bad=1
+      continue
+    fi
+    if [[ "$(jq -r 'type' "$m")" != object ]]; then
+      echo "Error: $m is not a JSON object" >&2
+      bad=1
+      continue
+    fi
+    pname=$(jq -r '.name // "" | if type == "string" then . else "" end' "$m")
+    [[ -z "$pname" ]] && pname=$(basename "$(dirname "$m")")
+    if printf '%s' "$seen" | grep -qxF -- "$pname"; then continue; fi
+    seen="${seen}${pname}"$'\n'
+    is_standalone_plugin "$pname" && continue
+    MANIFEST_PLUGINS="${MANIFEST_PLUGINS}${pname}"$'\n'
+    published=false
+    [[ -d "$MONOREPO_DIR/plugins/$pname/.claude-plugin" ]] && published=true
+    # One line per entry: name, source and "ok" or the problem, joined by US. A
+    # bare string means source "." (see manifest_skill_names in _lib.sh).
+    pairs=$(jq -r '(.skills // []) | if type == "array" then .[] else {notarray: true} end
+      | if type == "string" then [., ".", "ok"]
+        elif type == "object" and .notarray then ["", "", "skills is not an array"]
+        elif type != "object" then ["", "", "a skills[] entry is \(type), not a name or an object"]
+        else
+          [ (.name | if type == "string" then . else "" end),
+            (.source | if type == "string" then . else "" end),
+            (if (.name | type) == "string" and .name != "" and (.source | type) == "string" and .source != ""
+             then "ok" else "a skills[] entry has no string name and source" end) ]
+        end
+      | join("\u001f")' "$m")
+    while IFS="$us" read -r sname ssrc sok <&3; do
+      [[ -z "$sname$ssrc$sok" ]] && continue
+      if [[ "$sok" != ok ]]; then
+        echo "Error: $m: $sok${sname:+ (name: $sname)}" >&2
+        bad=1
+        continue
+      fi
+      dir=$(resolve_source_path "$ssrc" "$(dirname "$m")")
+      if [[ -n "$dir" && -f "$dir/SKILL.md" ]]; then
+        dir=$(cd "$dir" && pwd -P)
+        MANIFEST_SKILL_SOURCES="${MANIFEST_SKILL_SOURCES}${pname}${us}${sname}${us}${dir}"$'\n'
+      elif $published; then
+        echo "Error: $m: skill source $ssrc does not resolve (no SKILL.md at $dir)" >&2
+        bad=1
+      fi
+    done 3<<< "$pairs" </dev/null
+  done
+  [[ -z "$bad" ]]
+}
+if ! map_manifest_skill_sources; then
+  echo "       Fix the manifest and re-run. Nothing was changed." >&2
+  exit 1
+fi
+
+# plugin_has_manifest <plugin>: true when a manifest declares this plugin.
+plugin_has_manifest() {
+  printf '%s' "$MANIFEST_PLUGINS" | grep -qxF -- "$1"
+}
+
+# plugin_skill_source <plugin> <skill>: the directory a published plugin skill
+# is built from. For a plugin with a manifest, only the manifest's source counts:
+# a skill the manifest does not list prints nothing, and is never looked up by
+# name, which could find an unrelated $SKILLS_HOME/<name> (#92 review). The name
+# lookup is kept for a plugin with no manifest at all (one added with
+# --add-plugin).
+plugin_skill_source() {
+  if plugin_has_manifest "$1"; then
+    printf '%s' "$MANIFEST_SKILL_SOURCES" \
+      | awk -F$'\037' -v p="$1" -v s="$2" '$1==p && $2==s && !f {print $3; f=1}'
+  else
+    skill_source_dir "$2"
+  fi
+}
+
 # skill_source_dir() now lives in _lib.sh (issue #78) — it is called from
 # validate-pre-sync.sh too, and having two definitions is exactly the
 # extract_field()-style duplication a fix once needed two rounds to fully close
@@ -632,6 +749,63 @@ skill_refused() {
   printf '%s' "$REFUSED_SKILLS" | grep -qxF "$1"
 }
 
+# plugin_skill_refused <plugin> <skill>: skill_refused for a plugin skill. The
+# refusal is recorded against the top-level directory name, and a plugin skill
+# can be built from a directory with another name (#92: skill
+# install-statusline, source custom-statusline/), or through a symlink. So the
+# skill is refused when its own name is, or when its source is the same
+# directory (-ef) as $SKILLS_HOME/<name> for a refused <name>. Prints <name> in
+# that second case when it differs from the skill name, for the SKIP line.
+plugin_skill_refused() {
+  skill_refused "$2" && return 0
+  local src r
+  src=$(plugin_skill_source "$1" "$2")
+  [[ -n "$src" && -n "$REFUSED_SKILLS$PLUGIN_SOURCE_REFUSED" ]] || return 1
+  while IFS= read -r r; do
+    [[ -z "$r" ]] && continue
+    if [[ -d "$SKILLS_HOME/$r" && "$src" -ef "$SKILLS_HOME/$r" ]]; then
+      [[ "$r" != "$2" ]] && printf '%s\n' "$r"
+      return 0
+    fi
+  done <<< "$REFUSED_SKILLS$PLUGIN_SOURCE_REFUSED"
+  return 1
+}
+
+# --- Reversion guard for plugin sources (X-001) ---
+# The main loop refuses a top-level skill whose local copy is older than the
+# monorepo's, but only for the skills it syncs. A --skills run syncs a subset
+# and still auto-builds and resyncs every plugin, so a plugin built from a
+# refused-in-a-full-run source was rebuilt from it at exit 0. This check runs on
+# every run, before anything is written, for every source a manifest declares
+# (MANIFEST_SKILL_SOURCES): a source that is $SKILLS_HOME/<name> (by -ef) while
+# the monorepo's <name>/SKILL.md has a strictly newer version is refused. The
+# plugin is then skipped by plugin_skill_refused, and the run exits 3, as a full
+# sync does. --force-local lets the local copy win, as in the main loop.
+PLUGIN_SOURCE_REFUSED=""
+check_plugin_source_versions() {
+  local plug sk src cand cname srcv dstv
+  while IFS=$'\037' read -r plug sk src; do
+    [[ -n "$src" && -f "$src/SKILL.md" ]] || continue
+    for cand in "$SKILLS_HOME"/*/; do
+      cand="${cand%/}"
+      [[ -d "$cand" && "$src" -ef "$cand" ]] || continue
+      cname=$(basename "$cand")
+      [[ -f "$MONOREPO_DIR/$cname/SKILL.md" ]] || continue
+      srcv=$(extract_version "$src/SKILL.md")
+      dstv=$(extract_version "$MONOREPO_DIR/$cname/SKILL.md")
+      version_gt "$dstv" "$srcv" || continue
+      if $FORCE_LOCAL; then
+        echo "  WARNING: plugin $plug is built from $cand (v$srcv), older than $MONOREPO_DIR/$cname (v$dstv); --force-local given, building it anyway."
+        continue
+      fi
+      if ! printf '%s' "$PLUGIN_SOURCE_REFUSED" | grep -qxF -- "$cname"; then
+        PLUGIN_SOURCE_REFUSED="${PLUGIN_SOURCE_REFUSED}${cname}"$'\n'
+        echo "  REFUSED (plugin source)  $cand (v$srcv) is older than $MONOREPO_DIR/$cname (v$dstv); plugin $plug is not rebuilt from it"
+      fi
+    done
+  done <<< "$MANIFEST_SKILL_SOURCES"
+}
+
 # --- Resolve GitHub user (via shared _lib.sh) ---
 resolve_github_user
 
@@ -639,6 +813,8 @@ echo "GitHub user: $GITHUB_USER"
 echo "Monorepo:    $MONOREPO_DIR"
 echo "Source:      $SKILLS_HOME"
 echo ""
+
+check_plugin_source_versions
 
 # extract_field, extract_version, short_desc from _lib.sh
 
@@ -854,22 +1030,112 @@ echo ""
 # write_file, copy_file, copy_dir from _lib.sh
 
 # --- Sync each skill ---
-CATALOG_ROWS=""
+# The skill catalogue: one name and one README table row per skill, in two
+# parallel arrays (bash 3.2 has no associative arrays). The main loop adds the
+# skills it syncs; skills already in the monorepo that this run did not sync
+# are added after it (#93), and the rows are then sorted by name.
+CAT_NAMES=()
+CAT_ROWS=()
+catalog_add() {
+  CAT_NAMES+=("$1")
+  CAT_ROWS+=("$2")
+}
+catalog_has() {
+  local i
+  for ((i = 0; i < ${#CAT_NAMES[@]}; i++)); do
+    [[ "${CAT_NAMES[$i]}" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+# skill_row <name> <SKILL.md>: the catalogue row for one top-level skill, used
+# by the main loop and the backfill below, so the two cannot build rows by
+# different rules (#195 review C-004). Sets ROW (the table row) and ROW_VERSION,
+# ROW_SHORT and ROW_URL (the repo URL, or empty), which the main loop also uses
+# for the skill's own README. Runs in the current shell: one gh call per skill.
+# Rules:
+#   - an unreadable SKILL.md is an error (return 1, message on stderr);
+#   - extract_field's exit 3 (a description it cannot parse) is returned as is;
+#   - no version: 1.0.0, as the main loop always wrote;
+#   - no description: the row has an empty description and a WARNING says so;
+#   - the repo link comes from `gh repo view`. When that fails, the link in the
+#     existing README row is kept, because gh cannot tell "no such repo" from
+#     "gh is not working". A repo deleted since the last sync therefore keeps
+#     its link until gh works again.
+skill_row() {
+  local name="$1" md="$2" desc old
+  if [[ ! -f "$md" || ! -r "$md" ]]; then
+    echo "Error: cannot read $md for its catalogue row" >&2
+    return 1
+  fi
+  desc=$(extract_field "$md" "description") || return $?
+  ROW_SHORT=$(short_desc "$desc")
+  ROW_VERSION=$(extract_version "$md")
+  [[ -z "$ROW_VERSION" ]] && ROW_VERSION="1.0.0"
+  if [[ -z "$desc" ]]; then
+    echo "  WARNING: $md has no description; its catalogue row has none" >&2
+  fi
+  ROW_URL=""
+  if gh repo view "$GITHUB_USER/$name" --json url --jq '.url' >/dev/null 2>&1; then
+    ROW_URL="https://github.com/$GITHUB_USER/$name"
+  elif [[ -f "$MONOREPO_DIR/README.md" ]]; then
+    old=$(grep -F -- "| [$name](./$name/) |" "$MONOREPO_DIR/README.md" | head -1 || true)
+    old="${old% |}"
+    old="${old##* | }"
+    if [[ "$old" == "[repo](https://github.com/"*")" ]]; then
+      old="${old#\[repo\](}"
+      ROW_URL="${old%)}"
+    fi
+  fi
+  local link="—"
+  [[ -n "$ROW_URL" ]] && link="[repo]($ROW_URL)"
+  ROW="| [$name](./$name/) | $ROW_VERSION | $ROW_SHORT | $link |"
+}
+
+# --- Backfill: skills this run does not sync keep their catalogue rows (#93) ---
+# `--skills alpha` re-syncs alpha; it does not mean "the catalogue is now just
+# alpha". Every top-level skill already in the monorepo that this run does not
+# sync gets its row from its SKILL.md as it was last published, built as the
+# main loop builds one, so the table, the count and the install-all lines match
+# what a full sync would write. A full sync or --add syncs every such skill, so
+# this finds none there. A --skills name with no SKILL.md has no directory here
+# and gets no row.
+#
+# The row comes from skill_row, as in the main loop. Done before the main
+# loop, so a SKILL.md that cannot give a row (unreadable, or a description
+# extract_field cannot parse) stops the run before anything is written.
+BF_NAMES=()
+BF_ROWS=()
+if [[ -d "$MONOREPO_DIR" ]]; then
+  _BF_BAD=""
+  while IFS= read -r _BF_NAME <&3; do
+    [[ -z "$_BF_NAME" ]] && continue
+    _BF_MD="$MONOREPO_DIR/$_BF_NAME/SKILL.md"
+    [[ -e "$_BF_MD" ]] || continue
+    printf '%s\n' "$SKILLS_TO_SYNC" | grep -qxF -- "$_BF_NAME" && continue
+    if ! skill_row "$_BF_NAME" "$_BF_MD"; then
+      _BF_BAD=1
+      continue
+    fi
+    BF_NAMES+=("$_BF_NAME")
+    BF_ROWS+=("$ROW")
+  done 3<<< "$(list_top_level_candidates "$MONOREPO_DIR")" </dev/null
+  if [[ -n "$_BF_BAD" ]]; then
+    echo "       Fix the SKILL.md above, or sync that skill too. Nothing was changed." >&2
+    exit 1
+  fi
+fi
 
 # Counts every SKILLS_TO_SYNC entry that resolved to a real skill (found a
 # SKILL.md), whether it was ultimately copied or refused by the reversion
 # guard further down — a refusal is a legitimate outcome (exit 3), not the
 # "no such skill" case this counter exists to catch.
 #
-# FOUR readers, not one — an earlier version of this comment said "read only by
-# the explicit --skills guard after the loop (#80)", and that has been false
-# since #81's third pass. The other three are all catalogue-describing figures:
-# SKILLS_SYNCED_COUNT (this minus REFUSED_COUNT), the README template's
-# {{SKILL_COUNT}} substitution, and the minimal-README fallback's "N reusable
-# Agent Skills". Changing what this counts changes every published count in the
-# monorepo, not just one guard's threshold. The full reasoning for why the
-# catalogue-facing figure is this and NOT SKILLS_SYNCED_COUNT lives at the
-# {{SKILL_COUNT}} substitution site; read it before touching either.
+# Two readers: the explicit --skills guard after the loop (#80) and
+# SKILLS_SYNCED_COUNT (this minus REFUSED_COUNT). The README's skill count used
+# to read it too; since #93 that is CATALOG_COUNT, the catalogue's own row
+# count, because with --skills this counts only the named skills. The
+# reasoning lives at the {{SKILL_COUNT}} substitution site.
 SKILLS_RESOLVED_COUNT=0
 
 # Manifests the main sync loop refused for a bare-string agents[] entry.
@@ -883,7 +1149,7 @@ _BARE_ENTRY_MANIFESTS=""
 # splitting breaks a skill directory whose name contains a space into separate
 # tokens, each of which fails to resolve — two loud "no SKILL.md" ERRORs where
 # there should have been one successful sync. A here-string, not a pipe: this
-# loop assigns CATALOG_ROWS, REFUSED_SKILLS, REFUSED_COUNT and
+# loop assigns CAT_NAMES/CAT_ROWS, REFUSED_SKILLS, REFUSED_COUNT and
 # SKILLS_RESOLVED_COUNT, all read after the loop, and a pipe would run the body
 # in a subshell and silently discard every one of them. A here-string on an
 # empty $SKILLS_TO_SYNC still feeds one blank line, hence the guard below.
@@ -893,12 +1159,11 @@ _BARE_ENTRY_MANIFESTS=""
 # Any child that reads stdin — because it is a filter by nature, or because a
 # future version grows a prompt — consumes the rest of the skill list, and the
 # loop then exits early having synced only the skills read so far. It exits 0
-# while doing it, and every downstream figure agrees with the truncation:
-# {{SKILL_COUNT}} is SKILLS_RESOLVED_COUNT, the catalogue is built from the
-# same rows, and the CHANGELOG inventory iterates the same (already drained)
-# list — so a two-thirds-empty catalogue is internally self-consistent and
-# nothing flags it. The old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such
-# exposure; converting to `while read` created it.
+# while doing it, and the CHANGELOG's "Synced N skills" and its inventory agree
+# with the truncation, so nothing flags it. (Since #93 the README catalogue
+# also lists skills already in the monorepo, so it would keep their rows.) The
+# old `for SKILL_NAME in $SKILLS_TO_SYNC` had no such exposure; converting to
+# `while read` created it.
 #
 # TWO mechanisms, and they are not equally strong — an earlier version of this
 # comment claimed fd 3 alone meant "no child can reach the list at all", which
@@ -990,42 +1255,19 @@ while IFS= read -r SKILL_NAME <&3; do
     fi
   fi
 
-  # Extract metadata
+  # Extract metadata. The row, version, short description and repo URL come
+  # from skill_row, the same function the backfill uses.
   NAME=$(extract_field "$SKILL_MD" "name")
-  DESCRIPTION=$(extract_field "$SKILL_MD" "description")
-  VERSION=$(extract_version "$SKILL_MD")
-  SHORT=$(short_desc "$DESCRIPTION")
-
-  if [[ -z "$VERSION" ]]; then
-    VERSION="1.0.0"
-  fi
-
-  # Check if individual repo exists
-  INDIVIDUAL_REPO_URL=""
-  # No per-call </dev/null needed: the loop itself is `done … </dev/null`, so
-  # this child's stdin is already /dev/null. One mechanism at the loop, not one
-  # per call site — see the loop's own comment.
-  if gh repo view "$GITHUB_USER/$SKILL_NAME" --json url --jq '.url' >/dev/null 2>&1; then
-    INDIVIDUAL_REPO_URL="https://github.com/$GITHUB_USER/$SKILL_NAME"
-  fi
-
-  # Build catalog row
-  REPO_LINK=""
-  if [[ -n "$INDIVIDUAL_REPO_URL" ]]; then
-    REPO_LINK="[repo]($INDIVIDUAL_REPO_URL)"
-  else
-    REPO_LINK="—"
-  fi
-  CATALOG_ROWS="${CATALOG_ROWS}| [$SKILL_NAME](./$SKILL_NAME/) | $VERSION | $SHORT | $REPO_LINK |
-"
+  skill_row "$SKILL_NAME" "$SKILL_MD" || exit $?
+  VERSION="$ROW_VERSION"
+  SHORT="$ROW_SHORT"
+  INDIVIDUAL_REPO_URL="$ROW_URL"
+  catalog_add "$SKILL_NAME" "$ROW"
 
   # Refused above: the catalog row is kept (from the in-repo metadata), so
   # this skill's row is unchanged, but nothing is copied for this skill. The
   # README's overall "N reusable Agent Skills" figure (built further down)
-  # deliberately uses SKILLS_RESOLVED_COUNT, not SKILLS_SYNCED_COUNT, for
-  # exactly this reason: SKILLS_RESOLVED_COUNT counts every name that
-  # resolved to a real SKILL.md — refused or not — so it stays in step with
-  # the catalogue's actual row count regardless of how many were refused.
+  # is CATALOG_COUNT, the number of rows, so it counts this one too.
   # SKILLS_SYNCED_COUNT (resolved minus refused) undercounts the catalogue by
   # REFUSED_COUNT whenever anything here is refused, and shipped as exactly
   # that regression once already (issue #81, third pass) — do not repeat it.
@@ -1242,10 +1484,10 @@ fi
 # SKILL_COUNT is the discovered/requested count, printed above the loop as the
 # *plan* before anything has been attempted — legitimately SKILL_COUNT, left
 # alone. Every stage below that describes "how many skills" in the past
-# tense — the README template's {{SKILL_COUNT}} substitution, the minimal-
-# README fallback description, the CHANGELOG's "Synced N skills" entry, the
-# --init git commit message, and the closing "Sync complete." line — is a
-# claim about what actually happened, and must use this figure instead.
+# tense — the CHANGELOG's "Synced N skills" entry, the --init git commit
+# message, and the closing "Sync complete." line — is a claim about what
+# actually happened, and must use this figure instead. The README's count
+# describes the catalogue, not this run, and is CATALOG_COUNT.
 SKILLS_SYNCED_COUNT=$((SKILLS_RESOLVED_COUNT - REFUSED_COUNT))
 
 # --- Discover and sync plugins ---
@@ -1376,7 +1618,9 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
     # A skill refused by the reversion guard must not be rebuilt into a plugin
     # either: prepare-plugin.sh reads the same stale local source, so the rsync
     # below would revert plugins/<name>/ exactly as the main loop would have.
-    if [[ -n "$REFUSED_SKILLS" ]]; then
+    # PLUGIN_SOURCE_REFUSED too: a --skills run refuses plugin sources the main
+    # loop never saw (X-001).
+    if [[ -n "$REFUSED_SKILLS$PLUGIN_SOURCE_REFUSED" ]]; then
       _REFUSED_IN_PLUGIN=""
       # Line-wise (issue #81): a manifest skill name containing a space would
       # otherwise be split into fragments, neither of which matches the
@@ -1390,8 +1634,10 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       # the one list whose truncation lets the guard miss its own refusal.
       while IFS= read -r _PLUGIN_SKILL <&3; do
         [[ -z "$_PLUGIN_SKILL" ]] && continue
-        if skill_refused "$_PLUGIN_SKILL"; then
-          _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL"
+        # Through the manifest's source, not just the name (#92): a skill built
+        # from a refused directory of another name is just as stale.
+        if _REFUSED_VIA=$(plugin_skill_refused "$_MANIFEST_NAME" "$_PLUGIN_SKILL"); then
+          _REFUSED_IN_PLUGIN="${_REFUSED_IN_PLUGIN:+$_REFUSED_IN_PLUGIN }$_PLUGIN_SKILL${_REFUSED_VIA:+ (source $_REFUSED_VIA)}"
         fi
       done 3<<< "$_MANIFEST_SKILL_NAMES" </dev/null
       if [[ -n "$_REFUSED_IN_PLUGIN" ]]; then
@@ -1414,7 +1660,10 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
       # removed from the CHANGELOG stage below).
       _FIRST_SKILL="${_MANIFEST_SKILL_NAMES%%$'\n'*}"
       if [[ -n "$_FIRST_SKILL" ]]; then
-        _FIRST_SRC_DIR=$(skill_source_dir "$_FIRST_SKILL")
+        # The manifest's own source for this skill (#92), as prepare-plugin.sh
+        # reads it. A published plugin whose source does not resolve already
+        # stopped the run before the first write (map_manifest_skill_sources).
+        _FIRST_SRC_DIR=$(plugin_skill_source "$_MANIFEST_NAME" "$_FIRST_SKILL")
         _SRC_MD="${_FIRST_SRC_DIR:+$_FIRST_SRC_DIR/SKILL.md}"
         _DST_MD="$_PLUGIN_DST/skills/$_FIRST_SKILL/SKILL.md"
         if [[ -f "$_SRC_MD" && -f "$_DST_MD" ]]; then
@@ -1483,6 +1732,13 @@ if [[ -x "$PREPARE_SCRIPT" ]]; then
 
             find "$_PLUGIN_DST" -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
             echo "  AUTO-SYNCED  plugins/$_MANIFEST_NAME/$_PRESERVED_MSG"
+            # prepare-plugin.sh notes each SKILL.md section it left out of the
+            # README for holding a placeholder (#106). The build log is shown
+            # only on failure, so pass the notes on when the generated README
+            # is the one published.
+            if [[ -z "$_PRESERVED_MSG" ]]; then
+              grep '^dropped section ' "$_BUILD_LOG" | sed 's/^/    NOTE: /' || true
+            fi
             AUTO_BUILT_PLUGINS="${AUTO_BUILT_PLUGINS:+$AUTO_BUILT_PLUGINS }$_MANIFEST_NAME"
           else
             echo "  Warning: build produced no plugin at $_BUILD_DIR"
@@ -1596,8 +1852,13 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
     for _PREF_DIR in "$_PLUGIN_DIR"skills/*/; do
       [[ ! -d "$_PREF_DIR" ]] && continue
       _PREF_NAME=$(basename "$_PREF_DIR")
-      if skill_refused "$_PREF_NAME"; then
-        _PLUGIN_REFUSED="${_PLUGIN_REFUSED:+$_PLUGIN_REFUSED }$_PREF_NAME"
+      # A skill directory the plugin's manifest no longer lists has no source,
+      # so nothing below touches it. Say so rather than skip it silently.
+      if plugin_has_manifest "$_PLUGIN_NAME" && [[ -z "$(plugin_skill_source "$_PLUGIN_NAME" "$_PREF_NAME")" ]]; then
+        echo "  WARNING: plugins/$_PLUGIN_NAME/skills/$_PREF_NAME/ is not in the plugin's manifest; not resynced"
+      fi
+      if _REFUSED_VIA=$(plugin_skill_refused "$_PLUGIN_NAME" "$_PREF_NAME"); then
+        _PLUGIN_REFUSED="${_PLUGIN_REFUSED:+$_PLUGIN_REFUSED }$_PREF_NAME${_REFUSED_VIA:+ (source $_REFUSED_VIA)}"
       fi
     done
     if [[ -n "$_PLUGIN_REFUSED" ]]; then
@@ -1608,8 +1869,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
     for _PSKILL_MD in "$_PLUGIN_DIR"skills/*/SKILL.md; do
       [[ ! -f "$_PSKILL_MD" ]] && continue
       _SNAME=$(basename "$(dirname "$_PSKILL_MD")")
-      if skill_refused "$_SNAME"; then continue; fi
-      _SNAME_SRC=$(skill_source_dir "$_SNAME")
+      if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+      _SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
       _SRC_MD="${_SNAME_SRC:+$_SNAME_SRC/SKILL.md}"
       if [[ -f "$_SRC_MD" ]] && ! diff -q "$_PSKILL_MD" "$_SRC_MD" >/dev/null 2>&1; then
         _PLUGIN_DRIFTED=true; break
@@ -1621,8 +1882,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PSCRIPTS in "$_PLUGIN_DIR"skills/*/scripts; do
         [[ ! -d "$_PSCRIPTS" ]] && continue
         _SNAME=$(basename "$(dirname "$_PSCRIPTS")")
-        if skill_refused "$_SNAME"; then continue; fi
-        _SNAME_SRC=$(skill_source_dir "$_SNAME")
+        if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+        _SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
         _SRC_SCRIPTS="${_SNAME_SRC:+$_SNAME_SRC/scripts}"
         if [[ -n "$_SRC_SCRIPTS" && -d "$_SRC_SCRIPTS" ]]; then
           _SDIFF=$(diff -rq "$_PSCRIPTS" "$_SRC_SCRIPTS" 2>/dev/null | grep -v '.DS_Store' || true)
@@ -1648,8 +1909,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       for _PCL in "$_PLUGIN_DIR"skills/*/CHANGELOG.md; do
         [[ ! -f "$_PCL" ]] && continue
         _SNAME=$(basename "$(dirname "$_PCL")")
-        if skill_refused "$_SNAME"; then continue; fi
-        _SNAME_SRC=$(skill_source_dir "$_SNAME")
+        if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+        _SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
         _SRC_CL="${_SNAME_SRC:+$_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_SRC_CL" ]] && ! diff -q "$_PCL" "$_SRC_CL" >/dev/null 2>&1; then
           _PLUGIN_DRIFTED=true; break
@@ -1667,8 +1928,8 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
         _SNAME=$(basename "$_PSKILL_DIR")
         # Guards SKILL.md, scripts/, references/ and CHANGELOG.md below in one
         # place — all four copy from the same refused local source.
-        if skill_refused "$_SNAME"; then continue; fi
-        _SRC=$(skill_source_dir "$_SNAME")
+        if plugin_skill_refused "$_PLUGIN_NAME" "$_SNAME" >/dev/null; then continue; fi
+        _SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_SNAME")
         [[ -z "$_SRC" ]] && continue
 
         # SKILL.md
@@ -1722,14 +1983,20 @@ if [[ -d "$MONOREPO_DIR/plugins" ]]; then
       done
 
       # CHANGELOG.md — also sync to plugin root (top-level CHANGELOG)
-      # Use the first skill's CHANGELOG as the plugin-level CHANGELOG
-      _FIRST_SKILL_DIR=$(ls -d "$_PLUGIN_DIR"skills/*/ 2>/dev/null | head -1)
-      _FIRST_SNAME=""
-      [[ -n "$_FIRST_SKILL_DIR" ]] && _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
+      # Use the first skill's CHANGELOG as the plugin-level CHANGELOG. "First"
+      # is the manifest's skills[0], as prepare-plugin.sh reads it (#92); the
+      # first directory by name only for a plugin no manifest declares. By
+      # name alone, a manifest listing zeta before alpha got alpha's CHANGELOG
+      # copied over the root one on every resync.
+      _FIRST_SNAME=$(printf '%s' "$MANIFEST_SKILL_SOURCES" | awk -F$'\037' -v p="$_PLUGIN_NAME" '$1==p && !f {print $2; f=1}')
+      if [[ -z "$_FIRST_SNAME" ]]; then
+        _FIRST_SKILL_DIR=$(ls -d "$_PLUGIN_DIR"skills/*/ 2>/dev/null | head -1)
+        [[ -n "$_FIRST_SKILL_DIR" ]] && _FIRST_SNAME=$(basename "$_FIRST_SKILL_DIR")
+      fi
       # A refused first skill would drag the plugin-root CHANGELOG backwards too,
       # leaving the plugin advertising a version its files no longer are.
-      if [[ -n "$_FIRST_SNAME" ]] && ! skill_refused "$_FIRST_SNAME"; then
-        _FIRST_SNAME_SRC=$(skill_source_dir "$_FIRST_SNAME")
+      if [[ -n "$_FIRST_SNAME" ]] && ! plugin_skill_refused "$_PLUGIN_NAME" "$_FIRST_SNAME" >/dev/null; then
+        _FIRST_SNAME_SRC=$(plugin_skill_source "$_PLUGIN_NAME" "$_FIRST_SNAME")
         _FIRST_SRC_CL="${_FIRST_SNAME_SRC:+$_FIRST_SNAME_SRC/CHANGELOG.md}"
         if [[ -f "$_FIRST_SRC_CL" && -f "$_PLUGIN_DIR/CHANGELOG.md" ]]; then
           if ! diff -q "$_PLUGIN_DIR/CHANGELOG.md" "$_FIRST_SRC_CL" >/dev/null 2>&1; then
@@ -1798,6 +2065,32 @@ if [[ $PLUGIN_COUNT -gt 0 ]]; then
   validate_catalogue_inputs "The skills and plugins synced above are already written; README.md, CHANGELOG.md and the other root files were not." no-build
 fi
 
+# Rows for skills this run did not sync (see "backfill" before the main loop).
+for ((_bi = 0; _bi < ${#BF_NAMES[@]}; _bi++)); do
+  catalog_has "${BF_NAMES[$_bi]}" || catalog_add "${BF_NAMES[$_bi]}" "${BF_ROWS[$_bi]}"
+done
+
+# Sorted by name with the same `sort` discovery uses, so a --skills run writes
+# the rows in the order a full sync does. CATALOG_NAMES (one per line) drives
+# the table, the install-all lines and CATALOG_COUNT.
+CATALOG_NAMES=""
+if [[ ${#CAT_NAMES[@]} -gt 0 ]]; then
+  CATALOG_NAMES=$(printf '%s\n' "${CAT_NAMES[@]}" | sort)
+fi
+CATALOG_ROWS=""
+CATALOG_COUNT=0
+while IFS= read -r _CAT_NAME <&3; do
+  [[ -z "$_CAT_NAME" ]] && continue
+  for ((_ci = 0; _ci < ${#CAT_NAMES[@]}; _ci++)); do
+    if [[ "${CAT_NAMES[$_ci]}" == "$_CAT_NAME" ]]; then
+      CATALOG_ROWS="${CATALOG_ROWS}${CAT_ROWS[$_ci]}
+"
+      CATALOG_COUNT=$((CATALOG_COUNT + 1))
+      break
+    fi
+  done
+done 3<<< "$CATALOG_NAMES" </dev/null
+
 # --- Generate root README ---
 echo "--- Root files ---"
 
@@ -1811,16 +2104,14 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # Extract everything after the --- separator (skip the template header)
   ROOT_README=$(sed '1,/^---$/d' "$TEMPLATE_DIR/monorepo-readme-template.md")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{GITHUB_USER}}|$GITHUB_USER|g")
-  # SKILLS_RESOLVED_COUNT, not SKILL_COUNT and NOT SKILLS_SYNCED_COUNT (issue
-  # #81, third pass): this placeholder describes the catalogue table right
-  # below it, so it must match the catalogue's actual row count. A refused
-  # skill still gets a catalog row (CATALOG_ROWS is built before the
-  # reversion guard's `continue`, deliberately — see the comment where that
-  # row is added, above), so the catalogue's row count is
-  # SKILLS_RESOLVED_COUNT (every name that resolved to a real SKILL.md,
-  # refused or not) rather than SKILLS_SYNCED_COUNT (resolved minus refused,
-  # which undercounts the catalogue whenever anything was refused).
-  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$SKILLS_RESOLVED_COUNT|g")
+  # CATALOG_COUNT: this placeholder describes the catalogue table right below
+  # it, so it is that table's row count, and nothing else. Not
+  # SKILLS_SYNCED_COUNT (issue #81, third pass): a refused skill keeps its row
+  # (the main loop adds it before the reversion guard's `continue`), so that
+  # figure undercounts the table whenever anything is refused. Not
+  # SKILLS_RESOLVED_COUNT either (#93): with --skills it counts only the named
+  # skills, while the table also lists every skill this run did not sync.
+  ROOT_README=$(echo "$ROOT_README" | sed "s|{{SKILL_COUNT}}|$CATALOG_COUNT|g")
   ROOT_README=$(echo "$ROOT_README" | sed "s|{{LAST_UPDATED}}|$TODAY|g")
   # Build install-all commands (one cp -r per skill)
   INSTALL_ALL_CMDS=""
@@ -1832,11 +2123,14 @@ if [[ -f "$TEMPLATE_DIR/monorepo-readme-template.md" ]]; then
   # main sync loop's comment — pure-bash body today, uniform treatment so a
   # later addition cannot reintroduce the STDIN truncation silently. It is not
   # proof against a child that names fd 3 outright; nothing here is.
+  # CATALOG_NAMES, not SKILLS_TO_SYNC (#93): one line per catalogue row, so a
+  # --skills run still lists every skill, and a --skills name with no
+  # SKILL.md gets no install line.
   while IFS= read -r SKILL_NAME <&3; do
     [[ -z "$SKILL_NAME" ]] && continue
     INSTALL_ALL_CMDS="${INSTALL_ALL_CMDS}cp -r /tmp/claude-code-skills/$SKILL_NAME ~/.claude/skills/$SKILL_NAME
 "
-  done 3<<< "$SKILLS_TO_SYNC" </dev/null
+  done 3<<< "$CATALOG_NAMES" </dev/null
 
   # Build plugin section (only if plugins exist)
   PLUGIN_SECTION=""
@@ -1912,13 +2206,11 @@ rm -rf /tmp/ccs
   rm -f "$TMPFILE"
 else
   echo "  Warning: monorepo-readme-template.md not found, generating minimal README"
-  # SKILLS_RESOLVED_COUNT (issue #81, third pass): same reasoning as the
-  # template branch above — this describes $CATALOG_TABLE's actual contents,
-  # immediately below it, and the catalogue's row count is
-  # SKILLS_RESOLVED_COUNT, not SKILLS_SYNCED_COUNT (see that comment).
+  # CATALOG_COUNT: same reasoning as the template branch above. This describes
+  # $CATALOG_TABLE's actual contents, immediately below it.
   ROOT_README="# Claude Code Skills
 
-A curated collection of $SKILLS_RESOLVED_COUNT reusable Agent Skills.
+A curated collection of $CATALOG_COUNT reusable Agent Skills.
 
 ## Skills
 
@@ -2321,10 +2613,14 @@ if [[ -n "$CAT_HAND_EDITS" ]]; then
   echo ""
   report_hand_edits "$CAT_HAND_EDITS"
 fi
-if [[ "$REFUSED_COUNT" -gt 0 ]]; then
+# Skills the main loop refused, plus plugin sources refused before it (X-001),
+# each named once.
+ALL_REFUSED=$(printf '%s%s' "$REFUSED_SKILLS" "$PLUGIN_SOURCE_REFUSED" | awk 'NF && !seen[$0]++')
+if [[ -n "$ALL_REFUSED" ]]; then
+  ALL_REFUSED_COUNT=$(printf '%s\n' "$ALL_REFUSED" | wc -l | tr -d ' ')
   echo ""
-  echo "REFUSED $REFUSED_COUNT skill(s) — stale local source would have reverted newer in-repo content:"
-  printf '%s' "$REFUSED_SKILLS" | sed 's/^/  - /'
+  echo "REFUSED $ALL_REFUSED_COUNT skill(s) — stale local source would have reverted newer in-repo content:"
+  printf '%s\n' "$ALL_REFUSED" | sed 's/^/  - /'
   echo "Remove the stale local copies, or re-run with --force-local to override."
   exit 3
 fi
