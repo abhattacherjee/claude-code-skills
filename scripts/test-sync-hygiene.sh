@@ -6223,6 +6223,7 @@ assert_contains "…while the catalogue is clean" "catalogue.py --check: clean" 
 PRE_RC=0
 presync_run "$SCRATCH_DIR/pre-nomark.stdout" "$SCRATCH_DIR/pre-nomark.stderr" "$NOSKILL_MONO" || PRE_RC=$?
 assert_eq "validate-pre-sync.sh when catalogue.py cannot run (no markers) exits 1" "1" "$PRE_RC"
+assert_eq "…the #167 fixture is unchanged" "$NOSKILL_DIGEST" "$(tree_digest "$NOSKILL_MONO")"
 PRE_RC=0
 presync_run "$SCRATCH_DIR/pre-add.stdout" "$SCRATCH_DIR/pre-add.stderr" --add demo-skill "$PRE_CLEAN" || PRE_RC=$?
 assert_eq "validate-pre-sync.sh --add on a plugin-only monorepo is refused (exit 1)" "1" "$PRE_RC"
@@ -6896,6 +6897,9 @@ N106_RC=0
 run_prepare n106pub-plugin "$SCRATCH_DIR/n106pub.stdout" "$SCRATCH_DIR/n106pub.stderr" || N106_RC=$?
 N106_README="$(cat "$PREPARE_OUT_DIR/n106pub-plugin/README.md" 2>/dev/null || true)"
 assert_eq "prepare-plugin.sh builds skill-kit:publish's SKILL.md (#106)" "0" "$N106_RC"
+# Only the positive control below catches a fence regression: the three negative
+# asserts also pass without the fence check, because the placeholder rule drops
+# the wrongly matched section anyway.
 assert_not_contains "…with no <github-user> in the README" "<github-user>" "$N106_README"
 assert_not_contains "…and no <skill-name>" "<skill-name>" "$N106_README"
 assert_not_contains "…and no template block pulled in after a fenced heading" "### Step 4: Initialize Git and Push" "$N106_README"
