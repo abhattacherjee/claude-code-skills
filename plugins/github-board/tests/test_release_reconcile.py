@@ -892,3 +892,84 @@ def test_with_only_hotfix_tags_no_date_test_applies(tmp_path):
     assert lines(r, "NOTE") == []
     assert lines(r, "MISMATCH") == [
         f"MISMATCH #50: PR #150, commit {repo.sha[150][:7]}, after v0.5.1: v0.5 -> v0.6"]
+
+
+# ---- cross-model review (Codex) on f2e3fb6 ---------------------------------------------------
+
+def test_work_merged_in_the_release_window_of_a_merge_release_moves_on(tmp_path):
+    # X-001 (a): release/0.5.0 is cut, #120 lands on develop, then the release branch (not
+    # develop) merges to main and is tagged. #120 is older than the tag and not in it, but
+    # the tag commit is a merge, so it is unreleased work, not a squash.
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110))]
+    repo.git(repo.seed, "branch", "release/0.5.0", "develop")
+    prs.append(pr(120, "Closes #20", repo.squash(120)))
+    repo.git(repo.seed, "checkout", "-q", "main")
+    repo.git(repo.seed, "merge", "-q", "--no-ff", "release/0.5.0", "-m", "Merge release/0.5.0")
+    repo.git(repo.seed, "tag", "-a", "v0.5.0", "-m", "v0.5.0")
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": issue(10, V05), "20": issue(20, V05)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "NOTE") == []
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #20: PR #120, commit {repo.sha[120][:7]}, after v0.5.0: v0.5 -> v0.6"]
+
+
+def test_a_merge_release_with_a_hotfix_keeps_work_before_the_hotfix_moving(tmp_path):
+    # X-001 (c): the hotfix case on a merge release.
+    repo = Repo(tmp_path)
+    repo.release("v0.5.0")
+    prs = [pr(150, "Closes #50", repo.squash(150))]
+    hotfix(repo, 160, "v0.5.1")
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"50": issue(50, V05)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "NOTE") == [] and len(lines(r, "MISMATCH #50:")) == 1
+
+
+def ghe_repo(tmp_path):
+    repo = Repo(tmp_path)
+    body = ("Closes https://ghe.example.com/o/r/issues/10, fixes https://github.com/o/r/issues/11, "
+            "fixes https://gheXexample.com/o/r/issues/12")      # a "." in the host is literal
+    prs = [pr(110, body, repo.squash(110))]
+    repo.release()
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": issue(10, V06), "11": issue(11, V06),
+                                                     "12": issue(12, V06)}}
+    return repo, fix
+
+
+def asked(calls):
+    return sorted(x[4:] for c in calls if c[:2] == ["api", "graphql"] for x in c if x.startswith("num="))
+
+
+def test_on_gh_host_only_that_hosts_issue_urls_count(tmp_path):
+    # X-002: on GitHub Enterprise a github.com URL names another server's issue.
+    repo, fix = ghe_repo(tmp_path)
+    repo.git(repo.work, "remote", "set-url", "origin", "https://ghe.example.com/o/r.git")
+    r, calls = run(repo, fix, "--repo", "o/r", "--no-fetch", GH_HOST="ghe.example.com")
+    assert r.returncode == 0, r.stderr
+    assert asked(calls) == ["10"]
+
+
+def test_without_gh_host_only_github_com_issue_urls_count(tmp_path):
+    repo, fix = ghe_repo(tmp_path)
+    r, calls = run(repo, fix, "--repo", "o/r", "--no-fetch")
+    assert r.returncode == 0, r.stderr
+    assert asked(calls) == ["11"]
+
+
+@pytest.mark.parametrize("body,want", [("Encloses #10", []), ("prefixes #10", []),
+                                       ("Closes #10", ["10"]), ("(fixes #10)", ["10"])])
+def test_the_keyword_needs_a_left_boundary(tmp_path, body, want):
+    # X-003: "Encloses #10" must not read as "closes #10".
+    repo = Repo(tmp_path)
+    prs = [pr(110, body, repo.squash(110))]
+    repo.release()
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": issue(10, V05)}}
+    r, calls = run(repo, fix, "--repo", "o/r", "--no-fetch")
+    assert r.returncode == 0, r.stderr
+    assert asked(calls) == want

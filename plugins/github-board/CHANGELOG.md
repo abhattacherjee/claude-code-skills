@@ -23,7 +23,8 @@ All notable changes to the **github-board** plugin are documented here.
 - `plan-milestones` 2.2.0: step 0, `scripts/release-reconcile.sh --repo O/R [--json FILE] [--no-fetch]` (#204).
   - It refuses (exit 2) a checkout of another repo, a host other than github.com (`$GH_HOST` when set), and a shallow clone. Then it runs `git fetch --tags origin`.
   - It checks each closed issue that a merged PR into `develop` or the default branch names against the first release tag containing the merge commit. After the last tag, the target is the next-release milestone. The earliest release wins. Tags are ordered by version, with the leading `v` optional.
-  - A merge commit that no tag contains but that is older than the newest release tag (`vX.Y.0` or `vX.Y`; a squashed release) gets a `NOTE` and no move. Hotfix tags (`vX.Y.Z`, Z > 0) are ignored for this date test.
+  - A merge commit that no tag contains but that is older than the newest release tag (`vX.Y.0` or `vX.Y`; a squashed release) gets a `NOTE` and no move. It applies only when the release tag's commit is not a merge (a squashed or direct-commit release). Hotfix tags (`vX.Y.Z`, Z > 0) are ignored for this date test. Known false NOTE: develop work merged during a squashed release's window; it fails safe, with no write.
+  - Closing keywords are whole words ("Encloses #10" does not count). An issue URL counts only on the validated host: github.com, or `$GH_HOST`.
   - It flags a closed issue whose linked PRs never merged while a merged PR, or a commit on develop or the default branch, names it. The line names the branch.
   - It ends with `release check: N issues checked, M mismatches, K flagged`. "Checked" counts compared milestones; issues that only a commit names are counted apart.
   - `--json` writes `closed_moves` for `apply-plan.sh`. An old file is deleted at the start of every run.
@@ -33,6 +34,10 @@ All notable changes to the **github-board** plugin are documented here.
 ### Changed
 
 - `promote-shipped` 2.1.1: `apply-promotions.sh` maps tags through the shared `milestone-for-tag`, not its own copy of the rules. The three skip warnings changed wording (#204).
+
+### Fixed
+
+- `find-promotable.sh` no longer reads a closing keyword inside a longer word ("Encloses #42") (#204).
 
 ## [1.1.0] - 2026-10-07
 

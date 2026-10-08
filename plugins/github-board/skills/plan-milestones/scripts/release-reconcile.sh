@@ -40,9 +40,11 @@ Prints one line per finding, then always a summary:
 
 A merge commit that no tag contains, but that is older than the newest release tag, gets
 "NOTE #N: PR #P merged before <release tag> but no tag contains it (squashed release?)"
-and no move. A release tag is vX.Y.0 or vX.Y; hotfix tags (vX.Y.Z, Z > 0) are ignored for
-this date test. With only hotfix tags there is no release tag, so no date test applies and
-such a commit is an ordinary "after <last tag>" mismatch.
+and no move. This date test applies only when that tag's commit is not a merge (a squashed
+or direct-commit release); after a merge release such a commit is "after <last tag>". A
+release tag is vX.Y.0 or vX.Y; hotfix tags (vX.Y.Z, Z > 0) are ignored. With only hotfix
+tags there is no release tag, so no date test applies. Known false NOTE: work merged to
+develop during a squashed release's window gets the NOTE; it fails safe (no move).
 
 "Checked" counts the issues whose milestone was compared. An issue that only a commit
 names is checked for FLAG only, and counted apart.
@@ -147,8 +149,11 @@ BASES="develop"
 # tests one issue number. Here the number is captured instead. A keyword, an optional
 # colon, then #N, this repo's owner/repo#N, or this repo's issue URL. GitHub records no
 # closing link for a merge to a non-default base, so the body is the only record.
+# The keyword needs a word boundary on its left: "Encloses #10" is not "closes #10". The
+# issue URL uses the host this checkout was validated against (github.com, or $GH_HOST).
 REPO_RE=$(printf '%s' "$REPO" | sed 's/[.]/\\./g')
-CLOSE_RE='(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+(('"$REPO_RE"')?#|https?://github\.com/'"$REPO_RE"'/issues/)([0-9]+)\b'
+HOST_RE=$(printf '%s' "$WANT_HOST" | sed 's/[.]/\\./g')
+CLOSE_RE='(?i)(?<![A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+(('"$REPO_RE"')?#|https?://'"$HOST_RE"'/'"$REPO_RE"'/issues/)([0-9]+)\b'
 
 : > "$TMP/refs"           # issue <TAB> pr <TAB> sha, one per merged PR naming the issue
 for base in $BASES; do
@@ -207,13 +212,19 @@ LAST_TAG=$(awk 'END { print }' "$TMP/tags")
 [ -n "$LAST_TAG" ] || echo "WARN: no release tag (vX.Y or vX.Y.Z) in this checkout; every merged issue counts as after the last release." >&2
 # The squash date test uses the newest RELEASE tag: vX.Y.0 or vX.Y. A hotfix tag (vX.Y.Z,
 # Z > 0) sits on main only, so develop work merged before it is still unreleased, not
-# squashed into it.
+# squashed into it. It applies only when that tag's commit has one parent (a squashed or
+# direct-commit release). A merge release holds its branch's history, so a commit it does
+# not hold was merged to develop after the release branch was cut: unreleased work.
 RELEASE_TAG=$(grep -E '^v?[0-9]+\.[0-9]+(\.0)?$' "$TMP/tags" | awk 'END { print }' || true)
 RELEASE_DATE=""
 if [ -n "$RELEASE_TAG" ]; then
   # The tagger date of an annotated tag, else the date of the commit it points at.
   RELEASE_DATE=$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$RELEASE_TAG")
   [ -n "$RELEASE_DATE" ] || RELEASE_DATE=$(git log -1 --format=%ct "$RELEASE_TAG^{commit}")
+  # rev-list --parents prints the commit, then its parents: 3+ words is a merge.
+  if [ "$(git rev-list --parents -n 1 "$RELEASE_TAG^{commit}" | wc -w)" -gt 2 ]; then
+    RELEASE_DATE=""
+  fi
 fi
 
 # sha <TAB> rank <TAB> tag. rank is the tag's place in version order (1 = lowest); for a

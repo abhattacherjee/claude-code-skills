@@ -83,9 +83,13 @@ line says so.
 - A squashed `release/* -> main` merge breaks tag containment. A merge commit that no tag
   contains but that is older than the newest **release** tag (`vX.Y.0` or `vX.Y`) gets
   `NOTE #N: PR #P merged before <tag> but no tag contains it (squashed release?);
-  milestone left as <current>`, and no move. Hotfix tags (`vX.Y.Z`, Z > 0) are ignored
-  for this date test, so develop work merged before a hotfix still moves to the next
-  release. With only hotfix tags, no date test applies.
+  milestone left as <current>`, and no move. This applies only when the release tag's
+  commit is not a merge (a squashed or direct-commit release). After a merge release, a
+  commit the tag does not hold was merged during or after the release window, so it moves
+  to the next release. Hotfix tags (`vX.Y.Z`, Z > 0) are ignored for this date test, so
+  develop work merged before a hotfix still moves. With only hotfix tags, no date test
+  applies. Known false NOTE: develop work merged during a squashed release's window gets
+  the NOTE. It fails safe (nothing moves); check it by hand.
 - Exit 1 means the result is incomplete, and no JSON is written (an old `--json` file is
   deleted at the start of every run). It happens when git, gh or jq is missing, the fetch
   fails, a merged-PR list fails, is empty or hits the 1000-PR limit, a merged PR has no

@@ -228,3 +228,11 @@ def test_an_unmerged_foreign_pr_closing_our_issue_holds_it(tmp_path, body):
     assert out["candidates"] == [], f"{body!r}: promoted as nopr"
     assert [c["promoteClass"] for c in out["held"]] == ["hold-foreign-pr"]
     assert not [c for c in calls if "compare" in c]
+
+
+# #204 cross-model X-003: the keyword needs a left boundary. "Encloses #42" is not "closes #42".
+@pytest.mark.parametrize("body", ["Encloses #42", "prefixes #42", "unresolved #42"])
+def test_a_keyword_inside_a_longer_word_does_not_credit_the_pr(tmp_path, body):
+    out, calls = _find(tmp_path, _timeline(_pr("o/r", body)), compare="behind")
+    assert [c["promoteClass"] for c in out["candidates"]] == ["nopr"], body
+    assert not [c for c in calls if "compare" in c]

@@ -18,6 +18,11 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A tag that is not a version is now checked before the milestone list is read. With an
   unreadable list, such an item is counted as SKIPPED, not FAILED. (#204)
 
+### Fixed
+- `find-promotable.sh`'s fallback read a closing keyword inside a longer word: a PR body
+  saying "Encloses #42" credited the PR to #42. The keyword is now a whole word, the same
+  rule as plan-milestones' `release-reconcile.sh`. (#204)
+
 ## [2.1.0] — 2026-10-07
 
 ### Added
