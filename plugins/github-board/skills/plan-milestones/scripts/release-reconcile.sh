@@ -8,8 +8,9 @@
 # that milestone is closed. After the last tag, it belongs to the next-release milestone. Both
 # come from lib/config.py, shared with move-card and promote-shipped. When several merged PRs
 # name one issue, the earliest release wins: it shipped there first. A merge commit that no
-# tag contains but that is older than the last tag (a squashed release/* -> main merge breaks
-# containment) gets a NOTE and no move.
+# tag contains but that is older than the newest release tag (vX.Y.0 or vX.Y; a squashed
+# release/* -> main merge breaks containment) gets a NOTE and no move. Hotfix tags are
+# ignored for that date test.
 #
 # It also flags a closed issue whose linked PRs (closedByPullRequestsReferences) all failed to
 # merge while a merged PR or a commit on develop or the default branch names it: the issue
@@ -30,11 +31,18 @@ shallow. Then it runs `git fetch --tags origin` (skip with --no-fetch).
 
 Prints one line per finding, then always a summary:
   MISMATCH #N: PR #P, commit <sha>, in <tag>|after <last tag>: <current|none> -> <target>
-               [; also named by PR #Q (in <tag>|after <last tag>|in no tag, merged before <last tag>), ...]
+               [; also named by PR #Q (in <tag>|after <last tag>|in no tag, merged before
+               <release tag>), ...]
   FLAG #N: closed with only unmerged linked PR(s) #A, but merged PR #P names it
   FLAG #N: closed with only unmerged linked PR(s) #A, but commit <sha> on <branch> names it
   NOTE #N: <why it was not checked or not moved>
   release check: N issues checked, M mismatches, K flagged[, C named only by a commit]
+
+A merge commit that no tag contains, but that is older than the newest release tag, gets
+"NOTE #N: PR #P merged before <release tag> but no tag contains it (squashed release?)"
+and no move. A release tag is vX.Y.0 or vX.Y; hotfix tags (vX.Y.Z, Z > 0) are ignored for
+this date test. With only hotfix tags there is no release tag, so no date test applies and
+such a commit is an ordinary "after <last tag>" mismatch.
 
 "Checked" counts the issues whose milestone was compared. An issue that only a commit
 names is checked for FLAG only, and counted apart.
@@ -196,17 +204,20 @@ version_sort() {          # stdin: tag names; stdout: version tags, lowest first
 }
 git tag --list | version_sort > "$TMP/tags" || true
 LAST_TAG=$(awk 'END { print }' "$TMP/tags")
-LAST_DATE=""
-if [ -n "$LAST_TAG" ]; then
+[ -n "$LAST_TAG" ] || echo "WARN: no release tag (vX.Y or vX.Y.Z) in this checkout; every merged issue counts as after the last release." >&2
+# The squash date test uses the newest RELEASE tag: vX.Y.0 or vX.Y. A hotfix tag (vX.Y.Z,
+# Z > 0) sits on main only, so develop work merged before it is still unreleased, not
+# squashed into it.
+RELEASE_TAG=$(grep -E '^v?[0-9]+\.[0-9]+(\.0)?$' "$TMP/tags" | awk 'END { print }' || true)
+RELEASE_DATE=""
+if [ -n "$RELEASE_TAG" ]; then
   # The tagger date of an annotated tag, else the date of the commit it points at.
-  LAST_DATE=$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$LAST_TAG")
-  [ -n "$LAST_DATE" ] || LAST_DATE=$(git log -1 --format=%ct "$LAST_TAG^{commit}")
-else
-  echo "WARN: no release tag (vX.Y or vX.Y.Z) in this checkout; every merged issue counts as after the last release." >&2
+  RELEASE_DATE=$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$RELEASE_TAG")
+  [ -n "$RELEASE_DATE" ] || RELEASE_DATE=$(git log -1 --format=%ct "$RELEASE_TAG^{commit}")
 fi
 
 # sha <TAB> rank <TAB> tag. rank is the tag's place in version order (1 = lowest); for a
-# commit no tag contains, 999998 when it is older than the last tag (a squashed release?)
+# commit no tag contains, 999998 when it is older than the newest release tag (squashed?)
 # and 999999 when it is newer; -1 when the commit is not in this clone.
 : > "$TMP/shas"
 cut -f3 "$TMP/refs" | sort -u | while IFS= read -r sha; do
@@ -219,7 +230,7 @@ cut -f3 "$TMP/refs" | sort -u | while IFS= read -r sha; do
                 "$TMP/tags" - | sort -k1,1n | awk 'NR == 1' || true)
   if [ -n "$first" ]; then
     printf '%s\t%s\n' "$sha" "$first"
-  elif [ -n "$LAST_DATE" ] && [ "$(git log -1 --format=%ct "$sha")" -le "$LAST_DATE" ]; then
+  elif [ -n "$RELEASE_DATE" ] && [ "$(git log -1 --format=%ct "$sha")" -le "$RELEASE_DATE" ]; then
     printf '%s\t999998\t\n' "$sha"
   else
     printf '%s\t999999\t\n' "$sha"
@@ -305,7 +316,7 @@ $(printf '%s\n' "$ISSUE_ROWS" | awk 'NR == 1')
 EOF
   CUR=$(printf '%s' "$NODE" | jq -r '.milestone.title // "none"')
   if [ "$rank" = 999998 ]; then
-    echo "NOTE #$num: PR #$prn merged before $LAST_TAG but no tag contains it (squashed release?); milestone left as $CUR" >> "$TMP/note"
+    echo "NOTE #$num: PR #$prn merged before $RELEASE_TAG but no tag contains it (squashed release?); milestone left as $CUR" >> "$TMP/note"
     continue
   elif [ "$rank" = 999999 ]; then
     where="after $LAST_LABEL"
@@ -336,9 +347,9 @@ EOF
   CHECKED=$((CHECKED + 1))
   CUR_NUM=$(printf '%s' "$NODE" | jq -r '.milestone.number // ""')
   [ "$CUR_NUM" != "$TNUM" ] || continue
-  ALSO=$(printf '%s\n' "$ISSUE_ROWS" | awk -F'\t' -v last="$LAST_LABEL" '
+  ALSO=$(printf '%s\n' "$ISSUE_ROWS" | awk -F'\t' -v last="$LAST_LABEL" -v rel="$RELEASE_TAG" '
     NR > 1 { printf "%s#%s (%s)", (n++ ? ", " : "; also named by PR "), $3,
-                    ($2 == 999999 ? "after " last : ($2 == 999998 ? "in no tag, merged before " last : "in " $5)) }')
+                    ($2 == 999999 ? "after " last : ($2 == 999998 ? "in no tag, merged before " rel : "in " $5)) }')
   echo "MISMATCH #$num: PR #$prn, commit ${sha:0:7}, $where: $CUR -> $TTITLE$ALSO" >> "$TMP/mismatch"
   printf '%s\t%s\n' "$num" "$TTITLE" >> "$TMP/moves"
 done < "$TMP/issues"

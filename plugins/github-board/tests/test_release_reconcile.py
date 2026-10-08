@@ -774,7 +774,7 @@ def test_hotfix_with_higher_pr_number_ships_first(tmp_path):
     assert r.returncode == 0, r.stderr
     assert lines(r, "MISMATCH") == [
         f"MISMATCH #50: PR #160, commit {repo.sha[160][:7]}, in v0.5.1: v0.6 -> v0.5.1"
-        "; also named by PR #150 (in no tag, merged before v0.5.1)"]
+        "; also named by PR #150 (after v0.5.1)"]
 
 
 def test_tag_off_every_branch_is_fetched(tmp_path):
@@ -834,3 +834,61 @@ def test_a_merge_in_the_same_second_as_the_last_tag_counts_as_before_it(tmp_path
     r, _ = run(repo, fix, "--repo", "o/r")
     assert r.returncode == 0, r.stderr
     assert lines(r, "MISMATCH") == [] and len(lines(r, "NOTE #10: PR #110 merged before")) == 1
+
+
+# ---- hotfix tags are ignored for the squash date test ---------------------------------------
+
+def hotfix(repo, pr_num, tag):
+    repo.git(repo.seed, "checkout", "-q", "main")
+    repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", f"hotfix (#{pr_num})")
+    repo.sha[pr_num] = repo.git(repo.seed, "rev-parse", "HEAD")
+    repo.git(repo.seed, "tag", "-a", tag, "-m", tag)
+    return repo.sha[pr_num]
+
+
+def test_develop_work_merged_before_a_hotfix_tag_moves_to_the_next_release(tmp_path):
+    # #150 merged after v0.5.0 and before hotfix v0.5.1: no tag holds it, and it is newer
+    # than the newest release tag (v0.5.0), so it is unreleased work, not a squash.
+    repo = Repo(tmp_path)
+    repo.release("v0.5.0")
+    prs = [pr(150, "Closes #50", repo.squash(150))]
+    hotfix(repo, 160, "v0.5.1")
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"50": issue(50, V05)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "NOTE") == []
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #50: PR #150, commit {repo.sha[150][:7]}, after v0.5.1: v0.5 -> v0.6"]
+
+
+@pytest.mark.parametrize("tag", ["v0.6.0", "v0.6"], ids=["three-part", "two-part"])
+def test_a_squashed_release_after_a_hotfix_still_gets_the_note(tmp_path, tag):
+    repo = Repo(tmp_path)
+    repo.release("v0.5.0")
+    hotfix(repo, 160, "v0.5.1")
+    prs = [pr(170, "Closes #70", repo.squash(170))]
+    squashed_release(repo, tag)
+    hotfix(repo, 180, f"{tag}.1" if tag == "v0.6" else "v0.6.1")
+    repo.publish()
+    ms = MILESTONES + [{"title": "v0.6.1", "number": 61, "state": "open"}]
+    fix = {"prs": prs, "milestones": ms, "issues": {"70": issue(70, V06)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == []
+    assert lines(r, "NOTE") == [
+        f"NOTE #70: PR #170 merged before {tag} but no tag contains it (squashed release?); "
+        "milestone left as v0.6"]
+
+
+def test_with_only_hotfix_tags_no_date_test_applies(tmp_path):
+    repo = Repo(tmp_path)
+    prs = [pr(150, "Closes #50", repo.squash(150))]
+    hotfix(repo, 160, "v0.5.1")
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"50": issue(50, V05)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "NOTE") == []
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #50: PR #150, commit {repo.sha[150][:7]}, after v0.5.1: v0.5 -> v0.6"]
