@@ -28,6 +28,11 @@ REGEX_CALL = re.compile(r"\b(test|match|capture|scan|splits?|sub|gsub)\(")
 BACKREF = re.compile(r"\\\\[1-9]|\\\\[kg][<']")
 # A possessive quantifier: *+ ++ ?+ }+ (RE2 has none). A plain a+ or [0-9]+ is one quantifier.
 POSSESSIVE = re.compile(r"[*+?}]\+")
+# Before that check, replace escaped characters (\\+ in a jq string is a literal +), then bracket
+# classes (? and + are literals there), each with a plain X so the text around it stays apart. A test heuristic: a ] first in a class is not handled,
+# and a false positive fails loudly.
+ESCAPED = re.compile(r"\\\\.")
+CLASS = re.compile(r"\[[^\]]*\]")
 KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?"
 
 
@@ -46,7 +51,7 @@ def scan(text):
                 bad.append((i, f"look-around {token}"))
         if REGEX_CALL.search(line) and BACKREF.search(line):
             bad.append((i, "backreference"))
-        if REGEX_CALL.search(line) and POSSESSIVE.search(line):
+        if REGEX_CALL.search(line) and POSSESSIVE.search(CLASS.sub("X", ESCAPED.sub("X", line))):
             bad.append((i, "possessive quantifier"))
     return bad
 
@@ -89,6 +94,9 @@ def test_the_scan_catches_each_forbidden_form(snippet, problem):
     'x | capture("(?<issue>[0-9]+)")',
     'x | test("(?i)(?<name>close[sd]?) (?<num>[0-9]+)")',
     'x | test("(?P<issue>[0-9]+)")',
+    'x | test("[?+]+")',
+    'x | test("[*]+")',
+    'x | test("\\\\++")',
     'x | test("a+b*c?[0-9]+\\\\s+x{2}y+?")',
 ])
 def test_the_scan_allows_a_named_capture(snippet):
