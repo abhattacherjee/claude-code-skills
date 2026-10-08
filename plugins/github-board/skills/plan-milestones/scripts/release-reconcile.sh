@@ -149,11 +149,13 @@ BASES="develop"
 # tests one issue number. Here the number is captured instead. A keyword, an optional
 # colon, then #N, this repo's owner/repo#N, or this repo's issue URL. GitHub records no
 # closing link for a merge to a non-default base, so the body is the only record.
-# The keyword needs a word boundary on its left: "Encloses #10" is not "closes #10". The
-# issue URL uses the host this checkout was validated against (github.com, or $GH_HOST).
+# The keyword needs a word boundary on its left: "Encloses #10" is not "closes #10". It is
+# written (^|[^A-Za-z0-9_]), not a lookbehind, because find-promotable.sh runs the same rule
+# through gh --jq, whose Go regexp (RE2) has no look-around. The issue number stays the last
+# capture group (captures[-1]). The issue URL uses the host this checkout was validated against (github.com, or $GH_HOST).
 REPO_RE=$(printf '%s' "$REPO" | sed 's/[.]/\\./g')
 HOST_RE=$(printf '%s' "$WANT_HOST" | sed 's/[.]/\\./g')
-CLOSE_RE='(?i)(?<![A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+(('"$REPO_RE"')?#|https?://'"$HOST_RE"'/'"$REPO_RE"'/issues/)([0-9]+)\b'
+CLOSE_RE='(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+(('"$REPO_RE"')?#|https?://'"$HOST_RE"'/'"$REPO_RE"'/issues/)([0-9]+)\b'
 
 : > "$TMP/refs"           # issue <TAB> pr <TAB> sha, one per merged PR naming the issue
 for base in $BASES; do

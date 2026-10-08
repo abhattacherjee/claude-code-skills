@@ -22,6 +22,10 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `find-promotable.sh`'s fallback read a closing keyword inside a longer word: a PR body
   saying "Encloses #42" credited the PR to #42. The keyword is now a whole word, the same
   rule as plan-milestones' `release-reconcile.sh`. (#204)
+- The boundary is written `(^|[^A-Za-z0-9_])`, not a lookbehind, because gh's jq (gojq,
+  with Go's RE2 regexps) has no lookbehind: real gh failed every discovery query with
+  `invalid named capture`. A test now scans every script that uses `--jq` for
+  look-around and backreferences, and compiles the real filter with Go's regexp. (#204)
 
 ## [2.1.0] — 2026-10-07
 
