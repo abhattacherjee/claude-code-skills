@@ -2,7 +2,7 @@
 name: move-card
 description: "Moves a GitHub issue or PR's Project (v2) board card to a target Status column via a deterministic script (scripts/board-move.sh). Use when: (1) moving an issue to 'In Progress' when work starts, (2) moving a card to 'Development Complete'/'In Review'/'Done in develop' when its PR merges, (3) any mid-lifecycle Project v2 status change that promote-shipped (release->Done only) does not cover, (4) listing a board's available Status columns, (5) 'board move' or /github-board-move (the old name of this skill). Covers: projectsV2 board discovery, Status field/option lookup, updateProjectV2ItemFieldValue, fuzzy column matching, --add for items not yet on the board, project auth-scope checks."
 metadata:
-  version: 2.0.0
+  version: 2.1.0
 ---
 
 # GitHub Board Move
@@ -42,6 +42,8 @@ This is the tooling for steps 3 (-> In Progress) and 6 (-> post-merge column) of
 - **Projects v2 only** (GraphQL `projectsV2`). Classic (REST) projects are not supported.
 - **The option id is a plain string** — passed to the mutation via `gh api -f oid=` (not `-F`); a typed `-F` errors.
 - **The item must be on the board.** If the issue/PR is not a card yet, pass `--add` (runs `addProjectV2ItemById`); otherwise the script errors with that hint.
+- **Post-merge moves set the milestone.** Moving an `--issue` to a post-merge column also sets its milestone to the next-release one, and prints `milestone: <current|none> -> <title>` or `milestone: unchanged (<title>)`. `--dry-run` prints `would set milestone: …` and writes nothing. A post-merge column is one whose resolved name is "Development Complete", "Dev Complete" or "Done in develop" (any case). `move_card.post_merge_columns` in the github-board config replaces those names, and an empty list turns this off. `--pr` moves and other columns never touch the milestone.
+- **The next-release milestone** is `milestones.next_release["owner/repo"]` in `~/.config/github-board/config.json` when set. Otherwise it is the open milestone with the lowest version (`vX.Y` or `vX.Y.Z`), sorted by version, not milestone number, and a note names the pick. A configured title that is missing or closed, no candidate, an unreadable milestone list, or a failed write prints a warning and sets nothing. The card moves first, and the exit code stays the move's.
 - Idempotent — re-running for the same option is a no-op.
 - **Lookups are cached** for 7 days under `~/.cache/github-board/` (board list and Status options). A failed move, or a `--to` column missing from the cached options, triggers one automatic refetch; `--no-cache` skips the cache (use it right after linking a second board to the repo).
 

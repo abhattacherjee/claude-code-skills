@@ -2,6 +2,11 @@
 
 All notable changes to the **move-card** skill (was `github-board-move`) are documented here.
 
+## [2.1.0] - 2026-10-07
+
+### Added
+- An `--issue` moved to a post-merge column also gets the next-release milestone: `milestones.next_release["owner/repo"]` from the github-board config, else the open milestone with the lowest version (`vX.Y` or `vX.Y.Z`, sorted by version, not number). It prints `milestone: <current|none> -> <title>` or `milestone: unchanged (<title>)`; `--dry-run` prints `would set milestone: …` and writes nothing. A post-merge column's resolved name is "Development Complete", "Dev Complete" or "Done in develop" (any case), or one in `move_card.post_merge_columns`, which replaces those names (an empty list turns this off). `--pr` moves and other columns make no milestone call. The card moves first. No candidate, a wrong configured title, an unreadable milestone list, a failed write, or a reply naming another milestone prints a warning and keeps the move's exit code. The write is `gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`, and the current milestone comes from the item lookup, not an extra call. (#204)
+
 ## [2.0.0] - 2026-10-02
 
 ### Added

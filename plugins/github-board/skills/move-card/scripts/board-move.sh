@@ -9,6 +9,10 @@
 # the target column is not in the cached options, while cached ids are in use, the script drops
 # them and re-runs itself once with fresh lookups. --no-cache skips the cache.
 #
+# Moving an ISSUE to a post-merge column also sets its milestone to the next-release one
+# (lib/config.py next-release-milestone, #204). The card moves first; a milestone problem only
+# warns and never changes the exit code. --pr moves and other columns touch no milestone.
+#
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../lib/config.sh"
 ORIG_ARGS=("$@")
@@ -37,6 +41,14 @@ OPTIONS:
   --dry-run           Show the resolved move without applying it.
   --no-cache          Skip the 7-day board/Status cache (~/.cache/github-board).
   -h, --help          This help.
+
+MILESTONE:
+  An --issue moved to a post-merge column also gets the next-release milestone:
+  milestones.next_release["owner/repo"] in the github-board config, else the open
+  milestone with the lowest version (vX.Y or vX.Y.Z). Post-merge columns are those
+  named (any case) "Development Complete", "Dev Complete" or "Done in develop", or
+  the list in move_card.post_merge_columns, which replaces those names. The card
+  moves first; a milestone problem prints a warning and keeps the exit code.
 
 EXAMPLES:
   board-move.sh --issue 28 --to "In Progress"
@@ -183,11 +195,73 @@ ONAME=$(echo "$FIELD_JSON" | jq -r --arg id "$OID" '.options[]|select(.id==$id).
 if [[ -n "$ISSUE" ]]; then KIND=issue; NUM="$ISSUE"; else KIND=pullRequest; NUM="$PR"; fi
 [[ "$NUM" =~ ^[0-9]+$ ]] || die "issue/PR number must be numeric (got: $NUM)."
 # Note: projectItems is capped at 100 (un-paginated). An item on >100 boards is not supported.
-CONTENT=$(gql "query(\$o:String!,\$n:String!,\$num:Int!){repository(owner:\$o,name:\$n){$KIND(number:\$num){id projectItems(first:100){nodes{id project{number}}}}}}" \
+CONTENT=$(gql "query(\$o:String!,\$n:String!,\$num:Int!){repository(owner:\$o,name:\$n){$KIND(number:\$num){id milestone{number title} projectItems(first:100){nodes{id project{number}}}}}}" \
   -f o="$OWNER" -f n="$NAME" -F num="$NUM")
 CONTENT_ID=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.id // empty")
 [[ -n "$CONTENT_ID" ]] || die "$KIND #$NUM not found on $REPO."
 IID=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.projectItems.nodes | map(select(.project.number==$PROJECT))[0].id // empty")
+
+# --- next-release milestone (#204) ------------------------------------------------------
+# Only an issue moved to a post-merge column. The column is judged by its RESOLVED name, so
+# `--to complete` that resolves to "Development Complete" counts. A set config list replaces
+# the built-in names; an empty list turns this off.
+MS_POST_MERGE=false
+if [[ "$KIND" == issue ]]; then
+  if ! PM_COLS=$(gb_config_get move_card.post_merge_columns --optional 2>&1); then
+    echo "Warning: milestone not set: cannot read move_card.post_merge_columns: $PM_COLS" >&2
+  else
+    [[ -n "$PM_COLS" ]] || PM_COLS='["development complete","dev complete","done in develop"]'
+    if [[ "$(printf '%s' "$PM_COLS" | jq -r --arg n "$ONAME" '
+          def norm: ascii_downcase | gsub("^\\s+|\\s+$"; "");
+          ($n | norm) as $want
+          | if type == "array" and ([.[] | select(type == "string") | norm | select(. == $want)]
+                                     | length) > 0
+            then "yes" else "no" end')" == yes ]]; then
+      MS_POST_MERGE=true
+    fi
+  fi
+fi
+MS_CUR_NUM=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.milestone.number // empty")
+MS_CUR=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.milestone.title // \"none\"")
+
+# milestone_step dry|apply. Never fails the script: every problem is a warning.
+milestone_step() {
+  $MS_POST_MERGE || return 0
+  local out rc=0 num title got errf
+  # stderr passes through: the fallback note names the pick, and a failure says why.
+  out=$(gb_next_release --repo "$REPO") || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "Warning: milestone not set: could not read the next-release milestone of $REPO (see above)." >&2
+    return 0
+  fi
+  if [[ -z "$out" ]]; then
+    echo "Warning: milestone not set: $REPO has no next-release milestone (see above)." >&2
+    return 0
+  fi
+  num=${out%%$'\t'*}; title=${out#*$'\t'}
+  if [[ "$num" == "$MS_CUR_NUM" ]]; then
+    if [[ "$1" == dry ]]; then echo "[dry-run] milestone: unchanged ($title)"; else echo "milestone: unchanged ($title)"; fi
+    return 0
+  fi
+  if [[ "$1" == dry ]]; then
+    echo "[dry-run] would set milestone: $MS_CUR -> $title"
+    return 0
+  fi
+  # REST by number, like apply-plan.sh and apply-promotions.sh. The reply must name the number
+  # sent. On an HTTP error gh prints the response body on stdout, so keep both streams.
+  errf=$(mktemp)
+  rc=0
+  got=$(gh api -X PATCH "repos/$REPO/issues/$NUM" -F milestone="$num" --jq .milestone.number 2>"$errf") || rc=$?
+  if [[ $rc -eq 0 && "$got" == "$num" ]]; then
+    echo "milestone: $MS_CUR -> $title"
+  elif [[ $rc -ne 0 ]]; then
+    echo "Warning: milestone not set: $(tr '\n' ' ' < "$errf")$(printf '%s' "$got" | tr '\n' ' ' | cut -c1-300) (the card still moved)" >&2
+  else
+    echo "Warning: milestone not set: GitHub reports milestone '$(printf '%s' "$got" | tr '\n' ' ')', not $num (the card still moved)" >&2
+  fi
+  rm -f "$errf"
+  return 0
+}
 
 if [[ -z "$IID" ]]; then
   # The board number may come from a cached list that is out of date (the card sits on a board
@@ -199,6 +273,7 @@ if [[ -z "$IID" ]]; then
   fi
   if $DRY_RUN; then
     echo "[dry-run] would add $KIND #$NUM to board #$PROJECT, then set Status -> \"$ONAME\"."
+    milestone_step dry
     exit 0
   fi
   if ! IID=$(gql 'mutation($pid:ID!,$cid:ID!){addProjectV2ItemById(input:{projectId:$pid,contentId:$cid}){item{id}}}' \
@@ -212,6 +287,7 @@ fi
 
 if $DRY_RUN; then
   echo "[dry-run] would set $KIND #$NUM -> \"$ONAME\" on $REPO board #$PROJECT (item $IID)."
+  milestone_step dry
   exit 0
 fi
 
@@ -221,3 +297,4 @@ if ! OUT=$(gql 'mutation($pid:ID!,$iid:ID!,$fid:ID!,$oid:String!){updateProjectV
   die "move failed: $OUT"
 fi
 echo "Moved $KIND #$NUM -> \"$ONAME\" on $REPO board #$PROJECT."
+milestone_step apply
