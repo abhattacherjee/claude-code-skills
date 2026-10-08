@@ -23,10 +23,28 @@ CLI (bash scripts call it through lib/config.sh):
   config.py cache drop PART... | drop-scope PART... | drop-containing TEXT
   config.py cache key PART...                     print the file name the key tuple maps to
                                          A key is a tuple of PARTs, e.g. move-boards OWNER REPO.
+  config.py next-release-milestone --repo O/R [--cache FILE] [--after-tag TAG]
+                                         print "<number>\t<title>" of the milestone merged work
+                                         belongs to: milestones.next_release["O/R"] when set,
+                                         else the open milestone with the lowest version (vX.Y
+                                         or vX.Y.Z, sorted by version, not number) above the
+                                         newest version tag (gh api repos/O/R/tags, or
+                                         --after-tag TAG; "" means no tags). With no
+                                         candidate, or a configured title that is missing,
+                                         closed, or at or below that tag, it prints nothing
+                                         and warns on stderr (exit 0)
+  config.py milestone-for-tag --repo O/R --tag TAG [--cache FILE]
+                                         print "<number>\t<title>" of TAG's release milestone
+                                         (exact vX.Y.Z title, else vX.Y; leading v optional), or
+                                         "skip\t<reason>" when none, two, or TAG is no version
+  Both read gh api repos/O/R/milestones?state=all&per_page=100 --paginate. --cache FILE reads
+  the list from FILE when it exists, else writes the list there after a good read.
 
-Exit codes: 0 ok; 1 cache miss; 2 invalid config, payload or usage (the key is named), or the
-config path is a dangling symlink; 3 init refused because the config already holds a different
-value (pass --force); 4 no config file, or no section yet for the skill asking (run its init).
+Exit codes: 0 ok; 1 cache miss; 2 invalid config, payload or usage (the key is named), the
+config path is a dangling symlink, or the milestone or tag list could not be read (failed,
+empty or malformed; never read as "none"); 3 init refused because the config already holds a
+different value (pass --force); 4 no config file, or no section yet for the skill asking (run
+its init).
 Standard library only; Python 3.9+.
 """
 import argparse
@@ -34,6 +52,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -57,6 +76,11 @@ RATE_RE = re.compile(r"rate limit|RATE_LIMIT", re.I)
 SCOPE_RE = re.compile(r"required scopes|INSUFFICIENT_SCOPES|missing required scopes?|"
                       r"lacks the project scope", re.I)
 INIT_HINT = "run `plan-week init` (or `create-board init` for the board template)"
+# OWNER/REPO, as it goes into a REST path. _repo_ok also refuses a "." or ".." part.
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# A release milestone title or tag: vX.Y or vX.Y.Z, and the v is optional. It uses [0-9],
+# not \d, because \d also matches digits from other alphabets.
+VERSION_TITLE_RE = re.compile(r"^v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?$")
 
 
 class ConfigError(Exception):
@@ -200,6 +224,40 @@ def _validate_prune_branches(pb: Any) -> None:
         _str_list(pb["tracking_issue_authors"], f"{p}.tracking_issue_authors", AUTHOR_RE)
 
 
+def _repo_ok(repo: Any) -> bool:
+    return (isinstance(repo, str) and REPO_RE.fullmatch(repo) is not None
+            and not any(part in (".", "..") for part in repo.split("/")))
+
+
+def _validate_milestones(ms: Any) -> None:
+    p = "milestones"
+    if not isinstance(ms, dict):
+        raise ConfigError(f"{p} must be an object", p)
+    if "next_release" not in ms:
+        return
+    nr = ms["next_release"]
+    kp = f"{p}.next_release"
+    # Keyed by repo, because one config serves every repo: {"owner/repo": "v4.1"}.
+    if not isinstance(nr, dict):
+        raise ConfigError(f'{kp} must be an object of "owner/repo": "milestone title"', kp)
+    seen = {}
+    for repo, title in nr.items():
+        if not _repo_ok(repo):
+            raise ConfigError(f"{kp}: key {repo!r} is not owner/repo", kp)
+        _str(title, f"{kp}[{repo!r}]")
+        if repo.lower() in seen:
+            raise ConfigError(f"{kp}: {seen[repo.lower()]!r} and {repo!r} name the same repo", kp)
+        seen[repo.lower()] = repo
+
+
+def _validate_move_card(mc: Any) -> None:
+    p = "move_card"
+    if not isinstance(mc, dict):
+        raise ConfigError(f"{p} must be an object", p)
+    if "post_merge_columns" in mc:
+        _str_list(mc["post_merge_columns"], f"{p}.post_merge_columns")
+
+
 def validate(cfg: Any, require: Iterable[str] = ()) -> dict:
     if not isinstance(cfg, dict):
         raise ConfigError("the config must be a JSON object", "<file>")
@@ -213,6 +271,10 @@ def validate(cfg: Any, require: Iterable[str] = ()) -> dict:
         _validate_create_board(cfg["create_board"])
     if "prune_branches" in cfg:
         _validate_prune_branches(cfg["prune_branches"])
+    if "milestones" in cfg:
+        _validate_milestones(cfg["milestones"])
+    if "move_card" in cfg:
+        _validate_move_card(cfg["move_card"])
     for section in require:
         if section not in cfg:
             # The file exists (another skill's init wrote it) but this skill is not set up yet:
@@ -449,6 +511,243 @@ def cache_drop_containing(text: str) -> int:
     return n
 
 
+# ---- milestones (#204) ------------------------------------------------------------
+#
+# The one place that decides which milestone a piece of work belongs to. move-card,
+# promote-shipped (apply-promotions.sh) and plan-milestones (release-reconcile.sh) all call
+# it, so the tag rules and the next-release rule cannot drift apart.
+
+class MilestoneListError(Exception):
+    """The milestone list could not be read. Never the same as an empty list."""
+
+
+def _one_line(text: str, limit: int = 160) -> str:
+    return " ".join(text.split())[:limit]
+
+
+def _out(text: Any) -> str:
+    """A title as one stdout field: a tab or newline in it would split the row."""
+    return re.sub(r"[\t\r\n]", " ", str(text))
+
+
+def _parse_pages(text: str, what: str, repo: str) -> list:
+    """gh --paginate prints one JSON array per page, merged or back to back. Every page must
+    be an array of objects; anything else is a failure, never a shorter list."""
+    if not text.strip():
+        raise MilestoneListError(f"could not list {what} for {repo}: gh returned no output "
+                                 "(it prints [] when there are none)")
+    dec = json.JSONDecoder()
+    pos, out = 0, []
+    while True:
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        if pos >= len(text):
+            break
+        try:
+            page, pos = dec.raw_decode(text, pos)
+        except ValueError as e:
+            raise MilestoneListError(f"could not list {what} for {repo}: the reply is not JSON ({e})")
+        if not isinstance(page, list):
+            raise MilestoneListError(f"could not list {what} for {repo}: a page is not a list "
+                                     f"({_one_line(json.dumps(page))})")
+        if not all(isinstance(m, dict) for m in page):
+            raise MilestoneListError(f"could not list {what} for {repo}: a page is not a list of "
+                                     f"{what}")
+        out.extend(page)
+    return out
+
+
+def parse_milestone_pages(text: str, repo: str) -> list:
+    return [{"title": m.get("title"), "number": m.get("number"), "state": m.get("state")}
+            for m in _parse_pages(text, "milestones", repo)]
+
+
+def _gh_pages(path: str, what: str, repo: str) -> str:
+    try:
+        r = subprocess.run(["gh", "api", path, "--paginate"], capture_output=True, text=True)
+    except OSError as e:
+        raise MilestoneListError(f"could not list {what} for {repo}: cannot run gh ({e})")
+    if r.returncode != 0:
+        raise MilestoneListError(f"could not list {what} for {repo} (gh exit {r.returncode}): "
+                                 f"{_one_line(r.stderr + ' ' + r.stdout)}")
+    return r.stdout
+
+
+def newest_version_tag(repo: str) -> Optional[str]:
+    """The highest version-shaped tag of repo (vX.Y or vX.Y.Z, v optional), read from
+    gh api repos/O/R/tags on every page, so move-card needs no checkout. None: no such tag.
+    A failed read raises; it never means "no tags"."""
+    tags = [t.get("name") for t in _parse_pages(_gh_pages(f"repos/{repo}/tags", "tags", repo),
+                                                 "tags", repo)]
+    versions = [(k, t) for t in tags for k in [_version_key(t)] if k is not None]
+    return max(versions)[1] if versions else None
+
+
+def fetch_milestones(repo: str) -> list:
+    """Every milestone of repo, all states, all pages. No --jq: gh applies it per page."""
+    return parse_milestone_pages(
+        _gh_pages(f"repos/{repo}/milestones?state=all&per_page=100", "milestones", repo), repo)
+
+
+def load_milestones(repo: str, cache: Optional[str] = None) -> list:
+    """The list from the run's cache file when given and present, else from gh. A failed read
+    raises and writes nothing, so a later call retries instead of reading an empty list."""
+    if cache:
+        try:
+            cached = json.loads(Path(cache).read_text())
+            if isinstance(cached, list):
+                return cached
+        except (OSError, ValueError):
+            pass
+    found = fetch_milestones(repo)
+    if cache:
+        try:
+            tmp = Path(f"{cache}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(found))
+            os.replace(tmp, cache)
+        except OSError:
+            pass                 # a cache must never fail its caller
+    return found
+
+
+def _version_key(title: Any) -> Optional[tuple]:
+    m = VERSION_TITLE_RE.fullmatch(title) if isinstance(title, str) else None
+    if m is None:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+def _has_number(m: dict) -> bool:
+    return isinstance(m.get("number"), int) and not isinstance(m.get("number"), bool)
+
+
+def _tag_levels(tag: str) -> Optional[tuple]:
+    """(exact, minor) titles to try for a tag, without the leading v; minor is "" for a
+    two-part tag. None when the tag is not vX.Y.Z or vX.Y."""
+    core = tag[1:] if tag.startswith("v") else tag
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", core):
+        return core, core.rsplit(".", 1)[0]
+    if re.fullmatch(r"[0-9]+\.[0-9]+", core):
+        return core, ""
+    return None
+
+
+def milestone_for_tag(milestones: list, tag: str) -> tuple:
+    """("hit", number, title) or ("skip", reason). The rules of PR A (#203): the exact X.Y.Z
+    title first, then X.Y, leading v optional on both sides; more than one match at the first
+    level that has any is refused, never resolved by picking one."""
+    levels = _tag_levels(tag)
+    if levels is None:
+        return ("skip", f"tag '{_out(tag)}' is not vX.Y.Z or vX.Y")
+    exact, minor = levels
+
+    def pick(t):
+        out = []
+        for m in milestones:
+            title = m.get("title") or ""
+            if isinstance(title, str) and (title[1:] if title.startswith("v") else title) == t:
+                out.append(m)
+        return out
+
+    hits = pick(exact)
+    if not hits and minor:
+        hits = pick(minor)
+    if len(hits) == 1 and _has_number(hits[0]):
+        return ("hit", hits[0]["number"], hits[0]["title"])
+    if not hits:
+        return ("skip", f"no milestone titled {exact}{' or ' + minor if minor else ''} for {tag}")
+    names = ", ".join(f"{_out(m.get('title'))} #{m.get('number')}" for m in hits)
+    return ("skip", f"ambiguous: {names} for {tag}")
+
+
+def configured_next_release(cfg: Optional[dict], repo: str) -> Optional[str]:
+    """milestones.next_release[repo]. The repo name matches in any case, as on GitHub."""
+    table = ((cfg or {}).get("milestones") or {}).get("next_release") or {}
+    for key, title in table.items():
+        if key.lower() == repo.lower():
+            return title
+    return None
+
+
+def next_release_milestone(milestones: list, repo: str, choice: Optional[str],
+                           newest_tag: Optional[str] = None) -> tuple:
+    """((number, title) or None, [stderr lines]). Never guesses silently: a fallback pick says
+    what it picked, and a configured title that is wrong sets nothing. A milestone whose
+    version is at or below newest_tag has shipped, even when it was left open, so it is never
+    the next release."""
+    key = f'milestones.next_release["{repo}"]'
+    shipped = _version_key(newest_tag) if newest_tag else None
+
+    def done(title):
+        k = _version_key(title)
+        return shipped is not None and k is not None and k <= shipped
+
+    if choice is not None:
+        same = [m for m in milestones if m.get("title") == choice]
+        if not same:
+            return None, [f"WARN: {key} is {choice!r}, but {repo} has no milestone titled "
+                          f"{choice!r}; no next-release milestone set. Fix the config."]
+        if len(same) > 1 or not _has_number(same[0]):
+            return None, [f"WARN: {key} is {choice!r}, which names "
+                          f"{len(same)} milestones in {repo}; no next-release milestone set."]
+        if same[0].get("state") != "open":
+            return None, [f"WARN: {key} is {choice!r}, but that milestone is closed; "
+                          "no next-release milestone set. Fix the config."]
+        if done(choice):
+            return None, [f"WARN: {key} is {choice!r}, but {newest_tag} already shipped it; "
+                          "no next-release milestone set. Fix the config."]
+        return (same[0]["number"], choice), []
+    versions = [(k, m) for m in milestones
+                for k in [_version_key(m.get("title"))]
+                if k is not None and m.get("state") == "open" and _has_number(m)
+                and not done(m.get("title"))]
+    if not versions:
+        above = f" above {newest_tag}" if newest_tag else ""
+        return None, [f"WARN: {repo} has no open milestone titled vX.Y or vX.Y.Z{above}; no "
+                      "next-release milestone (set milestones.next_release to choose)."]
+    low = min(k for k, _ in versions)
+    tied = [m for k, m in versions if k == low]
+    if len(tied) > 1:
+        names = ", ".join(f"{_out(m['title'])} #{m['number']}" for m in tied)
+        return None, [f"WARN: the lowest open version in {repo} is ambiguous: {names}; no "
+                      "next-release milestone (set milestones.next_release to choose)."]
+    pick = tied[0]
+    return (pick["number"], pick["title"]), [
+        f"next-release milestone: {_out(pick['title'])} (lowest open version; set "
+        "milestones.next_release to choose)"]
+
+
+def _milestone_cli(args) -> int:
+    if not _repo_ok(args.repo):
+        raise ConfigError(f"--repo must be OWNER/REPO with no . or .. part, got {args.repo!r}",
+                          "--repo")
+    if getattr(args, "after_tag", None) and _version_key(args.after_tag) is None:
+        raise ConfigError(f"--after-tag must be vX.Y or vX.Y.Z, got {args.after_tag!r}",
+                          "--after-tag")
+    if args.cmd == "milestone-for-tag":
+        # A tag that is not a version needs no list.
+        milestones = [] if _tag_levels(args.tag) is None else load_milestones(args.repo, args.cache)
+        found = milestone_for_tag(milestones, args.tag)
+        print(f"{found[1]}\t{_out(found[2])}" if found[0] == "hit" else f"skip\t{_out(found[1])}")
+        return 0
+    try:
+        cfg = load()
+    except ConfigMissing:
+        cfg = None
+    choice = configured_next_release(cfg, args.repo)
+    if args.after_tag is None:
+        newest = newest_version_tag(args.repo)
+    else:
+        newest = args.after_tag or None           # "" = the caller knows there are no tags
+    pick, notes = next_release_milestone(load_milestones(args.repo, args.cache), args.repo,
+                                         choice, newest)
+    for line in notes:
+        print(line, file=sys.stderr)
+    if pick is not None:
+        print(f"{pick[0]}\t{_out(pick[1])}")
+    return 0
+
+
 # ---- CLI ------------------------------------------------------------------------
 
 def _print_value(value: Any, lines: bool) -> None:
@@ -520,6 +819,16 @@ def _parser() -> argparse.ArgumentParser:
     for op in ("key", "put", "drop", "drop-scope"):
         csub.add_parser(op).add_argument("key", nargs="+")
     csub.add_parser("drop-containing").add_argument("text")
+    nr = sub.add_parser("next-release-milestone",
+                        help="print the milestone merged work belongs to (number<TAB>title)")
+    nr.add_argument("--repo", required=True)
+    nr.add_argument("--cache", help="read the milestone list from FILE, or write it there")
+    nr.add_argument("--after-tag", help="the newest release tag; skips reading the repo's tags "
+                                        "(empty: the repo has none)")
+    mt = sub.add_parser("milestone-for-tag", help="print a release tag's milestone (number<TAB>title)")
+    mt.add_argument("--repo", required=True)
+    mt.add_argument("--tag", required=True)
+    mt.add_argument("--cache", help="read the milestone list from FILE, or write it there")
     return ap
 
 
@@ -551,9 +860,14 @@ def main(argv=None) -> int:
             return _cache_cli(args)
         elif args.cmd == "classify-error":
             print(error_kind(sys.stdin.read()))
+        elif args.cmd in ("next-release-milestone", "milestone-for-tag"):
+            return _milestone_cli(args)
     except ConfigError as e:
         print(f"github-board: error: {e}", file=sys.stderr)
         return e.exit_code
+    except MilestoneListError as e:
+        print(f"github-board: error: {e}", file=sys.stderr)
+        return 2
     return 0
 
 

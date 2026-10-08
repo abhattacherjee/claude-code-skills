@@ -11,6 +11,12 @@
 #   gb_cache_key PART...          print the file name the tuple maps to
 #   gb_cache_drop_containing TEXT forget every entry whose JSON contains TEXT (a stale id)
 #   gb_error_kind TEXT            print rate, scope or other (a refetch never fixes rate or scope)
+#   gb_next_release --repo O/R [--cache FILE]
+#                                 print "<number>\t<title>" of the next-release milestone, or
+#                                 nothing (a warning on stderr); exit 2 when the list is unreadable
+#   gb_milestone_for_tag --repo O/R --tag TAG [--cache FILE]
+#                                 print "<number>\t<title>" of TAG's release milestone, or
+#                                 "skip\t<reason>"; exit 2 when the list is unreadable
 # GB_NO_CACHE=1 (--no-cache): never read or write the cache.
 # GB_CACHE_REFRESH=1: skip reads but write fresh entries (the one refetch after a stale id).
 GB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,3 +47,7 @@ gb_cache_drop_containing() {
 }
 
 gb_error_kind() { printf '%s' "$1" | "$GB_PYTHON" "$GB_LIB_DIR/config.py" classify-error; }
+
+gb_next_release() { "$GB_PYTHON" "$GB_LIB_DIR/config.py" next-release-milestone "$@"; }
+
+gb_milestone_for_tag() { "$GB_PYTHON" "$GB_LIB_DIR/config.py" milestone-for-tag "$@"; }

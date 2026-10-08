@@ -11,7 +11,7 @@ One milestone field carries two meanings. Work starts in the milestone of its **
 ## Decisions (2026-10-07)
 
 - **Two PRs.** PR A fixes milestones where the release is already known: `apply-plan.sh` and `promote-shipped`. PR B adds the next-release helper, move-card and plan-milestones step 0.
-- **The next-release milestone** is `milestones.next_release` in `~/.config/github-board/config.json` when set. Otherwise it is the open milestone with the lowest version, `vX.Y` or `vX.Y.Z`. It is sorted by version, not by milestone number: in this repo v4.2 is #9 and v4.1 is #13. With no candidate, the helper warns and returns nothing. No marker goes in the milestone description, because plan-milestones prints the description as the theme.
+- **The next-release milestone** is `milestones.next_release["O/R"]` in `~/.config/github-board/config.json` when set. It is a map keyed by repo, because one config serves every repo (corrected while planning PR B). Otherwise it is the open milestone with the lowest version, `vX.Y` or `vX.Y.Z`. It is sorted by version, not by milestone number: in this repo v4.2 is #9 and v4.1 is #13. With no candidate, the helper warns and returns nothing. No marker goes in the milestone description, because plan-milestones prints the description as the theme.
 - **/ship is out of scope.** Its post-merge step uses `~/.claude/skills/ship/scripts/board_move.py` (claude-code-config), not move-card. A claude-code-config issue switches it over once PR B lands.
 
 ## PR A: write the release milestone where the release is known
@@ -55,6 +55,9 @@ One milestone field carries two meanings. Work starts in the milestone of its **
 
 ## Limits
 
-- A squashed `release/* -> main` breaks tag containment. promote-shipped already documents this. Step 0 reports such issues as "after the last tag", not as wrong.
+- A squashed `release/* -> main` breaks tag containment. promote-shipped already documents this. Step 0 compares the merge commit's date with the date of the newest release tag (`vX.Y.0` or `vX.Y`). Merged before it: a NOTE, and the milestone stays. Merged after it: the next-release milestone, as usual. The date test applies only when the release tag's commit is not a merge: a merge release holds its branch's history, so a commit it lacks was merged to develop after the release branch was cut. Hotfix tags (`vX.Y.Z`, Z > 0) are ignored for this date test, because develop work merged before a hotfix is still unreleased. With only hotfix tags, no date test applies. Known false NOTE: develop work merged during a squashed release's window gets the NOTE; it fails safe, with no write.
+- Closing keywords are whole words ("Encloses #10" does not count), and an issue URL counts only on the validated host (github.com, or `$GH_HOST`).
+- Step 0 refuses a shallow clone (exit 2): a commit it holds can look as if no tag contains it.
+- The next-release fallback skips any milestone whose version is at or below the newest version tag, so a shipped milestone left open is never picked. move-card reads the tags with `gh api repos/O/R/tags`; step 0 passes its local newest tag.
 - promote-shipped finds releases through GitHub Releases ordered by publish date, so a tag with no Release is not seen. That is unchanged here.
 - CI runs the github-board tests on ubuntu only (bash 5). The scripts stay bash 3.2 safe, and the local runs use 3.2.

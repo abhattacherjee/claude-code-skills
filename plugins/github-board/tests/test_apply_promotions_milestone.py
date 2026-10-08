@@ -418,3 +418,22 @@ def test_dry_run_prints_why_the_milestone_is_skipped(tmp_path, why, kw, reason):
     line = [ln for ln in r.stdout.splitlines() if "milestone: skipped" in ln]
     assert line and reason in line[0], r.stdout
     assert "Milestones: 0 to set, 0 unchanged, 1 skipped, 0 cannot check" in r.stdout
+
+
+# ---- PR #206 review round 1 ---------------------------------------------------------------
+
+def test_a_skip_warns_once_per_repo_and_tag(tmp_path):
+    cands = [_candidate("PVTI_1", 7, milestone=V41), _candidate("PVTI_2", 8, milestone=V41),
+             _candidate("PVTI_3", 9, milestone=V41)]
+    r, calls = _run(tmp_path, "--apply", candidates=cands, tag="v9.0.0")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stderr.count("no milestone titled 9.0.0 or 9.0 for v9.0.0") == 1, r.stderr
+    assert "Milestones: 0 set, 0 unchanged, 3 skipped, 0 failed" in r.stdout
+
+
+def test_a_non_version_tag_is_skipped_even_when_the_list_is_unreadable(tmp_path):
+    # The tag is checked before the list is read, so it is a skip, not a failure (#204).
+    r, calls = _run(tmp_path, "--apply", "--release-tag", "nightly-1", MS_FAIL="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _ms_lists(calls) == []
+    assert "Milestones: 0 set, 0 unchanged, 1 skipped, 0 failed" in r.stdout

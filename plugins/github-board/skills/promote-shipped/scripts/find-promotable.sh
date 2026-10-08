@@ -252,7 +252,9 @@ discover_prs_for_issue() {
   # Regex-escape the dots; the other allowed characters are literal in a regex.
   repo_re=$(printf '%s' "$repo" | sed 's/[.]/\\\\./g')
   local jq_filter
-  # The closing forms GitHub accepts: a keyword, an optional colon, then #N, owner/repo#N or
+  # The closing forms GitHub accepts: a keyword (a whole word: "Encloses #N" does not count;
+  # the boundary is (^|[^A-Za-z0-9_]) because gh --jq uses Go RE2, which has no lookbehind),
+  # an optional colon, then #N, owner/repo#N or
   # the issue's full URL (https://github.com/owner/repo/issues/N). Only THIS repo's
   # owner/repo#N or URL counts; a URL for another repo's issue closes that issue, not ours.
   # Unmerged PRs are kept too (merged:false): an open or abandoned closing PR is stalled
@@ -261,7 +263,7 @@ discover_prs_for_issue() {
     | {t:.__typename, pr:(.closer // .subject // .source)}
     | select(.pr != null and (.pr|type)=="object" and .pr.__typename=="PullRequest")
     | select( (.t=="ClosedEvent" or .t=="ConnectedEvent")
-              or ( (.pr.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?):?\\s+(('"${repo_re}"')?#|https?://github\\.com/'"${repo_re}"'/issues/)'"${num}"'\\b") ) )
+              or ( (.pr.body // "") | test("(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\\s+(('"${repo_re}"')?#|https?://github\\.com/'"${repo_re}"'/issues/)'"${num}"'\\b") ) )
     | ((.pr.repository.nameWithOwner // "") | ascii_downcase) as $prRepo
     | {number:.pr.number, baseRefName:.pr.baseRefName, mergedAt:.pr.mergedAt, mergeCommitOid:.pr.mergeCommit.oid,
        repo:"'"${repo}"'", foreign:($prRepo != "'"${repo_lc}"'"), prRepo:.pr.repository.nameWithOwner,
