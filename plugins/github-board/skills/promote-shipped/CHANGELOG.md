@@ -4,6 +4,16 @@ All notable changes to the `promote-shipped` skill (named `github-release-board-
 before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] — 2026-10-07
+
+### Changed
+- `apply-promotions.sh` maps a release tag to its milestone through the shared
+  `lib/config.py milestone-for-tag` (`gb_milestone_for_tag`), which move-card and
+  plan-milestones also use, instead of its own copy of the rules. The rules are
+  unchanged, and every #203 test passes unedited. The warning for a tag that is not a
+  version now reads `WARN: tag '<tag>' is not vX.Y.Z or vX.Y in <repo>; release milestone
+  not set.` (#204)
+
 ## [2.1.0] — 2026-10-07
 
 ### Added

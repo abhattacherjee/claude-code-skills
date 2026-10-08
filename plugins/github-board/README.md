@@ -1,7 +1,7 @@
 # github-board
 
 <!-- plugin-meta:start -->
-**Version:** 1.1.0 · **7** skills · **4** agents · **0** commands
+**Version:** 1.2.0 · **7** skills · **4** agents · **0** commands
 <!-- plugin-meta:end -->
 
 GitHub workflow skills in one install: create a board from a template, triage issues, plan milestones, plan the week, move cards, promote shipped work to Done, and prune stale branches.
@@ -61,6 +61,8 @@ Per-user values live outside the plugin, so upgrades never touch them and launch
 - Lane rules match in order; the first match wins, else `default_lane`. `schedule` is `null` (no fixed days) or `{"mon": [lanes], …}`.
 - No config: every `plan-week` command except `init` exits 4, and so does a config that has no `plan_week` section yet (for example one written by `create-board init`); the message names the init to run. An invalid file, or a config path that is a dangling symlink, exits 2 and names the key or the file.
 - Optional `"prune_branches": {"tracking_issue_authors": ["<login>", "app/<bot>"]}`: logins besides the repo owner whose issues `prune-branches` accepts as tracking issues for a Dependabot PR. Without it, only the owner counts; `prune-branches` needs no config.
+- Optional `"milestones": {"next_release": {"<owner>/<repo>": "<milestone title>"}}`: the milestone that work merged into each repo belongs to. `move-card` sets it on issues moved to a post-merge column, and `plan-milestones` step 0 checks against it. Without an entry, both use the repo's open milestone with the lowest version (`vX.Y` or `vX.Y.Z`, sorted by version, not number) and say which one they picked. An entry naming a milestone that is missing or closed prints a warning and sets nothing.
+- Optional `"move_card": {"post_merge_columns": ["<column>", …]}`: the Status columns that count as post-merge for `move-card`. It replaces the built-in names "Development Complete", "Dev Complete" and "Done in develop" (any case); an empty list turns the milestone write off.
 - To seed from an existing setup, write the same shape to a file outside the repo and run `python3 <plan-week>/scripts/weekly-focus.py init --from <file>`. Do not commit that file.
 
 ## Metadata cache

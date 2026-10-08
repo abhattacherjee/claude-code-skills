@@ -2,6 +2,20 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.2.0] - 2026-10-07
+
+### Added
+
+- `lib/config.py next-release-milestone --repo O/R` (`gb_next_release`) prints `<number>\t<title>` of the milestone that merged work belongs to: `milestones.next_release["O/R"]` from the config when set, else the open milestone with the lowest version (`vX.Y` or `vX.Y.Z`, sorted by version, not milestone number), with a note naming the pick. A configured title that is missing or closed, two titles with the same version, or no candidate prints a warning and nothing else (exit 0) (#204).
+- `lib/config.py milestone-for-tag --repo O/R --tag TAG` (`gb_milestone_for_tag`) maps a release tag to its milestone with the #203 rules, or prints `skip\t<reason>`. Both commands read the list with `gh api repos/O/R/milestones?state=all&per_page=100 --paginate`, take `--cache FILE`, and exit 2 when the list fails, is empty, or is not a list of milestones (#204).
+- Config: optional `milestones.next_release` (a map of `"owner/repo"` to a milestone title) and `move_card.post_merge_columns` (a list of column names). The validator refuses a `next_release` that is not a map, a key that is not `owner/repo` or has a `.` or `..` part, an empty title, one repo listed twice in different case, and a `post_merge_columns` that is not a list of non-empty strings (#204).
+- `move-card` 2.1.0: an `--issue` moved to a post-merge column also gets the next-release milestone. Post-merge columns are "Development Complete", "Dev Complete" and "Done in develop" (any case), or `move_card.post_merge_columns`, which replaces them. The card moves first; a milestone problem warns and keeps the exit code. `--pr` and other columns make no milestone call (#204).
+- `plan-milestones` 2.2.0: step 0, `scripts/release-reconcile.sh --repo O/R [--json FILE] [--no-fetch]`. It refuses a checkout of another repo (exit 2), runs `git fetch --tags origin`, and checks each closed issue named by a merged PR into `develop` or the default branch against the first release tag that contains the merge commit (after the last tag: the next-release milestone). The earliest release wins. It flags a closed issue whose linked PRs never merged while a merged PR or a commit names it, ends with `release check: N issues checked, M mismatches, K flagged`, and `--json` writes `closed_moves` for `apply-plan.sh`. A failed read exits 1 and writes no JSON. `task-manifest.sh` lists step 0 first in `refocus` (7 tasks) and `audit-only` (4 tasks) (#204).
+
+### Changed
+
+- `promote-shipped` 2.1.1: `apply-promotions.sh` maps tags through the shared `milestone-for-tag`, not its own copy of the rules (#204).
+
 ## [1.1.0] - 2026-10-07
 
 ### Added

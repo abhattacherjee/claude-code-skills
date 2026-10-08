@@ -58,6 +58,8 @@ if a[:2] == ["api", "graphql"]:
     num = [x for x in a if x.startswith("num=")][0][4:]
     if os.environ.get("FAIL_ISSUE") == num:
         sys.stderr.write("HTTP 502: Bad Gateway\n"); sys.exit(1)
+    if num in fix["issues"] and fix["issues"][num] is None:
+        print(json.dumps({"data": {"repository": {"issueOrPullRequest": None}}})); sys.exit(0)
     node = fix["issues"].get(num)
     if node is None:
         sys.stderr.write("GraphQL: Could not resolve to an issue or pull request with the "
@@ -456,6 +458,27 @@ def test_an_unreadable_issue_makes_the_run_incomplete(tmp_path):
     assert "1 issue(s) could not be checked: #20" in r.stdout + r.stderr
     assert len(lines(r, "MISMATCH")) == 8
     assert not out.exists()
+
+
+def test_a_null_issue_reply_is_unreadable_not_skipped(tmp_path):
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110))]
+    repo.release()
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": None}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 1
+    assert "unexpected reply" in r.stderr and "could not be checked: #10" in r.stdout
+
+
+def test_a_full_page_of_merged_prs_warns_that_older_ones_were_not_read(tmp_path):
+    repo = Repo(tmp_path)
+    sha = repo.squash(1)
+    repo.publish()
+    prs = [pr(n, "", sha) for n in range(1, 1001)]
+    r, _ = run(repo, {"prs": prs, "milestones": MILESTONES, "issues": {}}, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert "1000 merged PRs into develop" in r.stderr and "into main" not in r.stderr
 
 
 @pytest.mark.parametrize("args", [[], ["--repo"], ["--repo", "o"], ["--repo", "o/.."],

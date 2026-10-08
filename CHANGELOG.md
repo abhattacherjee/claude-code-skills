@@ -9,6 +9,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ### Added
 
+- **`github-board` 1.2.0: the next-release milestone on merge, and a release check on every plan (#204, part of #180).** `move-card` (2.1.0) sets the next-release milestone when an issue moves to a post-merge column. `plan-milestones` (2.2.0) step 0, `release-reconcile.sh`, checks every closed issue's milestone against the release tag that shipped it, flags issues closed through an unmerged PR, and writes `closed_moves` for `apply-plan.sh`. Both use one shared helper in `lib/config.py`, which `promote-shipped` (2.1.1) now uses too. See `plugins/github-board/CHANGELOG.md`.
 - **`github-board` 1.1.0: release milestones where the release is known (#203, part of #180).** `plan-milestones` (2.1.0) writes every milestone through REST by number, so an issue can move into a closed milestone, and takes `closed_moves` (closed issues only) with no rationale or comment. It checks the whole plan before any write; a failed write prints gh's error and exits 1. `promote-shipped` (2.1.0) sets the release milestone of each shipped `merged` item: the exact `vX.Y.Z` title, else `vX.Y`. See `plugins/github-board/CHANGELOG.md`.
 
 ## [4.0.0] - 2026-10-07

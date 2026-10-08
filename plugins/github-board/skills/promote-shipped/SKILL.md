@@ -2,7 +2,7 @@
 name: promote-shipped
 description: "Moves GitHub Projects (v2) board items to Done after a release or hotfix merges to main. Use when: (1) a release branch finished via Git Flow and the GitHub Release is published, (2) a hotfix shipped to main + back-merged to develop, (3) /finish just completed a release or hotfix, (4) the board has closed issues sitting in non-Done columns ('Dev Complete', 'In Review', 'Done in develop') whose linked PRs merged, (5) 'release board promote' or /github-release-board-promote (the old name of this skill). Previews before writing. No-op when the repo has no boards."
 metadata:
-  version: 2.1.0
+  version: 2.1.1
 ---
 
 # GitHub Release Board Promote
@@ -276,7 +276,7 @@ Milestone lines, and the stderr `WARN:` each skip also prints once per repo and 
   — two milestones match, for example `v4.0` and `4.0`. Rename one; the script never
   picks.
 - **`skipped — tag '<tag>' is not vX.Y.Z or vX.Y`**
-  (`WARN: release tag … is not vX.Y.Z or vX.Y`) — the tag has no version to map.
+  (`WARN: tag '<tag>' is not vX.Y.Z or vX.Y in <repo>; …`) — the tag has no version to map.
 - **`skipped — no release contains <sha>`** — as for the comment above.
 - **`UNAVAILABLE — …`** — the release or the milestone list could not be read.
 - **`FAILED — malformed issue number or repo (…)`** — the candidate's number or repo
