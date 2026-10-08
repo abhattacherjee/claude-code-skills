@@ -6,15 +6,33 @@ All notable changes to the **github-board** plugin are documented here.
 
 ### Added
 
-- `lib/config.py next-release-milestone --repo O/R` (`gb_next_release`) prints `<number>\t<title>` of the milestone that merged work belongs to: `milestones.next_release["O/R"]` from the config when set, else the open milestone with the lowest version (`vX.Y` or `vX.Y.Z`, sorted by version, not milestone number), with a note naming the pick. A configured title that is missing or closed, two titles with the same version, or no candidate prints a warning and nothing else (exit 0) (#204).
-- `lib/config.py milestone-for-tag --repo O/R --tag TAG` (`gb_milestone_for_tag`) maps a release tag to its milestone with the #203 rules, or prints `skip\t<reason>`. Both commands read the list with `gh api repos/O/R/milestones?state=all&per_page=100 --paginate`, take `--cache FILE`, and exit 2 when the list fails, is empty, or is not a list of milestones (#204).
-- Config: optional `milestones.next_release` (a map of `"owner/repo"` to a milestone title) and `move_card.post_merge_columns` (a list of column names). The validator refuses a `next_release` that is not a map, a key that is not `owner/repo` or has a `.` or `..` part, an empty title, one repo listed twice in different case, and a `post_merge_columns` that is not a list of non-empty strings (#204).
-- `move-card` 2.1.0: an `--issue` moved to a post-merge column also gets the next-release milestone. Post-merge columns are "Development Complete", "Dev Complete" and "Done in develop" (any case), or `move_card.post_merge_columns`, which replaces them. The card moves first; a milestone problem warns and keeps the exit code. `--pr` and other columns make no milestone call (#204).
-- `plan-milestones` 2.2.0: step 0, `scripts/release-reconcile.sh --repo O/R [--json FILE] [--no-fetch]`. It refuses a checkout of another repo (exit 2), runs `git fetch --tags origin`, and checks each closed issue named by a merged PR into `develop` or the default branch against the first release tag that contains the merge commit (after the last tag: the next-release milestone). The earliest release wins. It flags a closed issue whose linked PRs never merged while a merged PR or a commit names it, ends with `release check: N issues checked, M mismatches, K flagged`, and `--json` writes `closed_moves` for `apply-plan.sh`. A failed read exits 1 and writes no JSON. `task-manifest.sh` lists step 0 first in `refocus` (7 tasks) and `audit-only` (4 tasks) (#204).
+- `lib/config.py next-release-milestone --repo O/R` (`gb_next_release`) prints `<number>\t<title>` of the milestone that merged work belongs to (#204).
+  - It is `milestones.next_release["O/R"]` from the config when that is set.
+  - Otherwise it is the open milestone with the lowest version (`vX.Y` or `vX.Y.Z`), sorted by version, not milestone number, and a note names the pick.
+  - It skips any milestone at or below the newest version tag, so a shipped milestone left open is never picked. The tags come from `gh api repos/O/R/tags --paginate`, or from `--after-tag TAG` (`""` means no tags).
+  - A configured title that is missing, closed, or at or below the newest tag warns and prints nothing. So do two titles with the same version, and no candidate at all. The exit code is 0.
+- `lib/config.py milestone-for-tag --repo O/R --tag TAG` (`gb_milestone_for_tag`) maps a release tag to its milestone with the #203 rules, or prints `skip\t<reason>` (#204).
+- Both commands read `gh api repos/O/R/milestones?state=all&per_page=100 --paginate` and take `--cache FILE`. A milestone or tag list that fails, is empty, or is not a list exits 2 (#204).
+- Config: optional `milestones.next_release` (a map of `"owner/repo"` to a milestone title) and `move_card.post_merge_columns` (a list of column names) (#204).
+  - The validator refuses a `next_release` that is not a map, a key that is not `owner/repo` or has a `.` or `..` part, an empty title, and one repo listed twice in different case.
+  - It refuses a `post_merge_columns` that is not a list of non-empty strings.
+- `move-card` 2.1.0: an `--issue` moved to a post-merge column also gets the next-release milestone (#204).
+  - Post-merge columns are "Development Complete", "Dev Complete" and "Done in develop" (any case), or `move_card.post_merge_columns`, which replaces them.
+  - The card moves first. A milestone problem warns and keeps the exit code.
+  - `--pr` moves and other columns make no milestone call.
+- `plan-milestones` 2.2.0: step 0, `scripts/release-reconcile.sh --repo O/R [--json FILE] [--no-fetch]` (#204).
+  - It refuses (exit 2) a checkout of another repo, a host other than github.com (`$GH_HOST` when set), and a shallow clone. Then it runs `git fetch --tags origin`.
+  - It checks each closed issue that a merged PR into `develop` or the default branch names against the first release tag containing the merge commit. After the last tag, the target is the next-release milestone. The earliest release wins. Tags are ordered by version, with the leading `v` optional.
+  - A merge commit that no tag contains but that is older than the last tag (a squashed release) gets a `NOTE` and no move.
+  - It flags a closed issue whose linked PRs never merged while a merged PR, or a commit on develop or the default branch, names it. The line names the branch.
+  - It ends with `release check: N issues checked, M mismatches, K flagged`. "Checked" counts compared milestones; issues that only a commit names are counted apart.
+  - `--json` writes `closed_moves` for `apply-plan.sh`. An old file is deleted at the start of every run.
+  - Exit 1, with no JSON, when the result is incomplete: git, gh or jq is missing, the fetch fails, a merged-PR list fails, is empty or hits the 1000-PR limit, a merged PR has no merge commit, the milestone list fails, an issue cannot be read, or a merge commit is not in the clone.
+  - `task-manifest.sh` lists step 0 first in `refocus` (7 tasks) and `audit-only` (4 tasks).
 
 ### Changed
 
-- `promote-shipped` 2.1.1: `apply-promotions.sh` maps tags through the shared `milestone-for-tag`, not its own copy of the rules (#204).
+- `promote-shipped` 2.1.1: `apply-promotions.sh` maps tags through the shared `milestone-for-tag`, not its own copy of the rules. The three skip warnings changed wording (#204).
 
 ## [1.1.0] - 2026-10-07
 

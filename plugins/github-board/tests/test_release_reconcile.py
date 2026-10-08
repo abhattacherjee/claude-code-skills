@@ -36,7 +36,10 @@ OBS = {"number": 7, "title": "Observability"}
 # The fake gh answers from $FIX (a JSON file) and logs argv to $GH_LOG, one JSON list a line.
 # $FAIL_PR_LIST=<base> fails that list, $EMPTY_PR_LIST=<base> prints nothing for it,
 # $FAIL_ISSUE=<n> fails that issue read, $FAIL_MS=1 fails the milestone list. An issue that
-# is not in the fixture fails the way gh does for an unknown number.
+# is not in the fixture fails the way gh does for an unknown number. It answers what the call
+# asks for, as GitHub does: `pr list` returns only the --json fields named; an issue has
+# stateReason only when the query names it, and unmerged linked PRs only with
+# includeClosedPrs:true (every unmerged PR in these fixtures is closed).
 FAKE_GH = r'''
 import json, os, sys
 a = sys.argv[1:]
@@ -53,7 +56,9 @@ if a[:2] == ["pr", "list"]:
         sys.stderr.write("HTTP 502: Bad Gateway\n"); sys.exit(1)
     if os.environ.get("EMPTY_PR_LIST") == base:
         sys.exit(0)
-    print(json.dumps([p for p in fix["prs"] if p["baseRefName"] == base])); sys.exit(0)
+    fields = val("--json").split(",")
+    print(json.dumps([{k: v for k, v in p.items() if k in fields}
+                      for p in fix["prs"] if p["baseRefName"] == base])); sys.exit(0)
 if a[:2] == ["api", "graphql"]:
     num = [x for x in a if x.startswith("num=")][0][4:]
     if os.environ.get("FAIL_ISSUE") == num:
@@ -64,6 +69,17 @@ if a[:2] == ["api", "graphql"]:
     if node is None:
         sys.stderr.write("GraphQL: Could not resolve to an issue or pull request with the "
                          "number of %s. (repository.issueOrPullRequest)\n" % num); sys.exit(1)
+    query = [x for x in a if x.startswith("query=")][0]
+    node = dict(node)
+    if "stateReason" not in query:
+        node.pop("stateReason", None)
+    links = node.get("closedByPullRequestsReferences")
+    if links is not None:
+        if "closedByPullRequestsReferences" not in query:
+            node.pop("closedByPullRequestsReferences")
+        elif "includeClosedPrs:true" not in query:
+            node["closedByPullRequestsReferences"] = {
+                "nodes": [x for x in links["nodes"] if x["merged"]]}
     print(json.dumps({"data": {"repository": {"issueOrPullRequest": node}}})); sys.exit(0)
 if a[0] == "api" and "/milestones?" in a[1]:
     if os.environ.get("FAIL_MS"):
@@ -92,9 +108,13 @@ class Repo:
         self.home.mkdir(exist_ok=True)
         self.env = dict(os.environ, HOME=str(self.home), GIT_CONFIG_NOSYSTEM="1",
                         GIT_TERMINAL_PROMPT="0", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@e",
-                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@e")
-        for k in ("GIT_DIR", "GIT_CONFIG_GLOBAL", "GIT_CONFIG", "GIT_WORK_TREE"):
+                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@e",
+                        # Only local transports: a URL that slips past the insteadOf rewrite
+                        # (a mutant that skips the host check) fails here, never on a network.
+                        GIT_ALLOW_PROTOCOL="file")
+        for k in ("GIT_DIR", "GIT_CONFIG_GLOBAL", "GIT_CONFIG", "GIT_WORK_TREE", "GH_HOST"):
             self.env.pop(k, None)
+        self.clock = 1_700_000_000
         self.seed = tmp_path / "seed"
         self.origin = tmp_path / "origin.git"
         self.work = tmp_path / "work"
@@ -105,6 +125,11 @@ class Repo:
         self.git(self.seed, "branch", "develop")
 
     def git(self, cwd, *args):
+        # Every commit, merge and tag is one minute after the last, so "merged before the
+        # last tag" never rests on two events in the same second.
+        if args and args[0] in ("commit", "merge", "tag"):
+            self.clock += 60
+            self.env["GIT_AUTHOR_DATE"] = self.env["GIT_COMMITTER_DATE"] = f"@{self.clock} +0000"
         return subprocess.run(["git", *args], cwd=str(cwd), env=self.env, check=True,
                               capture_output=True, text=True).stdout.strip()
 
@@ -245,23 +270,52 @@ def test_merged_prs_are_read_for_develop_and_the_default_branch(tmp_path):
 # ---- the checkout ------------------------------------------------------------------------
 
 @pytest.mark.parametrize("url", ["https://github.com/other/thing.git", "/some/local/path",
-                                 "git@github.com:o/r-fork.git"])
-def test_a_checkout_of_another_repo_is_refused(tmp_path, url):
+                                 "git@github.com:o/r-fork.git", "https://gitlab.com/o/r.git",
+                                 "git@gitlab.com:o/r.git", "ssh://git@evil.example/o/r",
+                                 "file:///o/r", "https://github.com.evil.example/o/r"])
+def test_a_checkout_of_another_repo_or_host_is_refused_before_any_fetch(tmp_path, url):
     repo, fix = shape(tmp_path)
+    repo.git(repo.work, "tag", "-d", "v0.5.0")
     repo.git(repo.work, "remote", "set-url", "origin", url)
     r, calls = run(repo, fix, "--repo", "o/r")
     assert r.returncode == 2
-    assert "not o/r" in r.stderr
+    assert "not o/r on github.com" in r.stderr
     assert calls == []
+    # The refusal comes before git fetch: the deleted tag is still missing.
+    assert repo.git(repo.work, "tag", "--list") == ""
+
+
+def test_the_refusal_comes_before_a_fetch_that_would_work(tmp_path):
+    # The wrong repo's URL is reachable here (rewritten to the local origin), so a script that
+    # fetched first would bring the deleted tag back.
+    repo, fix = shape(tmp_path)
+    repo.git(repo.work, "tag", "-d", "v0.5.0")
+    fork = "https://github.com/o/r-fork.git"
+    repo.git(repo.work, "remote", "set-url", "origin", fork)
+    repo.git(repo.work, "config", f"url.{repo.origin}.insteadOf", fork)
+    r, calls = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 2 and calls == []
+    assert repo.git(repo.work, "tag", "--list") == ""
 
 
 @pytest.mark.parametrize("url", ["git@github.com:o/r.git", "ssh://git@github.com/O/R",
-                                 "https://github.com/o/r/"])
+                                 "https://github.com/o/r/", "github.com:o/r.git",
+                                 "ssh://git@github.com:22/o/r.git", "https://GitHub.com/o/r"])
 def test_every_url_form_of_the_right_repo_is_accepted(tmp_path, url):
     repo, fix = shape(tmp_path)
     repo.git(repo.work, "remote", "set-url", "origin", url)
     r, _ = run(repo, fix, "--repo", "o/r", "--no-fetch")
     assert r.returncode == 0, r.stderr
+
+
+def test_gh_host_names_the_only_accepted_host(tmp_path):
+    repo, fix = shape(tmp_path)
+    repo.git(repo.work, "remote", "set-url", "origin", "https://ghe.example.com/o/r.git")
+    r, _ = run(repo, fix, "--repo", "o/r", "--no-fetch", GH_HOST="ghe.example.com")
+    assert r.returncode == 0, r.stderr
+    repo.git(repo.work, "remote", "set-url", "origin", URL)
+    r, calls = run(repo, fix, "--repo", "o/r", "--no-fetch", GH_HOST="ghe.example.com")
+    assert r.returncode == 2 and calls == []
 
 
 def test_outside_a_git_checkout_exits_2(tmp_path):
@@ -301,19 +355,20 @@ def test_a_failed_fetch_exits_1(tmp_path):
     assert not [c for c in calls if c[:2] == ["api", "graphql"]]
 
 
-def test_a_shallow_clone_warns(tmp_path):
+def test_a_shallow_clone_is_refused(tmp_path):
+    # A shallow clone can hold a merge commit yet miss the history that ties it to its tag,
+    # so a shipped issue reads as "after the last tag". Refuse rather than guess.
     repo, fix = shape(tmp_path)
     shutil.rmtree(repo.work)
-    repo.git(tmp_path, "clone", "-q", "--depth", "1", "--no-single-branch",
+    repo.git(tmp_path, "clone", "-q", "--depth", "3", "--no-single-branch",
              f"file://{repo.origin}", str(repo.work))
     repo.git(repo.work, "remote", "set-url", "origin", URL)
     repo.git(repo.work, "config", f"url.file://{repo.origin}.insteadOf", URL)
-    r, _ = run(repo, fix, "--repo", "o/r")
-    assert "shallow clone" in r.stderr
-    # Commits the clone lacks are never guessed at: they cannot be checked, so the run is
-    # incomplete (exit 1) and lists no move for them.
-    assert r.returncode == 1
-    assert "could not be checked" in r.stdout + r.stderr
+    out = tmp_path / "plan.json"
+    r, calls = run(repo, fix, "--repo", "o/r", "--json", str(out))
+    assert r.returncode == 2
+    assert "shallow clone: run git fetch --unshallow origin, then re-run" in r.stderr
+    assert calls == [] and lines(r, "MISMATCH") == [] and not out.exists()
 
 
 # ---- the step-5 flag: closed through an abandoned PR -----------------------------------
@@ -336,7 +391,9 @@ def test_a_closed_issue_whose_only_linked_pr_never_merged_is_flagged(tmp_path):
         "FLAG #40: closed with only unmerged linked PR(s) #41, but merged PR #140 names it",
         f"FLAG #42: closed with only unmerged linked PR(s) #43 #45, but commit {repo.sha[0][:7]} "
         "on develop names it"]
-    assert r.stdout.splitlines()[-1] == "release check: 3 issues checked, 0 mismatches, 2 flagged"
+    # #40 and #44 had their milestones checked; #42, named only by a commit, had not.
+    assert r.stdout.splitlines()[-1] == ("release check: 2 issues checked, 0 mismatches, "
+                                         "2 flagged, 1 named only by a commit")
 
 
 def test_an_issue_with_no_linked_pr_is_not_flagged(tmp_path):
@@ -390,7 +447,7 @@ def test_a_tag_with_no_milestone_is_a_note_not_a_mismatch(tmp_path):
     assert r.returncode == 0, r.stderr
     assert lines(r, "MISMATCH") == []
     assert "no milestone titled 0.9.0 or 0.9 for v0.9.0" in r.stdout
-    assert r.stdout.splitlines()[-1] == "release check: 1 issues checked, 0 mismatches, 0 flagged"
+    assert r.stdout.splitlines()[-1] == "release check: 0 issues checked, 0 mismatches, 0 flagged"
 
 
 def test_no_next_release_milestone_is_a_note(tmp_path):
@@ -471,14 +528,44 @@ def test_a_null_issue_reply_is_unreadable_not_skipped(tmp_path):
     assert "unexpected reply" in r.stderr and "could not be checked: #10" in r.stdout
 
 
-def test_a_full_page_of_merged_prs_warns_that_older_ones_were_not_read(tmp_path):
+def test_a_full_page_of_merged_prs_makes_the_run_incomplete(tmp_path):
     repo = Repo(tmp_path)
     sha = repo.squash(1)
     repo.publish()
     prs = [pr(n, "", sha) for n in range(1, 1001)]
-    r, _ = run(repo, {"prs": prs, "milestones": MILESTONES, "issues": {}}, "--repo", "o/r")
-    assert r.returncode == 0, r.stderr
+    out = tmp_path / "plan.json"
+    r, _ = run(repo, {"prs": prs, "milestones": MILESTONES, "issues": {}}, "--repo", "o/r",
+               "--json", str(out))
+    assert r.returncode == 1
     assert "1000 merged PRs into develop" in r.stderr and "into main" not in r.stderr
+    assert "past the 1000-PR limit" in r.stdout and not out.exists()
+
+
+@pytest.mark.parametrize("merge_commit", [None, {}, "absent"])
+def test_a_merged_pr_without_a_merge_commit_makes_the_run_incomplete(tmp_path, merge_commit):
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110)), pr(111, "Closes #11", "x")]
+    if merge_commit == "absent":
+        del prs[1]["mergeCommit"]
+    else:
+        prs[1]["mergeCommit"] = merge_commit
+    repo.release()
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": issue(10, V06), "11": issue(11, V06)}}
+    out = tmp_path / "plan.json"
+    r, _ = run(repo, fix, "--repo", "o/r", "--json", str(out))
+    assert r.returncode == 1
+    assert "#111 (no merge commit)" in r.stdout and not out.exists()
+
+
+def test_an_old_json_file_is_deleted_even_when_the_run_fails(tmp_path):
+    repo, fix = shape(tmp_path)
+    out = tmp_path / "plan.json"
+    for args, env in (((), {"FAIL_MS": "1"}), (("--repo", "o"), {})):
+        out.write_text('{"repo": "o/r", "closed_moves": [{"issue": 1, "to": "v0.1"}]}')
+        r, _ = run(repo, fix, *(args or ("--repo", "o/r")), "--json", str(out), **env)
+        assert r.returncode != 0
+        assert not out.exists(), "a stale plan survived a failed run"
 
 
 @pytest.mark.parametrize("args", [[], ["--repo"], ["--repo", "o"], ["--repo", "o/.."],
@@ -555,3 +642,195 @@ def test_skill_md_has_step_0_and_its_task_row():
     assert "| 0 | Check closed issues against their releases |" in text
     assert text.index("### 0. Release check") < text.index("### 1. Gather")
     assert '"${CLAUDE_SKILL_DIR}/scripts/release-reconcile.sh" --repo O/R' in text
+
+
+# ---- PR #206 review round 1 -----------------------------------------------------------------
+
+def squashed_release(repo, tag="v0.5.0"):
+    """release/* squashed into main: the tag holds a new commit, not develop's history."""
+    repo.git(repo.seed, "checkout", "-q", "main")
+    repo.git(repo.seed, "merge", "-q", "--squash", "develop")
+    repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", f"Release {tag} (squash)")
+    repo.git(repo.seed, "tag", "-a", tag, "-m", tag)
+
+
+def test_a_squashed_release_leaves_work_merged_before_it_alone(tmp_path):
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110)), pr(111, "Closes #11", repo.squash(111))]
+    squashed_release(repo)
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES,
+           "issues": {"10": issue(10, V05), "11": issue(11, V06)}}
+    out = tmp_path / "plan.json"
+    r, _ = run(repo, fix, "--repo", "o/r", "--json", str(out))
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == []
+    assert lines(r, "NOTE") == [
+        "NOTE #10: PR #110 merged before v0.5.0 but no tag contains it (squashed release?); "
+        "milestone left as v0.5",
+        "NOTE #11: PR #111 merged before v0.5.0 but no tag contains it (squashed release?); "
+        "milestone left as v0.6"]
+    assert r.stdout.splitlines()[-1] == "release check: 0 issues checked, 0 mismatches, 0 flagged"
+    assert json.loads(out.read_text())["closed_moves"] == []
+
+
+def test_after_a_squashed_release_later_work_still_mismatches(tmp_path):
+    repo = Repo(tmp_path)
+    repo.squash(100)
+    squashed_release(repo)
+    prs = [pr(120, "Closes #20", repo.squash(120))]
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"20": issue(20, V05)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #20: PR #120, commit {repo.sha[120][:7]}, after v0.5.0: v0.5 -> v0.6"]
+
+
+def test_a_lightweight_last_tag_uses_its_commit_date(tmp_path):
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110))]
+    repo.git(repo.seed, "checkout", "-q", "main")
+    repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", "release")
+    repo.git(repo.seed, "tag", "v0.5.0")
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": issue(10, V06)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == [] and len(lines(r, "NOTE #10: PR #110 merged before v0.5.0")) == 1
+
+
+def test_a_shipped_milestone_left_open_is_not_the_next_release(tmp_path):
+    repo = Repo(tmp_path)
+    repo.release()
+    prs = [pr(120, "Closes #20", repo.squash(120))]
+    repo.publish()
+    ms = [dict(m, state="open") if m["title"] == "v0.5" else m for m in MILESTONES]
+    fix = {"prs": prs, "milestones": ms, "issues": {"20": issue(20, V05)}}
+    r, calls = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #20: PR #120, commit {repo.sha[120][:7]}, after v0.5.0: v0.5 -> v0.6"]
+    # The local newest tag is passed in: no tag list is read from GitHub.
+    assert not [c for c in calls if any("/tags" in x for x in c)]
+
+
+def test_mixed_tag_prefixes_are_ordered_by_version(tmp_path):
+    # git's v:refname puts "1.3.0" before "v1.2.0" and "2.0" before "v1.0".
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110))]
+    for tag in ("v1.2.0", "1.3.0", "v1.10.0", "2.0"):
+        repo.git(repo.seed, "checkout", "-q", "main")
+        repo.git(repo.seed, "merge", "-q", "--no-ff", "develop", "-m", f"Merge {tag}")
+        repo.git(repo.seed, "tag", "-a", tag, "-m", tag)
+        repo.git(repo.seed, "checkout", "-q", "develop")
+        repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", f"after {tag}")
+    prs.append(pr(120, "Closes #20", repo.squash(120)))
+    repo.publish()
+    ms = MILESTONES + [{"title": "v1.2", "number": 12, "state": "closed"},
+                       {"title": "v2.1", "number": 21, "state": "open"}]
+    fix = {"prs": prs, "milestones": ms, "issues": {"10": issue(10, V06), "20": issue(20, V06)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #10: PR #110, commit {repo.sha[110][:7]}, in v1.2.0: v0.6 -> v1.2",
+        f"MISMATCH #20: PR #120, commit {repo.sha[120][:7]}, after 2.0: v0.6 -> v2.1"]
+
+
+def test_ten_or_more_tags_rank_numerically(tmp_path):
+    # v0.9 is rank 9 and v0.10 rank 10: a text sort of the ranks would put 10 first.
+    repo = Repo(tmp_path)
+    prs = []
+    for i in range(1, 13):
+        if i == 9:
+            prs.append(pr(190, "Closes #50", repo.squash(190)))
+        if i == 10:
+            prs.append(pr(200, "Closes #50", repo.squash(200)))
+        repo.release(f"v0.{i}")
+    repo.publish()
+    ms = MILESTONES + [{"title": "v0.9", "number": 9, "state": "closed"}]
+    fix = {"prs": prs, "milestones": ms, "issues": {"50": issue(50, V06)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #50: PR #190, commit {repo.sha[190][:7]}, in v0.9: v0.6 -> v0.9"
+        "; also named by PR #200 (in v0.10)"]
+
+
+def test_hotfix_with_higher_pr_number_ships_first(tmp_path):
+    # #150 lands on develop after v0.5.0 (unreleased); hotfix #160 on main is tagged v0.5.1.
+    repo = Repo(tmp_path)
+    repo.release("v0.5.0")
+    prs = [pr(150, "Closes #50", repo.squash(150))]
+    repo.git(repo.seed, "checkout", "-q", "main")
+    repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", "hotfix (#160)")
+    repo.sha[160] = repo.git(repo.seed, "rev-parse", "HEAD")
+    repo.git(repo.seed, "tag", "-a", "v0.5.1", "-m", "v0.5.1")
+    prs.append(pr(160, "Fixes #50", repo.sha[160], base="main"))
+    repo.publish()
+    ms = MILESTONES + [{"title": "v0.5.1", "number": 51, "state": "closed"}]
+    fix = {"prs": prs, "milestones": ms, "issues": {"50": issue(50, V06)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #50: PR #160, commit {repo.sha[160][:7]}, in v0.5.1: v0.6 -> v0.5.1"
+        "; also named by PR #150 (in no tag, merged before v0.5.1)"]
+
+
+def test_tag_off_every_branch_is_fetched(tmp_path):
+    # A tag pushed after the clone, on a commit no branch reaches: only --tags brings it.
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110))]
+    repo.publish()
+    repo.git(repo.seed, "checkout", "-q", "--detach", "develop")
+    repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", "release build")
+    repo.git(repo.seed, "tag", "-a", "v0.5.0", "-m", "v0.5.0")
+    repo.git(repo.seed, "push", "-q", str(repo.origin), "v0.5.0")
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": issue(10, V06)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert repo.git(repo.work, "tag", "--list") == "v0.5.0"
+    assert lines(r, "MISMATCH") == [
+        f"MISMATCH #10: PR #110, commit {repo.sha[110][:7]}, in v0.5.0: v0.6 -> v0.5"]
+
+
+def test_a_flag_names_the_branch_the_commit_is_on(tmp_path):
+    repo = Repo(tmp_path)
+    repo.git(repo.seed, "checkout", "-q", "main")
+    repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", "hotfix\n\nCloses #42")
+    sha = repo.git(repo.seed, "rev-parse", "HEAD")
+    repo.publish()
+    fix = {"prs": [], "milestones": MILESTONES,
+           "issues": {"42": issue(42, V05, linked=[(43, False)])}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "FLAG") == [
+        f"FLAG #42: closed with only unmerged linked PR(s) #43, but commit {sha[:7]} on main names it"]
+
+
+def test_without_origin_branches_commit_evidence_is_unavailable(tmp_path):
+    repo, fix = shape(tmp_path)
+    for b in ("develop", "main"):
+        repo.git(repo.work, "update-ref", "-d", f"refs/remotes/origin/{b}")
+    repo.git(repo.work, "update-ref", "-d", "refs/remotes/origin/HEAD")
+    r, _ = run(repo, fix, "--repo", "o/r", "--no-fetch")
+    assert r.returncode == 0, r.stderr
+    assert "neither origin/develop nor origin/main exists here" in r.stderr
+
+
+def test_a_merge_in_the_same_second_as_the_last_tag_counts_as_before_it(tmp_path):
+    # The boundary: a squashed release tagged in the very second the PR merged. "Before or
+    # at" keeps the shipped milestone; "after" would move it out.
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110))]
+    stamp = repo.git(repo.seed, "log", "-1", "--format=%ct", repo.sha[110])
+    repo.git(repo.seed, "checkout", "-q", "main")
+    repo.git(repo.seed, "commit", "-q", "--allow-empty", "-m", "Release v0.5.0 (squash)")
+    env = dict(repo.env, GIT_COMMITTER_DATE=f"@{stamp} +0000")
+    subprocess.run(["git", "tag", "-a", "v0.5.0", "-m", "v0.5.0"], cwd=str(repo.seed), env=env,
+                   check=True, capture_output=True)
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES, "issues": {"10": issue(10, V05)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stderr
+    assert lines(r, "MISMATCH") == [] and len(lines(r, "NOTE #10: PR #110 merged before")) == 1

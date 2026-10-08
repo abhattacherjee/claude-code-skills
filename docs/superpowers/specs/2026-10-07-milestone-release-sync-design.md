@@ -55,6 +55,8 @@ One milestone field carries two meanings. Work starts in the milestone of its **
 
 ## Limits
 
-- A squashed `release/* -> main` breaks tag containment. promote-shipped already documents this. Step 0 reports such issues as "after the last tag", not as wrong.
+- A squashed `release/* -> main` breaks tag containment. promote-shipped already documents this. Step 0 compares the merge commit's date with the last tag's date. Merged before it: a NOTE, and the milestone stays. Merged after it: the next-release milestone, as usual. One side effect: develop work merged before a hotfix tag on main also gets the NOTE, not a move.
+- Step 0 refuses a shallow clone (exit 2): a commit it holds can look as if no tag contains it.
+- The next-release fallback skips any milestone whose version is at or below the newest version tag, so a shipped milestone left open is never picked. move-card reads the tags with `gh api repos/O/R/tags`; step 0 passes its local newest tag.
 - promote-shipped finds releases through GitHub Releases ordered by publish date, so a tag with no Release is not seen. That is unchanged here.
 - CI runs the github-board tests on ubuntu only (bash 5). The scripts stay bash 3.2 safe, and the local runs use 3.2.

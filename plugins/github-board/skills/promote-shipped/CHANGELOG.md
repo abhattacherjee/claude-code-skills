@@ -10,9 +10,13 @@ This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `apply-promotions.sh` maps a release tag to its milestone through the shared
   `lib/config.py milestone-for-tag` (`gb_milestone_for_tag`), which move-card and
   plan-milestones also use, instead of its own copy of the rules. The rules are
-  unchanged, and every #203 test passes unedited. The warning for a tag that is not a
-  version now reads `WARN: tag '<tag>' is not vX.Y.Z or vX.Y in <repo>; release milestone
-  not set.` (#204)
+  unchanged, and every #203 test passes unedited. (#204)
+- All three skip warnings now read `WARN: <reason> in <repo>; release milestone not set.`,
+  still once per repo and tag. The reasons are `no milestone titled X.Y.Z or X.Y for
+  <tag>`, `ambiguous: <title> #<n>, … for <tag>`, and `tag '<tag>' is not vX.Y.Z or
+  vX.Y`. (#204)
+- A tag that is not a version is now checked before the milestone list is read. With an
+  unreadable list, such an item is counted as SKIPPED, not FAILED. (#204)
 
 ## [2.1.0] — 2026-10-07
 

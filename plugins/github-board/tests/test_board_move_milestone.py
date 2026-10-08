@@ -35,12 +35,14 @@ def content(kind="issue", milestone=V40, on_board=True):
                                            "projectItems": {"nodes": items}}}}}
 
 
-def routes(kind="issue", milestone=V40, on_board=True, ms_route=None, patch=None):
+def routes(kind="issue", milestone=V40, on_board=True, ms_route=None, patch=None, tags=()):
     return [
         AUTH,
         patch or {"match": ["-X", "PATCH"], "stdout": "13\n"},
-        ms_route or {"match": ["milestones?state=all&per_page=100", "--paginate"],
+        ms_route or {"match": ["repos/octo-user/app/milestones?state=all&per_page=100", "--paginate"],
                      "stdout": json.dumps(MILESTONES) + "\n"},
+        {"match": ["repos/octo-user/app/tags", "--paginate"],
+         "stdout": json.dumps([{"name": t} for t in tags]) + "\n"},
         {"match": ["updateProjectV2ItemFieldValue"], "stdout": "ITEM1\n"},
         {"match": ["addProjectV2ItemById"], "stdout": "ITEM1\n"},
         {"match": ["projectsV2(first:100)"],
@@ -101,7 +103,7 @@ def test_the_current_milestone_comes_from_the_item_lookup(tmp_path):
     lookup = [c for c in calls if "projectItems(first:100)" in " ".join(c)]
     assert len(lookup) == 1 and "milestone{number title}" in " ".join(lookup[0])
     # One list read and one write: no extra call for the current milestone.
-    assert len(ms_lists(calls)) == 1 and len(calls) == 8
+    assert len(ms_lists(calls)) == 1 and len(calls) == 9
 
 
 def test_already_in_the_milestone_writes_nothing(tmp_path):
@@ -249,3 +251,43 @@ def test_an_invalid_config_warns_and_still_moves(tmp_path):
     assert moves(calls) and patches(calls) == []
     assert "milestone not set: cannot read move_card.post_merge_columns" in r.stderr
     assert ms_lists(calls) == []
+
+
+def test_a_shipped_milestone_left_open_is_not_the_next_release(tmp_path):
+    # v4.1 shipped as v4.1.0 but is still open: the next release is v4.2 (#9).
+    r, calls = run(tmp_path, *issue("Development Complete"),
+                   rts=routes(tags=["v4.1.0"], patch={"match": ["-X", "PATCH"], "stdout": "9\n"}))
+    assert r.returncode == 0, r.stderr
+    assert [c for c in patches(calls) if "milestone=9" in c]
+    assert "milestone: v4.0 -> v4.2" in r.stdout
+
+
+def test_stderr_from_the_config_read_is_not_parsed_as_the_column_list(tmp_path):
+    # A python that warns on stderr (a deprecation notice, say) must not break the JSON.
+    noisy = tmp_path / "noisy-python"
+    noisy.write_text(f"#!/bin/sh\necho 'note: noise on stderr' >&2\nexec {sys.executable} \"$@\"\n")
+    noisy.chmod(0o755)
+    cfg = cfg_copy()
+    cfg["move_card"] = {"post_merge_columns": ["Development Complete"]}
+    write_config(tmp_path / "xdg-config", cfg)
+    log = tmp_path / "gh.log"
+    env = dict(os.environ, GB_PYTHON=str(noisy), **install_fake_gh(tmp_path / "bin", routes(), log))
+    r = subprocess.run(["bash", str(MOVE), *issue("Development Complete"), "--repo", "octo-user/app"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert patches(gh_calls(log)) == [PATCH_CALL]
+    assert "noise on stderr" in r.stderr
+
+
+def test_a_column_list_that_is_not_json_warns(tmp_path):
+    # A python wrapper that prints junk on stdout: never read as "not post-merge" in silence.
+    junk = tmp_path / "junk-python"
+    junk.write_text(f"#!/bin/sh\ncase \"$2\" in get) echo 'not json'; exit 0;; esac\n"
+                    f"exec {sys.executable} \"$@\"\n")
+    junk.chmod(0o755)
+    log = tmp_path / "gh.log"
+    env = dict(os.environ, GB_PYTHON=str(junk), **install_fake_gh(tmp_path / "bin", routes(), log))
+    r = subprocess.run(["bash", str(MOVE), *issue("Development Complete"), "--repo", "octo-user/app"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "is not a JSON list" in r.stderr and patches(gh_calls(log)) == []

@@ -207,19 +207,26 @@ IID=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.projectItems.nodes | map(s
 # the built-in names; an empty list turns this off.
 MS_POST_MERGE=false
 if [[ "$KIND" == issue ]]; then
-  if ! PM_COLS=$(gb_config_get move_card.post_merge_columns --optional 2>&1); then
-    echo "Warning: milestone not set: cannot read move_card.post_merge_columns: $PM_COLS" >&2
+  # stdout only: anything on stderr (a Python warning) would corrupt the JSON list.
+  PM_ERR=$(mktemp)
+  if ! PM_COLS=$(gb_config_get move_card.post_merge_columns --optional 2>"$PM_ERR"); then
+    echo "Warning: milestone not set: cannot read move_card.post_merge_columns: $(tr '\n' ' ' < "$PM_ERR")" >&2
   else
+    cat "$PM_ERR" >&2
     [[ -n "$PM_COLS" ]] || PM_COLS='["development complete","dev complete","done in develop"]'
-    if [[ "$(printf '%s' "$PM_COLS" | jq -r --arg n "$ONAME" '
+    PM_HIT=$(printf '%s' "$PM_COLS" | jq -r --arg n "$ONAME" '
           def norm: ascii_downcase | gsub("^\\s+|\\s+$"; "");
           ($n | norm) as $want
           | if type == "array" and ([.[] | select(type == "string") | norm | select(. == $want)]
                                      | length) > 0
-            then "yes" else "no" end')" == yes ]]; then
-      MS_POST_MERGE=true
-    fi
+            then "yes" else "no" end' 2>/dev/null || true)
+    case "$PM_HIT" in
+      yes) MS_POST_MERGE=true ;;
+      no) ;;
+      *) echo "Warning: milestone not set: move_card.post_merge_columns is not a JSON list: $PM_COLS" >&2 ;;
+    esac
   fi
+  rm -f "$PM_ERR"
 fi
 MS_CUR_NUM=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.milestone.number // empty")
 MS_CUR=$(echo "$CONTENT" | jq -r ".data.repository.$KIND.milestone.title // \"none\"")

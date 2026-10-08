@@ -260,7 +260,7 @@ milestone_for_tag() {
   [ -f "$failed_marker" ] && return 2
   local out rc=0
   out=$(gb_milestone_for_tag --repo "$repo" --tag "$tag" --cache "$ms_file" 2>"$errf") || rc=$?
-  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+  if [ "$rc" -ne 0 ]; then
     echo "WARN: $(tr '\n' ' ' < "$errf" | sed 's/^github-board: error: //' | cut -c1-240)" >&2
     echo "      release milestones for this repo will be reported as FAILED, not skipped." >&2
     : > "$failed_marker"

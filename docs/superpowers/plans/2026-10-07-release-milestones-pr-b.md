@@ -1,6 +1,6 @@
 # Release milestones, PR B (#204) Implementation Plan
 
-> **For agentic workers:** one implementation pass (ship Phase 4 default). Follow TDD per task and commit per task. Steps use checkbox (`- [ ]`) syntax.
+> **For agentic workers:** one implementation pass, then one review of the whole branch. Follow TDD per task and commit per task. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Set the next-release milestone when an issue's card moves to a post-merge column, and make plan-milestones check every closed issue's milestone against the release that shipped it.
 
@@ -23,7 +23,7 @@
 ## Review Focus
 
 1. Several open milestones that are not versions (`Backlog`, `Someday`) mixed with `v4.1`, `v4.10` and `v4.2`. The pick is v4.1. `v4.10` sorts after `v4.2`. Non-version titles are never picked.
-2. A config entry naming a milestone that does not exist, or is closed. Warn and fall back? No: an explicit choice that is wrong must be an error the user sees. Print a warning and set nothing.
+2. A config entry naming a milestone that does not exist, or is closed. Do not fall back to the lowest open version: a wrong explicit choice must be an error the user sees. Print a warning and set nothing.
 3. move-card on a `--pr` card, or to a column that is not post-merge: no milestone call at all.
 4. Reconcile on a repo whose tags are not fetched locally, a shallow clone, and a checkout of a different repo than `--repo`.
 5. An issue named by two merged PRs, one inside v4.0.0 and one after it: the earliest release wins (it shipped there first). Say so in the output.
@@ -95,7 +95,7 @@
 
 **Interfaces:**
 - `release-reconcile.sh --repo O/R [--json FILE] [--no-fetch]`.
-  - It refuses (exit 2) when `git remote get-url origin` does not name `O/R` (https or ssh form).
+  - It refuses (exit 2) when `git config remote.origin.url` does not name `O/R` (https or ssh form). Not `git remote get-url`: that applies `insteadOf` rewrites.
   - It runs `git fetch --tags origin` unless `--no-fetch` is given. A failed fetch exits 1.
   - It warns when the repo is a shallow clone.
 - PRs come from `gh pr list --state merged --base <b> --limit 1000 --json number,body,mergeCommit,baseRefName`, for `develop` and the default branch. Closing keywords use the same regex as find-promotable.sh's fallback. Copy it exactly, and point a comment at the source.
@@ -104,7 +104,7 @@
   - Inside a tag, the target is `milestone-for-tag`. After the last tag, the target is `next-release-milestone`.
   - When several PRs name the issue, the earliest release wins.
   - Only issues that are closed with `stateReason` `COMPLETED` (or null) are checked.
-  - The step-5 flag: a closed issue whose `closedByPullRequestsReferences` lists only unmerged PRs, while a merged PR's body names it.
+  - The step-5 flag: a closed issue whose `closedByPullRequestsReferences` lists only unmerged PRs, while a merged PR's body or a commit on develop or the default branch names it.
 - Output always ends with a summary line: `release check: N issues checked, M mismatches, K flagged`. Each mismatch line gives the issue, PR, commit, tag (or "after <last tag>"), and the current and target milestone. `--json FILE` writes `{"repo":…, "closed_moves":[{issue,to}]}` for apply-plan.sh.
 - Exit codes: 0 when it ran (with or without mismatches), 1 when a read failed, 2 for usage or wrong repo.
 

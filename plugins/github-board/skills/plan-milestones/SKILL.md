@@ -49,34 +49,46 @@ never leave a triage looking finished when the moves were never applied.
 
 ### 0. Release check (every invocation)
 
-Run this first, every time, from a checkout of the repo:
+Run this first, every time, from a full (not shallow) checkout of the repo:
 
 ```bash
 "${CLAUDE_SKILL_DIR}/scripts/release-reconcile.sh" --repo O/R --json release-moves.json
 ```
 
-It refuses (exit 2) when the checkout's `origin` is another repo, then runs
-`git fetch --tags origin`. For each closed issue (done, not "not planned") that a merged PR
+It refuses (exit 2) when the checkout's `origin` is another repo, or a host other than
+github.com (`$GH_HOST` when set), or when the clone is shallow (`shallow clone: run git
+fetch --unshallow origin, then re-run`). Then it runs `git fetch --tags origin`. For each closed issue (done, not "not planned") that a merged PR
 names with a closing keyword, it finds the first release tag containing the PR's merge
 commit. Inside a tag, the issue belongs to that release's milestone (`vX.Y.Z`, else
 `vX.Y`), even when that milestone is closed. After the last tag, it belongs to the
 next-release milestone: `milestones.next_release["O/R"]` in the github-board config, else
-the open milestone with the lowest version. When several merged PRs name an issue, the
-earliest release wins and the line says so.
+the open milestone with the lowest version above the newest tag (a milestone at or below
+it has shipped, even if it is still open). Tags are ordered by version, with the leading
+`v` optional. When several merged PRs name an issue, the earliest release wins and the
+line says so.
 
 - **Show its summary line to the user even when it is clean:**
-  `release check: N issues checked, M mismatches, K flagged`.
+  `release check: N issues checked, M mismatches, K flagged`. "Checked" counts the issues
+  whose milestone was compared. An issue that only a commit names is checked for `FLAG`
+  only, and the line adds `, C named only by a commit`.
 - **Fold its `closed_moves` into the plan before any theme work.** Each `MISMATCH` line
   gives the issue, PR, commit, tag (or "after <last tag>"), and the current and target
   milestone. `--json` writes `{"repo", "closed_moves"}`, which `apply-plan.sh` takes as is.
 - **Raise every `FLAG` line.** It is a closed issue whose linked PRs never merged while a
-  merged PR or a commit on develop names it. Check which PR really shipped the work.
-- `NOTE` lines say why an issue was not checked: its tag has no milestone, there is no
-  next-release milestone, or the number does not exist.
-- Exit 1 means a read failed (fetch, a PR list, the milestone list, or an issue), so the
-  result is incomplete and no JSON is written. A shallow clone warns: commits it lacks
-  cannot be checked. A squashed `release/* -> main` merge breaks tag containment, so its
-  issues show as "after the last tag".
+  merged PR, or a commit on develop or the default branch, names it. The line names the
+  branch. Check which PR really shipped the work.
+- `NOTE` lines say why an issue was not checked or not moved: its tag has no milestone,
+  two milestones match the tag, there is no next-release milestone (for example, every
+  open version milestone is at or below the newest tag), or the number does not exist.
+- A squashed `release/* -> main` merge breaks tag containment. A merge commit that no tag
+  contains but that is older than the last tag gets `NOTE #N: PR #P merged before <tag>
+  but no tag contains it (squashed release?); milestone left as <current>`, and no move.
+  Develop work merged before a hotfix tag gets the same NOTE. Check it by hand.
+- Exit 1 means the result is incomplete, and no JSON is written (an old `--json` file is
+  deleted at the start of every run). It happens when git, gh or jq is missing, the fetch
+  fails, a merged-PR list fails, is empty or hits the 1000-PR limit, a merged PR has no
+  merge commit, the milestone list fails, an issue cannot be read, or a merge commit is
+  not in the clone.
 
 ### 1. Gather
 

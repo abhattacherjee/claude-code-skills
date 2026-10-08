@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# release-reconcile.sh — plan-milestones step 0: check every closed issue's milestone against
-# the release that shipped it (#204).
+# release-reconcile.sh — plan-milestones step 0: check each closed issue a merged PR names
+# against the release that shipped it (#204).
 #
 # For each closed issue (stateReason COMPLETED, or none) named by a merged PR's closing
 # keyword, it finds the first release tag that contains the PR's merge commit. Inside a tag,
 # the issue belongs to that release's milestone (the exact vX.Y.Z title, else vX.Y), even when
 # that milestone is closed. After the last tag, it belongs to the next-release milestone. Both
 # come from lib/config.py, shared with move-card and promote-shipped. When several merged PRs
-# name one issue, the earliest release wins: it shipped there first.
+# name one issue, the earliest release wins: it shipped there first. A merge commit that no
+# tag contains but that is older than the last tag (a squashed release/* -> main merge breaks
+# containment) gets a NOTE and no move.
 #
 # It also flags a closed issue whose linked PRs (closedByPullRequestsReferences) all failed to
 # merge while a merged PR or a commit on develop or the default branch names it: the issue
-# was closed through an abandoned PR while another one shipped the work. It reads only;
-# apply the moves with apply-plan.sh.
+# was closed through an abandoned PR while another one shipped the work. It writes nothing on
+# GitHub; apply the moves with apply-plan.sh.
 #
 # Validation script: set -euo pipefail. Bash 3.2 safe.
 set -euo pipefail
@@ -22,25 +24,34 @@ usage() {
   cat <<'USAGE'
 Usage: release-reconcile.sh --repo OWNER/REPO [--json FILE] [--no-fetch]
 
-Run it from a checkout of OWNER/REPO. It refuses (exit 2) when the checkout's origin is
-another repo, then runs `git fetch --tags origin` (skip with --no-fetch).
+Run it from a full (not shallow) checkout of OWNER/REPO. It refuses (exit 2) when origin
+is another repo or another host than github.com ($GH_HOST when set), or when the clone is
+shallow. Then it runs `git fetch --tags origin` (skip with --no-fetch).
 
 Prints one line per finding, then always a summary:
   MISMATCH #N: PR #P, commit <sha>, in <tag>|after <last tag>: <current|none> -> <target>
+               [; also named by PR #Q (in <tag>|after <last tag>|in no tag, merged before <last tag>), ...]
   FLAG #N: closed with only unmerged linked PR(s) #A, but merged PR #P names it
-  NOTE #N: <why it was not checked>
-  release check: N issues checked, M mismatches, K flagged
+  FLAG #N: closed with only unmerged linked PR(s) #A, but commit <sha> on <branch> names it
+  NOTE #N: <why it was not checked or not moved>
+  release check: N issues checked, M mismatches, K flagged[, C named only by a commit]
+
+"Checked" counts the issues whose milestone was compared. An issue that only a commit
+names is checked for FLAG only, and counted apart.
 
 Options:
   --repo O/R      The repo to check. Required.
   --json FILE     Write {"repo": "O/R", "closed_moves": [{"issue": N, "to": "<title>"}]} for
-                  apply-plan.sh --plan FILE. Not written when the run exits 1.
+                  apply-plan.sh --plan FILE. An old FILE is deleted first, and nothing is
+                  written when the run exits 1.
   --no-fetch      Do not run git fetch --tags origin first.
   -h, --help      This message
 
-Exit codes: 0 it ran (with or without mismatches) · 1 a read failed (git fetch, a merged-PR
-            list, the milestone list, or an issue), so the result is incomplete · 2 usage, not
-            a git checkout, or a checkout of another repo
+Exit codes: 0 it ran (with or without mismatches) · 1 the result is incomplete: git, gh or
+            jq is missing; git fetch failed; a merged-PR list failed, was empty, or hit the
+            1000-PR limit; a merged PR had no merge commit; the milestone list failed; an
+            issue could not be read; or a merge commit is not in this clone · 2 usage, not a
+            git checkout, a shallow clone, or a checkout of another repo or host
 USAGE
 }
 
@@ -56,6 +67,8 @@ while [ $# -gt 0 ]; do
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+# A failed or refused run must not leave an old plan behind for apply-plan.sh to apply.
+[ -z "$JSON_OUT" ] || rm -f "$JSON_OUT"
 [ -n "$REPO" ] || { echo "ERROR: --repo is required" >&2; usage >&2; exit 2; }
 # The repo goes into REST paths and GraphQL variables: no extra segments, no . or .. part.
 if ! printf '%s' "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
@@ -69,7 +82,7 @@ done
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
-# --- the checkout must be REPO ------------------------------------------------------------
+# --- the checkout must be REPO on the GitHub host -----------------------------------------
 if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]; then
   echo "ERROR: not inside a git checkout; run this from a checkout of $REPO" >&2
   exit 2
@@ -78,20 +91,27 @@ fi
 # a mirror rewrite would hide which repo this checkout is.
 ORIGIN_URL=$(git config --get remote.origin.url || true)
 url="${ORIGIN_URL%/}"; url="${url%.git}"
+host=""; path=""
 case "$url" in
-  *://*) path="${url#*://}"; path="${path#*/}" ;;   # https://host/O/R, ssh://git@host/O/R
-  *@*:*) path="${url#*:}" ;;                         # git@host:O/R
-  *) path="" ;;
+  *://*) rest="${url#*://}"; host="${rest%%/*}"; path="${rest#*/}"   # https://host/O/R, ssh://git@host:22/O/R
+         [ "$rest" != "$host" ] || path="" ;;
+  /*|./*|../*) ;;                                                     # a local path
+  *:*) host="${url%%:*}"; path="${url#*:}" ;;                         # [git@]host:O/R
 esac
-if [ -z "$ORIGIN_URL" ] || [ "$(lower "$path")" != "$(lower "$REPO")" ]; then
-  echo "ERROR: this checkout's origin is '${ORIGIN_URL:-none}', not $REPO; refusing." >&2
+host="${host##*@}"; host="${host%%:*}"
+WANT_HOST="${GH_HOST:-github.com}"
+if [ -z "$ORIGIN_URL" ] || [ "$(lower "$host")" != "$(lower "$WANT_HOST")" ] \
+   || [ "$(lower "$path")" != "$(lower "$REPO")" ]; then
+  echo "ERROR: this checkout's origin is '${ORIGIN_URL:-none}', not $REPO on $WANT_HOST; refusing." >&2
   echo "       run it from a checkout of $REPO, or pass the repo this checkout is." >&2
   exit 2
 fi
 
+# A shallow clone lacks commits, and a commit it does have can look contained in no tag:
+# that reads as "after the last tag" and would move a shipped issue. Refuse, never guess.
 if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
-  echo "WARN: this is a shallow clone, so tag containment cannot be trusted. Commits it lacks" >&2
-  echo "      are reported as not checked. Run git fetch --unshallow origin for a full check." >&2
+  echo "ERROR: shallow clone: run git fetch --unshallow origin, then re-run" >&2
+  exit 2
 fi
 
 if [ "$FETCH" -eq 1 ]; then
@@ -103,6 +123,7 @@ fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+INCOMPLETE=""            # reads that leave the result incomplete; exit 1 at the end
 
 # --- merged PRs and the issues they name --------------------------------------------------
 if ! DEFAULT=$(gh repo view "$REPO" --json defaultBranchRef --jq .defaultBranchRef.name 2>"$TMP/err") \
@@ -114,7 +135,7 @@ BASES="develop"
 [ "$DEFAULT" = "develop" ] || BASES="develop $DEFAULT"
 
 # The closing keywords GitHub accepts: the same rule as find-promotable.sh's fallback
-# (promote-shipped/scripts/find-promotable.sh, jq_filter in discover_linked_prs), which
+# (promote-shipped/scripts/find-promotable.sh, jq_filter in discover_prs_for_issue), which
 # tests one issue number. Here the number is captured instead. A keyword, an optional
 # colon, then #N, this repo's owner/repo#N, or this repo's issue URL. GitHub records no
 # closing link for a merge to a non-default base, so the body is the only record.
@@ -135,6 +156,13 @@ for base in $BASES; do
   fi
   if [ "$(printf '%s' "$PRS" | jq 'length')" -ge 1000 ]; then
     echo "WARN: 1000 merged PRs into $base (the --limit); older ones were not read." >&2
+    INCOMPLETE="$INCOMPLETE; the merged PRs into $base past the 1000-PR limit"
+  fi
+  NOSHA=$(printf '%s' "$PRS" | jq -r '[.[] | select((.mergeCommit.oid // "") == "") | "#\(.number)"]
+                                      | join(" ")')
+  if [ -n "$NOSHA" ]; then
+    echo "WARN: merged PR(s) with no merge commit in the reply: $NOSHA" >&2
+    INCOMPLETE="$INCOMPLETE; merged PR(s) $NOSHA (no merge commit)"
   fi
   printf '%s' "$PRS" | jq -r --arg re "$CLOSE_RE" '
     .[] | select((.mergeCommit.oid // "") != "") | . as $p
@@ -143,40 +171,58 @@ for base in $BASES; do
 done
 
 # Commits on develop and the default branch that name an issue: evidence for the flag only.
-: > "$TMP/crefs"          # issue <TAB> sha
-CREFS=""
+: > "$TMP/crefs"          # issue <TAB> sha <TAB> branch, develop first
+HAVE_REF=0
 for base in $BASES; do
-  if git rev-parse --verify -q "refs/remotes/origin/$base^{commit}" >/dev/null; then
-    CREFS="$CREFS refs/remotes/origin/$base"
-  fi
-done
-if [ -n "$CREFS" ]; then
-  # shellcheck disable=SC2086  # CREFS is a list of ref names, split on purpose
-  git log --format='%H%x1f%B%x1e' $CREFS | jq -R -s -r --arg re "$CLOSE_RE" '
+  git rev-parse --verify -q "refs/remotes/origin/$base^{commit}" >/dev/null || continue
+  HAVE_REF=1
+  git log --format='%H%x1f%B%x1e' "refs/remotes/origin/$base" | jq -R -s -r --arg re "$CLOSE_RE" --arg b "$base" '
     split("\u001e")[] | sub("^\\s+"; "") | select(. != "") | split("\u001f")
     | .[0] as $sha | [(.[1] // "") | match($re; "g") | .captures[-1].string | tonumber]
-    | unique[] | "\(.)\t\($sha)"' > "$TMP/crefs"
+    | unique[] | "\(.)\t\($sha)\t\($b)"' >> "$TMP/crefs"
+done
+if [ "$HAVE_REF" -eq 0 ]; then
+  echo "WARN: neither origin/develop nor origin/$DEFAULT exists here, so commit evidence for FLAG is unavailable." >&2
 fi
 
-# --- release tags --------------------------------------------------------------------------
+# --- release tags, in version order -------------------------------------------------------
+# Our own key, not --sort=v:refname: that sorts "2.0" before "v1.0", because it compares the
+# names as text up to the first digit.
 VER_RE='^v?[0-9]+\.[0-9]+(\.[0-9]+)?$'
-git tag --list --sort=v:refname | grep -E "$VER_RE" > "$TMP/tags" || true
+version_sort() {          # stdin: tag names; stdout: version tags, lowest first
+  grep -E "$VER_RE" | awk '{ s = $0; sub(/^v/, "", s); n = split(s, a, ".")
+                             printf "%d %d %d %s\n", a[1], a[2], (n > 2 ? a[3] : 0), $0 }' \
+    | sort -k1,1n -k2,2n -k3,3n -k4,4 | awk '{ print $4 }'
+}
+git tag --list | version_sort > "$TMP/tags" || true
 LAST_TAG=$(awk 'END { print }' "$TMP/tags")
-[ -n "$LAST_TAG" ] || echo "WARN: no release tag (vX.Y or vX.Y.Z) in this checkout; every merged issue counts as after the last release." >&2
+LAST_DATE=""
+if [ -n "$LAST_TAG" ]; then
+  # The tagger date of an annotated tag, else the date of the commit it points at.
+  LAST_DATE=$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$LAST_TAG")
+  [ -n "$LAST_DATE" ] || LAST_DATE=$(git log -1 --format=%ct "$LAST_TAG^{commit}")
+else
+  echo "WARN: no release tag (vX.Y or vX.Y.Z) in this checkout; every merged issue counts as after the last release." >&2
+fi
 
-# sha <TAB> rank <TAB> tag. rank is the tag's place in version order; 999999 after the last
-# tag; -1 when the commit is not in this clone (shallow, or never fetched).
+# sha <TAB> rank <TAB> tag. rank is the tag's place in version order (1 = lowest); for a
+# commit no tag contains, 999998 when it is older than the last tag (a squashed release?)
+# and 999999 when it is newer; -1 when the commit is not in this clone.
 : > "$TMP/shas"
 cut -f3 "$TMP/refs" | sort -u | while IFS= read -r sha; do
   [ -n "$sha" ] || continue
   if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
     printf '%s\t-1\t\n' "$sha"; continue
   fi
-  first=$(git tag --contains "$sha" --sort=v:refname | grep -E "$VER_RE" | awk 'NR == 1' || true)
-  if [ -z "$first" ]; then
-    printf '%s\t999999\t\n' "$sha"
+  first=$(git tag --contains "$sha" | grep -E "$VER_RE" \
+          | awk 'NR == FNR { rank[$0] = FNR; next } ($0 in rank) { print rank[$0] "\t" $0 }' \
+                "$TMP/tags" - | sort -k1,1n | awk 'NR == 1' || true)
+  if [ -n "$first" ]; then
+    printf '%s\t%s\n' "$sha" "$first"
+  elif [ -n "$LAST_DATE" ] && [ "$(git log -1 --format=%ct "$sha")" -le "$LAST_DATE" ]; then
+    printf '%s\t999998\t\n' "$sha"
   else
-    printf '%s\t%s\t%s\n' "$sha" "$(grep -nxF "$first" "$TMP/tags" | cut -d: -f1)" "$first"
+    printf '%s\t999999\t\n' "$sha"
   fi
 done > "$TMP/shas"
 
@@ -191,7 +237,8 @@ NEXT_DONE=0; NEXT_NUM=""; NEXT_TITLE=""
 next_release() {          # sets NEXT_NUM / NEXT_TITLE once; returns 2 on a failed read
   if [ "$NEXT_DONE" -eq 0 ]; then
     local out
-    out=$(gb_next_release --repo "$REPO" --cache "$MS_CACHE") || return 2
+    # --after-tag: the tags were just fetched, so the newest one is known here.
+    out=$(gb_next_release --repo "$REPO" --cache "$MS_CACHE" --after-tag "$LAST_TAG") || return 2
     NEXT_DONE=1
     if [ -n "$out" ]; then NEXT_NUM="${out%%$'\t'*}"; NEXT_TITLE="${out#*$'\t'}"; fi
   fi
@@ -200,7 +247,8 @@ next_release() {          # sets NEXT_NUM / NEXT_TITLE once; returns 2 on a fail
 
 QUERY='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){issueOrPullRequest(number:$num){__typename ... on Issue{number state stateReason milestone{number title} closedByPullRequestsReferences(first:25,includeClosedPrs:true){nodes{number merged}}}}}}'
 OWNER="${REPO%%/*}"; NAME="${REPO#*/}"
-CHECKED=0; FLAGGED=0; UNREAD=""
+CHECKED=0; FLAGGED=0; COMMIT_ONLY=0; UNREAD=""
+LAST_LABEL="${LAST_TAG:-the last tag (none)}"
 : > "$TMP/mismatch"; : > "$TMP/flag"; : > "$TMP/note"; : > "$TMP/moves"
 
 { cut -f1 "$TMP/refs"; cut -f1 "$TMP/crefs"; } | sort -n -u > "$TMP/issues"
@@ -226,7 +274,6 @@ while IFS= read -r num; do
   # Only issues closed as done. Open, not planned and duplicate are not release work.
   printf '%s' "$NODE" | jq -e '.state == "CLOSED" and ((.stateReason // "COMPLETED") == "COMPLETED")' \
     >/dev/null || continue
-  CHECKED=$((CHECKED + 1))
 
   # Step-5 flag: every linked PR unmerged, yet merged work names the issue.
   UNMERGED=$(printf '%s' "$NODE" | jq -r '(.closedByPullRequestsReferences.nodes // []) as $l
@@ -237,14 +284,17 @@ while IFS= read -r num; do
     if [ -n "$ISSUE_ROWS" ]; then
       by="merged PR #$(printf '%s\n' "$ISSUE_ROWS" | awk -F'\t' 'NR == 1 { print $3 }')"
     else
-      by="commit $(awk -F'\t' -v n="$num" '$1 == n { print substr($2, 1, 7); exit }' "$TMP/crefs") on develop"
+      by=$(awk -F'\t' -v n="$num" '$1 == n { print "commit " substr($2, 1, 7) " on " $3; exit }' "$TMP/crefs")
     fi
     echo "FLAG #$num: closed with only unmerged linked PR(s) $UNMERGED, but $by names it" >> "$TMP/flag"
     FLAGGED=$((FLAGGED + 1))
   fi
 
   # Milestone check: merged PRs only.
-  [ -n "$ISSUE_ROWS" ] || continue
+  if [ -z "$ISSUE_ROWS" ]; then
+    COMMIT_ONLY=$((COMMIT_ONLY + 1))
+    continue
+  fi
   if printf '%s\n' "$ISSUE_ROWS" | awk -F'\t' '$2 == -1 { bad = 1 } END { exit !bad }'; then
     echo "WARN: #$num: a merge commit is not in this clone, so its release is unknown." >&2
     UNREAD="$UNREAD #$num"
@@ -253,8 +303,12 @@ while IFS= read -r num; do
   IFS=$'\t' read -r _ rank prn sha tag <<EOF
 $(printf '%s\n' "$ISSUE_ROWS" | awk 'NR == 1')
 EOF
-  if [ "$rank" = 999999 ]; then
-    where="after ${LAST_TAG:-the last tag (none)}"
+  CUR=$(printf '%s' "$NODE" | jq -r '.milestone.title // "none"')
+  if [ "$rank" = 999998 ]; then
+    echo "NOTE #$num: PR #$prn merged before $LAST_TAG but no tag contains it (squashed release?); milestone left as $CUR" >> "$TMP/note"
+    continue
+  elif [ "$rank" = 999999 ]; then
+    where="after $LAST_LABEL"
     rc=0; next_release || rc=$?
     if [ "$rc" -ne 0 ]; then
       echo "ERROR: could not read the next-release milestone of $REPO (see above)." >&2
@@ -268,7 +322,7 @@ EOF
   else
     where="in $tag"
     rc=0; HIT=$(gb_milestone_for_tag --repo "$REPO" --tag "$tag" --cache "$MS_CACHE" 2>"$TMP/err") || rc=$?
-    if [ "$rc" -ne 0 ] || [ -z "$HIT" ]; then
+    if [ "$rc" -ne 0 ]; then
       echo "ERROR: $(tr '\n' ' ' < "$TMP/err" | sed 's/^github-board: error: //')" >&2
       exit 1
     fi
@@ -279,12 +333,12 @@ EOF
     esac
     TNUM="${HIT%%$'\t'*}"; TTITLE="${HIT#*$'\t'}"
   fi
+  CHECKED=$((CHECKED + 1))
   CUR_NUM=$(printf '%s' "$NODE" | jq -r '.milestone.number // ""')
   [ "$CUR_NUM" != "$TNUM" ] || continue
-  CUR=$(printf '%s' "$NODE" | jq -r '.milestone.title // "none"')
-  ALSO=$(printf '%s\n' "$ISSUE_ROWS" | awk -F'\t' -v last="${LAST_TAG:-the last tag (none)}" '
+  ALSO=$(printf '%s\n' "$ISSUE_ROWS" | awk -F'\t' -v last="$LAST_LABEL" '
     NR > 1 { printf "%s#%s (%s)", (n++ ? ", " : "; also named by PR "), $3,
-                    ($2 == 999999 ? "after " last : "in " $5) }')
+                    ($2 == 999999 ? "after " last : ($2 == 999998 ? "in no tag, merged before " last : "in " $5)) }')
   echo "MISMATCH #$num: PR #$prn, commit ${sha:0:7}, $where: $CUR -> $TTITLE$ALSO" >> "$TMP/mismatch"
   printf '%s\t%s\n' "$num" "$TTITLE" >> "$TMP/moves"
 done < "$TMP/issues"
@@ -296,8 +350,11 @@ if [ -n "$UNREAD" ]; then
   NUNREAD=$(printf '%s\n' $UNREAD | awk 'END { print NR }')
   echo "$NUNREAD issue(s) could not be checked:$UNREAD (see the warnings above); the result is incomplete."
 fi
-echo "release check: $CHECKED issues checked, $MISMATCHES mismatches, $FLAGGED flagged"
-if [ -n "$UNREAD" ]; then
+[ -z "$INCOMPLETE" ] || echo "Not read:${INCOMPLETE#;} (see the warnings above); the result is incomplete."
+SUMMARY="release check: $CHECKED issues checked, $MISMATCHES mismatches, $FLAGGED flagged"
+[ "$COMMIT_ONLY" -eq 0 ] || SUMMARY="$SUMMARY, $COMMIT_ONLY named only by a commit"
+echo "$SUMMARY"
+if [ -n "$UNREAD" ] || [ -n "$INCOMPLETE" ]; then
   [ -z "$JSON_OUT" ] || echo "$JSON_OUT not written: the result is incomplete." >&2
   exit 1
 fi

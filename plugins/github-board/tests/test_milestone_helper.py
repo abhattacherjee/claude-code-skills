@@ -33,8 +33,19 @@ def list_route(pages=None, rc=0, stdout=None, stderr=""):
     """The milestone list. Pages print back to back, as an older gh does with --paginate."""
     if stdout is None:
         stdout = "".join(json.dumps(p) + "\n" for p in (pages if pages is not None else [REPO_SHAPE]))
-    return {"match": ["milestones?state=all&per_page=100", "--paginate"],
+    return {"match": ["repos/o/r/milestones?state=all&per_page=100", "--paginate"],
             "stdout": stdout, "stderr": stderr, "rc": rc}
+
+
+def tags_route(pages=None, rc=0, stdout=None, stderr=""):
+    """The repo's tags (gh api repos/O/R/tags --paginate). No tags by default."""
+    if stdout is None:
+        stdout = "".join(json.dumps([{"name": n} for n in p]) + "\n" for p in (pages or [[]]))
+    return {"match": ["repos/o/r/tags", "--paginate"], "stdout": stdout, "stderr": stderr, "rc": rc}
+
+
+def tag_calls(calls):
+    return [c for c in calls if "repos/o/r/tags" in c]
 
 
 def run(tmp_path, *args, routes=None, config=None):
@@ -42,8 +53,10 @@ def run(tmp_path, *args, routes=None, config=None):
         write_config(tmp_path / "xdg-config", config)
     log = tmp_path / "gh.log"
     log.unlink(missing_ok=True)
-    env = dict(os.environ, **install_fake_gh(tmp_path / "bin", routes if routes is not None
-                                             else [list_route()], log))
+    routes = list(routes) if routes is not None else [list_route()]
+    if not any("repos/o/r/tags" in r["match"] for r in routes):
+        routes.append(tags_route())
+    env = dict(os.environ, **install_fake_gh(tmp_path / "bin", routes, log))
     r = subprocess.run([sys.executable, str(CONFIG_PY), *args], env=env, capture_output=True,
                        text=True, timeout=60)
     return r, gh_calls(log)
@@ -72,11 +85,13 @@ def test_the_config_wins_over_the_lowest_version(tmp_path):
     assert r.returncode == 0, r.stderr
     assert r.stdout == "9\tv4.2\n"
     assert "lowest open version" not in r.stderr
-    assert len(calls) == 1
+    assert len(calls) == 2 and len(tag_calls(calls)) == 1
 
 
 def test_a_config_key_matches_the_repo_in_any_case(tmp_path):
-    r, _ = nr(tmp_path, repo="O/R", config=cfg_with({"o/r": "v4.2"}))
+    upper = [dict(list_route(), match=["repos/O/R/milestones?state=all"]),
+             dict(tags_route(), match=["repos/O/R/tags"])]
+    r, _ = nr(tmp_path, repo="O/R", config=cfg_with({"o/r": "v4.2"}), routes=upper)
     assert r.returncode == 0, r.stderr
     assert r.stdout == "9\tv4.2\n"
 
@@ -195,11 +210,81 @@ def test_the_cache_file_is_reused_and_a_failure_is_not_cached(tmp_path):
                    routes=[list_route(rc=1, stdout="", stderr="HTTP 502\n")])
     assert r.returncode == 2 and not cache.exists()
     r, calls = run(tmp_path, "next-release-milestone", "--repo", "o/r", "--cache", str(cache))
-    assert r.returncode == 0 and len(calls) == 1 and cache.exists()
+    assert r.returncode == 0 and len(calls) == 2 and len(tag_calls(calls)) == 1 and cache.exists()
     r, calls = run(tmp_path, "milestone-for-tag", "--repo", "o/r", "--tag", "v4.0.0",
                    "--cache", str(cache))
     assert r.returncode == 0 and r.stdout == "15\tv4.0\n"
     assert calls == []
+
+
+def test_the_answer_on_page_one_is_kept_when_page_two_has_more(tmp_path):
+    r, _ = nr(tmp_path, routes=[list_route([[ms("v4.1", 13)], [ms("v4.2", 9), ms("Backlog", 2)]])])
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "13\tv4.1\n"
+
+
+# ---- the newest version tag bounds the fallback (round 1, item 3) ---------------------
+
+def test_an_open_milestone_already_shipped_is_skipped(tmp_path):
+    # v4.0 shipped (tag v4.0.0) but was left open: it is not the next release.
+    shape = [ms("v4.0", 15), ms("v4.1", 13), ms("v4.2", 9)]
+    r, calls = nr(tmp_path, routes=[list_route([shape]), tags_route([["v4.0.0", "nightly"]])])
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "13\tv4.1\n"
+    assert tag_calls(calls) == [["api", "repos/o/r/tags", "--paginate"]]
+
+
+def test_a_minor_milestone_is_at_or_below_its_patch_tag(tmp_path):
+    shape = [ms("v4.1", 13), ms("v4.1.1", 14), ms("v4.2", 9)]
+    r, _ = nr(tmp_path, routes=[list_route([shape]), tags_route([["v4.1.0"]])])
+    assert r.stdout == "14\tv4.1.1\n"
+
+
+def test_the_newest_tag_is_the_highest_version_on_any_page(tmp_path):
+    # Mixed prefixes, a non-version tag, and the highest on page two.
+    shape = [ms("v4.2", 9), ms("v4.10", 3), ms("v4.11", 4)]
+    pages = [["4.2.0", "v4.9.0", "nightly-1"], ["v4.10.0", "v4.1.0"]]
+    r, _ = nr(tmp_path, routes=[list_route([shape]), tags_route(pages)])
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "4\tv4.11\n"
+
+
+@pytest.mark.parametrize("route,why", [
+    pytest.param(tags_route(rc=1, stdout="", stderr="HTTP 502: Bad Gateway\n"), "502", id="gh-fails"),
+    pytest.param(tags_route(stdout=""), "no output", id="empty-output"),
+    pytest.param(tags_route(stdout='{"message": "Not Found"}\n'), "not a list", id="object-page"),
+])
+def test_an_unreadable_tag_list_exits_2(tmp_path, route, why):
+    r, _ = nr(tmp_path, routes=[list_route(), route])
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert r.stdout == ""
+    assert "could not list tags for o/r" in r.stderr and why in r.stderr
+
+
+def test_a_configured_title_at_or_below_the_newest_tag_warns_and_sets_nothing(tmp_path):
+    r, _ = nr(tmp_path, config=cfg_with({"o/r": "v4.1"}),
+              routes=[list_route(), tags_route([["v4.1.0"]])])
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == ""
+    assert "already shipped" in r.stderr and "v4.1.0" in r.stderr
+
+
+def test_after_tag_replaces_the_tag_read(tmp_path):
+    r, calls = run(tmp_path, "next-release-milestone", "--repo", "o/r", "--after-tag", "v4.1.0")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "9\tv4.2\n"
+    assert tag_calls(calls) == []
+
+
+def test_an_empty_after_tag_means_no_tags(tmp_path):
+    r, calls = run(tmp_path, "next-release-milestone", "--repo", "o/r", "--after-tag", "")
+    assert r.returncode == 0 and r.stdout == "13\tv4.1\n"
+    assert tag_calls(calls) == []
+
+
+def test_after_tag_must_be_a_version(tmp_path):
+    r, calls = run(tmp_path, "next-release-milestone", "--repo", "o/r", "--after-tag", "nightly")
+    assert r.returncode == 2 and calls == []
 
 
 # ---- milestone-for-tag (PR A's rules, #203) --------------------------------------------
@@ -308,7 +393,7 @@ def test_the_validator_accepts_good_sections(tmp_path):
 def test_the_bash_wrappers(tmp_path, fn, args, out):
     log = tmp_path / "gh.log"
     env = dict(os.environ, GB_PYTHON=sys.executable,
-               **install_fake_gh(tmp_path / "bin", [list_route()], log))
+               **install_fake_gh(tmp_path / "bin", [list_route(), tags_route()], log))
     r = subprocess.run(["bash", "-c", f'. "{CONFIG_SH}"; {fn} "$@"', "x", *args], env=env,
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
