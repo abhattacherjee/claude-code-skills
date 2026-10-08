@@ -2,7 +2,7 @@
 name: plan-milestones
 description: "Re-organises open GitHub issues across milestones so each milestone stays small, themed, and shippable, deferring the rest to a themed backlog rather than letting one milestone absorb everything. Use when: (1) a milestone keeps growing and never ships, (2) new issues land in the open milestone by default, (3) open issues have no milestone at all, (4) planning what a release actually contains, (5) the user asks to re-arrange, re-scope, or focus milestones, (6) a roadmap pivots and leaves version-numbered milestones that never shipped, (7) 'milestone planning' or /github-milestone-planning (the old name of this skill). Covers: milestone themes, accretion detection, keep/defer/backlog triage, what to do with emptied and never-shipped milestones, gh milestone mechanics."
 metadata:
-  version: 2.1.0
+  version: 2.2.0
 ---
 
 # GitHub Milestone Planning
@@ -18,6 +18,7 @@ everything else somewhere with its own theme.
 ## Quick Check
 
 ```bash
+"${CLAUDE_SKILL_DIR}/scripts/release-reconcile.sh" --repo O/R --json release-moves.json  # step 0
 "${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh"                      # themes, open issues, accretion flags
 "${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh" --unassigned         # + open issues with NO milestone
 "${CLAUDE_SKILL_DIR}/scripts/milestone-report.sh" --json               # machine-readable
@@ -26,7 +27,7 @@ everything else somewhere with its own theme.
 "${CLAUDE_SKILL_DIR}/scripts/task-manifest.sh" refocus                 # task checklist
 ```
 
-Requires `gh` (authenticated) and `jq`.
+Requires `gh` (authenticated) and `jq`. Step 0 also needs `git` and a checkout of the repo.
 
 ## Progress Tracking (MANDATORY)
 
@@ -36,6 +37,7 @@ never leave a triage looking finished when the moves were never applied.
 
 | # | Task |
 |---|---|
+| 0 | Check closed issues against their releases |
 | 1 | Gather milestone + issue state |
 | 2 | Establish the theme for each milestone |
 | 3 | Judge each open issue against its milestone theme |
@@ -44,6 +46,37 @@ never leave a triage looking finished when the moves were never applied.
 | 6 | Apply and verify |
 
 ## Workflow
+
+### 0. Release check (every invocation)
+
+Run this first, every time, from a checkout of the repo:
+
+```bash
+"${CLAUDE_SKILL_DIR}/scripts/release-reconcile.sh" --repo O/R --json release-moves.json
+```
+
+It refuses (exit 2) when the checkout's `origin` is another repo, then runs
+`git fetch --tags origin`. For each closed issue (done, not "not planned") that a merged PR
+names with a closing keyword, it finds the first release tag containing the PR's merge
+commit. Inside a tag, the issue belongs to that release's milestone (`vX.Y.Z`, else
+`vX.Y`), even when that milestone is closed. After the last tag, it belongs to the
+next-release milestone: `milestones.next_release["O/R"]` in the github-board config, else
+the open milestone with the lowest version. When several merged PRs name an issue, the
+earliest release wins and the line says so.
+
+- **Show its summary line to the user even when it is clean:**
+  `release check: N issues checked, M mismatches, K flagged`.
+- **Fold its `closed_moves` into the plan before any theme work.** Each `MISMATCH` line
+  gives the issue, PR, commit, tag (or "after <last tag>"), and the current and target
+  milestone. `--json` writes `{"repo", "closed_moves"}`, which `apply-plan.sh` takes as is.
+- **Raise every `FLAG` line.** It is a closed issue whose linked PRs never merged while a
+  merged PR or a commit on develop names it. Check which PR really shipped the work.
+- `NOTE` lines say why an issue was not checked: its tag has no milestone, there is no
+  next-release milestone, or the number does not exist.
+- Exit 1 means a read failed (fetch, a PR list, the milestone list, or an issue), so the
+  result is incomplete and no JSON is written. A shallow clone warns: commits it lacks
+  cannot be checked. A squashed `release/* -> main` merge breaks tag containment, so its
+  issues show as "after the last tag".
 
 ### 1. Gather
 
