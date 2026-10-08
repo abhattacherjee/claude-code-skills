@@ -63,7 +63,7 @@ exit 1
 '''
 
 
-def _find(tmp_path, timeline, compare="ahead"):
+def _find(tmp_path, timeline, compare="ahead", gh_host=None):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "gh").write_text(_STUB)
@@ -74,6 +74,9 @@ def _find(tmp_path, timeline, compare="ahead"):
     log = tmp_path / "gh.log"
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", GH_LOG=str(log),
                TIMELINE=str(tmp_path / "timeline.json"), COMPARE=compare)
+    env.pop("GH_HOST", None)
+    if gh_host:
+        env["GH_HOST"] = gh_host
     done = subprocess.run(["bash", str(FIND), str(inv)], capture_output=True, text=True,
                           env=env, timeout=60)
     assert done.returncode == 0, done.stderr
@@ -236,3 +239,34 @@ def test_a_keyword_inside_a_longer_word_does_not_credit_the_pr(tmp_path, body):
     out, calls = _find(tmp_path, _timeline(_pr("o/r", body)), compare="behind")
     assert [c["promoteClass"] for c in out["candidates"]] == ["nopr"], body
     assert not [c for c in calls if "compare" in c]
+
+
+# #208: the issue URL uses the host gh talks to ($GH_HOST, else github.com), like release-reconcile.sh.
+GHE = "ghe.example.com"
+
+
+def _classes(tmp_path, body, gh_host):
+    out, _ = _find(tmp_path, _timeline(_pr("o/r", body)), compare="behind", gh_host=gh_host)
+    return [c["promoteClass"] for c in out["candidates"] + out["held"]]
+
+
+def test_with_gh_host_set_an_issue_url_on_that_host_credits_the_pr(tmp_path):
+    assert _classes(tmp_path, f"closes https://{GHE}/O/R/issues/42", GHE) == ["hold-unreleased"]
+
+
+def test_with_gh_host_set_a_github_com_issue_url_does_not_credit_the_pr(tmp_path):
+    assert _classes(tmp_path, "closes https://github.com/o/r/issues/42", GHE) == ["nopr"]
+
+
+def test_without_gh_host_a_ghe_issue_url_does_not_credit_the_pr(tmp_path):
+    assert _classes(tmp_path, f"closes https://{GHE}/o/r/issues/42", None) == ["nopr"]
+
+
+def test_the_host_dots_are_escaped_so_another_character_does_not_match(tmp_path):
+    assert _classes(tmp_path, "closes https://gheXexample.com/o/r/issues/42", GHE) == ["nopr"]
+
+
+@pytest.mark.parametrize("host", ['a"b', "a|b", "ghe.example.com/x", "a b"])
+def test_a_gh_host_that_is_not_a_hostname_is_refused_not_spliced_into_the_filter(tmp_path, host):
+    out, calls = _find(tmp_path, _timeline(_pr("o/r", "closes #42")), gh_host=host)
+    assert not [c for c in calls if "graphql" in c]

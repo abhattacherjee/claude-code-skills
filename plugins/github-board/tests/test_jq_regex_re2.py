@@ -19,10 +19,11 @@ from gbtest import PLUGIN, SKILLS_DIR
 
 FIND = SKILLS_DIR / "promote-shipped" / "scripts" / "find-promotable.sh"
 RECONCILE = SKILLS_DIR / "plan-milestones" / "scripts" / "release-reconcile.sh"
-LOOKAROUND = ("(?<", "(?=", "(?!")
+# Look-around only. A named capture "(?<name>" is valid RE2 in Go, so "(?<" alone is not flagged.
+LOOKAROUND = ("(?<=", "(?<!", "(?=", "(?!")
 # A jq regex function call; its line is checked for a backreference (\\1 in a jq string).
 REGEX_CALL = re.compile(r"\b(test|match|capture|scan|splits?|sub|gsub)\(")
-BACKREF = re.compile(r"\\\\[1-9]")
+BACKREF = re.compile(r"\\\\[1-9]|\\\\k<")
 KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?"
 
 
@@ -51,9 +52,31 @@ def test_the_scan_covers_the_find_promotable_filter():
 
 
 def test_the_scan_catches_a_planted_lookbehind_and_backreference():
-    assert scan('x | test("(?i)(?<![a-z])closes") | y') == [(1, "look-around (?<")]
+    assert scan('x | test("(?i)(?<![a-z])closes") | y') == [(1, "look-around (?<!")]
     assert scan('x | test("(a)\\\\1")') == [(1, "backreference")]
     assert scan('x | test("(?i)(^|[^A-Za-z0-9_])closes")') == []
+
+
+@pytest.mark.parametrize("snippet, problem", [
+    ('x | test("(?<=a)b")', "look-around (?<="),
+    ('x | test("(?<!a)b")', "look-around (?<!"),
+    ('x | test("a(?=b)")', "look-around (?="),
+    ('x | test("a(?!b)")', "look-around (?!"),
+    ('x | test("(a)\\\\1")', "backreference"),
+    ('x | test("(a)\\\\9")', "backreference"),
+    ('x | test("(?<n>a)\\\\k<n>")', "backreference"),
+])
+def test_the_scan_catches_each_forbidden_form(snippet, problem):
+    assert (1, problem) in scan(snippet)
+
+
+@pytest.mark.parametrize("snippet", [
+    'x | capture("(?<issue>[0-9]+)")',
+    'x | test("(?i)(?<name>close[sd]?) (?<num>[0-9]+)")',
+    'x | test("(?P<issue>[0-9]+)")',
+])
+def test_the_scan_allows_a_named_capture(snippet):
+    assert scan(snippet) == []
 
 
 @pytest.mark.parametrize("script", jq_scripts(), ids=lambda p: p.name)

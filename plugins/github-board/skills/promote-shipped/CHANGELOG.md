@@ -4,6 +4,15 @@ All notable changes to the `promote-shipped` skill (named `github-release-board-
 before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] — 2026-10-08
+
+### Fixed
+- `find-promotable.sh` matches a closing keyword's issue URL on `$GH_HOST` when it is set,
+  else github.com, with the dots escaped. It was fixed to github.com, so on GitHub Enterprise
+  it disagreed with `release-reconcile.sh`. A `GH_HOST` that is not a hostname makes discovery
+  report FAILED instead of going into the jq filter. The filter still has no look-around (gh
+  runs it as Go RE2). (#208)
+
 ## [2.1.1] — 2026-10-07
 
 ### Changed

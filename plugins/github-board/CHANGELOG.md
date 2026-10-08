@@ -2,6 +2,13 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.2.1] - 2026-10-08
+
+### Fixed
+
+- `promote-shipped` 2.1.2: `find-promotable.sh` matches issue URLs on `$GH_HOST` (else github.com), dots escaped, like `release-reconcile.sh` (#208).
+- `tests/test_jq_regex_re2.py` flags only `(?<=`, `(?<!`, `(?=`, `(?!` and backreferences (`\1` to `\9`, `\k<`). A named capture `(?<name>...)` is valid Go RE2 and now passes (#208).
+
 ## [1.2.0] - 2026-10-07
 
 ### Added
