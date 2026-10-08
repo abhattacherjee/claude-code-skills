@@ -242,8 +242,10 @@ discover_prs_for_issue() {
   # PR that does claim this issue is returned as {foreign:true} so the candidate is held, not
   # promoted on the "no linked PR" rule. The repo and number are checked before they are
   # pasted into the filter below as literals.
-  if ! printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
-     || ! printf '%s' "$num" | grep -Eq '^[0-9]+$'; then
+  # [[ =~ ]] matches the whole value; grep -Eq matches line by line, so a value with a second
+  # line would pass if any one line fit.
+  if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+     || ! [[ "$num" =~ ^[0-9]+$ ]]; then
     echo "[find-promotable] discovery skipped: malformed reference repo='$repo' num='$num'" >&2
     echo "FAILED"; return
   fi
@@ -256,7 +258,7 @@ discover_prs_for_issue() {
   # plan-milestones/scripts/release-reconcile.sh.
   local want_host host_re
   want_host="${GH_HOST:-github.com}"
-  if ! printf '%s' "$want_host" | grep -Eq '^[A-Za-z0-9.-]+$'; then
+  if ! [[ "$want_host" =~ ^[A-Za-z0-9.-]+$ ]]; then
     echo "[find-promotable] discovery skipped: GH_HOST='$want_host' is not a hostname" >&2
     echo "FAILED"; return
   fi

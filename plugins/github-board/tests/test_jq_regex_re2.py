@@ -20,10 +20,14 @@ from gbtest import PLUGIN, SKILLS_DIR
 FIND = SKILLS_DIR / "promote-shipped" / "scripts" / "find-promotable.sh"
 RECONCILE = SKILLS_DIR / "plan-milestones" / "scripts" / "release-reconcile.sh"
 # Look-around only. A named capture "(?<name>" is valid RE2 in Go, so "(?<" alone is not flagged.
-LOOKAROUND = ("(?<=", "(?<!", "(?=", "(?!")
+# Oniguruma-only too: atomic (?> and absent (?~ groups. Local jq accepts them, Go RE2 does not.
+LOOKAROUND = ("(?<=", "(?<!", "(?=", "(?!", "(?>", "(?~")
 # A jq regex function call; its line is checked for a backreference (\\1 in a jq string).
 REGEX_CALL = re.compile(r"\b(test|match|capture|scan|splits?|sub|gsub)\(")
-BACKREF = re.compile(r"\\\\[1-9]|\\\\k<")
+# \\1 to \\9, \\k<n>, \\k'n', and the subexpression calls \\g<n>, \\g'n'.
+BACKREF = re.compile(r"\\\\[1-9]|\\\\[kg][<']")
+# A possessive quantifier: *+ ++ ?+ }+ (RE2 has none). A plain a+ or [0-9]+ is one quantifier.
+POSSESSIVE = re.compile(r"[*+?}]\+")
 KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?"
 
 
@@ -42,6 +46,8 @@ def scan(text):
                 bad.append((i, f"look-around {token}"))
         if REGEX_CALL.search(line) and BACKREF.search(line):
             bad.append((i, "backreference"))
+        if REGEX_CALL.search(line) and POSSESSIVE.search(line):
+            bad.append((i, "possessive quantifier"))
     return bad
 
 
@@ -65,6 +71,15 @@ def test_the_scan_catches_a_planted_lookbehind_and_backreference():
     ('x | test("(a)\\\\1")', "backreference"),
     ('x | test("(a)\\\\9")', "backreference"),
     ('x | test("(?<n>a)\\\\k<n>")', "backreference"),
+    ("x | test(\"(?<n>a)\\\\k'n'\")", "backreference"),
+    ('x | test("(?<n>a)\\\\g<n>")', "backreference"),
+    ('x | test("(a)\\\\g<1>")', "backreference"),
+    ('x | test("(?>a+)b")', "look-around (?>"),
+    ('x | test("a(?~b)")', "look-around (?~"),
+    ('x | test("a*+b")', "possessive quantifier"),
+    ('x | test("a++b")', "possessive quantifier"),
+    ('x | test("a?+b")', "possessive quantifier"),
+    ('x | test("a{2}+b")', "possessive quantifier"),
 ])
 def test_the_scan_catches_each_forbidden_form(snippet, problem):
     assert (1, problem) in scan(snippet)
@@ -74,6 +89,7 @@ def test_the_scan_catches_each_forbidden_form(snippet, problem):
     'x | capture("(?<issue>[0-9]+)")',
     'x | test("(?i)(?<name>close[sd]?) (?<num>[0-9]+)")',
     'x | test("(?P<issue>[0-9]+)")',
+    'x | test("a+b*c?[0-9]+\\\\s+x{2}y+?")',
 ])
 def test_the_scan_allows_a_named_capture(snippet):
     assert scan(snippet) == []

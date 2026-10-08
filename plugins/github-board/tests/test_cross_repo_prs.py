@@ -63,14 +63,17 @@ exit 1
 '''
 
 
-def _find(tmp_path, timeline, compare="ahead", gh_host=None):
+def _find(tmp_path, timeline, compare="ahead", gh_host=None, issue_patch=None):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "gh").write_text(_STUB)
     (bindir / "gh").chmod(0o755)
     (tmp_path / "timeline.json").write_text(json.dumps(timeline))
     inv = tmp_path / "inv.json"
-    inv.write_text(json.dumps(_inventory()))
+    inventory = _inventory()
+    if issue_patch:
+        inventory["items"][0]["issue"].update(issue_patch)
+    inv.write_text(json.dumps(inventory))
     log = tmp_path / "gh.log"
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", GH_LOG=str(log),
                TIMELINE=str(tmp_path / "timeline.json"), COMPARE=compare)
@@ -266,7 +269,25 @@ def test_the_host_dots_are_escaped_so_another_character_does_not_match(tmp_path)
     assert _classes(tmp_path, "closes https://gheXexample.com/o/r/issues/42", GHE) == ["nopr"]
 
 
-@pytest.mark.parametrize("host", ['a"b', "a|b", "ghe.example.com/x", "a b"])
+def _assert_refused_and_held(out, calls):
+    # A refusal must read as "could not verify" (held), never as "no PR" (promoted).
+    assert not [c for c in calls if "graphql" in c]
+    assert out["candidates"] == []
+    assert [c["promoteClass"] for c in out["held"]] == ["hold-discovery-failed"]
+
+
+@pytest.mark.parametrize("host", ['a"b', "a|b", "ghe.example.com/x", "a b",
+                                  'x\n|)")) or true or (""|test("('])
 def test_a_gh_host_that_is_not_a_hostname_is_refused_not_spliced_into_the_filter(tmp_path, host):
     out, calls = _find(tmp_path, _timeline(_pr("o/r", "closes #42")), gh_host=host)
-    assert not [c for c in calls if "graphql" in c]
+    _assert_refused_and_held(out, calls)
+
+
+@pytest.mark.parametrize("patch", [
+    {"repo": 'o/r\n"x'},
+    {"repo": "o/r\nx/y"},
+    {"number": "42\n7"},
+])
+def test_a_multi_line_repo_or_number_is_refused_not_spliced_into_the_filter(tmp_path, patch):
+    out, calls = _find(tmp_path, _timeline(_pr("o/r", "closes #42")), issue_patch=patch)
+    _assert_refused_and_held(out, calls)
