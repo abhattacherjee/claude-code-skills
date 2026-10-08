@@ -28,11 +28,21 @@ REGEX_CALL = re.compile(r"\b(test|match|capture|scan|splits?|sub|gsub)\(")
 BACKREF = re.compile(r"\\\\[1-9]|\\\\[kg][<']")
 # A possessive quantifier: *+ ++ ?+ }+ (RE2 has none). A plain a+ or [0-9]+ is one quantifier.
 POSSESSIVE = re.compile(r"[*+?}]\+")
-# Before that check, replace escaped characters (\\+ in a jq string is a literal +), then bracket
-# classes (? and + are literals there), each with a plain X so the text around it stays apart. A test heuristic: a ] first in a class is not handled,
-# and a false positive fails loudly.
+# The check reads the contents of each jq string literal on the line, not the whole line, so
+# a jq array constructor [ ... ] is never taken for a class. In a literal, an escaped character
+# (\\+ in a jq string is a literal +) and then a bracket class (? and + are literals there)
+# are each replaced with a plain X so the text around them stays apart. A test heuristic:
+# a ] first in a class is not handled, and a false positive fails loudly.
+STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 ESCAPED = re.compile(r"\\\\.")
 CLASS = re.compile(r"\[[^\]]*\]")
+
+
+def has_possessive(line):
+    return any(POSSESSIVE.search(CLASS.sub("X", ESCAPED.sub("X", lit)))
+               for lit in STRING.findall(line))
+
+
 KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?"
 
 
@@ -51,7 +61,7 @@ def scan(text):
                 bad.append((i, f"look-around {token}"))
         if REGEX_CALL.search(line) and BACKREF.search(line):
             bad.append((i, "backreference"))
-        if REGEX_CALL.search(line) and POSSESSIVE.search(CLASS.sub("X", ESCAPED.sub("X", line))):
+        if REGEX_CALL.search(line) and has_possessive(line):
             bad.append((i, "possessive quantifier"))
     return bad
 
@@ -85,6 +95,8 @@ def test_the_scan_catches_a_planted_lookbehind_and_backreference():
     ('x | test("a++b")', "possessive quantifier"),
     ('x | test("a?+b")', "possessive quantifier"),
     ('x | test("a{2}+b")', "possessive quantifier"),
+    ('x | [test("a++")]', "possessive quantifier"),
+    ('[.[] | select(test("a*+"))]', "possessive quantifier"),
 ])
 def test_the_scan_catches_each_forbidden_form(snippet, problem):
     assert (1, problem) in scan(snippet)
