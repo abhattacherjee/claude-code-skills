@@ -41,7 +41,8 @@ when its own background job ends.
 
 All live in `<RUN_DIR>`. No script writes these names. The scripts write `r1-<ADVERSARY>.json`,
 `r2-<ADVERSARY>-verdicts.json`, `r3-codex-counters.json`, `report.md`, `report.json`,
-`round-<K>.json`, `fix-range-<K>.diff` and `recheck-<K>.json`; `review:adversarial` also writes
+`round-<K>.json`, `fix-range-<K>.diff`, `cites-<K>.diff` and `recheck-<K>.json`, and the Step 2.2
+Gemini fallback writes `r2-gemini-prompt.txt`; `review:adversarial` also writes
 `r1-empty.json` and `r2-empty.json`.
 
 | Dispatch | Results file | Shape |

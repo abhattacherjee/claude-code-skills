@@ -691,7 +691,7 @@ class DispatchContractTests(unittest.TestCase):
         script_outputs = re.compile(
             r"^(r1-(codex|gemini|claude-only|claude|empty)\.json|r2-(codex|gemini|claude-only|empty)"
             r"(-verdicts)?\.json|r3-codex-counters\.json|report\.(md|json)|round-.*\.json|"
-            r"fix-range-.*\.diff|recheck-.*\.json)$")
+            r"fix-range-.*\.diff|cites-.*\.diff|recheck-.*\.json|r2-gemini-prompt\.txt)$")
         for name in names:
             self.assertNotRegex(name, script_outputs)
         # r2-claude-verdicts.json is the one name a Claude agent and synthesize.py share on purpose.
