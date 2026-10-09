@@ -1,7 +1,7 @@
 # review
 
 <!-- plugin-meta:start -->
-**Version:** 1.0.2 · **2** skills · **3** agents · **0** commands
+**Version:** 1.1.0 · **2** skills · **3** agents · **0** commands
 <!-- plugin-meta:end -->
 
 Two review skills in one install. `deep` converges a changeset to zero actionable issues in two phases. `adversarial` is the single-pass version: Claude and an opposing model (Codex, else Gemini) find issues independently, cross-examine each other, and only findings the other side confirms are reported.
@@ -82,7 +82,7 @@ The Gemini notes below apply when Gemini is the adversary. The skill detects and
 
 No manual pre-flight is needed; the check runs at the start of every run.
 
-The `gemini` binary at version 0.38.2 or later supports `gemini -p "<prompt>" -o json` for headless use.
+The `gemini` binary at version 0.38.2 or later supports headless use. `gemini-review.sh` runs `gemini -o json` with all input on stdin and a fixed `-p` sentence.
 
 ## Contents
 
@@ -93,8 +93,10 @@ The `gemini` binary at version 0.38.2 or later supports `gemini -p "<prompt>" -o
 - `ensure-gemini.sh`: Step 0 detection. Prints `KEY=VALUE` status lines (installed, version, authed, install hint, auth hint). It never installs anything and never calls the network.
 - `ensure-codex.sh`: Codex install and login detection (the exit code of `codex login status`). It never installs anything.
 - `pick-adversary.sh`: picks Codex, then Gemini, then Claude-only. `--adversary` forces one.
-- `codex-review.sh`: Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`.
-- `gemini-review.sh`: `--mode find` is Gemini's independent R1 pass. `--mode judge` is its R2 cross-examination of Claude's findings. It extracts JSON from the CLI envelope and retries once on a parse failure.
+- `codex-review.sh`: Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`. Exit 4 (`SECRET_SUSPECTED`) means the secret scan hit an input and nothing was sent; `--allow-secret-match` sends anyway after the user confirms.
+- `gemini-review.sh`: `--mode find` is Gemini's independent R1 pass. `--mode judge` is its R2 cross-examination of Claude's findings. It extracts JSON from the CLI envelope and retries once on a parse failure. The diff and findings go on stdin only, in nonce-tagged blocks marked as untrusted data, with every `@` written as `\@` so the Gemini CLI does not read it as a file include. Exit 4 works as for `codex-review.sh`.
+- `secret_scan.py`: scans files for secret formats and secret-looking file names in diff headers. Prints `<path>:<line> <pattern-name>`, never the value. Exit 0 clean, 4 hit, 2 unreadable. Both adversary scripts run it on their inputs before any model call.
+- `check-cites.py`: checks that each finding's path is a file in the diff, inside the repo, and that its line exists. `deep` runs it before an implementer acts on the survivors. Exit 0 all passed, 1 some failed, 2 unreadable.
 - `detect-mode.sh`: resolves PR or local mode and writes the shared diff that both models read. `--base <branch>` sets the local base; `--include-untracked` adds untracked files, minus secret-looking names.
 - `synthesize.py`: applies the survivor rule to the four symmetric inputs (Claude findings, adversary findings, adversary verdicts, Claude verdicts) and sorts findings into SURVIVORS, UNCONFIRMED and REJECTED.
 - `sink.sh`: delivers the report. It posts the PR audit trail in PR mode, and prints the terminal report and writes the markdown file in local mode.

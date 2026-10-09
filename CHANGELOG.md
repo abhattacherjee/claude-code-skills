@@ -9,6 +9,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ### Fixed
 
+- **`review` 1.1.0: the diff under review is untrusted input (#123).** `codex-review.sh` and `gemini-review.sh` run the new `secret_scan.py` on everything they send and exit 4 (`SECRET_SUSPECTED`) on a hit, which the skills never treat as an unavailable adversary. `gemini-review.sh` sends the brief, diff and findings on stdin in nonce-tagged blocks with a fixed `-p`, and escapes `@` so the Gemini CLI does not include files (#120). `deep` (1.1.0) runs the new `check-cites.py` before its implementer, asks before pushing someone else's PR, confirms each out-of-tree file, and forbids diff text in a shell argument. `adversarial` 1.1.0. See `plugins/review/CHANGELOG.md`.
 - **`github-board` 1.2.1: `GH_HOST` in `find-promotable.sh` issue URLs, and an RE2 guard that allows named captures (#208).** `promote-shipped` (2.1.2) matches a closing keyword's issue URL on `$GH_HOST` (else github.com), like `release-reconcile.sh`. The `--jq` regex test flags look-around and backreferences only, not `(?<name>...)`. See `plugins/github-board/CHANGELOG.md`.
 
 ### Added

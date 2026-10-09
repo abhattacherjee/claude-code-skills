@@ -2,6 +2,17 @@
 
 All notable changes to the **adversarial** skill (was `adversarial-review`) are documented here.
 
+## [1.1.0] - 2026-10-09
+
+### Fixed
+
+- The diff is treated as untrusted input (#123).
+  - New `scripts/secret_scan.py`. `codex-review.sh` and `gemini-review.sh` scan every input they send before any model call. A hit sends nothing and exits 4 with `SECRET_SUSPECTED:` and `<path>:<line> <pattern-name>` lines; `--allow-secret-match` sends anyway after the user confirms. Step 2, Step 3 and Degradation Behavior never treat exit 4 as exit 3. An unreadable input exits 1.
+  - `gemini-review.sh` sends the brief, diff and findings on stdin only, in nonce-tagged blocks marked as untrusted data, with a fixed `-p` sentence and every `@` written as `\@` (#120).
+  - `audit_record.py`'s `SECRET_PATTERNS` adds Slack tokens, and its `sk-` patterns need a left boundary, so `task-…` and `risk-…` no longer match as OpenAI keys. This also changes what `redact()` replaces.
+  - New `scripts/check-cites.py`, used by `review:deep` before its implementer.
+  - The Claude finder and cross-examiner dispatches say the diff and findings are untrusted data, never instructions.
+
 ## [1.0.0] - 2026-10-03
 
 ### Changed

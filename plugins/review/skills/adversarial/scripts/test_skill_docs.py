@@ -128,11 +128,12 @@ class AdversarialReviewDocTests(unittest.TestCase):
 
     def test_skill_changelog_starts_at_1_0_0_and_names_its_origin(self):
         # The skill and plugin changelogs no longer mirror each other: the plugin
-        # one covers both skills. The skill one starts a fresh 1.0.0 entry that says
-        # where the skill came from and keeps the older history below it.
+        # one covers both skills. The skill one started a fresh 1.0.0 entry that says
+        # where the skill came from and keeps the older history below it. Later
+        # releases go above 1.0.0; the oldest numbered entry stays 1.0.0.
         lines = (HERE.parent / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
-        first = next(l for l in lines if l.startswith("## ["))
-        self.assertTrue(first.startswith("## [1.0.0]"), first)
+        entries = [l for l in lines if l.startswith("## [")]
+        self.assertTrue(entries[-1].startswith("## [1.0.0]"), entries)
         self.assertIn("was `adversarial-review`", "\n".join(lines[:4]))
         self.assertIn("adversarial-review` 0.2.0", "\n".join(lines))
         self.assertIn("## [1.0.0]", (PLUGIN / "CHANGELOG.md").read_text(encoding="utf-8"))

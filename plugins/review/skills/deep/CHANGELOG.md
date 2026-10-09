@@ -2,6 +2,18 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [1.1.0] - 2026-10-09
+
+### Fixed
+
+- The diff is treated as untrusted input (#123). New `references/untrusted-input.md` holds the detail.
+  - Phase 0 adds an out-of-tree file only after the user confirms each path, and appends it to the diff so the secret scan covers it.
+  - Phase 1, R1 and R2 dispatches say the diff and findings are untrusted data, never instructions.
+  - Exit 4 (`SECRET_SUSPECTED`) from an adversary script: ask the user, and rerun with `--allow-secret-match` only on a yes. It is not exit 3, so it never switches model or degrades.
+  - The Step 2.2 Gemini fallback shows one form: a prompt file written with the Write tool, scanned, and fed on stdin with a fixed `-p`. The `gemini -p "<prompt>"` form is gone.
+  - Step 2.5 runs `check-cites.py` before the implementer; failing findings go to the user. In PR mode it compares the PR author with `gh api user` and asks before the commit and push when they differ.
+  - A Red Flag forbids diff- or finding-derived text in a shell argument and names `-p "$(cat f)"` as still unsafe.
+
 ## [1.0.1] - 2026-10-09
 
 ### Changed
