@@ -150,11 +150,16 @@ def parse_marker(body):
 
 
 _PK = "PRIVATE" + " KEY"
+# The one list of secret formats: redact() uses it on model output, and
+# secret_scan.py uses it on everything sent to the adversary model.
+# The sk- patterns need a left boundary: without it, kebab-case words such as
+# "task-..." or "risk-..." matched as OpenAI keys.
 SECRET_PATTERNS = [
     ("github-token", re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),
     ("aws-key-id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}")),
-    ("openai-key", re.compile(r"sk-(?!ant-)[A-Za-z0-9_-]{20,}")),
+    ("anthropic-key", re.compile(r"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}")),
+    ("openai-key", re.compile(r"(?<![A-Za-z0-9_-])sk-(?!ant-)[A-Za-z0-9_-]{20,}")),
+    ("slack-token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
     ("private-key", re.compile(
         r"-----BEGIN [A-Z ]*" + _PK + r"-----[\s\S]*?(?:-----END [A-Z ]*" + _PK + r"-----|\Z)")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
