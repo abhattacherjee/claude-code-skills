@@ -60,9 +60,10 @@ def is_secret_name(path):
 def map_lines(lines):
     """For each physical line, (path, line, removed): where that line sits in the
     files the diff describes. path is None for text outside any diff; line is 0 for a
-    diff header line. Also returns every path the diff names. Hunk ends come from the
-    hunk header counts, so a removed "-- x" (shown as "--- x") stays in its hunk."""
-    out, paths = [], []
+    diff header line. Also returns every path the diff names, and each file's
+    new-side path (None when the diff deletes it). Hunk ends come from the hunk
+    header counts, so a removed "-- x" (shown as "--- x") stays in its hunk."""
+    out, paths, new_sides = [], [], []
     old_path = new_path = None
     old_left = new_left = 0
     old_no = new_no = 0
@@ -96,6 +97,7 @@ def map_lines(lines):
             in_file = True
             old_path, new_path = unquote(header.group(1)), unquote(header.group(2))
             paths += [p for p in (old_path, new_path) if p]
+            new_sides.append(new_path)
             out.append((new_path or old_path, 0, False))
             continue
         hunk = HUNK_RE.match(raw) if in_file else None
@@ -114,6 +116,8 @@ def map_lines(lines):
                         value = unquote(value)
                     elif value.startswith('"'):
                         value = unquote(value)
+                    if which == "new" and new_sides:
+                        new_sides[-1] = value
                     if value:
                         paths.append(value)
                         if which == "old":
@@ -124,13 +128,18 @@ def map_lines(lines):
             out.append((new_path or old_path, 0, False))
             continue
         out.append((None, None, False))
-    return out, paths
+    return out, paths, new_sides
+
+
+def new_side_paths(text):
+    """The files a diff leaves in place: each file's new-side path, deleted ones left out."""
+    return {p for p in map_lines(text.split("\n"))[2] if p}
 
 
 def scan_text(text, label):
     """Hits as output lines, in order, without the matched values."""
     lines = text.split("\n")
-    where, paths = map_lines(lines)
+    where, paths, _ = map_lines(lines)
     starts, pos = [], 0
     for line in lines:
         starts.append(pos)

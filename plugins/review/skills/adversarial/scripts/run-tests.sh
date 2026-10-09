@@ -54,7 +54,8 @@ Tests:
   - synthesize.py: confirm-rate guard (rubber-stamp / rubber-reject detection)
   - synthesize.py: verdict_reason carries the judge's real reason text
   - Python unit and CLI tests (test_*.py): audit trail (gh stub), Codex detection,
-    adversary choice, codex-review.sh (codex stub), synthesize --adversary, docs
+    adversary choice, codex-review.sh (codex stub), synthesize --adversary, docs,
+    secret_scan.py, check-cites.py, gemini-review.sh argv and stdin (gemini stub)
   - sink.sh: PR mode posts the audit trail; any pr-audit failure -> exit 4;
     gh fallback; .gitignore handling; --no-post and local mode
 
