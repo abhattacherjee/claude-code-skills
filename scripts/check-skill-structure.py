@@ -5,7 +5,8 @@ Checks every plugins/*/skills/*/SKILL.md and the .md files beside it:
   S1  the SKILL.md body (the lines after the closing --- of the frontmatter)
       is under 500 lines;
   S2  every .md file under the skill directory, other than SKILL.md,
-      README.md and CHANGELOG.md, is named in SKILL.md by its path relative
+      README.md, CHANGELOG.md, CONTRIBUTING.md and files under a dot-directory
+      such as .github/ (a skill repo's own files), is named in SKILL.md by its path relative
       to the skill directory (`references/x.md`, `./references/x.md`,
       `${CLAUDE_SKILL_DIR}/references/x.md` or a markdown link), or its file
       name appears in a file under the skill's scripts/ (a script reads it),
@@ -15,7 +16,11 @@ Checks every plugins/*/skills/*/SKILL.md and the .md files beside it:
 
 A name must stand alone: references/x.md.bak, other/./references/x.md and
 (in a script) x.md.bak do not name references/x.md. A ## Contents heading inside
-a fenced code block does not count.
+a fenced code block does not count. Only a newline (LF) ends a line; a lone CR,
+VT, FF or U+2028 does not, and a last line with no newline still counts.
+
+scripts/validate-skill.sh checks S1-S3 for one skill in bash, with the same rules;
+the parity case in scripts/test-check-skill-structure.sh keeps the two in step.
 
 Blind spots (not checked): any mention counts, including one in a comment, in
 the frontmatter description or in a "do not read" sentence; whether the place
@@ -33,16 +38,23 @@ from pathlib import Path
 MAX_BODY = 500        # S1: the body must be shorter than this
 TOC_MIN_LINES = 100   # S3: files longer than this need a Contents list
 TOC_WITHIN = 30       # S3: ...in this many first lines
-EXCLUDED = {"SKILL.md", "README.md", "CHANGELOG.md"}
+EXCLUDED = {"SKILL.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md"}
 TOC = re.compile(r"^##\s+(contents|table of contents)\s*$", re.I)
 # A fence opens with 3+ backticks or tildes (up to 3 spaces of indent). CommonMark
 # forbids a backtick in a backtick fence's info string, so ```inline``` is not a fence.
 FENCE = re.compile(r"^ {0,3}(?:(`{3,})(?!.*`)|(~{3,}))")
 
 
-def body_lines(text):
+def read_lines(path):
+    """The file's lines, split on \\n only, as bash and awk split them."""
+    lines = path.read_bytes().decode("utf-8").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def body_lines(lines):
     """Lines after the frontmatter's closing ---, or all lines if there is none."""
-    lines = text.splitlines()
     if lines and lines[0].strip() == "---":
         for i in range(1, len(lines)):
             if lines[i].strip() == "---":
@@ -88,9 +100,10 @@ def has_toc(lines):
 def check_skill(skill, repo):
     out = []
     skill_md = skill / "SKILL.md"
-    text = skill_md.read_text(encoding="utf-8")
+    skill_lines = read_lines(skill_md)
+    text = "\n".join(skill_lines)
     shown = skill.relative_to(repo).as_posix()
-    n = body_lines(text)
+    n = body_lines(skill_lines)
     if n >= MAX_BODY:
         out.append(f"{shown}/SKILL.md: S1: body is {n} lines (must be under {MAX_BODY})")
 
@@ -100,17 +113,17 @@ def check_skill(skill, repo):
         for f in sorted(scripts.rglob("*")):
             if f.is_file():
                 try:
-                    script_text += f.read_text(encoding="utf-8") + "\n"
+                    script_text += f.read_bytes().decode("utf-8") + "\n"
                 except UnicodeDecodeError:
                     continue
 
     for md in sorted(skill.rglob("*.md")):
-        if md.name in EXCLUDED or not md.is_file():
-            continue
         rel = md.relative_to(skill).as_posix()
+        if md.name in EXCLUDED or not md.is_file() or any(p.startswith(".") for p in rel.split("/")):
+            continue
         if not (named_in(text, rel) or read_by_script(script_text, md.name)):
             out.append(f"{shown}/{rel}: S2: not named in SKILL.md or read by a script in scripts/")
-        lines = md.read_text(encoding="utf-8").splitlines()
+        lines = read_lines(md)
         if len(lines) > TOC_MIN_LINES and not has_toc(lines[:TOC_WITHIN]):
             out.append(f"{shown}/{rel}: S3: {len(lines)} lines with no '## Contents' heading in the first {TOC_WITHIN} lines")
     return out
