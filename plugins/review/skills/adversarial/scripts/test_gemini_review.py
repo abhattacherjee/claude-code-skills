@@ -13,6 +13,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "gemini-review.sh"
 FAKE_AWS = "AKIA" + "EXAMPLEEXAMPLE12"
+ESC_KEY = "\\u0041KIA" + "EXAMPLEEXAMPLE12"
+NOT_STRICT = [
+    # trailing comma: json.loads fails, so a scanner that needs it would skip decoding
+    '{"findings":[{"id":"C-001","title":"t","rationale":"key %s"}],}' % ESC_KEY,
+    # duplicate key: json.loads keeps the last value, the secret is in the first
+    '{"findings":[{"id":"C-001","title":"t","rationale":"key %s","rationale":"fine"}]}' % ESC_KEY,
+    '{"findings":[{"id":"C-001","title":"t","rationale":"r","confidence":NaN}]}',
+]
 DIFF_MARK = "DIFFMARK7f3a"
 FIND_MARK = "FINDMARK9c1e"
 DIFF = ("diff --git a/src/a.css b/src/a.css\nindex 1..2 100644\n--- a/src/a.css\n+++ b/src/a.css\n"
@@ -176,6 +184,29 @@ class SecretGateTests(unittest.TestCase):
                 res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge")
                 self.assertEqual(res.returncode, 4, res.stderr)
                 self.assertEqual(h.calls(), [])
+
+    def test_findings_that_are_not_strict_json_are_refused(self):
+        for text in NOT_STRICT:
+            with self.subTest(text=text[:60]):
+                h = GeminiHarness(self, [VERDICTS])
+                h.put("r1-claude.json", text)
+                res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge")
+                self.assertEqual(res.returncode, 1, res.stderr)
+                self.assertIn("not strict JSON", res.stderr)
+                self.assertEqual(h.calls(), [])
+                res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge",
+                            "--allow-secret-match")
+                self.assertEqual(res.returncode, 1, res.stderr)
+                self.assertEqual(h.calls(), [])
+
+    def test_the_findings_block_is_the_reserialized_json(self):
+        h = GeminiHarness(self, [VERDICTS])
+        h.put("r1-claude.json", '{"findings":[{"id":"C-001","title":"caf\\u00e9 \\u0074ab"}]}')
+        res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        sent = block(h.calls()[0]["stdin"], "findings")
+        self.assertNotIn("\\u", sent)
+        self.assertEqual(json.loads(sent), {"findings": [{"id": "C-001", "title": "caf\u00e9 tab"}]})
 
     def test_allow_secret_match_lets_the_run_continue(self):
         h = GeminiHarness(self, [FOUND])

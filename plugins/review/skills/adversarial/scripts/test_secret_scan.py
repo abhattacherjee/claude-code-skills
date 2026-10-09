@@ -227,6 +227,30 @@ class JsonEscapeTests(Base):
         self.assertEqual(self.run_scan(path).returncode, 0)
 
 
+class StrictJsonTests(unittest.TestCase):
+    """The review scripts parse findings with this, refuse what it rejects, and send
+    a re-serialized copy, so the text scanned is the text sent."""
+
+    def test_valid_json_loads(self):
+        import secret_scan
+        self.assertEqual(secret_scan.load_strict_json('{"a": [1, "\\u0041"]}'), {"a": [1, "A"]})
+
+    def test_rejects_what_json_loads_would_quietly_accept_or_drop(self):
+        import secret_scan
+        for text in ('{"k": "first", "k": "second"}', '{"a": NaN}', '[Infinity]', '[-Infinity]',
+                     '{"a": 1,}', 'not json', '', '[1e999]'):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    secret_scan.load_strict_json(text)
+
+    def test_reserialized_text_has_no_escapes_for_a_secret_to_hide_in(self):
+        import secret_scan
+        value = secret_scan.load_strict_json('{"r": "\\u0041KIA%s caf\\u00e9"}' % "EXAMPLEEXAMPLE12")
+        text = secret_scan.dump_json(value)
+        self.assertNotIn("\\u", text)
+        self.assertEqual(secret_scan.scan_text(text, "x")[0].rsplit(" ", 1)[1], "aws-key-id")
+
+
 class SharedPatternTests(unittest.TestCase):
     def test_one_pattern_list_shared_with_redaction(self):
         import audit_record

@@ -23,8 +23,9 @@ Its output is untrusted: it is checked against the schema, capped, and redacted.
 
 Exit codes:
   0  success
-  1  error (an input file is missing or unreadable, or the --out file cannot be
-     written; the result then goes to stdout)
+  1  error (an input file is missing or unreadable, --findings or --prior is not
+     strict JSON (a duplicate key, NaN or Infinity, bad syntax), or the --out file
+     cannot be written; the result then goes to stdout)
   2  usage error
   3  adversary unavailable (codex missing or logged out, a non-zero exit,
      a timeout, no valid output after one retry, a missing isolation flag,
@@ -839,9 +840,14 @@ def load_findings(path):
     without a string id are dropped."""
     try:
         with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
+            text = fh.read()
     except (OSError, ValueError) as exc:
         raise InputError("cannot read %s: %s" % (path, exc))
+    try:
+        # Strict, so what build_stdin re-serializes is all there was to scan.
+        data = secret_scan.load_strict_json(text)
+    except ValueError as exc:
+        raise InputError("%s is not strict JSON (%s); nothing was sent" % (path, exc))
     items = data.get("findings") if isinstance(data, dict) else data
     if not isinstance(items, list):
         raise InputError("%s has no findings list" % path)

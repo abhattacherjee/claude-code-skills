@@ -30,6 +30,14 @@ ONE_FINDING = {"findings": [{"path": "src/a.py", "line": 2, "severity": "importa
 NONCED_DIFF_TAG = re.compile(r"<diff-([0-9a-f]{8})>")
 # Keys the stub's own launch adds (bash's exec wrapper, macOS, Python's locale
 # coercion); they were not in the env codex-review passed.
+ESC_KEY = "\\u0041KIA" + "EXAMPLEEXAMPLE12"
+NOT_STRICT = [
+    # trailing comma: json.loads fails, so a scanner that needs it would skip decoding
+    '{"findings":[{"id":"C-001","title":"t","rationale":"key %s"}],}' % ESC_KEY,
+    # duplicate key: json.loads keeps the last value, the secret is in the first
+    '{"findings":[{"id":"C-001","title":"t","rationale":"key %s","rationale":"fine"}]}' % ESC_KEY,
+    '{"findings":[{"id":"C-001","title":"t","rationale":"r","confidence":NaN}]}',
+]
 LAUNCH_NOISE = {"PWD", "OLDPWD", "SHLVL", "_", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 
 
@@ -777,6 +785,26 @@ class SecretGateTests(unittest.TestCase):
                     res = h.run("--mode", mode, flag, path)
                     self.assertEqual(res.returncode, 4, res.stderr)
                     self.assertEqual(h.calls(), [])
+
+    def test_findings_or_prior_that_are_not_strict_json_are_refused(self):
+        for text in NOT_STRICT:
+            for mode, flag in (("judge", "--findings"), ("find", "--prior")):
+                with self.subTest(text=text[:60], mode=mode):
+                    h = Harness(self)
+                    path = h.dir / "in.json"
+                    path.write_text(text)
+                    res = h.run("--mode", mode, flag, path)
+                    self.assertEqual(res.returncode, 1, res.stderr)
+                    self.assertIn("not strict JSON", res.stderr)
+                    self.assertEqual(h.calls(), [])
+
+    def test_allow_secret_match_does_not_send_a_file_that_is_not_strict_json(self):
+        h = Harness(self)
+        path = h.dir / "in.json"
+        path.write_text(NOT_STRICT[1])
+        res = h.run("--mode", "judge", "--findings", path, "--allow-secret-match")
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(h.calls(), [])
 
     def test_allow_secret_match_lets_the_run_continue(self):
         h = Harness(self)

@@ -35,7 +35,7 @@ notes.txt:5 openai-key (removed line)
 
 A line number of 0 means the file name itself matched. The value is never printed.
 
-The scan checks what is sent, after every change the scripts make to it. A JSON input (findings, prior round records) is also scanned with its escapes decoded, so `"\u0041KIA…"` counts as `AKIA…`: Codex gets the decoded text, and Gemini can decode it. A hit there prints as `<file> (JSON-decoded):<n> <pattern-name>`, where n counts the file's strings. `codex-review.sh` then scans its stdin exactly as built, and `gemini-review.sh` scans its assembled stdin, after the `\@` escaping, before each call.
+The scan checks the text that is sent, after every change the scripts make to it. Both scripts parse `--findings` and `--prior` as strict JSON and refuse (exit 1, nothing sent) a file with a duplicate key, `NaN` or `Infinity`, or bad syntax. They send a re-serialized copy with no `\u` escapes, so `"\u0041KIA…"` is scanned as the `AKIA…` the model reads. `codex-review.sh` scans its stdin exactly as built; `gemini-review.sh` scans the re-serialized findings, then its assembled stdin after the `\@` escaping, before each call. The scanner also checks a JSON file's strings with escapes decoded, reported as `<file> (JSON-decoded):<n> <pattern-name>`.
 
 What to do:
 

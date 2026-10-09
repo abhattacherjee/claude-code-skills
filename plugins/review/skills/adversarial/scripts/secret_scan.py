@@ -186,10 +186,44 @@ def scan_text(text, label):
     return hits
 
 
+def _unique_keys(pairs):
+    """object_pairs_hook: json.loads keeps only the last of two equal keys, so a
+    value in the first would be sent (in the raw file) but never checked. The key
+    is not named in the error, since it is untrusted text."""
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("an object has a duplicate key")
+    return dict(pairs)
+
+
+def _no_constant(name):
+    raise ValueError("%s is not JSON" % name)
+
+
+def _finite_float(text):
+    value = float(text)
+    if value in (float("inf"), float("-inf")):
+        raise ValueError("a number is out of range")
+    return value
+
+
+def load_strict_json(text):
+    """Parse text as strict JSON: no duplicate keys, no NaN or Infinity (written or
+    by overflow). Raises ValueError otherwise. The review scripts parse --findings
+    and --prior with this, refuse what it rejects, and send dump_json(value)."""
+    return json.loads(text, object_pairs_hook=_unique_keys, parse_constant=_no_constant,
+                      parse_float=_finite_float)
+
+
+def dump_json(value):
+    """The text the review scripts send for a parsed JSON input. ensure_ascii=False
+    leaves no \\u escapes, so a scan of this text sees every string as a reader does."""
+    return json.dumps(value, indent=1, ensure_ascii=False)
+
+
 def json_strings(text):
-    """Every key and string value in text, decoded, if text is JSON; else None."""
+    """Every key and string value in text, decoded, if text is strict JSON; else None."""
     try:
-        data = json.loads(text)
+        data = load_strict_json(text)
     except ValueError:
         return None
     out, stack = [], [data]

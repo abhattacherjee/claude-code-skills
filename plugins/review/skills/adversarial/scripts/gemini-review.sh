@@ -93,7 +93,9 @@ Output JSON schema:
 
 Exit codes:
   0  Success
-  1  Error (file not found, etc.)
+  1  Error (file not found, --findings not strict JSON, etc.). The findings are
+     parsed strictly (no duplicate keys, NaN or Infinity) and Gemini gets the
+     re-serialized copy, the same text the secret scan checked.
   2  Usage error
   3  Adversary unavailable (gemini not installed, auth error, parse failure)
   4  Secret suspected: secret_scan.py found a secret format or a secret-looking
@@ -157,9 +159,30 @@ if [[ "$MODE" == "judge" ]]; then
   [[ -f "$FINDINGS_FILE" ]] || { echo "Error: findings file not found: $FINDINGS_FILE" >&2; exit 1; }
 fi
 
+# ---- findings: parse strictly, then send and scan the re-serialized copy ----
+# A file that is not strict JSON (a duplicate key, NaN, a trailing comma) is
+# refused: Gemini would get raw text the scan could not decode the same way.
+SENT_FINDINGS_FILE="$(mktemp /tmp/adversarial-gemini-findings.XXXXXX)"
+trap 'rm -f "$SENT_FINDINGS_FILE"' EXIT
+if [[ "$MODE" == "judge" ]]; then
+  if ! NORM_ERR="$(python3 - "$SCRIPT_DIR" "$FINDINGS_FILE" "$SENT_FINDINGS_FILE" 2>&1 <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+from secret_scan import dump_json, load_strict_json
+with open(sys.argv[2], encoding="utf-8", errors="replace") as fh:
+    value = load_strict_json(fh.read())
+with open(sys.argv[3], "w", encoding="utf-8") as fh:
+    fh.write(dump_json(value) + "\n")
+PYEOF
+)"; then
+    echo "gemini-review: $FINDINGS_FILE is not strict JSON (${NORM_ERR##*$'\n'}); nothing was sent" >&2
+    exit 1
+  fi
+fi
+
 # ---- secret scan: before anything is sent ----
 SCAN_INPUTS=("$DIFF_FILE")
-[[ "$MODE" == "judge" ]] && SCAN_INPUTS+=("$FINDINGS_FILE")
+[[ "$MODE" == "judge" ]] && SCAN_INPUTS+=("$SENT_FINDINGS_FILE")
 SCAN_RC=0
 SCAN_OUT="$(python3 "$SCRIPT_DIR/secret_scan.py" "${SCAN_INPUTS[@]}" 2>&1)" || SCAN_RC=$?
 case "$SCAN_RC" in
@@ -476,18 +499,17 @@ EXTRACTED_JSON_FILE="$(mktemp /tmp/adversarial-gemini-json.XXXXXX)"
 GEMINI_STDERR_FILE="$(mktemp /tmp/adversarial-gemini-stderr.XXXXXX)"
 VALIDATE_ERR_FILE="$(mktemp /tmp/adversarial-validate-err.XXXXXX)"
 
-trap 'rm -f "$BRIEF_FILE" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE" "$GEMINI_STDERR_FILE" "$VALIDATE_ERR_FILE"' EXIT
+trap 'rm -f "$SENT_FINDINGS_FILE" "$BRIEF_FILE" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE" "$GEMINI_STDERR_FILE" "$VALIDATE_ERR_FILE"' EXIT
 
-[[ "$MODE" == "judge" ]] || FINDINGS_FILE=""
+# build_stdin sends the re-serialized copy that was scanned, never the raw file.
+if [[ "$MODE" == "judge" ]]; then FINDINGS_FILE="$SENT_FINDINGS_FILE"; else FINDINGS_FILE=""; fi
 
 call_gemini() {
   local strict="$1"
   build_prompt "$strict" >"$BRIEF_FILE"
   build_stdin "$BRIEF_FILE" "$COMBINED_INPUT_FILE"
   # Scan again after the last change to the input (assembly and \@ escaping), so
-  # what is checked is exactly what Gemini gets. The first scan, on the input
-  # files, also decodes JSON escapes in the findings: Gemini receives that file
-  # as written and can decode them itself.
+  # what is checked is exactly what Gemini gets.
   if [[ "$ALLOW_SECRET_MATCH" != "true" ]]; then
     local scan_rc=0 scan_out
     scan_out="$(python3 "$SCRIPT_DIR/secret_scan.py" "$COMBINED_INPUT_FILE" 2>&1)" || scan_rc=$?
