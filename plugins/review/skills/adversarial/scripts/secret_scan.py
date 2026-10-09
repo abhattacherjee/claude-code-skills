@@ -12,6 +12,10 @@ line per hit and never the matched value:
   <path>:<line> <pattern-name> (removed line)  a removed line, old-file line
   <path>:0 secret-file-name                    the diff adds, changes or deletes that file
   <input-file>:<line> <pattern-name>           text that is not inside a diff
+  <input-file> (JSON-decoded):<n> <pattern-name>
+                                               the n-th string in a JSON file, after
+                                               its escapes are decoded (a reader sees
+                                               "\u0041KIA..." as "AKIA...")
 
 Exit codes:
   0  no hits
@@ -21,6 +25,7 @@ Exit codes:
 import ast
 import bisect
 import fnmatch
+import json
 import re
 import sys
 from pathlib import Path
@@ -33,6 +38,7 @@ EXIT_CLEAN, EXIT_USAGE, EXIT_HIT = 0, 2, 4
 # Matched against the lower-cased last part of the path.
 SECRET_NAME_GLOBS = ('.env', '.env.*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*credentials*',
                      '*.p12', '*.pfx')
+HIT_NAME_RE = re.compile(r":\d+ (\S+)(?: \(removed line\))?$")
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 QUOTED_HEADER_RE = re.compile(r'^("(?:[^"\\]|\\.)*"|\S+) ("(?:[^"\\]|\\.)*"|\S+)$')
 
@@ -180,11 +186,60 @@ def scan_text(text, label):
     return hits
 
 
+def json_strings(text):
+    """Every key and string value in text, decoded, if text is JSON; else None."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    out, stack = [], [data]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict):
+            for key, value in item.items():
+                out.append(key)
+                stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+    return out
+
+
+def scan_strings(strings, label):
+    """Hits in each string on its own, numbered from 1, so a key cannot be split
+    across two strings and a hit names the string it came from."""
+    hits = []
+    for n, value in enumerate(strings, 1):
+        for name, rx in SECRET_PATTERNS:
+            if rx.search(value):
+                hits.append("%s:%d %s" % (label, n, name))
+    return hits
+
+
 def scan_file(path):
-    """Hit lines for one file. Raises OSError if it cannot be read."""
+    """Hit lines for one file: its text as read, and for a JSON file each decoded
+    string too, since the review scripts and the models decode JSON escapes.
+    Raises OSError if it cannot be read."""
     with open(path, "rb") as fh:
         data = fh.read()
-    return scan_text(data.decode("utf-8", "replace"), path)
+    text = data.decode("utf-8", "replace")
+    hits = scan_text(text, path)
+    strings = json_strings(text)
+    if strings is not None:
+        # Report only what the escapes hid: per pattern, the decoded hits beyond
+        # the ones the raw text already showed.
+        seen = {}
+        for hit in hits:
+            name = HIT_NAME_RE.search(hit).group(1)
+            seen[name] = seen.get(name, 0) + 1
+        for hit in scan_strings(strings, "%s (JSON-decoded)" % path):
+            name = hit.rsplit(" ", 1)[1]
+            if seen.get(name, 0) > 0:
+                seen[name] -= 1
+            else:
+                hits.append(hit)
+    return hits
 
 
 def main(argv=None):

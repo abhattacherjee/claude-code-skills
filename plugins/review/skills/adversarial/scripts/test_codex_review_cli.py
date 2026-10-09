@@ -765,6 +765,19 @@ class SecretGateTests(unittest.TestCase):
                 self.assertEqual(res.returncode, 4, res.stderr)
                 self.assertEqual(h.calls(), [])
 
+    def test_a_json_escaped_secret_in_findings_or_prior_stops_the_run(self):
+        # Codex gets the decoded value on stdin, so the escape must not hide it.
+        for raw in ("\\u0041KIA" + "EXAMPLEEXAMPLE12", "AKIA" + "EXAMPLEEXAMPLE12"):
+            text = '{"findings":[{"id":"C-001","title":"t","rationale":"key %s"}]}' % raw
+            for mode, flag in (("judge", "--findings"), ("find", "--prior")):
+                with self.subTest(raw=raw, mode=mode):
+                    h = Harness(self)
+                    path = h.dir / "in.json"
+                    path.write_text(text)
+                    res = h.run("--mode", mode, flag, path)
+                    self.assertEqual(res.returncode, 4, res.stderr)
+                    self.assertEqual(h.calls(), [])
+
     def test_allow_secret_match_lets_the_run_continue(self):
         h = Harness(self)
         h.diff.write_text(DIFF + "+key = '%s'\n" % self.FAKE_AWS)

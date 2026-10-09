@@ -484,6 +484,26 @@ call_gemini() {
   local strict="$1"
   build_prompt "$strict" >"$BRIEF_FILE"
   build_stdin "$BRIEF_FILE" "$COMBINED_INPUT_FILE"
+  # Scan again after the last change to the input (assembly and \@ escaping), so
+  # what is checked is exactly what Gemini gets. The first scan, on the input
+  # files, also decodes JSON escapes in the findings: Gemini receives that file
+  # as written and can decode them itself.
+  if [[ "$ALLOW_SECRET_MATCH" != "true" ]]; then
+    local scan_rc=0 scan_out
+    scan_out="$(python3 "$SCRIPT_DIR/secret_scan.py" "$COMBINED_INPUT_FILE" 2>&1)" || scan_rc=$?
+    case "$scan_rc" in
+      0) ;;
+      4)
+        echo "SECRET_SUSPECTED: possible secret(s) in the assembled Gemini input; nothing was sent. Ask the user; rerun with --allow-secret-match only if they confirm." >&2
+        printf '%s\n' "$scan_out" >&2
+        exit 4
+        ;;
+      *)
+        echo "gemini-review: the secret scan could not check the assembled input (exit $scan_rc): $scan_out" >&2
+        exit 1
+        ;;
+    esac
+  fi
 
   # Everything from the diff and the findings is on stdin; -p is a fixed sentence.
   # -o json for output format, -m for model.

@@ -206,6 +206,27 @@ class SecretFileNameTests(Base):
         self.assertEqual(list(secret_scan.SECRET_NAME_GLOBS), re.findall(r"'([^']*)'", line))
 
 
+class JsonEscapeTests(Base):
+    """A key written with JSON escapes is the same key once a reader decodes it."""
+    ESCAPED = ["\\u0041KIA" + "EXAMPLEEXAMPLE12", "AKIA" + "\\u0045XAMPLEEXAMPLE12"]
+
+    def test_an_escaped_key_in_a_json_string_is_found(self):
+        for value in self.ESCAPED:
+            with self.subTest(value=value):
+                path = self.put("f.json", '{"findings":[{"id":"C-001","rationale":"key %s"}]}' % value)
+                res = self.run_scan(path)
+                self.assertEqual(res.returncode, 4, res.stdout)
+                self.assertIn("aws-key-id", res.stdout)
+
+    def test_an_escaped_key_in_a_json_key_is_found(self):
+        path = self.put("k.json", '{"\\u0041KIA%s": 1}' % "EXAMPLEEXAMPLE12")
+        self.assertEqual(self.run_scan(path).returncode, 4)
+
+    def test_clean_json_stays_clean(self):
+        path = self.put("c.json", '{"findings":[{"id":"C-001","rationale":"caf\\u00e9 \\u0040scope"}]}')
+        self.assertEqual(self.run_scan(path).returncode, 0)
+
+
 class SharedPatternTests(unittest.TestCase):
     def test_one_pattern_list_shared_with_redaction(self):
         import audit_record

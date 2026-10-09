@@ -35,6 +35,8 @@ notes.txt:5 openai-key (removed line)
 
 A line number of 0 means the file name itself matched. The value is never printed.
 
+The scan checks what is sent, after every change the scripts make to it. A JSON input (findings, prior round records) is also scanned with its escapes decoded, so `"\u0041KIA…"` counts as `AKIA…`: Codex gets the decoded text, and Gemini can decode it. A hit there prints as `<file> (JSON-decoded):<n> <pattern-name>`, where n counts the file's strings. `codex-review.sh` then scans its stdin exactly as built, and `gemini-review.sh` scans its assembled stdin, after the `\@` escaping, before each call.
+
 What to do:
 
 - Show the user the hit lines and ask whether to send the input anyway.

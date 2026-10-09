@@ -167,6 +167,16 @@ class SecretGateTests(unittest.TestCase):
         self.assertEqual(res.returncode, 4, res.stderr)
         self.assertEqual(h.calls(), [])
 
+    def test_a_json_escaped_secret_in_the_findings_stops_judge_mode(self):
+        for raw in ("\\u0041KIA" + "EXAMPLEEXAMPLE12", "AKIA" + "EXAMPLEEXAMPLE12"):
+            with self.subTest(raw=raw):
+                h = GeminiHarness(self, [VERDICTS])
+                h.put("r1-claude.json", '{"findings":[{"id":"C-001","path":"src/a.css","line":2,'
+                                        '"title":"t","rationale":"key %s"}]}' % raw)
+                res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge")
+                self.assertEqual(res.returncode, 4, res.stderr)
+                self.assertEqual(h.calls(), [])
+
     def test_allow_secret_match_lets_the_run_continue(self):
         h = GeminiHarness(self, [FOUND])
         h.put("change.diff", DIFF + "+key = '%s'\n" % FAKE_AWS)

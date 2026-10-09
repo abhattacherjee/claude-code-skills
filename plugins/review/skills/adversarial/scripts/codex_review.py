@@ -976,9 +976,12 @@ def _require_stamp(codex, env, version):
                           % version)
 
 
-def scan_inputs(args):
-    """Scan every file this run will send, before Codex is even located. A hit
-    raises SecretSuspected unless --allow-secret-match; an unreadable file is an
+def scan_inputs(args, diff_text, findings, prior):
+    """Scan what this run will send, before Codex is even located: each input file
+    (for secret-looking file names, and JSON strings with their escapes decoded),
+    and the stdin text exactly as build_stdin makes it, after load_findings has
+    decoded the JSON. The nonce does not change what the scan sees. A hit raises
+    SecretSuspected unless --allow-secret-match; an unreadable file is an
     InputError, never clean."""
     hits = []
     for path in (args.diff, args.findings, args.prior):
@@ -987,6 +990,9 @@ def scan_inputs(args):
                 hits += secret_scan.scan_file(path)
             except OSError as exc:
                 raise InputError("cannot read %s for the secret scan: %s" % (path, exc.strerror or exc))
+    if not hits:
+        stdin_text = build_stdin(diff_text, args.mode, findings, prior, nonce="0" * 8)
+        hits = secret_scan.scan_text(stdin_text, "<codex stdin>")
     if hits and not args.allow_secret_match:
         raise SecretSuspected(hits)
     if hits:
@@ -1006,7 +1012,7 @@ def review(args):
               % (args.findings, args.mode), file=sys.stderr)
         return {"adversary": "codex", "verdicts": []} if args.mode == "judge" \
             else {"adversary": "codex", "counters": []}
-    scan_inputs(args)
+    scan_inputs(args, diff_text, findings, prior)
     env = _codex_env()
     codex = _ready_codex(env)
     version = ensure_isolation(codex, env, args.timeout)
