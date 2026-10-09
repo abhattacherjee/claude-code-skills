@@ -69,12 +69,12 @@ def first_string_is_open(text):
     return start >= 0
 
 
-def regex_text(lines, n):
-    """The text of the regex call on lines[n]. If its regex string is still open at the end of the
-    line, join the next lines (at most MAX_JOIN) until it closes. Pairing stays local to the
-    call: a whole-file scan would misalign on the first stray quote in shell source.
-    Returns (text, closed)."""
-    text = lines[n][REGEX_CALL.search(lines[n]).end():]
+def regex_text(lines, n, start):
+    """The text after the regex call that ends at column start on lines[n]. If its regex string is
+    still open at the end of the line, join the next lines (at most MAX_JOIN) until it closes.
+    Pairing stays local to the call: a whole-file scan would misalign on the first stray quote
+    in shell source. Returns (text, closed)."""
+    text = lines[n][start:]
     joined = 0
     while first_string_is_open(text) and joined < MAX_JOIN and n + 1 + joined < len(lines):
         text += "\n" + lines[n + 1 + joined]
@@ -84,8 +84,10 @@ def regex_text(lines, n):
 
 def scan(text):
     """(line number, problem) for every look-around, and every backreference or possessive
-    quantifier on a line that calls a jq regex function. A regex string that runs onto
-    following lines is joined; one still open after MAX_JOIN lines is reported."""
+    quantifier on a line that calls a jq regex function. On such a line, every string literal
+    that closes on the line is checked for a possessive quantifier, wherever it sits; and for
+    each regex call, a regex string that runs onto following lines is joined and checked. One
+    still open after MAX_JOIN lines is reported. At most one possessive finding per line."""
     bad = []
     lines = text.splitlines()
     for n, line in enumerate(lines):
@@ -93,14 +95,20 @@ def scan(text):
         for token in LOOKAROUND:
             if token in line:
                 bad.append((i, f"look-around {token}"))
-        if not REGEX_CALL.search(line):
+        calls = list(REGEX_CALL.finditer(line))
+        if not calls:
             continue
         if BACKREF.search(line):
             bad.append((i, "backreference"))
-        joined, closed = regex_text(lines, n)
-        if has_possessive(joined):
+        possessive = has_possessive(line)
+        unterminated = False
+        for call in calls:
+            joined, closed = regex_text(lines, n, call.end())
+            possessive = possessive or has_possessive(joined)
+            unterminated = unterminated or (not closed and joined.count("\n") >= MAX_JOIN)
+        if possessive:
             bad.append((i, "possessive quantifier"))
-        if not closed and joined.count("\n") >= MAX_JOIN:
+        if unterminated:
             bad.append((i, "unterminated regex string"))
     return bad
 
@@ -117,7 +125,7 @@ def test_the_scan_catches_a_planted_lookbehind_and_backreference():
     assert scan('x | test("(?i)(^|[^A-Za-z0-9_])closes")') == []
 
 
-@pytest.mark.parametrize("snippet, problem", [
+FORBIDDEN = [
     ('x | test("(?<=a)b")', "look-around (?<="),
     ('x | test("(?<!a)b")', "look-around (?<!"),
     ('x | test("a(?=b)")', "look-around (?="),
@@ -138,7 +146,12 @@ def test_the_scan_catches_a_planted_lookbehind_and_backreference():
     ('[.[] | select(test("a*+"))]', "possessive quantifier"),
     ('x | test("a++\nb")', "possessive quantifier"),
     ('x | test("b\na*+")', "possessive quantifier"),
-])
+    ('x | test("ok") | test("c*+\nd")', "possessive quantifier"),
+    ('"a++" as $re | test($re)', "possessive quantifier"),
+]
+
+
+@pytest.mark.parametrize("snippet, problem", FORBIDDEN)
 def test_the_scan_catches_each_forbidden_form(snippet, problem):
     assert (1, problem) in scan(snippet)
 
@@ -262,3 +275,21 @@ def test_a_regex_string_left_open_for_more_than_the_join_cap_is_reported():
 def test_a_regex_string_that_closes_within_the_join_cap_is_not_reported():
     text = 'x | test("a' + "\nb" * (MAX_JOIN - 1) + '")'
     assert scan(text) == []
+
+
+def _line_scan_possessive(line):
+    """The 4608fff check, kept here as the reference: every string literal that closes on the
+    line, on a line that calls a regex function."""
+    return bool(REGEX_CALL.search(line)) and any(
+        POSSESSIVE.search(CLASS.sub("X", ESCAPED.sub("X", lit))) for lit in STRING.findall(line))
+
+
+@pytest.mark.parametrize("text", [snippet for snippet, _ in FORBIDDEN]
+                         + [p.read_text() for p in jq_scripts()],
+                         ids=[f"forbidden{i}" for i in range(len(FORBIDDEN))]
+                         + [p.name for p in jq_scripts()])
+def test_the_new_scan_flags_everything_the_line_scan_flagged(text):
+    found = scan(text)
+    for i, line in enumerate(text.splitlines(), 1):
+        if _line_scan_possessive(line):
+            assert (i, "possessive quantifier") in found, f"line {i}: {line!r}"
