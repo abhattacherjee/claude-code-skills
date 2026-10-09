@@ -22,7 +22,8 @@ VT, FF or U+2028 does not, and a last line with no newline still counts.
 Whitespace is ASCII (space, tab, CR, VT, FF), as in bash's [[:space:]]. Files are
 read as bytes, so a file that is not UTF-8 is still read. A symlink to a file counts;
 a symlinked directory is not entered (as find). A file name with a newline can never
-be named (bash matches names within one line); it is shown with \n.
+be named by that name (bash matches names within one line), though a script may name
+the file in a directory with one; it is shown with \n.
 
 scripts/validate-skill.sh checks S1-S3 for one skill in bash, with the same rules;
 the parity case in scripts/test-check-skill-structure.sh keeps the two in step.
@@ -175,7 +176,10 @@ def check_skill(skill, repo):
         except OSError:
             out.append(f"{shown}/{show(rel)}: cannot read")
             continue
-        if "\n" in rel or not (named_in(text, rel) or read_by_script(script_text, name)):
+        # bash matches a name within one line, so a name with a newline never matches;
+        # a script can still name the file of a path whose directory has one.
+        if not (("\n" not in rel and named_in(text, rel))
+                or ("\n" not in name and read_by_script(script_text, name))):
             out.append(f"{shown}/{show(rel)}: S2: not named in SKILL.md or read by a script in scripts/")
         if len(lines) > TOC_MIN_LINES and not has_toc(lines[:TOC_WITHIN]):
             out.append(f"{shown}/{show(rel)}: S3: {len(lines)} lines with no '## Contents' heading in the first {TOC_WITHIN} lines")

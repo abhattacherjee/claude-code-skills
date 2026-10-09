@@ -201,6 +201,11 @@ pskill newline-name 10; printf '# n\n' > "$PS/references/a
 b.md"
 pskill newline-split 10; printf '# n\n' > "$PS/references/a
 b.md"; names_it 'See references/a'; names_it 'b.md split over two lines'
+pskill newline-dir-script 10; mkdir -p "$PS/references/a
+b"; printf '# x\n' > "$PS/references/a
+b/xdir.md"; scripted 'cat "$DIR/xdir.md"'
+pskill newline-name-script 10; printf '# n\n' > "$PS/references/c
+d.md"; scripted 'cat "$DIR/c'; printf 'd.md"\n' >> "$PS/scripts/run.sh"
 pskill non-utf8-script 10; orphan; printf '#!/usr/bin/env bash\n# --help\n# \xff\xfe\ncat "$DIR/orphan.md"\n' > "$PS/scripts/run.sh"; chmod +x "$PS/scripts/run.sh"
 pskill non-utf8-ref 10; { printf '# T \xff\n'; lines 150; } | ref
 pskill toc-nbsp 10; { printf '# T\n##\xc2\xa0Contents\n'; lines 148; } | ref
@@ -244,7 +249,7 @@ fi
 for want in 's1-500 SKILL.md S1 500' 's2-orphan references/orphan.md S2' 's3-150 references/short.md S3 150'; do
   [[ "$PY_SET" == *"$want"* ]] && ok "…the fixtures make $want fail" || bad "…the fixtures make $want fail" "$PY_SET"
 done
-for want in 'tests-deep references/tests/x.md S2' 'newline-name references/a\nb.md S2' 'newline-split references/a\nb.md S2' 'backslash-unnamed references/a\tb.md S2' \
+for want in 'tests-deep references/tests/x.md S2' 'newline-name references/a\nb.md S2' 'newline-split references/a\nb.md S2' 'newline-name-script references/c\nd.md S2' 'backslash-unnamed references/a\tb.md S2' \
             'toc-nbsp references/short.md S3 150' 'fence-x1c references/short.md S3 150' \
             'self-match references/x.md S2' 'non-utf8-ref references/short.md S3 151'; do
   [[ "$PY_SET" == *"$want"* ]] && ok "…the fixtures make $want fail" || bad "…the fixtures make $want fail" "$PY_SET"
@@ -255,7 +260,7 @@ if [[ -n "$NONROOT" ]]; then
   done
   chmod 755 "$P/plugins/kit/skills/unlistable/locked"; chmod 644 "$P/plugins/kit/skills/unreadable/references/secret.md"; chmod 755 "$P/plugins/kit/skills/unreadable-script/scripts/run.sh"
 fi
-for id in clean s1-499 s2-script s3-table tests-top tests-top-long script-symlink dir-symlink backslash non-utf8-script fence-vt; do
+for id in clean s1-499 s2-script s3-table newline-dir-script tests-top tests-top-long script-symlink dir-symlink backslash non-utf8-script fence-vt; do
   [[ "$PY_SET" != *"$id "* ]] && ok "…and $id pass" || bad "…and $id pass" "$PY_SET"
 done
 
