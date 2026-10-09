@@ -25,7 +25,7 @@ The defences below cover each one. None of them makes the diff trusted.
 
 `codex-review.sh` and `gemini-review.sh` run `secret_scan.py` on every file they will send (`--diff`, `--findings`, and `--prior` for Codex) before any model call. It looks for:
 
-- the formats in `audit_record.py`'s `SECRET_PATTERNS`: AWS key ids, GitHub, Anthropic, OpenAI, Slack, Google API and Stripe keys, credentials in a URL (`scheme://user:password@`), private-key blocks and JWTs;
+- the formats in `audit_record.py`'s `SECRET_PATTERNS`: AWS key ids, GitHub, Anthropic, OpenAI, Slack, Google API and Stripe keys, credentials in a URL (a user and password before the `@` of a `scheme://` address), private-key blocks and JWTs;
 - a value assigned to a secret-sounding name (scan only, never redacted): a quoted literal after `password`, `secret`, `api_key`, `token` and similar, or an upper-case env line such as `DB_PASSWORD=…`. Values with placeholder words (`example`, `changeme`, `fake`, `test`, `${…}`) are skipped. On this repo's whole history as one diff (5.7 MB) this rule hit nothing;
 - diff headers that add, change, delete or rename onto a secret-looking file name: `.env`, `.env.*`, `*.env`, `.envrc`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`, `*credentials*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`.
 
