@@ -739,5 +739,46 @@ class IsolationGateTests(unittest.TestCase):
         self.assertEqual(h.leftovers(), [])
 
 
+class SecretGateTests(unittest.TestCase):
+    """Every input codex-review sends is scanned before Codex runs at all. A hit
+    exits 4, never 3, so the skill cannot mistake it for an unavailable adversary."""
+    FAKE_AWS = "AKIA" + "EXAMPLEEXAMPLE12"
+
+    def test_a_secret_in_the_diff_stops_before_codex_runs(self):
+        h = Harness(self)
+        h.diff.write_text(DIFF + "+key = '%s'\n" % self.FAKE_AWS)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 4, res.stderr)
+        self.assertIn("SECRET_SUSPECTED:", res.stderr)
+        self.assertIn("src/a.py:", res.stderr)
+        self.assertNotIn(self.FAKE_AWS, res.stderr + res.stdout)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+        self.assertEqual(h.calls(), [])
+        self.assertFalse(h.out.exists())
+
+    def test_a_secret_in_findings_or_prior_stops_the_run(self):
+        secret = {"findings": [{"id": "C-001", "title": "t", "rationale": "uses " + FAKE_GH}]}
+        for mode, flag in (("judge", "--findings"), ("counter", "--findings"), ("find", "--prior")):
+            with self.subTest(mode=mode):
+                h = Harness(self)
+                res = h.run("--mode", mode, flag, h.write("in.json", secret))
+                self.assertEqual(res.returncode, 4, res.stderr)
+                self.assertEqual(h.calls(), [])
+
+    def test_allow_secret_match_lets_the_run_continue(self):
+        h = Harness(self)
+        h.diff.write_text(DIFF + "+key = '%s'\n" % self.FAKE_AWS)
+        res = h.run("--mode", "find", "--allow-secret-match")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.exec_calls()), 1)
+        self.assertIn("--allow-secret-match", res.stderr)
+
+    def test_a_clean_run_is_unchanged(self):
+        h = Harness(self)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn("SECRET_SUSPECTED", res.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
