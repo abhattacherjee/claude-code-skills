@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+### Fixed
+
+- **`github-board` 1.2.1: `GH_HOST` in `find-promotable.sh` issue URLs, and an RE2 guard that allows named captures (#208).** `promote-shipped` (2.1.2) matches a closing keyword's issue URL on `$GH_HOST` (else github.com), like `release-reconcile.sh`. The `--jq` regex test flags look-around and backreferences only, not `(?<name>...)`. See `plugins/github-board/CHANGELOG.md`.
+
 ### Added
 
 - **`github-board` 1.2.0: the next-release milestone on merge, and a release check on every plan (#204, part of #180).** `move-card` (2.1.0) sets the next-release milestone when an issue moves to a post-merge column. `plan-milestones` (2.2.0) step 0, `release-reconcile.sh`, checks each closed issue a merged PR names against the release tag that shipped it, flags issues closed through an unmerged PR, and writes `closed_moves` for `apply-plan.sh`. Both use one shared helper in `lib/config.py`, which `promote-shipped` (2.1.1) now uses too. See `plugins/github-board/CHANGELOG.md`.

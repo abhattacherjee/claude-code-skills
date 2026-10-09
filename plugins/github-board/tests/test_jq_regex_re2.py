@@ -19,10 +19,30 @@ from gbtest import PLUGIN, SKILLS_DIR
 
 FIND = SKILLS_DIR / "promote-shipped" / "scripts" / "find-promotable.sh"
 RECONCILE = SKILLS_DIR / "plan-milestones" / "scripts" / "release-reconcile.sh"
-LOOKAROUND = ("(?<", "(?=", "(?!")
+# Look-around only. A named capture "(?<name>" is valid RE2 in Go, so "(?<" alone is not flagged.
+# Oniguruma-only too: atomic (?> and absent (?~ groups. Local jq accepts them, Go RE2 does not.
+LOOKAROUND = ("(?<=", "(?<!", "(?=", "(?!", "(?>", "(?~")
 # A jq regex function call; its line is checked for a backreference (\\1 in a jq string).
 REGEX_CALL = re.compile(r"\b(test|match|capture|scan|splits?|sub|gsub)\(")
-BACKREF = re.compile(r"\\\\[1-9]")
+# \\1 to \\9, \\k<n>, \\k'n', and the subexpression calls \\g<n>, \\g'n'.
+BACKREF = re.compile(r"\\\\[1-9]|\\\\[kg][<']")
+# A possessive quantifier: *+ ++ ?+ }+ (RE2 has none). A plain a+ or [0-9]+ is one quantifier.
+POSSESSIVE = re.compile(r"[*+?}]\+")
+# The check reads the contents of each jq string literal on the line, not the whole line, so
+# a jq array constructor [ ... ] is never taken for a class. In a literal, an escaped character
+# (\\+ in a jq string is a literal +) and then a bracket class (? and + are literals there)
+# are each replaced with a plain X so the text around them stays apart. A test heuristic:
+# a ] first in a class is not handled, and a false positive fails loudly.
+STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+ESCAPED = re.compile(r"\\\\.")
+CLASS = re.compile(r"\[[^\]]*\]")
+
+
+def has_possessive(line):
+    return any(POSSESSIVE.search(CLASS.sub("X", ESCAPED.sub("X", lit)))
+               for lit in STRING.findall(line))
+
+
 KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?"
 
 
@@ -31,16 +51,65 @@ def jq_scripts():
                   and "--jq" in p.read_text())
 
 
+MAX_JOIN = 20  # following lines joined to close a regex string that runs past its line
+
+
+def first_string_is_open(text):
+    """True when the first jq string after the call opens but does not close in text. Escape-aware,
+    like STRING. Only that first literal (the regex) counts: a later quote on the line may close
+    a string opened on an earlier line, as in "\\(.t | gsub("x"; "y"))"."""
+    start = text.find('"')
+    i = start + 1
+    while start >= 0 and i < len(text):
+        if text[i] == "\\":
+            i += 1
+        elif text[i] == '"':
+            return False
+        i += 1
+    return start >= 0
+
+
+def regex_text(lines, n, start):
+    """The text after the regex call that ends at column start on lines[n]. If its regex string is
+    still open at the end of the line, join the next lines (at most MAX_JOIN) until it closes.
+    Pairing stays local to the call: a whole-file scan would misalign on the first stray quote
+    in shell source. Returns (text, closed)."""
+    text = lines[n][start:]
+    joined = 0
+    while first_string_is_open(text) and joined < MAX_JOIN and n + 1 + joined < len(lines):
+        text += "\n" + lines[n + 1 + joined]
+        joined += 1
+    return text, not first_string_is_open(text)
+
+
 def scan(text):
-    """(line number, problem) for every look-around, and every backreference on a line that
-    calls a jq regex function."""
+    """(line number, problem) for every look-around, and every backreference or possessive
+    quantifier on a line that calls a jq regex function. On such a line, every string literal
+    that closes on the line is checked for a possessive quantifier, wherever it sits; and for
+    each regex call, a regex string that runs onto following lines is joined and checked. One
+    still open after MAX_JOIN lines is reported. At most one possessive finding per line."""
     bad = []
-    for i, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for n, line in enumerate(lines):
+        i = n + 1
         for token in LOOKAROUND:
             if token in line:
                 bad.append((i, f"look-around {token}"))
-        if REGEX_CALL.search(line) and BACKREF.search(line):
+        calls = list(REGEX_CALL.finditer(line))
+        if not calls:
+            continue
+        if BACKREF.search(line):
             bad.append((i, "backreference"))
+        possessive = has_possessive(line)
+        unterminated = False
+        for call in calls:
+            joined, closed = regex_text(lines, n, call.end())
+            possessive = possessive or has_possessive(joined)
+            unterminated = unterminated or (not closed and joined.count("\n") >= MAX_JOIN)
+        if possessive:
+            bad.append((i, "possessive quantifier"))
+        if unterminated:
+            bad.append((i, "unterminated regex string"))
     return bad
 
 
@@ -51,9 +120,54 @@ def test_the_scan_covers_the_find_promotable_filter():
 
 
 def test_the_scan_catches_a_planted_lookbehind_and_backreference():
-    assert scan('x | test("(?i)(?<![a-z])closes") | y') == [(1, "look-around (?<")]
+    assert scan('x | test("(?i)(?<![a-z])closes") | y') == [(1, "look-around (?<!")]
     assert scan('x | test("(a)\\\\1")') == [(1, "backreference")]
     assert scan('x | test("(?i)(^|[^A-Za-z0-9_])closes")') == []
+
+
+FORBIDDEN = [
+    ('x | test("(?<=a)b")', "look-around (?<="),
+    ('x | test("(?<!a)b")', "look-around (?<!"),
+    ('x | test("a(?=b)")', "look-around (?="),
+    ('x | test("a(?!b)")', "look-around (?!"),
+    ('x | test("(a)\\\\1")', "backreference"),
+    ('x | test("(a)\\\\9")', "backreference"),
+    ('x | test("(?<n>a)\\\\k<n>")', "backreference"),
+    ("x | test(\"(?<n>a)\\\\k'n'\")", "backreference"),
+    ('x | test("(?<n>a)\\\\g<n>")', "backreference"),
+    ('x | test("(a)\\\\g<1>")', "backreference"),
+    ('x | test("(?>a+)b")', "look-around (?>"),
+    ('x | test("a(?~b)")', "look-around (?~"),
+    ('x | test("a*+b")', "possessive quantifier"),
+    ('x | test("a++b")', "possessive quantifier"),
+    ('x | test("a?+b")', "possessive quantifier"),
+    ('x | test("a{2}+b")', "possessive quantifier"),
+    ('x | [test("a++")]', "possessive quantifier"),
+    ('[.[] | select(test("a*+"))]', "possessive quantifier"),
+    ('x | test("a++\nb")', "possessive quantifier"),
+    ('x | test("b\na*+")', "possessive quantifier"),
+    ('x | test("ok") | test("c*+\nd")', "possessive quantifier"),
+    ('"a++" as $re | test($re)', "possessive quantifier"),
+]
+
+
+@pytest.mark.parametrize("snippet, problem", FORBIDDEN)
+def test_the_scan_catches_each_forbidden_form(snippet, problem):
+    assert (1, problem) in scan(snippet)
+
+
+@pytest.mark.parametrize("snippet", [
+    'x | capture("(?<issue>[0-9]+)")',
+    'x | test("(?i)(?<name>close[sd]?) (?<num>[0-9]+)")',
+    'x | test("(?P<issue>[0-9]+)")',
+    'x | test("[?+]+")',
+    'x | test("[?+]\n+")',
+    'x | test("[*]+")',
+    'x | test("\\\\++")',
+    'x | test("a+b*c?[0-9]+\\\\s+x{2}y+?")',
+])
+def test_the_scan_allows_a_named_capture(snippet):
+    assert scan(snippet) == []
 
 
 @pytest.mark.parametrize("script", jq_scripts(), ids=lambda p: p.name)
@@ -151,3 +265,31 @@ def test_the_go_check_rejects_a_lookbehind(tmp_path):
     # The instrument works: the old pattern is the error real gh printed.
     r = go_compile(tmp_path, ["(?i)(?<![A-Za-z0-9_])closes"])
     assert r.returncode == 1 and "invalid" in r.stdout
+
+
+def test_a_regex_string_left_open_for_more_than_the_join_cap_is_reported():
+    text = 'x | test("a' + "\nb" * (MAX_JOIN + 1)
+    assert (1, "unterminated regex string") in scan(text)
+
+
+def test_a_regex_string_that_closes_within_the_join_cap_is_not_reported():
+    text = 'x | test("a' + "\nb" * (MAX_JOIN - 1) + '")'
+    assert scan(text) == []
+
+
+def _line_scan_possessive(line):
+    """The 4608fff check, kept here as the reference: every string literal that closes on the
+    line, on a line that calls a regex function."""
+    return bool(REGEX_CALL.search(line)) and any(
+        POSSESSIVE.search(CLASS.sub("X", ESCAPED.sub("X", lit))) for lit in STRING.findall(line))
+
+
+@pytest.mark.parametrize("text", [snippet for snippet, _ in FORBIDDEN]
+                         + [p.read_text() for p in jq_scripts()],
+                         ids=[f"forbidden{i}" for i in range(len(FORBIDDEN))]
+                         + [p.name for p in jq_scripts()])
+def test_the_new_scan_flags_everything_the_line_scan_flagged(text):
+    found = scan(text)
+    for i, line in enumerate(text.splitlines(), 1):
+        if _line_scan_possessive(line):
+            assert (i, "possessive quantifier") in found, f"line {i}: {line!r}"

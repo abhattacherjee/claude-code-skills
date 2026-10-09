@@ -2,6 +2,18 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.2.1] - 2026-10-08
+
+### Fixed
+
+- `promote-shipped` 2.1.2: `find-promotable.sh` matches issue URLs on `$GH_HOST` (else github.com), dots escaped, like `release-reconcile.sh` (#208).
+- `tests/test_jq_regex_re2.py` flags the forms Go RE2 rejects and local jq (Oniguruma) accepts, and nothing else (#208).
+  - Look-around `(?<=`, `(?<!`, `(?=`, `(?!`; atomic `(?>`; absent `(?~`.
+  - Backreferences and calls: `\1` to `\9`, `\k<n>`, `\k'n'`, `\g<n>`, `\g<1>`.
+  - Possessive quantifiers `*+`, `++`, `?+`, `}+`. A plain `a+` or `[0-9]+` passes.
+  - A named capture `(?<name>...)` or `(?P<name>...)` is valid Go RE2 and passes.
+- `find-promotable.sh` checks `repo`, `num` and `GH_HOST` with `[[ =~ ]]` on the whole value. `grep -Eq` passed a multi-line value if any one line fit. A refused value still reports FAILED, so the card is held as `hold-discovery-failed`, never promoted as `nopr` (#208).
+
 ## [1.2.0] - 2026-10-07
 
 ### Added

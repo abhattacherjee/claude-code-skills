@@ -242,8 +242,10 @@ discover_prs_for_issue() {
   # PR that does claim this issue is returned as {foreign:true} so the candidate is held, not
   # promoted on the "no linked PR" rule. The repo and number are checked before they are
   # pasted into the filter below as literals.
-  if ! printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' \
-     || ! printf '%s' "$num" | grep -Eq '^[0-9]+$'; then
+  # [[ =~ ]] matches the whole value; grep -Eq matches line by line, so a value with a second
+  # line would pass if any one line fit.
+  if ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+     || ! [[ "$num" =~ ^[0-9]+$ ]]; then
     echo "[find-promotable] discovery skipped: malformed reference repo='$repo' num='$num'" >&2
     echo "FAILED"; return
   fi
@@ -251,11 +253,21 @@ discover_prs_for_issue() {
   repo_lc=$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')
   # Regex-escape the dots; the other allowed characters are literal in a regex.
   repo_re=$(printf '%s' "$repo" | sed 's/[.]/\\\\./g')
+  # The issue URL uses the host gh talks to: $GH_HOST when set, else github.com. It goes into
+  # the jq filter text, so refuse anything that is not a hostname. Same rule as HOST_RE in
+  # plan-milestones/scripts/release-reconcile.sh.
+  local want_host host_re
+  want_host="${GH_HOST:-github.com}"
+  if ! [[ "$want_host" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "[find-promotable] discovery skipped: GH_HOST='$want_host' is not a hostname" >&2
+    echo "FAILED"; return
+  fi
+  host_re=$(printf '%s' "$want_host" | sed 's/[.]/\\\\./g')
   local jq_filter
   # The closing forms GitHub accepts: a keyword (a whole word: "Encloses #N" does not count;
   # the boundary is (^|[^A-Za-z0-9_]) because gh --jq uses Go RE2, which has no lookbehind),
   # an optional colon, then #N, owner/repo#N or
-  # the issue's full URL (https://github.com/owner/repo/issues/N). Only THIS repo's
+  # the issue's full URL (https://<host>/owner/repo/issues/N, host = $GH_HOST or github.com). Only THIS repo's
   # owner/repo#N or URL counts; a URL for another repo's issue closes that issue, not ours.
   # Unmerged PRs are kept too (merged:false): an open or abandoned closing PR is stalled
   # work, so it must count as a linked PR and hold the card, never vanish into "nopr".
@@ -263,7 +275,7 @@ discover_prs_for_issue() {
     | {t:.__typename, pr:(.closer // .subject // .source)}
     | select(.pr != null and (.pr|type)=="object" and .pr.__typename=="PullRequest")
     | select( (.t=="ClosedEvent" or .t=="ConnectedEvent")
-              or ( (.pr.body // "") | test("(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\\s+(('"${repo_re}"')?#|https?://github\\.com/'"${repo_re}"'/issues/)'"${num}"'\\b") ) )
+              or ( (.pr.body // "") | test("(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\\s+(('"${repo_re}"')?#|https?://'"${host_re}"'/'"${repo_re}"'/issues/)'"${num}"'\\b") ) )
     | ((.pr.repository.nameWithOwner // "") | ascii_downcase) as $prRepo
     | {number:.pr.number, baseRefName:.pr.baseRefName, mergedAt:.pr.mergedAt, mergeCommitOid:.pr.mergeCommit.oid,
        repo:"'"${repo}"'", foreign:($prRepo != "'"${repo_lc}"'"), prRepo:.pr.repository.nameWithOwner,
