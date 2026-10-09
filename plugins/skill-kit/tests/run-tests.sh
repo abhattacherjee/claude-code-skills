@@ -150,6 +150,59 @@ for nm in clad-tools anthro-pic cla-ude; do
   check "the name $nm passes (only looks like a reserved word)" 0 'name: no reserved words'
 done
 
+# Reference files: every .md file is named in SKILL.md or read by a script, and one over
+# 100 lines has a ## Contents heading in its first 30 lines. rskill: a clean skill whose
+# SKILL.md names references/short.md; each case plants one change, then runs vref.
+rskill() { vskill "$VS" my-skill 10; mkdir -p "$VS/references" "$VS/scripts"; printf 'Read references/short.md.\n' >> "$VS/SKILL.md"; printf '# Short\n' > "$VS/references/short.md"; }
+vref() { run_in "$PROJ" "$V" "$VS"; }
+nlines() { local i; for ((i = 1; i <= $1; i++)); do printf 'line %d\n' "$i"; done; }
+O='references/orphan.md: not named in SKILL.md or read by a script'
+rskill; vref; check "a skill whose references are all named passes" 0 'references/short.md: named'
+rskill; printf '# o\n' > "$VS/references/orphan.md"; vref; check "an unnamed reference fails" 1 "FAIL  $O"
+rskill; mkdir -p "$VS/resources/deep"; printf '# x\n' > "$VS/resources/deep/x.md"; vref
+check "an unnamed .md file at any depth fails" 1 'FAIL  resources/deep/x.md: not named'
+for how in './references/orphan.md' '${CLAUDE_SKILL_DIR}/references/orphan.md' '[o](references/orphan.md)' 'references/orphan.md.'; do
+  rskill; printf '# o\n' > "$VS/references/orphan.md"; printf 'See %s\n' "$how" >> "$VS/SKILL.md"; vref
+  check "SKILL.md naming it as $how counts" 0 'references/orphan.md: named'
+done
+for how in 'references/orphan.md.bak' 'other/./references/orphan.md' 'other/references/orphan.md' 'references/orphan.md-old'; do
+  rskill; printf '# o\n' > "$VS/references/orphan.md"; printf 'See %s\n' "$how" >> "$VS/SKILL.md"; vref
+  check "SKILL.md naming $how does not count" 1 "FAIL  $O"
+done
+rskill; printf '# o\n' > "$VS/references/orphan.md"; printf '#!/usr/bin/env bash\n# --help\ncat "$DIR/orphan.md"\n' > "$VS/scripts/run.sh"; chmod +x "$VS/scripts/run.sh"; vref
+check "a file a script in scripts/ reads counts" 0 'references/orphan.md: named'
+for how in 'orphan.md.bak' 'my-orphan.md' 'x.orphan.md'; do
+  rskill; printf '# o\n' > "$VS/references/orphan.md"; printf '#!/usr/bin/env bash\n# --help\ncat "$DIR/%s"\n' "$how" > "$VS/scripts/run.sh"; chmod +x "$VS/scripts/run.sh"; vref
+  check "a script naming $how does not count" 1 "FAIL  $O"
+done
+rskill; for f in references/README.md references/CHANGELOG.md CONTRIBUTING.md .github/PULL_REQUEST_TEMPLATE.md; do mkdir -p "$VS/$(dirname "$f")"; printf '# x\n' > "$VS/$f"; done; vref
+check "README, CHANGELOG, CONTRIBUTING and .md files under a dot-directory are never orphans" 0 'Result: PASS'
+S3='references/short.md: 150 lines with no .## Contents. heading in the first 30 lines'
+rskill; nlines 150 > "$VS/references/short.md"; vref; check "a 150-line reference with no Contents fails" 1 "FAIL  $S3"
+rskill; nlines 100 > "$VS/references/short.md"; vref; check "a 100-line reference needs no Contents" 0 'Result: PASS'
+rskill; printf '%s' "$(nlines 101)" > "$VS/references/short.md"; vref
+check "a 101-line reference with no final newline needs Contents" 1 'FAIL  references/short.md: 101 lines'
+rskill; { nlines 30; printf '## Contents\n'; nlines 119; } > "$VS/references/short.md"; vref
+check "a Contents heading after line 30 fails" 1 "FAIL  $S3"
+rskill; { printf '# T\n## Table of contents\n'; nlines 148; } > "$VS/references/short.md"; vref
+check "## Table of contents is accepted" 0 'references/short.md: has a Contents heading'
+rskill; { printf '# T\n##  CONTENTS  \n'; nlines 148; } > "$VS/references/short.md"; vref
+check "the heading ignores case and extra spaces" 0 'references/short.md: has a Contents heading'
+rskill; { printf '# T\n```markdown\n## Contents\n```\n'; nlines 146; } > "$VS/references/short.md"; vref
+check "a ## Contents inside a code fence does not count" 1 "FAIL  $S3"
+rskill; { printf '# T\n   ~~~\n## Contents\n~~~~\n## Contents\n'; nlines 145; } > "$VS/references/short.md"; vref
+check "a real ## Contents after a closed fence counts" 0 'references/short.md: has a Contents heading'
+rskill; { printf '# T\n````\n```\n## Contents\n````\n'; nlines 145; } > "$VS/references/short.md"; vref
+check "a shorter fence line does not close a longer fence" 1 "FAIL  $S3"
+rskill; { printf '# T\n```\n``` not a close\n## Contents\n'; nlines 146; } > "$VS/references/short.md"; vref
+check "a fence line with text after it does not close the fence" 1 "FAIL  $S3"
+rskill; { printf '# T\n```inline``` is not a fence\n## Contents\n'; nlines 147; } > "$VS/references/short.md"; vref
+check "a line like \`\`\`inline\`\`\` is not a fence" 0 'references/short.md: has a Contents heading'
+rskill; { printf '# T\n    ```\n## Contents\n'; nlines 147; } > "$VS/references/short.md"; vref
+check "a fence indented 4 spaces is not a fence" 0 'references/short.md: has a Contents heading'
+rskill; { printf '# T\n### Contents\n'; nlines 148; } > "$VS/references/short.md"; vref
+check "a ### Contents heading fails" 1 "FAIL  $S3"
+
 echo "generate-task-manifest.sh (author)"
 mkdir -p "$PROJ/my-skill"
 # The command as author/SKILL.md writes it, with the placeholder path filled in.

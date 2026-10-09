@@ -20,6 +20,8 @@ Validates a Claude Code skill directory against quality rules:
   - No non-standard frontmatter fields (author, date, tags are disallowed)
   - Version matches CHANGELOG.md (if present)
   - Body: under 500 lines
+  - Reference .md files: named in SKILL.md (or read by a script); over 100 lines,
+    a ## Contents heading in the first 30 lines
   - Scripts: executable, #!/usr/bin/env bash shebang, --help support
 
 Options:
@@ -306,6 +308,123 @@ if [[ $BODY_LINES -lt $MAX_BODY ]]; then
   pass "body: $BODY_LINES lines (must be under $MAX_BODY)"
 else
   fail "body: $BODY_LINES lines (must be under $MAX_BODY)"
+fi
+
+# ============================================================
+# 7b. Reference files: named from SKILL.md, and a Contents list
+# ============================================================
+# The rules of scripts/check-skill-structure.py (S2, S3); a parity test in
+# scripts/test-check-skill-structure.sh keeps the two in step. Checked: every .md
+# file under the skill directory other than SKILL.md, README.md, CHANGELOG.md and
+# CONTRIBUTING.md, and not under a dot-directory such as .github/.
+#   S2  SKILL.md names its path relative to the skill directory (bare, ./ or
+#       ${CLAUDE_SKILL_DIR}/ in front), or a file under scripts/ names its file name.
+#   S3  a file over 100 lines has a ## Contents or ## Table of contents heading in
+#       its first 30 lines, outside a fenced code block.
+# Blind spots, as in the Python checker: any mention counts (a comment, a "do not
+# read" line); non-.md files are not checked. Names are matched byte by byte, so a
+# non-ASCII letter glued to a path does not stop it counting here (it does in Python).
+echo ""
+echo "--- references ---"
+
+TOC_MIN_LINES=100  # Anthropic's guide: a reference file over 100 lines needs a contents list
+TOC_WITHIN=30      # ...near the top, where a partial read (head) still shows it
+
+# names <path|file> <target> <file>...: exit 0 when a file names target on its own.
+# After target, the next char must not extend it: not a word char or -, and not a .
+# followed by a word char (x.md. ends a sentence; x.md.bak is another file).
+# path: the char before target (after an optional ./ or ${CLAUDE_SKILL_DIR}/) must not
+#   be part of a path, so other/./references/x.md does not name references/x.md.
+# file: the char before must not be a word char, . or -; a / is fine ("$DIR/x.md").
+names() {
+  local mode="$1" target="$2"
+  shift 2
+  LC_ALL=C awk -v mode="$mode" -v t="$target" '
+    function w(c) { return c ~ /^[A-Za-z0-9_]$/ }
+    BEGIN { pfx = "${CLAUDE_SKILL_DIR}/" }
+    {
+      s = $0; off = 0
+      while ((i = index(substr(s, off + 1), t)) > 0) {
+        p = off + i; off = p
+        nx = substr(s, p + length(t), 1)
+        if (w(nx) || nx == "-" || (nx == "." && w(substr(s, p + length(t) + 1, 1)))) continue
+        pre = substr(s, 1, p - 1)
+        if (mode == "path") {
+          if (length(pre) >= 2 && substr(pre, length(pre) - 1) == "./") pre = substr(pre, 1, length(pre) - 2)
+          else if (length(pre) >= length(pfx) && substr(pre, length(pre) - length(pfx) + 1) == pfx) pre = substr(pre, 1, length(pre) - length(pfx))
+          c = substr(pre, length(pre), 1)
+          if (c == "" || !(w(c) || index("./${}-", c))) { found = 1; exit }
+        } else {
+          c = substr(pre, length(pre), 1)
+          if (c == "" || !(w(c) || c == "." || c == "-")) { found = 1; exit }
+        }
+      }
+    }
+    END { exit (found ? 0 : 1) }' "$@"
+}
+
+# has_toc <file>: exit 0 when a ## Contents heading sits in the first TOC_WITHIN lines,
+# outside a fenced block. A fence is 3+ backticks or tildes after at most 3 spaces; a
+# backtick fence line has no other backtick (so ```inline``` is not one). A fence closes
+# on the same char, at least as long, with nothing but spaces after it.
+has_toc() {
+  LC_ALL=C awk -v within="$TOC_WITHIN" '
+    NR > within { exit }
+    {
+      line = $0; ind = 0
+      while (ind < 4 && substr(line, ind + 1, 1) == " ") ind++
+      if (ind < 4) {
+        rest = substr(line, ind + 1); c = substr(rest, 1, 1)
+        if (c == "`" || c == "~") {
+          n = 0
+          while (substr(rest, n + 1, 1) == c) n++
+          after = substr(rest, n + 1)
+          if (n >= 3 && (c == "~" || index(after, "`") == 0)) {
+            if (fc == "") { fc = c; fn = n }
+            else if (c == fc && n >= fn && after ~ /^[[:space:]]*$/) fc = ""
+            next
+          }
+        }
+      }
+      if (fc == "" && tolower(line) ~ /^##[[:space:]]+(contents|table of contents)[[:space:]]*$/) { found = 1; exit }
+    }
+    END { exit (found ? 0 : 1) }' "$1"
+}
+
+SCRIPT_FILES=()
+if [[ -d "$SKILL_DIR/scripts" ]]; then
+  while IFS= read -r f; do
+    SCRIPT_FILES+=("$SKILL_DIR/scripts/${f#./}")
+  done < <(cd "$SKILL_DIR/scripts" && find . -type f | LC_ALL=C sort)
+fi
+
+REF_COUNT=0
+while IFS= read -r rel; do
+  rel="${rel#./}"
+  case "${rel##*/}" in SKILL.md|README.md|CHANGELOG.md|CONTRIBUTING.md) continue ;; esac
+  case "/$rel" in */.*) continue ;; esac
+  [[ -f "$SKILL_DIR/$rel" ]] || continue
+  REF_COUNT=$((REF_COUNT + 1))
+
+  if names path "$rel" "$SKILL_MD" \
+     || { [[ ${#SCRIPT_FILES[@]} -gt 0 ]] && names file "${rel##*/}" "${SCRIPT_FILES[@]}"; }; then
+    pass "$rel: named in SKILL.md or read by a script"
+  else
+    fail "$rel: not named in SKILL.md or read by a script in scripts/"
+  fi
+
+  REF_LINES=$(awk 'END { print NR }' "$SKILL_DIR/$rel")
+  if [[ $REF_LINES -gt $TOC_MIN_LINES ]]; then
+    if has_toc "$SKILL_DIR/$rel"; then
+      pass "$rel: has a Contents heading ($REF_LINES lines)"
+    else
+      fail "$rel: $REF_LINES lines with no '## Contents' heading in the first $TOC_WITHIN lines"
+    fi
+  fi
+done < <(cd "$SKILL_DIR" && find . -name '*.md' | LC_ALL=C sort)
+
+if [[ $REF_COUNT -eq 0 ]]; then
+  pass "no reference files besides SKILL.md, README.md and CHANGELOG.md"
 fi
 
 # ============================================================
