@@ -160,6 +160,9 @@ SECRET_PATTERNS = [
     ("anthropic-key", re.compile(r"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}")),
     ("openai-key", re.compile(r"(?<![A-Za-z0-9_-])sk-(?!ant-)[A-Za-z0-9_-]{20,}")),
     ("slack-token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
+    ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}")),
+    ("stripe-key", re.compile(r"\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}")),
+    ("url-credentials", re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")),
     ("private-key", re.compile(
         r"-----BEGIN [A-Z ]*" + _PK + r"-----[\s\S]*?(?:-----END [A-Z ]*" + _PK + r"-----|\Z)")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),

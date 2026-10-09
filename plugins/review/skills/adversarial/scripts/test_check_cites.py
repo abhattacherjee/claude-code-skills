@@ -11,6 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "check-cites.py"
+FAILED = 3  # some findings failed; 1 is left to mean an unexpected crash
 
 DIFF = ("diff --git a/src/a.py b/src/a.py\nindex 1..2 100644\n--- a/src/a.py\n+++ b/src/a.py\n"
         "@@ -1,2 +1,3 @@\n x = 1\n+y = 2\n z = 3\n"
@@ -69,7 +70,7 @@ class PassTests(Base):
 class FailTests(Base):
     def assert_fails(self, item, reason_part):
         res = self.check([finding("C-001", "src/a.py", 1), item])
-        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(res.returncode, FAILED, res.stdout + res.stderr)
         lines = res.stdout.strip().splitlines()
         self.assertEqual(len(lines), 1, res.stdout)
         self.assertTrue(lines[0].startswith(item.get("id") or "(no id)"), lines[0])
@@ -109,7 +110,7 @@ class FailTests(Base):
     def test_a_file_in_the_diff_missing_from_the_repo_fails(self):
         (self.repo / "src" / "a.py").unlink()
         res = self.check([finding("C-001", "src/a.py", 1)])
-        self.assertEqual(res.returncode, 1)
+        self.assertEqual(res.returncode, FAILED)
         self.assertIn("not in the repo", res.stdout)
 
 
@@ -124,7 +125,7 @@ class SelectionTests(Base):
         res = self.check([finding("C-001", "src/a.py", 1),
                           finding("C-002", "nope.py", 1, status="rejected")],
                          "--status", "survivor", "--id", "C-002")
-        self.assertEqual(res.returncode, 1)
+        self.assertEqual(res.returncode, FAILED)
         self.assertIn("C-002", res.stdout)
 
     def test_status_on_findings_with_no_status_field_is_an_error_not_a_pass(self):
@@ -137,8 +138,58 @@ class SelectionTests(Base):
 
     def test_an_id_that_is_not_in_the_findings_fails(self):
         res = self.check([finding("C-001", "src/a.py", 1)], "--id", "C-404")
-        self.assertEqual(res.returncode, 1)
+        self.assertEqual(res.returncode, FAILED)
         self.assertIn("C-404 not in the findings file", res.stdout)
+
+
+class InternalErrorTests(Base):
+    def test_a_non_string_id_is_a_failed_finding_not_a_crash(self):
+        for fid in (["B"], {"x": 1}, 7, None):
+            with self.subTest(fid=fid):
+                item = finding("C-009", "src/a.py", 1)
+                item["id"] = fid
+                res = self.check([finding("C-001", "src/a.py", 1), item], "--status", "survivor")
+                self.assertEqual(res.returncode, FAILED, res.stdout + res.stderr)
+                self.assertIn("(no id)", res.stdout)
+
+    def test_a_non_string_id_flag_match_does_not_crash(self):
+        item = finding("C-009", "src/a.py", 1)
+        item["id"] = ["C-009"]
+        res = self.check([item], "--id", "C-009")
+        self.assertEqual(res.returncode, FAILED, res.stdout + res.stderr)
+
+    def test_a_crash_exits_2_never_1_or_0(self):
+        # A broken import (here: a secret_scan.py that raises) must not look like
+        # "some findings failed, fix the others".
+        d = self.dir / "copy"
+        d.mkdir()
+        shutil.copy(str(SCRIPT), str(d / "check-cites.py"))
+        (d / "secret_scan.py").write_text("raise RuntimeError('broken')\n")
+        res = subprocess.run([sys.executable, str(d / "check-cites.py"), "--diff", self.diff, "--findings",
+                              self.write({"findings": [finding("C-001", "src/a.py", 1)]}), "--repo", self.repo],
+                             capture_output=True, text=True, timeout=30,
+                             env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("internal error", res.stderr)
+
+    def test_findings_that_are_not_objects_are_reported_not_skipped(self):
+        res = self.check([finding("C-001", "src/a.py", 1), "C-002", 5])
+        self.assertEqual(res.returncode, FAILED, res.stdout + res.stderr)
+        self.assertEqual(res.stdout.count("not an object"), 2)
+
+
+class HunkNoteTests(Base):
+    def test_a_line_outside_every_hunk_passes_with_a_note(self):
+        res = self.check([finding("C-001", "src/a.py", 1), finding("C-002", "src/a.py", 2)])
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("C-002", res.stderr)
+        res = self.check([finding("C-003", "src/a.py", 3)])
+        self.assertEqual(res.returncode, 0)
+        self.assertNotIn("C-003", res.stderr)
+        (self.repo / "src" / "a.py").write_text("x = 1\ny = 2\nz = 3\nw = 4\n")
+        res = self.check([finding("C-004", "src/a.py", 4)])
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("note: C-004 line 4 of src/a.py is outside every hunk of the diff", res.stderr)
 
 
 class UsageTests(Base):

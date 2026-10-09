@@ -156,7 +156,78 @@ class ArgvAndStdinTests(unittest.TestCase):
         self.assertEqual(json.loads(res.stdout), {"verdicts": []})
 
 
+def patched_copy(test, h, edits):
+    """gemini-review.sh copied next to its helpers with each (old, new) applied once,
+    to reach one code path on its own."""
+    d = h.dir / "patched"
+    d.mkdir()
+    for name in ("secret_scan.py", "audit_record.py"):
+        shutil.copy(str(HERE / name), str(d / name))
+    text = SCRIPT.read_text()
+    for old, new in edits:
+        test.assertEqual(text.count(old), 1, old)
+        text = text.replace(old, new)
+    (d / "gemini-review.sh").write_text(text)
+    return d / "gemini-review.sh"
+
+
+class InputLimitTests(unittest.TestCase):
+    def test_input_over_the_cli_stdin_cap_is_refused(self):
+        # Gemini CLI 0.46.0 keeps 8 MiB of stdin and drops the rest without an error.
+        h = GeminiHarness(self, [FOUND])
+        h.put("change.diff", "diff --git a/m.js b/m.js\n--- /dev/null\n+++ b/m.js\n@@ -0,0 +1 @@\n+"
+              + "a" * (9 * 1024 * 1024) + "\n")
+        res = h.run("--diff", h.diff, "--mode", "find")
+        self.assertEqual(res.returncode, 1, res.stderr[-300:])
+        self.assertIn("8 MiB", res.stderr)
+        self.assertEqual(h.calls(), [])
+
+    def test_input_just_under_the_cap_is_sent(self):
+        h = GeminiHarness(self, [FOUND])
+        h.put("change.diff", "diff --git a/m.js b/m.js\n--- /dev/null\n+++ b/m.js\n@@ -0,0 +1 @@\n+"
+              + "a" * (7 * 1024 * 1024) + "\n")
+        self.assertEqual(h.run("--diff", h.diff, "--mode", "find").returncode, 0)
+        self.assertEqual(len(h.calls()), 1)
+
+    def test_a_failed_input_build_stops_the_run(self):
+        h = GeminiHarness(self, [FOUND])
+        script = patched_copy(self, h, [("brief_file, diff_file, findings_file, out_file = sys.argv[1:5]",
+                                         "brief_file, diff_file, findings_file, out_file = sys.argv[1:5]\n"
+                                         "raise SystemExit(1)")])
+        res = subprocess.run(["bash", str(script), "--diff", str(h.diff), "--mode", "find"], capture_output=True,
+                             text=True, env=h.env, timeout=60, stdin=subprocess.DEVNULL)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("could not build", res.stderr)
+        self.assertEqual(h.calls(), [])
+
+
+    def test_an_input_that_cannot_be_measured_is_not_sent(self):
+        # A failed wc, or one that prints something bash arithmetic would read as 0.
+        for fake in ("false", "echo not-a-number"):
+            with self.subTest(fake=fake):
+                h = GeminiHarness(self, [FOUND])
+                script = patched_copy(self, h, [('if ! input_bytes="$(wc -c <"$COMBINED_INPUT_FILE")"',
+                                                 'if ! input_bytes="$(%s)"' % fake)])
+                res = subprocess.run(["bash", str(script), "--diff", str(h.diff), "--mode", "find"],
+                                     capture_output=True, text=True, env=h.env, timeout=60,
+                                     stdin=subprocess.DEVNULL)
+                self.assertEqual(res.returncode, 1, res.stderr)
+                self.assertEqual(h.calls(), [])
+
+
 class SecretGateTests(unittest.TestCase):
+    def test_the_assembled_input_is_scanned_on_its_own(self):
+        # Pins the scan after build_stdin: here only the assembled text holds a key.
+        h = GeminiHarness(self, [FOUND])
+        script = patched_copy(self, h, [('  # ---- the input is final from here ----',
+                                         '  # ---- the input is final from here ----\n'
+                                         "  printf '+k=%s\\n' '" + FAKE_AWS + "' >> \"$COMBINED_INPUT_FILE\"")])
+        res = subprocess.run(["bash", str(script), "--diff", str(h.diff), "--mode", "find"], capture_output=True,
+                             text=True, env=h.env, timeout=60, stdin=subprocess.DEVNULL)
+        self.assertEqual(res.returncode, 4, res.stderr)
+        self.assertIn("assembled", res.stderr)
+        self.assertEqual(h.calls(), [])
+
     def test_a_secret_in_the_diff_stops_before_gemini_runs(self):
         h = GeminiHarness(self, [FOUND])
         h.put("change.diff", DIFF + "+key = '%s'\n" % FAKE_AWS)

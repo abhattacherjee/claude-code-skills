@@ -20,6 +20,10 @@ FAKE_ANT = "sk-" + "ant-" + "api03-EXAMPLEexampleEXAMPLEexample"
 FAKE_OAI = "sk-" + "proj-EXAMPLEexampleEXAMPLEexample"
 FAKE_SLACK = "xox" + "b-" + "123456789012-EXAMPLEexample"
 FAKE_JWT = "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N"
+FAKE_GOOGLE = "AI" + "za" + "SyEXAMPLEexampleEXAMPLEexample12345"
+FAKE_STRIPE = "sk" + "_live_" + "EXAMPLEexample1234"
+FAKE_URL = "postgres" + "://admin:" + "hunter2pass@db.internal/app"
+PASS_WORD = "pass" + "word"
 PEM_HEAD = "-----BEGIN RSA " + "PRIVATE" + " KEY-----"
 PEM_TAIL = "-----END RSA " + "PRIVATE" + " KEY-----"
 
@@ -84,7 +88,8 @@ class ExitCodeTests(Base):
 class PatternTests(Base):
     CASES = [("aws-key-id", FAKE_AWS), ("github-token", FAKE_GH), ("github-token", FAKE_PAT),
              ("anthropic-key", FAKE_ANT), ("openai-key", FAKE_OAI), ("slack-token", FAKE_SLACK),
-             ("jwt", FAKE_JWT), ("private-key", PEM_HEAD)]
+             ("jwt", FAKE_JWT), ("private-key", PEM_HEAD), ("google-api-key", FAKE_GOOGLE),
+             ("stripe-key", FAKE_STRIPE), ("url-credentials", FAKE_URL)]
 
     def test_each_pattern_is_found_and_named_without_its_value(self):
         for name, value in self.CASES:
@@ -93,6 +98,28 @@ class PatternTests(Base):
                 self.assertEqual(res.returncode, 4, res.stdout + res.stderr)
                 self.assertIn("src/conf.py:2 %s" % name, res.stdout)
                 self.assertNotIn(value, res.stdout + res.stderr)
+
+    def test_a_quoted_or_env_style_secret_assignment_is_found(self):
+        for line in ('%s = "Hunter2Hunter2"' % PASS_WORD, '"api_key": "k9f8a7d6s5a4"',
+                     "DB_%s=s3cr3tP4ssw0rd" % PASS_WORD.upper(), "export GITHUB_TOKEN=abcd1234efgh5678"):
+            with self.subTest(line=line):
+                res = self.run_scan(self.put("g.diff", diff("conf/app.cfg", line)))
+                self.assertIn("conf/app.cfg:1 secret-assignment", res.stdout)
+                self.assertEqual(res.returncode, 4)
+
+    def test_code_and_placeholders_are_not_secret_assignments(self):
+        for line in ("tokens = _tokenize(cleaned)", "%s = os.environ['DB_PASS']" % PASS_WORD,
+                     'token = "CANARY-SKILL-"', '"token": "ya29.fake-oauth-token"', 'API_KEY="stub-value"',
+                     "API_KEY=${API_KEY}", '%s = "changeme"' % PASS_WORD, "API_KEY=<your-key>",
+                     'secret = "short"', "_DISTINCTIVE_TOKEN_RE = re.compile("):
+            with self.subTest(line=line):
+                res = self.run_scan(self.put("c.diff", diff("conf/app.py", line)))
+                self.assertEqual(res.returncode, 0, res.stdout)
+
+    def test_the_assignment_rule_is_scan_only(self):
+        import audit_record
+        text = '%s = "Hunter2Hunter2"' % PASS_WORD
+        self.assertEqual(audit_record.redact(text)[0], text)
 
     def test_a_pem_block_is_reported_at_its_first_line(self):
         res = self.run_scan(self.put("k.diff", diff("k.txt", "x", PEM_HEAD, "MIIEexample", PEM_TAIL)))
@@ -153,7 +180,8 @@ class SecretFileNameTests(Base):
     def test_each_secret_looking_name_is_flagged(self):
         for path in (".env", "app/.env.production", "certs/server.pem", "tls.key", ".ssh/id_rsa",
                      "id_ed25519.pub", "aws/credentials", "my-credentials.json", "store.p12",
-                     "store.pfx", "App/.ENV"):
+                     "store.pfx", "App/.ENV", "prod.env", ".envrc", ".ssh/id_ecdsa", "id_dsa",
+                     ".netrc", ".npmrc", ".pypirc", ".pgpass"):
             with self.subTest(path=path):
                 res = self.run_scan(self.put("n.diff", diff(path, "harmless")))
                 self.assertEqual(res.returncode, 4, path)
@@ -198,6 +226,23 @@ class SecretFileNameTests(Base):
                 "rename to .env\n")
         res = self.run_scan(self.put("ren.diff", text))
         self.assertIn(".env:0 secret-file-name", res.stdout)
+
+    def test_a_colored_diff_still_finds_names_and_lines(self):
+        # What `git diff` writes with color.ui=always in the user's config.
+        text = ("\x1b[1mdiff --git a/.env b/.env\x1b[m\n\x1b[1mindex 1..2 100644\x1b[m\n"
+                "\x1b[1m--- a/.env\x1b[m\n\x1b[1m+++ b/.env\x1b[m\n\x1b[36m@@ -1 +1,2 @@\x1b[m\n"
+                " A=1\n\x1b[32m+K=%s\x1b[m\n" % FAKE_AWS)
+        res = self.run_scan(self.put("color.diff", text))
+        self.assertEqual(res.stdout.strip().splitlines(), [".env:0 secret-file-name", ".env:2 aws-key-id"])
+
+    def test_a_path_with_control_characters_is_printed_escaped(self):
+        # A newline in a path could forge or hide a hit line; a tab or ESC could hide text.
+        text = ('diff --git "a/x\\nfake.py:9 aws-key-id\\tb.pem" "b/x\\nfake.py:9 aws-key-id\\tb.pem"\n'
+                'new file mode 100644\n--- /dev/null\n+++ "b/x\\nfake.py:9 aws-key-id\\tb.pem"\n'
+                '@@ -0,0 +1 @@\n+x\n')
+        res = self.run_scan(self.put("ctl.diff", text))
+        self.assertEqual(res.returncode, 4)
+        self.assertEqual(res.stdout.splitlines(), ["x\\nfake.py:9 aws-key-id\\tb.pem:0 secret-file-name"])
 
     def test_the_name_list_matches_detect_mode(self):
         import secret_scan

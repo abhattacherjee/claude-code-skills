@@ -944,8 +944,8 @@ assert_contains "ordinary untracked files are still sent" "+ok-content" "$(cat "
 assert_contains "notes.txt is in the diff" "notes.txt" "$(cat "$DM_DIFF")"
 assert_contains "environment.md is in the diff (not a .env match)" "environment.md" "$(cat "$DM_DIFF")"
 
-# Glob-looking names. An untracked file named `[.]env`, `*`, `?env` or `:(glob).env`
-# passes the secret-name filter. If git treated it as a pathspec glob, `git add -N`
+# Glob-looking names. An untracked file named `[.]env`, `*`, `?env`, `:(glob).e*` or
+# `:(top)[.]env` passes the secret-name filter (`:(glob).env` no longer does: `*.env`). If git treated it as a pathspec glob, `git add -N`
 # would pull the real .env into the diff. Each case gets its own new temp dir, and the
 # dir is deleted afterwards, so no glob-named file is ever removed by a shell glob.
 # Guard 1 is literal pathspecs; guard 2 is the final check on the paths in the diff.
@@ -967,7 +967,7 @@ chmod +x "$SHIM_DIR/git"
 dm_run_shim() { local repo="$1"; shift; (cd "$repo" && PATH="$SHIM_DIR:$NOGH_DIR:$PATH" bash "$DETECT_MODE" "$@"); }
 
 GLOB_I=0
-for GLOB_NAME in '[.]env' '*' '?env' ':(glob).env' ':(top).env'; do
+for GLOB_NAME in '[.]env' '*' '?env' ':(glob).e*' ':(top)[.]env'; do
   GLOB_I=$((GLOB_I + 1))
   GD="$TMP_DIR/dm-glob-$GLOB_I"
   dm_glob_repo "$GD" "$GLOB_NAME"

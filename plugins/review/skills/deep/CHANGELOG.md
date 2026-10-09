@@ -13,6 +13,7 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
   - The Step 2.2 Gemini fallback shows one form: a prompt file written with the Write tool, scanned, and fed on stdin with a fixed `-p`. The `gemini -p "<prompt>"` form is gone.
   - Step 2.5 runs `check-cites.py` before the implementer; failing findings go to the user. In PR mode it compares the PR author with `gh api user` and asks before the commit and push when they differ.
   - A Red Flag forbids diff- or finding-derived text in a shell argument and names `-p "$(cat f)"` as still unsafe.
+  - Out-of-tree files are appended as `git diff --no-index /dev/null <path> >> <DIFF>`, so the scan checks their names. Steps 2.3 and 2.6 handle exit 4. Step 2.6 builds its diff with `--no-color --no-ext-diff --no-textconv` and fixed prefixes, and checks cites against `<BASE_REF>...<FIX_SHA>` with `--id` for each confirmed new finding. `check-cites.py` exit 3 means some failed; any other non-zero code stops. An empty `gh` login counts as someone else's PR. `references/untrusted-input.md` says what the scan does not detect.
 
 ## [1.0.1] - 2026-10-09
 

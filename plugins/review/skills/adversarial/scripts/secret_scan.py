@@ -36,8 +36,41 @@ from audit_record import SECRET_PATTERNS  # noqa: E402
 EXIT_CLEAN, EXIT_USAGE, EXIT_HIT = 0, 2, 4
 # Must match SECRET_NAME_GLOBS in detect-mode.sh; test_secret_scan.py checks that.
 # Matched against the lower-cased last part of the path.
-SECRET_NAME_GLOBS = ('.env', '.env.*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*credentials*',
-                     '*.p12', '*.pfx')
+SECRET_NAME_GLOBS = ('.env', '.env.*', '*.env', '.envrc', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*',
+                     'id_ecdsa*', 'id_dsa*', '*credentials*', '*.p12', '*.pfx', '.netrc', '.npmrc',
+                     '.pypirc', '.pgpass')
+# Scan only, never redact: a value assigned to a secret-sounding name. A quoted
+# literal after password/secret/api_key/token, or an upper-case env line such as
+# DB_PASSWORD=... . Values with placeholder words are skipped. Measured on this
+# repo: no hit on the whole develop history as one diff (5.7 MB) nor on its six
+# largest commits.
+ASSIGNMENT_RULES = (
+    re.compile(r"""(?i)(?:password|passwd|pwd|secret|api_?key|access_?key|auth_?token|token)["']?\s*[:=]\s*["']([^"'\s]{8,})["']"""),
+    re.compile(r"""(?m)^[+ -]?\s*(?:export\s+)?[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|API_?KEY|ACCESS_?KEY|TOKEN)[A-Z0-9_]*\s*=\s*([A-Za-z0-9_+/=.:@!#%^&*~-]{8,})\s*$"""),
+)
+PLACEHOLDER_RE = re.compile(r"(?i)x{4,}|\*{3,}|\.{3}|changeme|example|placeholder|your[_-]|^<|\$\{|\{\{|"
+                            r"redacted|dummy|fake|stub|test|canary|sample|mock")
+# What `git diff` writes when the user's config turns color on. Stripped before
+# parsing, so a colored header still names its file.
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def find_secrets(text):
+    """(start offset, pattern name) for every secret in text: SECRET_PATTERNS, then
+    the scan-only assignment rules."""
+    found = []
+    for name, rx in SECRET_PATTERNS:
+        found += [(m.start(), name) for m in rx.finditer(text)]
+    for rx in ASSIGNMENT_RULES:
+        found += [(m.start(), "secret-assignment") for m in rx.finditer(text)
+                  if not PLACEHOLDER_RE.search(m.group(1))]
+    return found
+
+
+def show(path):
+    """A path from the untrusted diff, safe to print on one line: control and other
+    non-printable characters are written as escapes, so a newline cannot forge a hit."""
+    return path if path.isprintable() else path.encode("unicode_escape").decode("ascii")
 HIT_NAME_RE = re.compile(r":\d+ (\S+)(?: \(removed line\))?$")
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 QUOTED_HEADER_RE = re.compile(r'^("(?:[^"\\]|\\.)*"|\S+) ("(?:[^"\\]|\\.)*"|\S+)$')
@@ -155,13 +188,25 @@ def map_lines(lines):
     return out, paths, new_sides
 
 
+def hunk_lines(text):
+    """{path: set of new-file line numbers} that the diff's hunks show (added or
+    context lines)."""
+    lines = ANSI_RE.sub("", text).split("\n")
+    out = {}
+    for path, line, removed in map_lines(lines)[0]:
+        if path and line and not removed:
+            out.setdefault(path, set()).add(line)
+    return out
+
+
 def new_side_paths(text):
     """The files a diff leaves in place: each file's new-side path, deleted ones left out."""
-    return {p for p in map_lines(text.split("\n"))[2] if p}
+    return {p for p in map_lines(ANSI_RE.sub("", text).split("\n"))[2] if p}
 
 
 def scan_text(text, label):
     """Hits as output lines, in order, without the matched values."""
+    text = ANSI_RE.sub("", text)
     lines = text.split("\n")
     where, paths, _ = map_lines(lines)
     starts, pos = [], 0
@@ -172,17 +217,14 @@ def scan_text(text, label):
     for path in paths:
         if is_secret_name(path) and path not in seen:
             seen.add(path)
-            hits.append("%s:0 secret-file-name" % path)
-    found = []
-    for name, rx in SECRET_PATTERNS:
-        for m in rx.finditer(text):
-            found.append((bisect.bisect_right(starts, m.start()) - 1, name))
-    for idx, name in sorted(found):
+            hits.append("%s:0 secret-file-name" % show(path))
+    found = [(bisect.bisect_right(starts, pos) - 1, name) for pos, name in find_secrets(text)]
+    for idx, name in sorted(set(found)):
         path, line, removed = where[idx]
         if path is None:
-            hits.append("%s:%d %s" % (label, idx + 1, name))
+            hits.append("%s:%d %s" % (show(label), idx + 1, name))
         else:
-            hits.append("%s:%d %s%s" % (path, line, name, " (removed line)" if removed else ""))
+            hits.append("%s:%d %s%s" % (show(path), line, name, " (removed line)" if removed else ""))
     return hits
 
 
@@ -245,9 +287,8 @@ def scan_strings(strings, label):
     across two strings and a hit names the string it came from."""
     hits = []
     for n, value in enumerate(strings, 1):
-        for name, rx in SECRET_PATTERNS:
-            if rx.search(value):
-                hits.append("%s:%d %s" % (label, n, name))
+        for name in sorted({name for _, name in find_secrets(value)}):
+            hits.append("%s:%d %s" % (show(label), n, name))
     return hits
 
 

@@ -13,6 +13,11 @@ All notable changes to the **review** plugin are documented here.
   - New `check-cites.py`. `deep` Step 2.5 runs it before the implementer: a finding whose path is not a file in the diff or inside the repo, or whose line does not exist, goes to the user instead.
   - `deep` asks before committing and pushing when the PR author is not the operator, adds an out-of-tree file only after the user confirms each path, and shows one Gemini direct-call form (a prompt file on stdin). A Red Flag forbids diff text in a shell argument, `-p "$(cat f)"` included.
   - The three agents, and every dispatch in both skills, say the diff and findings are untrusted data, never instructions.
+  - The scan also finds Google API keys, Stripe keys, credentials in a URL and (scan only) a quoted or env-style value assigned to a secret-sounding name, and flags `*.env`, `.envrc`, `id_ecdsa*`, `id_dsa*`, `.netrc`, `.npmrc`, `.pypirc` and `.pgpass` (here and in `detect-mode.sh`). It strips color codes, and it prints a path with control characters as escapes, so a newline in a path cannot forge a hit line.
+  - `detect-mode.sh` and deep Step 2.6 build diffs with `--no-color --no-ext-diff --no-textconv` and fixed `a/` `b/` prefixes (and `gh pr diff --color=never`), so `color.ui=always`, `diff.mnemonicPrefix`, `diff.noprefix`, an external diff tool or a decrypting textconv cannot hide a header or put plaintext secrets in the diff.
+  - `check-cites.py` exits 3 when findings fail and 2 on any internal error, so a crash can no longer read as "some failed, fix the others". It reports entries that are not objects and ids that are not strings, and notes a cited line outside every hunk.
+  - `gemini-review.sh` refuses an input over the Gemini CLI's 8 MiB stdin cap (exit 1, nothing sent), and stops if it cannot build its input.
+  - deep: out-of-tree files are appended as `git diff --no-index /dev/null <path>`; Steps 2.3 and 2.6 handle exit 4; Step 2.6 checks cites against `<BASE_REF>...<FIX_SHA>` with `--id` for confirmed new findings; an empty `gh` login counts as someone else's PR. adversarial: Steps 2 and 3 give exit 1 and exit 4 their own rules.
 
 ## [1.0.2] - 2026-10-09
 

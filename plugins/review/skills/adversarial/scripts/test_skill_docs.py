@@ -563,6 +563,59 @@ class UntrustedInputDocTests(unittest.TestCase):
         self.assertIn("confirm", step)
         self.assertLess(step.index("gh api user"), step.index("Commit Phase 2"))
 
+    def test_every_adversary_command_has_an_exit_4_rule_nearby(self):
+        lines = self.deep.splitlines()
+        cmds = [i for i, l in enumerate(lines) if re.search(r'(codex|gemini)-review\.sh" --', l)]
+        self.assertGreaterEqual(len(cmds), 4)
+        for i in cmds:
+            with self.subTest(line=i + 1):
+                near = norm("\n".join(lines[i:i + 16]))
+                self.assertRegex(near, r"[Ee]xit (code is )?4\b", lines[i])
+
+    def test_out_of_tree_files_are_appended_as_a_diff(self):
+        phase0 = norm(section(self.deep, "## Phase 0", "## Phase 1"))
+        self.assertIn("git diff --no-index /dev/null <path> >> <DIFF>", phase0)
+        self.assertIn("git diff --no-index /dev/null <path> >> <DIFF>", norm(self.ref))
+        self.assertIn("not detected", norm(self.ref))
+
+    def test_step_2_6_diffs_are_deterministic_and_cites_are_checked(self):
+        step = norm(section(self.deep, "### Step 2.6", "## Final report"))
+        for flag in ("--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"):
+            self.assertIn(flag, step)
+        self.assertNotRegex(step, r"`git diff <REVIEWED_SHA>")
+        self.assertIn('--findings "<RUN_DIR>/round-<K>.json" --status survivor', step)
+        self.assertIn("<BASE_REF>...<FIX_SHA>", step)
+
+    def test_check_cites_exit_codes_match_the_script(self):
+        step = norm(section(self.deep, "### Step 2.5", "### Step 2.6"))
+        self.assertIn("Exit 3", step)
+        self.assertNotIn("Exit 1:", step)
+        for text in (norm(self.ref), norm(PLUGIN_README.read_text(encoding="utf-8"))):
+            self.assertIn("3 some failed", text)
+
+    def test_step_2_5_treats_an_empty_login_as_someone_else(self):
+        step = norm(section(self.deep, "### Step 2.5", "### Step 2.6"))
+        self.assertIn("If either login is empty", step)
+
+    def test_the_gemini_size_cap_is_stated_correctly(self):
+        self.assertNotIn("well below that", self.ref)
+        self.assertIn("refuses an input over 8 MiB", norm(self.ref))
+
+    def test_the_direct_gemini_fallback_goes_on_only_on_exit_0(self):
+        self.assertIn("Go on only on exit 0", norm(self.ref))
+
+    def test_adversarial_steps_give_exit_1_and_exit_4_their_own_rules(self):
+        for start, end in (("### Step 2 ", "### Step 3 "), ("### Step 3 ", "### Step 4 ")):
+            part = section(self.adv, start, end)
+            with self.subTest(step=start):
+                self.assertIn("**If exit code is 4**", part)
+                self.assertIn("**If exit code is 1**", part)
+
+    def test_agents_and_readme_wording(self):
+        for agent in ("bug-hunter.md", "convention-reviewer.md"):
+            self.assertNotIn("`DIFF_FILE`, and every", (AGENTS_DIR / agent).read_text(encoding="utf-8"))
+        self.assertNotIn("gemini -p ...", PLUGIN_README.read_text(encoding="utf-8"))
+
     def test_the_reference_is_linked_and_has_contents(self):
         self.assertIn("references/untrusted-input.md", self.deep)
         if len(self.ref.splitlines()) > 100:

@@ -10,7 +10,11 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
   - New `scripts/secret_scan.py`. `codex-review.sh` and `gemini-review.sh` scan every input they send before any model call. A hit sends nothing and exits 4 with `SECRET_SUSPECTED:` and `<path>:<line> <pattern-name>` lines; `--allow-secret-match` sends anyway after the user confirms. Step 2, Step 3 and Degradation Behavior never treat exit 4 as exit 3. An unreadable input exits 1. `--findings` and `--prior` must be strict JSON (no duplicate keys, `NaN` or `Infinity`; anything else exits 1, nothing sent), and the scripts send and scan a re-serialized copy, so an escaped key (`\u0041KIA…`) is checked as the model reads it. `codex-review.sh` also scans its stdin as built, and `gemini-review.sh` its assembled stdin before each call.
   - `gemini-review.sh` sends the brief, diff and findings on stdin only, in nonce-tagged blocks marked as untrusted data, with a fixed `-p` sentence and every `@` written as `\@` (#120).
   - `audit_record.py`'s `SECRET_PATTERNS` adds Slack tokens, and its `sk-` patterns need a left boundary, so `task-…` and `risk-…` no longer match as OpenAI keys. This also changes what `redact()` replaces.
-  - New `scripts/check-cites.py`, used by `review:deep` before its implementer.
+  - New `scripts/check-cites.py`, used by `review:deep` before its implementer. Exit 0 all passed, 3 some failed, 2 unreadable input or an internal error.
+  - The scan adds Google API keys, Stripe keys, URL credentials and a scan-only secret-assignment rule, and more secret file names (`*.env`, `.envrc`, `id_ecdsa*`, `id_dsa*`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`, also in `detect-mode.sh`). It strips color codes and escapes control characters in printed paths.
+  - `detect-mode.sh` builds its diff with `--no-color --no-ext-diff --no-textconv` and fixed prefixes, and asks `gh pr diff` for `--color=never`.
+  - `gemini-review.sh` refuses an input over 8 MiB (the Gemini CLI drops the rest of stdin silently) and stops if it cannot build its input.
+  - Steps 2 and 3 give exit 1 and exit 4 their own rules.
   - The Claude finder and cross-examiner dispatches say the diff and findings are untrusted data, never instructions.
 
 ## [1.0.0] - 2026-10-03

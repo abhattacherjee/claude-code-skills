@@ -17,13 +17,16 @@ With no --status or --id, every finding is checked. --status survivor checks tho
 with that status; each --id adds that finding (for example an R3 concession). An
 --id that is not in the file is a failure.
 
-Prints one line per failing finding, "<id> <reason>", and a count on stderr.
+Prints one line per failing finding, "<id> <reason>", and a count on stderr. A
+cited line that passes but sits outside every hunk of the diff gets a "note:" line
+on stderr; it does not fail, since a real finding can cite an unchanged caller.
 
 Exit codes:
   0  every selected finding passed
-  1  one or more failed
-  2  usage error, the diff or findings cannot be read, or --status was given
-     but no finding has a status field
+  2  usage error, the diff or findings cannot be read, --status was given but no
+     finding has a status field, or an internal error (send nothing on)
+  3  one or more findings failed
+Exit 1 is never returned on purpose: it means Python crashed before main() ran.
 """
 import argparse
 import json
@@ -32,10 +35,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from secret_scan import new_side_paths  # noqa: E402
-
-EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
+EXIT_OK, EXIT_USAGE, EXIT_FAILED = 0, 2, 3
 
 
 class Unreadable(Exception):
@@ -61,7 +61,7 @@ def load_findings(path):
     items = data.get("findings") if isinstance(data, dict) else data
     if not isinstance(items, list):
         raise Unreadable("%s has no findings list" % path)
-    return [f for f in items if isinstance(f, dict)]
+    return items
 
 
 def problem(finding, diff_paths, repo):
@@ -97,7 +97,7 @@ def problem(finding, diff_paths, repo):
 def parse_args(argv):
     p = argparse.ArgumentParser(
         prog="check-cites.py", description="Check each finding's file:line against the diff and the repo. "
-        "Exit codes: 0 all passed, 1 some failed, 2 usage or unreadable input.")
+        "Exit codes: 0 all passed, 3 some failed, 2 usage, unreadable input or internal error.")
     p.add_argument("--diff", required=True, help="the diff the findings are about")
     p.add_argument("--findings", required=True, help="findings JSON, or synthesize.py's report.json")
     p.add_argument("--repo", help="repository root (default: git top level)")
@@ -109,6 +109,17 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        return check(args)
+    except Exception as exc:  # noqa: BLE001 - a crash must never read as "some failed"
+        print("check-cites: internal error (%s: %s); nothing was checked" % (type(exc).__name__, exc),
+              file=sys.stderr)
+        return EXIT_USAGE
+
+
+def check(args):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from secret_scan import hunk_lines, new_side_paths
     try:
         try:
             with open(args.diff, "rb") as fh:
@@ -126,14 +137,18 @@ def main(argv=None):
         return EXIT_USAGE
     repo = os.path.realpath(args.repo or repo_root())
     diff_paths = {os.path.normpath(p) for p in new_side_paths(diff_text)}
+    shown = {os.path.normpath(p): lines for p, lines in hunk_lines(diff_text).items()}
 
+    failures = ["(entry %d) is not an object" % n for n, f in enumerate(findings, 1)
+                if not isinstance(f, dict)]
+    findings = [f for f in findings if isinstance(f, dict)]
     if args.status is None and not args.ids:
         selected = findings
     else:
         selected = [f for f in findings
-                    if (args.status is not None and f.get("status") == args.status) or f.get("id") in args.ids]
-    failures = []
-    present = {f.get("id") for f in findings}
+                    if (args.status is not None and f.get("status") == args.status)
+                    or (isinstance(f.get("id"), str) and f["id"] in args.ids)]
+    present = {f["id"] for f in findings if isinstance(f.get("id"), str)}
     failures += ["%s not in the findings file" % fid for fid in args.ids if fid not in present]
     for f in selected:
         fid = f.get("id")
@@ -143,6 +158,9 @@ def main(argv=None):
         why = problem(f, diff_paths, repo)
         if why:
             failures.append("%s %s" % (fid, why))
+        elif f.get("line") is not None and f["line"] not in shown.get(os.path.normpath(f["path"]), ()):
+            print("note: %s line %d of %s is outside every hunk of the diff" % (fid, f["line"], f["path"]),
+                  file=sys.stderr)
     for line in failures:
         print(line)
     print("check-cites: checked=%d failed=%d" % (len(selected), len(failures)), file=sys.stderr)

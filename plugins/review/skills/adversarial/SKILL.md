@@ -158,7 +158,7 @@ The exit code matters: 3 means the user forced an adversary that is not usable. 
 "${CLAUDE_SKILL_DIR}/scripts/detect-mode.sh"
 ```
 
-Add `--force` when the user passed it, and `--base <branch>` when the user named a base. Without `--base`, local mode guesses the base from the branch prefix (`feature/*` to `develop`, `release/*` and `hotfix/*` to `main`, else the repo default branch). If that branch does not exist it falls back to the repo default branch (`main` when `gh` cannot say) and says so on stderr; if no base exists it exits 1. Tell the user, and offer `--base <branch>`. An unknown `--base` exits 2. In local mode the diff is the working tree against the merge base: committed, staged and unstaged changes to tracked files, and your index is not changed. Untracked files are left out and listed on stderr (paths only), because the diff goes to the adversary model, an external service, and an untracked file may hold a secret. Add `--include-untracked` only when the user asks for new files to be reviewed; even then, names like `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*.p12` and `*.pfx` are never sent and are listed on stderr. In PR mode `--base` is ignored. The script prints `MODE`, `PR`, `BASE`, `DIFF_FILE` and `FILES_FILE` as `KEY=VALUE` lines. Note them and write them into later commands. If exit code is 2 and `--force` was not passed, halt and tell the user the diff is too large; offer `--force` to continue.
+Add `--force` when the user passed it, and `--base <branch>` when the user named a base. Without `--base`, local mode guesses the base from the branch prefix (`feature/*` to `develop`, `release/*` and `hotfix/*` to `main`, else the repo default branch). If that branch does not exist it falls back to the repo default branch (`main` when `gh` cannot say) and says so on stderr; if no base exists it exits 1. Tell the user, and offer `--base <branch>`. An unknown `--base` exits 2. In local mode the diff is the working tree against the merge base: committed, staged and unstaged changes to tracked files, and your index is not changed. Untracked files are left out and listed on stderr (paths only), because the diff goes to the adversary model, an external service, and an untracked file may hold a secret. Add `--include-untracked` only when the user asks for new files to be reviewed; even then, names like `.env`, `.env.*`, `*.env`, `.envrc`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`, `*credentials*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc` and `.pgpass` are never sent and are listed on stderr. In PR mode `--base` is ignored. The script prints `MODE`, `PR`, `BASE`, `DIFF_FILE` and `FILES_FILE` as `KEY=VALUE` lines. Note them and write them into later commands. If exit code is 2 and `--force` was not passed, halt and tell the user the diff is too large; offer `--force` to continue.
 
 ### Step 2 — R1: Parallel Independent Discovery
 
@@ -191,6 +191,8 @@ With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 - Otherwise: go to the R1 path in Degradation Behavior.
 
 **If exit code is 4** (`SECRET_SUSPECTED`): the script found a suspected secret in its input and sent nothing. Exit 4 is not exit 3: never switch to the other model or to Claude-only, because it would get the same input. Show the user the hit lines from stderr (`<path>:<line> <pattern-name>`; the values are never printed) and ask. Rerun the same command with `--allow-secret-match` only if they confirm; otherwise stop the run.
+
+**If exit code is 1**: the script could not use its inputs (a missing file, an input over Gemini's 8 MiB stdin cap). Show the stderr line and stop. Exit 1 is not exit 3, so there is no fallback.
 
 Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemini findings arrive with `origin="gemini"`; renumber them `G-001`, `G-002`, ... The file is `<RUN_DIR>/r1-<ADVERSARY>.json`.
 
@@ -265,8 +267,11 @@ With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 **If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
 
 - `ADVERSARY_FLAG` is set: show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3. Never fall back to Claude-only.
-- Exit code 4 (`SECRET_SUSPECTED`): the same as in Step 2(b). Exit 4 is not exit 3.
 - Otherwise: go to the R2 path in Degradation Behavior. It keeps the adversary's R1 findings. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
+
+**If exit code is 4** (`SECRET_SUSPECTED`): the same as in Step 2(b). Exit 4 is not exit 3: never fall back. Ask the user; rerun with `--allow-secret-match` only if they confirm.
+
+**If exit code is 1**: the script could not use its inputs (a missing file, `--findings` that is not strict JSON, an input over Gemini's 8 MiB stdin cap). Show the stderr line and stop. Exit 1 is not exit 3, so there is no fallback.
 
 Both scripts emit `{"verdicts":[{"id":"C-NNN","adversary_verdict":"confirm|refute","reason":"...","confidence":...}]}`. The key is `adversary_verdict` for both models; it was `gemini_verdict` before #135, and old run files still load.
 

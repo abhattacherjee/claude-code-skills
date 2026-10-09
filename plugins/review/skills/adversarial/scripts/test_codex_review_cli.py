@@ -747,6 +747,38 @@ class IsolationGateTests(unittest.TestCase):
         self.assertEqual(h.leftovers(), [])
 
 
+class ScanLayerTests(unittest.TestCase):
+    """Each scan layer in scan_inputs is pinned on its own: with the other layer
+    stubbed out, a key only it can see must still stop the run."""
+    FAKE_AWS = "AKIA" + "EXAMPLEEXAMPLE12"
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="codex-scan-layer-"))
+        self.addCleanup(shutil.rmtree, str(self.dir), True)
+        self.diff = self.dir / "c.diff"
+        self.diff.write_text(DIFF)
+
+    def args(self, findings=None):
+        return cr.parse_args(["--diff", str(self.diff), "--mode", "judge" if findings else "find"]
+                             + (["--findings", str(findings)] if findings else []))
+
+    def test_the_file_scan_alone_catches_a_field_codex_never_gets(self):
+        f = self.dir / "f.json"
+        f.write_text(json.dumps({"findings": [{"id": "C-001", "title": "t", "notes": "k " + self.FAKE_AWS}]}))
+        args = self.args(f)
+        with mock.patch.object(cr, "build_stdin", return_value="clean\n"):
+            with self.assertRaises(cr.SecretSuspected):
+                cr.scan_inputs(args, DIFF, cr.load_findings(str(f)), None)
+
+    def test_the_stdin_scan_alone_catches_what_is_sent(self):
+        args = self.args()
+        with mock.patch.object(cr.secret_scan, "scan_file", return_value=[]):
+            with mock.patch.object(cr, "build_stdin", return_value="+k = %s\n" % self.FAKE_AWS):
+                with self.assertRaises(cr.SecretSuspected):
+                    cr.scan_inputs(args, DIFF, None, None)
+            cr.scan_inputs(args, DIFF, None, None)  # negative control: clean stdin passes
+
+
 class SecretGateTests(unittest.TestCase):
     """Every input codex-review sends is scanned before Codex runs at all. A hit
     exits 4, never 3, so the skill cannot mistake it for an unavailable adversary."""
