@@ -1270,6 +1270,14 @@ run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_FIXTURE" "$STDOUT_LOG" "$STDERR_LOG" 
 SYNC_STDOUT="$(cat "$STDOUT_LOG")"
 SYNC_STDERR="$(cat "$STDERR_LOG")"
 
+# The "Next steps" banner follows skill-kit:publish Step 5: a branch, named paths, a PR.
+# It used to print `git add -A` and a bare `git push` (#210).
+assert_contains "Next steps: stage the paths the sync wrote by name (#210)" \
+    'git add -- <PATH>...' "$SYNC_STDOUT"
+assert_contains "Next steps: open a PR, as in skill-kit:publish Step 5 (#210)" \
+    'gh pr create --base <BASE_BRANCH>' "$SYNC_STDOUT"
+assert_not_contains "Next steps: no git add -A (#210)" 'git add -A' "$SYNC_STDOUT"
+
 ADD_STDOUT_LOG="$SCRATCH_DIR/add.stdout"
 ADD_STDERR_LOG="$SCRATCH_DIR/add.stderr"
 ADD_RC=0

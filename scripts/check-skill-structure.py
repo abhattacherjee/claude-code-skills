@@ -13,9 +13,15 @@ Checks every plugins/*/skills/*/SKILL.md and the .md files beside it:
   S3  every such file over 100 lines has a `## Contents` or
       `## Table of contents` heading within its first 30 lines.
 
-Blind spots (not checked): whether the place SKILL.md names a file tells
-Claude when to read it; whether a Contents list matches the file's headings;
-files that are not .md; a scripts/ file that names the file but never opens it.
+A name must stand alone: references/x.md.bak, other/./references/x.md and
+(in a script) x.md.bak do not name references/x.md. A ## Contents heading inside
+a fenced code block does not count.
+
+Blind spots (not checked): any mention counts, including one in a comment, in
+the frontmatter description or in a "do not read" sentence; whether the place
+SKILL.md names a file tells Claude when to read it; whether a Contents list
+matches the file's headings; files that are not .md; a scripts/ file that names
+the file but never opens it.
 
 Usage: check-skill-structure.py [<repo>]   (default: the repo this script is in)
 Exit: 0 clean, 1 violations (one line each: path: rule: reason), 2 cannot run.
@@ -29,6 +35,7 @@ TOC_MIN_LINES = 100   # S3: files longer than this need a Contents list
 TOC_WITHIN = 30       # S3: ...in this many first lines
 EXCLUDED = {"SKILL.md", "README.md", "CHANGELOG.md"}
 TOC = re.compile(r"^##\s+(contents|table of contents)\s*$", re.I)
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 def body_lines(text):
@@ -41,17 +48,39 @@ def body_lines(text):
     return len(lines)
 
 
+# A name ends where the next char cannot extend it: not a word char or -, and not a
+# . followed by a word char (so x.md. ends a sentence, while x.md.bak is another file).
+END = r"(?![\w-])(?!\.\w)"
+
+
 def named_in(text, rel):
     """True when text names rel as a path relative to the skill directory."""
-    # Before rel: the start, ./, ${CLAUDE_SKILL_DIR}/ or a char that cannot be
-    # part of a longer path. After it: a char that cannot extend the name.
-    pat = r"(?:^|\./|\$\{CLAUDE_SKILL_DIR\}/|[^\w./${}-])" + re.escape(rel) + r"(?![\w-])"
+    # Before rel: the start of a line or a char that cannot be part of a path, then
+    # optionally ./ or ${CLAUDE_SKILL_DIR}/. So other/./references/x.md does not count.
+    pat = r"(?:^|(?<=[^\w./${}-]))(?:\./|\$\{CLAUDE_SKILL_DIR\}/)?" + re.escape(rel) + END
     return re.search(pat, text, re.M) is not None
 
 
 def read_by_script(text, name):
     """True when a script names the file: "$DIR/name", 'references/name', ..."""
-    return re.search(r"(?<![\w.-])" + re.escape(name) + r"(?![\w-])", text) is not None
+    return re.search(r"(?<![\w.-])" + re.escape(name) + END, text) is not None
+
+
+def has_toc(lines):
+    """True when a ## Contents heading sits in lines, outside fenced code blocks."""
+    fence = None
+    for line in lines:
+        m = FENCE.match(line)
+        if m:
+            tok = m.group(1)
+            if fence is None:
+                fence = (tok[0], len(tok))
+            elif tok[0] == fence[0] and len(tok) >= fence[1] and not line.strip()[len(tok):]:
+                fence = None
+            continue
+        if fence is None and TOC.match(line):
+            return True
+    return False
 
 
 def check_skill(skill, repo):
@@ -80,7 +109,7 @@ def check_skill(skill, repo):
         if not (named_in(text, rel) or read_by_script(script_text, md.name)):
             out.append(f"{shown}/{rel}: S2: not named in SKILL.md or read by a script in scripts/")
         lines = md.read_text(encoding="utf-8").splitlines()
-        if len(lines) > TOC_MIN_LINES and not any(TOC.match(l) for l in lines[:TOC_WITHIN]):
+        if len(lines) > TOC_MIN_LINES and not has_toc(lines[:TOC_WITHIN]):
             out.append(f"{shown}/{rel}: S3: {len(lines)} lines with no '## Contents' heading in the first {TOC_WITHIN} lines")
     return out
 

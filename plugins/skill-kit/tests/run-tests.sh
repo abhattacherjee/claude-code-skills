@@ -245,6 +245,60 @@ for name in prepare-plugin validate-plugin validate-pre-sync sync-monorepo relea
   check "$name: --help exits 0" 0 "Usage: $name\\.sh"
 done
 
+echo "release-monorepo.sh: main-only guard and --co-author (temp repo, bare remote, no network)"
+# A bare remote and a clone with one plugin skill, committed and pushed on main. `gh` fails
+# (the stub on CLEAN_PATH), so the GitHub release step only warns.
+REL="$TMP/rel"
+mkdir -p "$REL"
+git init -q --bare "$REL/remote.git"
+git -C "$REL/remote.git" symbolic-ref HEAD refs/heads/main
+rel_git() { env -i PATH="$CLEAN_PATH" HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 git -c user.name=T -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+rel_clone() {
+  rm -rf "$1"
+  rel_git clone -q "$REL/remote.git" "$1" 2>/dev/null
+  rel_git -C "$1" symbolic-ref HEAD refs/heads/main
+}
+rel_clone "$REL/seed"
+mkdir -p "$REL/seed/plugins/pg/skills/one"
+printf -- '---\nname: one\ndescription: "A fixture. Use when: (1) testing."\nmetadata:\n  version: 1.0.0\n---\n# One\n' > "$REL/seed/plugins/pg/skills/one/SKILL.md"
+printf '# Changelog\n\n## [0.0.0] - 2026-01-01\n\nBaseline.\n' > "$REL/seed/CHANGELOG.md"
+rel_git -C "$REL/seed" add -- CHANGELOG.md plugins
+rel_git -C "$REL/seed" commit -q -m "feat: baseline"
+rel_git -C "$REL/seed" push -q origin main
+rel_run() { RC=0; OUT="$(cd "$PROJ" && env -i PATH="$CLEAN_PATH" HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=T GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=T GIT_COMMITTER_EMAIL=t@example.invalid "$PUBLISH/release-monorepo.sh" --github-user tester "$@" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"; }
+
+rel_clone "$REL/a"
+rel_git -C "$REL/a" switch -q -c feature/x
+rel_run patch "$REL/a"
+check "on a feature branch: refuses, non-zero" nonzero "" 'not on main'
+[[ -z "$(rel_git -C "$REL/a" tag -l)" && "$(rel_git -C "$REL/a" rev-list --count HEAD)" == 1 ]] \
+  && ok "…before any commit or tag" || bad "…before any commit or tag" "tags: $(rel_git -C "$REL/a" tag -l), commits: $(rel_git -C "$REL/a" rev-list --count HEAD)"
+
+rel_clone "$REL/b"
+rel_clone "$REL/c"
+printf 'more\n' >> "$REL/c/CHANGELOG.md"
+rel_git -C "$REL/c" commit -q -am "docs: newer on origin"
+rel_git -C "$REL/c" push -q origin main
+rel_run patch "$REL/b"
+check "main behind origin/main: refuses, non-zero" nonzero "" 'behind origin/main'
+[[ -z "$(rel_git -C "$REL/b" tag -l)" && -z "$(rel_git --git-dir="$REL/remote.git" tag -l)" ]] \
+  && ok "…before any commit or tag, locally or on the remote" || bad "…before any commit or tag, locally or on the remote" "local: $(rel_git -C "$REL/b" tag -l) remote: $(rel_git --git-dir="$REL/remote.git" tag -l)"
+
+rel_clone "$REL/d"
+rel_run --co-author "Co-Authored-By: Fixture Bot <bot@example.invalid>" patch "$REL/d"
+check "on main, up to date: releases v0.0.1, exit 0" 0 'PUSHED'
+rel_git --git-dir="$REL/remote.git" tag -l | grep -qx v0.0.1 && ok "…the tag reaches the remote" || bad "…the tag reaches the remote" "$(rel_git --git-dir="$REL/remote.git" tag -l)"
+MSG="$(rel_git -C "$REL/d" log -1 --format=%B)"
+printf '%s' "$MSG" | grep -qx 'Co-Authored-By: Fixture Bot <bot@example.invalid>' && ok "--co-author: the release commit ends with that line" || bad "--co-author: the release commit ends with that line" "$MSG"
+
+rel_clone "$REL/e"
+rel_run minor "$REL/e"
+check "no --co-author: releases v0.1.0, exit 0" 0 'PUSHED'
+MSG="$(rel_git -C "$REL/e" log -1 --format=%B)"
+printf '%s' "$MSG" | grep -qi 'co-authored-by' && bad "no --co-author: no trailer" "$MSG" || ok "no --co-author: no trailer, and no model name"
+printf '%s' "$MSG" | grep -q 'release: v0.1.0' && ok "…the commit is the release commit" || bad "…the commit is the release commit" "$MSG"
+grep -q 'Opus 4.6' "$PUBLISH/release-monorepo.sh" && bad "release-monorepo.sh hard-codes no model name" "found Opus 4.6" || ok "release-monorepo.sh hard-codes no model name"
+
 echo "every script named in a SKILL.md exists, is executable and answers --help"
 # Pull each "${CLAUDE_SKILL_DIR}/scripts/<name>" out of a SKILL.md, resolve it against that
 # skill's directory in the plugin copy, and run it with --help from the project dir.
@@ -338,11 +392,17 @@ else
 fi
 RC=0; OUT="$(cd "$TMP/other" && env -i PATH="$TMP/s1bin:$CLEAN_PATH" HOME="$TMP/empty-home" "$FS" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
 check "no skill directory exits 2" 2 "" 'no skill directories found'
+mkdir -p "$TMP/s1bad"; printf '#!/bin/sh\necho "regex parse error" >&2\nexit 2\n' > "$TMP/s1bad/rg"; chmod +x "$TMP/s1bad/rg"
+RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$TMP/s1bad:$CLEAN_PATH" HOME="$S1HOME" "$FS" -e "(" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+check "an rg error (rg exits 2) exits 3, not 2 or 1" 3 "" 'the search failed'
+printf '%s' "$ERR" | grep -q 'regex parse error' && ok "rg's own error reaches stderr" || bad "rg's own error reaches stderr" "$ERR"
 if command -v rg >/dev/null; then
   RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" -i "FROBNICATE" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
   check "real rg: a keyword search finds the user skill, exit 0" 0 'user-skill/SKILL.md'
   RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" -F "no such text anywhere" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
   check "real rg: no match exits 1" 1
+  RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" -e "(" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+  check "real rg: a bad regex exits 3" 3 "" 'the search failed'
   RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
   printf '%s' "$OUT" | grep -q 'plug-skill/SKILL.md' && printf '%s' "$OUT" | grep -q 'user-skill/SKILL.md' \
     && ok "real rg: lists the user and the plugin skill" || bad "real rg: lists the user and the plugin skill" "$OUT"

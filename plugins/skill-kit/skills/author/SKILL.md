@@ -42,7 +42,7 @@ metadata:
 
 ## Frontmatter Rules
 
-Supported fields: `name`, `description`, `metadata`, `compatibility`, `license`.
+Supported fields: `name`, `description`, `metadata`, plus `model` (sub-agent skills) and `disable-model-invocation` (slash-command-only skills). `validate-skill.sh` rejects any other.
 
 ```yaml
 ---
@@ -122,7 +122,9 @@ Extract into `scripts/` when ANY apply:
 - Use `#!/usr/bin/env bash` shebang (portable)
 - **Choose `set` flags by script purpose:** `set -euo pipefail` for **validation**
   scripts; `set -eu` (without pipefail) for **context-gathering** scripts, whose
-  `head`-terminated pipes and zero-count `grep -c` would otherwise abort them
+  `head`-terminated pipes and zero-count `grep -c` would otherwise abort them. Under `set -e`,
+  `((var++))` with var=0 aborts the script (use `VAR=$((VAR + 1))`), and a `while read` loop
+  at the end of a pipe runs in a subshell, so its variables are lost (use a `for` loop or `< file`)
 
 **After writing the script, slim SKILL.md:**
 - Replace procedural prose with a Quick Check section pointing to the script

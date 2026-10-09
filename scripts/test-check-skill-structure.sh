@@ -69,6 +69,12 @@ fresh; lines 10 > "$S/references/readme-template.md"; printf 'cat "$DIR/monorepo
 expect "a script naming a longer file name does not count" 1 "references/readme-template.md: S2"
 fresh; lines 10 > "$S/references/orphan.md"; printf 'See references/orphan.md.\n' >> "$S/SKILL.md"; run
 clean "a name followed by punctuation still counts (references/orphan.md.)"
+fresh; lines 10 > "$S/references/orphan.md"; printf 'See references/orphan.md.bak instead.\n' >> "$S/SKILL.md"; run
+expect "references/orphan.md.bak does not name references/orphan.md" 1 "references/orphan.md: S2"
+fresh; lines 10 > "$S/references/orphan.md"; printf 'See other/./references/orphan.md.\n' >> "$S/SKILL.md"; run
+expect "other/./references/orphan.md does not name references/orphan.md" 1 "references/orphan.md: S2"
+fresh; lines 10 > "$S/references/orphan.md"; printf 'cat "$DIR/orphan.md.bak"\n' > "$S/scripts/run.sh"; run
+expect "a script reading orphan.md.bak does not read orphan.md" 1 "references/orphan.md: S2"
 fresh; printf '# r\n' > "$S/references/README.md"; printf '# c\n' > "$S/references/CHANGELOG.md"; run
 clean "README.md and CHANGELOG.md are never orphans"
 
@@ -81,6 +87,10 @@ fresh; { lines 30; printf '## Contents\n'; lines 100; } > "$S/references/short.m
 expect "a Contents heading after line 30 fails" 1 "references/short.md: S3"
 fresh; { printf '# T\n## Table of contents\n'; lines 120; } > "$S/references/short.md"; run
 clean "## Table of contents is accepted"
+fresh; { printf '# T\n```markdown\n## Contents\n```\n'; lines 120; } > "$S/references/short.md"; run
+expect "a ## Contents heading inside a code fence does not count" 1 "references/short.md: S3"
+fresh; { printf '# T\n~~~\n## Contents\n~~~\n## Contents\n'; lines 120; } > "$S/references/short.md"; run
+clean "a real ## Contents heading after a fenced one counts"
 fresh; { printf '# T\n### Contents\n'; lines 120; } > "$S/references/short.md"; run
 expect "a ### Contents heading is not a level-2 heading and fails" 1 "references/short.md: S3"
 

@@ -6,6 +6,7 @@ All notable changes to the **extract** skill (was `claudeception`) are documente
 
 ### Added
 
+- `find-skills.sh` exits 3 when `rg` itself fails (a bad pattern or an unreadable file), so that is never read as "nothing found" (1) or a missing tool (2) (#210).
 - `scripts/find-skills.sh` runs Step 1, the search for existing skills: it lists or searches (`rg` arguments) the project, user and active plugin-install skill directories, and `--dirs` prints them. It exits 2 when `rg` or `python3` is missing or no skill directory exists. It replaces the ~50-line inline script in SKILL.md (#210).
 
 ## [1.0.1] - 2026-10-05

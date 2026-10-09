@@ -23,7 +23,8 @@ Examples:
   find-skills.sh -i "next.config.js|prisma"    # context markers: files, functions, config keys
 
 Run it from the project directory. Needs ripgrep (rg) and python3.
-Exit: 0 found, 1 nothing found, 2 cannot run (a missing tool or no skill directory).
+Exit: 0 found, 1 nothing found, 2 cannot run (a missing tool or no skill directory),
+      3 the search failed (a bad pattern or an unreadable file; read rg's error).
 EOF
 }
 
@@ -67,8 +68,16 @@ if [ "${1:-}" = "--dirs" ]; then
   printf '%s\n' "${SKILL_DIRS[@]}"
   exit 0
 fi
+rc=0
 if [ "$#" -eq 0 ]; then
-  rg --files -g 'SKILL.md' "${SKILL_DIRS[@]}"
+  rg --files -g 'SKILL.md' "${SKILL_DIRS[@]}" || rc=$?
 else
-  rg "$@" "${SKILL_DIRS[@]}"
+  rg "$@" "${SKILL_DIRS[@]}" || rc=$?
 fi
+# rg exits 2 on a bad pattern or an unreadable file. Report that as 3, so it is never
+# mistaken for "nothing found" (1) or a missing tool (2).
+if [ "$rc" -ge 2 ]; then
+  echo "find-skills.sh: the search failed (rg exited $rc); read the rg error above." >&2
+  exit 3
+fi
+exit "$rc"

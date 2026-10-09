@@ -211,7 +211,7 @@ Run the target project's build and lint commands (discovered in Phase 1; `npm ru
 
 **TaskUpdate: task 7/9 `in_progress`**
 
-1. **Stage and commit** — stage the files this story changed by name (`git status --short` lists them; leave out build output and stray files), and use conventional commit format. End the message with the commit attribution line your session gives you; do not copy a model name from here:
+1. **Stage and commit** — stage the files this story changed by name (`git status --short` lists them; leave out build output and stray files), and use conventional commit format. End the message with the commit attribution line your session gives you in place of `<ATTRIBUTION_LINE>` (omit the line if your session gives none); do not copy a model name from here:
    ```bash
    git status --short
    git add -- <PATH>...

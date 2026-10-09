@@ -34,7 +34,7 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 - [ ] `description`: has numbered trigger conditions `Use when: (1)...(2)...`
 - [ ] `description`: includes specific terms for semantic matching (error messages, tool names)
 - [ ] `metadata.version`: present, follows semver (no top-level `version`)
-- [ ] No non-standard fields (only `name`, `description`, `metadata`, `compatibility`, `license`)
+- [ ] No non-standard fields (only `name`, `description`, `metadata`, plus `model` for a sub-agent skill and `disable-model-invocation` for a slash-command-only skill; `validate-skill.sh` rejects any other)
 
 ## Content
 
@@ -107,7 +107,7 @@ awk 'c>=2{n++} /^---$/{c++} END{print n}' SKILL.md  # Must be under 500
 grep -m1 '^description:' SKILL.md | wc -c  # Must be ≤ 1040: 1024 plus the 'description: ""' wrapper and the newline
 
 # Non-standard frontmatter fields
-awk '/^---$/{c++;next} c==1{print}' SKILL.md | grep -vE '^(name|description|metadata|compatibility|license|  )' # Should be empty
+awk '/^---$/{c++;next} c==1{print}' SKILL.md | grep -vE '^(name|description|metadata|model|disable-model-invocation|  )' # Should be empty
 
 # Script executability
 ls -la scripts/*.sh scripts/*.py 2>/dev/null  # Check x bit

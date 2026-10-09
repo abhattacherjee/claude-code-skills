@@ -219,10 +219,11 @@ When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and publ
 - Skills **with** `plugin-manifest.json` → auto-assembled via `prepare-plugin.sh` and synced to `plugins/`
 - Skills **without** manifest → synced as bare directories at monorepo root
 
-Sync on a branch and open a PR; never commit or push to `main`. `<BASE_BRANCH>` is the branch the monorepo's own rules (its CLAUDE.md or CONTRIBUTING.md) send feature PRs to: `develop` for `claude-code-skills`, which uses Git Flow. Stage the paths the sync wrote by name: staging everything would also sweep in `./build/` output and stray files.
+Sync on a branch and open a PR; never commit or push to `main`. **Which branch:** if the skill change is already committed on a feature branch of the monorepo (skills edited in place, as in `claude-code-skills`), stay on it and skip the `fetch` and `switch` lines. Otherwise branch from a fresh `origin/<BASE_BRANCH>`, as below. `<BASE_BRANCH>` is the branch the monorepo's own rules (its CLAUDE.md or CONTRIBUTING.md) send feature PRs to: `develop` for `claude-code-skills`, which uses Git Flow. Stage the paths the sync wrote by name: staging everything would also sweep in `./build/` output and stray files.
 
 ```bash
-git -C "<MONOREPO_DIR>" switch -c "feature/sync-skills-<YYYY-MM-DD>" "<BASE_BRANCH>"
+git -C "<MONOREPO_DIR>" fetch origin "<BASE_BRANCH>"
+git -C "<MONOREPO_DIR>" switch -c "feature/sync-skills-<YYYY-MM-DD>" "origin/<BASE_BRANCH>"
 "${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"   # sync all skills + auto-build plugins
 git -C "<MONOREPO_DIR>" status --short                            # the paths the sync wrote
 git -C "<MONOREPO_DIR>" add -- <PATH>...                          # each path from that list, by name
@@ -235,14 +236,16 @@ If `status` lists nothing, there is nothing to commit: delete the branch and ski
 
 ### Step 6: Monorepo Release (MANDATORY)
 
-**After every sync that changes skill content, ALWAYS create a monorepo release** once the sync PR has merged. `release-monorepo.sh` commits the CHANGELOG on the current branch and pushes `origin main --tags` itself, so run it on `main` only when the user has approved that push. A Git Flow monorepo such as `claude-code-skills` releases through its own release flow (`git-flow:release`) instead of this script.
+**After every sync that changes skill content, ALWAYS create a monorepo release** once the sync PR has merged. `release-monorepo.sh` commits the CHANGELOG on `main` and pushes `origin main --tags` itself, so run it only when the user has approved that push. It refuses (exit 1, before any commit or tag) when HEAD is not `main` or `main` is behind `origin/main`. Pass the commit attribution line your session gives you with `--co-author`; with none, leave the flag out (no trailer). A Git Flow monorepo such as `claude-code-skills` releases through its own release flow (`git-flow:release`) instead of this script.
 
 ```bash
 # Determine bump level from what changed:
 #   - patch: typo fixes, sync-only updates, no SKILL.md changes
 #   - minor: skill version bumps, new features, new scripts
 #   - major: new skill added, skill removed, breaking structure changes
-"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" <patch|minor|major> "<MONOREPO_DIR>"
+git -C "<MONOREPO_DIR>" switch main
+git -C "<MONOREPO_DIR>" pull --ff-only
+"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" --co-author "<ATTRIBUTION_LINE>" <patch|minor|major> "<MONOREPO_DIR>"
 ```
 
 **Bump level decision:**
@@ -380,20 +383,11 @@ When you update a skill locally and want to push changes to its individual GitHu
 
 After syncing skills to the monorepo and committing, create a versioned release:
 
-```bash
-# After the sync PR from Step 5 has merged, on main, with the user's approval to push to main:
-"${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" minor "<MONOREPO_DIR>"
-```
+After the sync PR from Step 5 has merged, with the user's approval to push to `main`, run the Step 6 commands.
 
 `release-monorepo.sh` counts top-level `<name>/SKILL.md` and `plugins/<plugin>/skills/<name>/SKILL.md` skills, lists a plugin skill as `<plugin>:<name>`, and exits 1 without writing anything when it finds no skill in either layout.
 
-### Bump Levels
-
-| Level | When | Example |
-|-------|------|---------|
-| `patch` | Bug fixes, sync updates, typo fixes | 1.0.0 → 1.0.1 |
-| `minor` | New skill added, feature improvements | 1.0.0 → 1.1.0 |
-| `major` | Breaking changes, removed skills, restructured layout | 1.0.0 → 2.0.0 |
+Bump levels: the Step 6 table.
 
 The script:
 - Reads current version from the latest `v*` semver tag
@@ -406,6 +400,8 @@ The script:
 Use `--dry-run` to preview without making changes.
 
 **Prerequisite**: All changes must be committed before running. The script rejects uncommitted changes.
+
+**CHANGELOG gotchas** (both scripts write the monorepo CHANGELOG): `sync-monorepo.sh` writes a `## [<date>] — Monorepo sync` entry and `release-monorepo.sh` turns it into `## [X.Y.Z] - <date>`. Each must recognise the other's heading before it writes: replace a sync entry, keep a versioned one, else prepend. When you change either script, add blank lines at the point where strings are joined: `$(...)` strips trailing newlines, even from `printf '%s\n\n'`, and two entries then run together.
 
 ## Workflow E: Publish a Plugin (Manual Fallback)
 

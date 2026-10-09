@@ -12,6 +12,7 @@ BUMP_LEVEL=""
 DRY_RUN=false
 MONOREPO_DIR=""
 GITHUB_USER=""
+CO_AUTHOR=""
 
 usage() {
   cat <<'EOF'
@@ -27,6 +28,8 @@ Bump levels:
 Options:
   --dry-run              Preview changes without writing
   --github-user NAME     GitHub username (default: auto-detect via gh api)
+  --co-author "LINE"     End the release commit with LINE, e.g. the session's
+                         "Co-Authored-By: ..." attribution line (default: no trailer)
   -h, --help             Show this help
 
 Examples:
@@ -34,11 +37,15 @@ Examples:
   release-monorepo.sh minor ~/dev/claude-code-skills        # New skill release
   release-monorepo.sh --dry-run minor ~/dev/claude-code-skills
 
-Workflow:
-  1. sync-monorepo.sh ~/dev/claude-code-skills    # Sync files
-  2. cd ~/dev/claude-code-skills && git add -A     # Stage changes
-  3. git commit -m "feat: ..."                     # Commit
-  4. release-monorepo.sh minor ~/dev/claude-code-skills  # Tag + push
+Workflow (skill-kit:publish SKILL.md, Steps 5 and 6):
+  1. On a feature branch: sync-monorepo.sh, stage the paths it wrote by name,
+     commit, push the branch and open a PR.
+  2. After the PR merges: git switch main && git pull --ff-only
+  3. release-monorepo.sh minor ~/dev/claude-code-skills   # Tag + push main
+
+It refuses to run (exit 1, before any commit or tag) unless HEAD is main and
+main is not behind origin/main. It commits the CHANGELOG on main and pushes
+origin main --tags.
 EOF
   exit 0
 }
@@ -48,6 +55,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)      DRY_RUN=true; shift ;;
     --github-user)  GITHUB_USER="$2"; shift 2 ;;
+    --co-author)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "Error: --co-author needs a line" >&2; exit 2; }
+      CO_AUTHOR="$2"; shift 2 ;;
     -h|--help)      usage ;;
     patch|minor|major) BUMP_LEVEL="$1"; shift ;;
     -*)             echo "Error: Unknown option: $1" >&2; exit 1 ;;
@@ -118,6 +128,28 @@ if [[ -n "$(git status --porcelain)" ]]; then
   echo "" >&2
   git status --short >&2
   exit 1
+fi
+
+# --- Release only from main, and never from a main that is behind origin ---
+# The script commits on the current branch and pushes origin main --tags, so on any
+# other branch it would tag that branch's commit and push it, and from a stale main
+# the push fails after the tag is already pushed. Both checks run before any write.
+BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+if [[ "$BRANCH" != main ]]; then
+  echo "Error: not on main (HEAD is ${BRANCH:-detached}). Merge the sync PR, then:" >&2
+  echo "  git -C \"$MONOREPO_DIR\" switch main && git -C \"$MONOREPO_DIR\" pull --ff-only" >&2
+  exit 1
+fi
+if git remote get-url origin >/dev/null 2>&1; then
+  if ! git fetch -q origin main; then
+    echo "Error: git fetch origin main failed, so it is unknown whether main is behind origin/main" >&2
+    exit 1
+  fi
+  BEHIND="$(git rev-list --count HEAD..origin/main)"
+  if [[ "$BEHIND" != 0 ]]; then
+    echo "Error: main is $BEHIND commit(s) behind origin/main. Run: git -C \"$MONOREPO_DIR\" pull --ff-only" >&2
+    exit 1
+  fi
 fi
 
 # --- Check tag doesn't already exist ---
@@ -354,11 +386,15 @@ else
     if [[ $PLUGIN_COUNT -gt 0 ]]; then
       RELEASE_MSG="$RELEASE_MSG and $PLUGIN_COUNT plugins"
     fi
-    git commit -m "release: v${NEW_VERSION}
+    COMMIT_MSG="release: v${NEW_VERSION}
 
-${RELEASE_MSG}.
+${RELEASE_MSG}."
+    if [[ -n "$CO_AUTHOR" ]]; then
+      COMMIT_MSG="${COMMIT_MSG}
 
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
+${CO_AUTHOR}"
+    fi
+    git commit -m "$COMMIT_MSG"
     echo "COMMITTED  release: v${NEW_VERSION}"
   fi
 

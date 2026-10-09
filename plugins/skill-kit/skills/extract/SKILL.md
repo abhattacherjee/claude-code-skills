@@ -36,7 +36,7 @@ Before extracting, verify the knowledge meets these criteria:
 
 **Goal:** Find related skills before creating. Decide: update or create new.
 
-Run `find-skills.sh` from the project directory. It searches the project's skills, the user's, and only the plugin installs that are active for this project. It exits 2 if `rg` or `python3` is missing: stop then, because an empty result would read as "nothing related".
+Run `find-skills.sh` from the project directory. It searches the project's skills, the user's, and only the plugin installs that are active for this project. Exit 0 means found and 1 nothing found. Exit 2 means `rg` or `python3` is missing, and exit 3 means the search itself failed (a bad pattern or an unreadable file; `rg`'s error is on stderr). On 2 or 3, stop and fix it: an empty result would read as "nothing related".
 
 ```bash
 "${CLAUDE_SKILL_DIR}/scripts/find-skills.sh"                                   # list all skills
