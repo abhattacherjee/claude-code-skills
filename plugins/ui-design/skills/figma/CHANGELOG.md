@@ -2,6 +2,12 @@
 
 All notable changes to the **figma** skill (was `figma-ui-designer`) are documented here.
 
+## [1.0.1] - 2026-10-09
+
+### Changed
+
+- Phase 0 and the iteration step describe the `AskUserQuestion` options and the task list in prose instead of JSON call templates; every option, label and task is kept (#210).
+
 ## [1.0.0] - 2026-10-04
 
 ### Changed

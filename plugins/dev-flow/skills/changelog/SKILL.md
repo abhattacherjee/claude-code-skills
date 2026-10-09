@@ -2,7 +2,7 @@
 name: changelog
 description: "Was the changelog-keeper skill (changelog-keeper still works as a phrase). Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Use when: (1) user asks to update the changelog, (2) before committing changes that should be documented, (3) preparing a release and need changelog entries, (4) user says 'update changelog' or 'what changed since last release', (5) a commit is about to be pushed and the changelog hasn't been updated."
 metadata:
-  version: 1.0.1
+  version: 1.0.2
 ---
 
 # Changelog Keeper
@@ -129,84 +129,6 @@ The script follows [Keep a Changelog](https://keepachangelog.com/) format:
 
 ### Added
 - Initial release features
-```
-
-## Multi-Script CHANGELOG Coordination
-
-When multiple scripts modify the same CHANGELOG (e.g., a sync script + a release script), they must recognize each other's entry format to avoid clobbering.
-
-### The Problem
-
-Script A generates `## [2026-02-24] — Monorepo sync` entries.
-Script B promotes them to `## [1.1.0] - 2026-02-24` entries.
-
-If Script A runs after Script B, it doesn't recognize `[1.1.0]` as "already handled" and prepends a new generic entry, burying or duplicating the release entry.
-
-### The Fix: Format-Aware Detection
-
-Each script must detect the other's entry format before writing:
-
-```bash
-FIRST_ENTRY=$(awk '/^## \[/{print; exit}' CHANGELOG.md)
-
-# Detect sync entry (replace it)
-if echo "$FIRST_ENTRY" | grep -q "Monorepo sync"; then
-  # Replace with fresh sync or release entry
-  ...
-
-# Detect versioned release (preserve it)
-elif echo "$FIRST_ENTRY" | grep -qE '## \[[0-9]+\.[0-9]+\.[0-9]+\]'; then
-  # Skip — release entry is the audit record
-  ...
-
-# Neither — prepend new entry
-else
-  ...
-fi
-```
-
-### Bash Newline Pitfall
-
-When building CHANGELOG content via string concatenation, bash `$()` command substitution **always strips trailing newlines**. This causes:
-
-```
-Format: Monorepo-level events only.## [1.1.0] - 2026-02-24   ← MISSING BLANK LINE
-```
-
-**This also affects `printf`:** `$(printf '%s\n\n' "text")` still loses the trailing newlines because `$()` strips them after `printf` outputs them.
-
-Fix: Never rely on trailing newlines in variables. Add blank lines at the **concatenation point** instead:
-
-```bash
-EXISTING=$(cat CHANGELOG.md)
-NEW_ENTRY="## [1.2.0] - 2026-02-24"
-
-# Wrong — $() strips trailing newlines from both echo and printf
-HEADER=$(echo "$EXISTING" | awk '/^## \[/{exit} {print}')
-HEADER=$(printf '%s\n\n' "$HEADER")  # Still loses \n\n!
-NEW_CHANGELOG="${HEADER}${NEW_ENTRY}"  # No blank line
-
-# Right — explicit blank line at concatenation
-HEADER=$(echo "$EXISTING" | awk '/^## \[/{exit} {print}')
-NEW_CHANGELOG="${HEADER}
-
-${NEW_ENTRY}"  # Blank line guaranteed
-```
-
-### Semver Tag Filtering
-
-`git describe --tags --abbrev=0` picks up ANY tag (including non-semver like `sync-2026-02-24`). For version detection, filter explicitly:
-
-```bash
-# Wrong — picks up non-semver tags
-git describe --tags --abbrev=0
-
-# Right — only final release tags (v1.2.3 or 1.2.3) reachable from HEAD, newest by version.
-# (The script uses this only when CHANGELOG.md has no versioned heading.)
-# `--sort=-v:refname` alone would rank v1.2.3-rc1 above v1.2.3.
-git tag -l --merged HEAD | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
-  | awk '{ v = $0; sub(/^v/, "", v); split(v, p, "."); print p[1], p[2], p[3], $0 }' \
-  | sort -k1,1n -k2,2n -k3,3n | tail -1 | cut -d' ' -f4
 ```
 
 ## Key Decisions

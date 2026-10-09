@@ -2,7 +2,7 @@
 name: shield
 description: "Was the context-shield skill (/context-shield still works as a phrase). Prevents context window overflow when processing large content (Figma designs, web pages, GitHub wikis, large codebases). Delegates token-heavy reads to isolated sub-agents that return distilled summaries. Auto-detects when ralph-loop is needed based on batch count. Use when: (1) reading 3+ large external sources (URLs, Figma frames, wiki pages), (2) large documentation/API reference sites decomposed into section URLs, (3) monorepo code audits across many directories, (4) dependency upgrade research across 5+ packages, (5) large PR reviews with 15+ changed files, (6) competitive feature matrix analysis, (7) security advisory triage for dependency updates."
 metadata:
-  version: 1.0.1
+  version: 1.0.2
 ---
 
 # Context Shield
@@ -202,33 +202,6 @@ The summaries output is compact — each source compressed to ~500 tokens. Use t
 
 ---
 
-## Architecture
-
-```
-Parent Orchestrator (lean — never reads raw content)
-│
-├── manage-manifest.sh          (deterministic: create, track, collect)
-│
-├── content-distiller agent 1   (isolated context: reads URL, returns ~500 tokens)
-├── content-distiller agent 2   (isolated context: reads Figma, returns ~500 tokens)
-├── content-distiller agent 3   (isolated context: reads file, returns ~500 tokens)
-├── content-distiller agent 4   (isolated context: reads wiki, returns ~500 tokens)
-│   └── (batch 1 — parallel)
-│
-├── [ralph-loop iteration boundary — fresh context]
-│
-├── content-distiller agent 5   (isolated context)
-├── content-distiller agent 6   (isolated context)
-│   └── (batch 2 — parallel)
-│
-└── Synthesis (all summaries fit in parent context)
-```
-
-**Token math example:**
-- 10 web pages at ~50K tokens each = 500K tokens (impossible in parent)
-- 10 agent summaries at ~500 tokens each = 5K tokens (easily fits)
-- 2 ralph-loop iterations of 5 agents each = fresh context per iteration
-
 ## Content Source Format
 
 ```
@@ -248,36 +221,6 @@ type:key1=value1,key2=value2,label=Human Name
 - **`context:content-distiller`** (`agents/content-distiller.md` in this plugin) — reads one source, returns distilled summary. Model: `sonnet`. NOT user-invocable.
 
 ## Common Patterns
-
-### Figma Design Analysis (10+ frames)
-
-```bash
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Analyze all Figma frames for design system" \
-  --output-dir /tmp/cs-figma --batch-size 3 \
-  "figma:fileKey=abc,nodeId=1:2,label=Homepage" \
-  "figma:fileKey=abc,nodeId=3:4,label=Search" \
-  "figma:fileKey=abc,nodeId=5:6,label=Results" \
-  "figma:fileKey=abc,nodeId=7:8,label=Detail" \
-  "figma:fileKey=abc,nodeId=9:10,label=Checkout" \
-  "figma:fileKey=abc,nodeId=11:12,label=Profile" \
-  "figma:fileKey=abc,nodeId=13:14,label=Settings" \
-  "figma:fileKey=abc,nodeId=15:16,label=Mobile Home" \
-  "figma:fileKey=abc,nodeId=17:18,label=Mobile Search" \
-  "figma:fileKey=abc,nodeId=19:20,label=Mobile Detail"
-```
-
-### Competitor Research (many URLs)
-
-```bash
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Analyze competitor booking UIs" \
-  --output-dir /tmp/cs-competitors --batch-size 4 \
-  "url:https://booking.com,label=Booking.com" \
-  "url:https://airbnb.com,label=Airbnb" \
-  "url:https://vrbo.com,label=VRBO" \
-  "url:https://tripadvisor.com,label=TripAdvisor" \
-  "url:https://expedia.com,label=Expedia" \
-  "url:https://hotels.com,label=Hotels.com"
-```
 
 ### Large Website / Documentation Site (auto-ralph)
 
@@ -305,37 +248,6 @@ Break a single large site into section URLs. With 12 sources at batch-size 3 = 4
 
 **How to decompose a large site**: Identify the top-level navigation or sitemap sections. Each page becomes one source. Label clearly — these labels appear in the final synthesis report.
 
-### GitHub Wiki Crawl
-
-```bash
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Extract architecture decisions from wiki" \
-  --output-dir /tmp/cs-wiki --batch-size 5 \
-  "wiki:https://github.com/org/repo/wiki/Architecture,label=Architecture" \
-  "wiki:https://github.com/org/repo/wiki/API-Reference,label=API Ref" \
-  "wiki:https://github.com/org/repo/wiki/Data-Model,label=Data Model" \
-  "wiki:https://github.com/org/repo/wiki/Deployment,label=Deployment" \
-  "wiki:https://github.com/org/repo/wiki/Security,label=Security"
-```
-
-### API Reference / Framework Docs
-
-Break a multi-page API reference into per-section URLs. Works for any vendor docs (OpenAI, Stripe, Twilio, AWS, etc.).
-
-```bash
-# Example: OpenAI API reference (9 pages, auto-ralph)
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Comprehensive OpenAI API reference" \
-  --output-dir /tmp/cs-openai --batch-size 3 \
-  "url:https://platform.openai.com/docs/api-reference/chat,label=Chat Completions" \
-  "url:https://platform.openai.com/docs/api-reference/embeddings,label=Embeddings" \
-  "url:https://platform.openai.com/docs/api-reference/fine-tuning,label=Fine-tuning" \
-  "url:https://platform.openai.com/docs/api-reference/batch,label=Batch API" \
-  "url:https://platform.openai.com/docs/api-reference/uploads,label=Uploads" \
-  "url:https://platform.openai.com/docs/api-reference/images,label=Images" \
-  "url:https://platform.openai.com/docs/api-reference/models,label=Models" \
-  "url:https://platform.openai.com/docs/api-reference/moderations,label=Moderations" \
-  "url:https://platform.openai.com/docs/api-reference/assistants,label=Assistants"
-```
-
 ### Monorepo Code Audit
 
 Use `codebase` type to scan patterns across directories. Use batch-size 4-5 since code files are lighter than web pages.
@@ -350,64 +262,15 @@ Use `codebase` type to scan patterns across directories. Use batch-size 4-5 sinc
   "codebase:frontend/src/services/**/*.ts,label=Frontend Services"
 ```
 
-### Dependency Upgrade Research
+### Other sources
 
-Fetch changelogs and migration guides before a major upgrade. Label with version ranges.
+The same `create` call covers the other uses; only the sources change:
 
-```bash
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Research breaking changes for dependency upgrade" \
-  --output-dir /tmp/cs-deps --batch-size 3 \
-  "url:https://github.com/expressjs/express/releases,label=Express Releases" \
-  "url:https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md,label=Vite Changelog" \
-  "url:https://github.com/vitest-dev/vitest/releases,label=Vitest Releases" \
-  "url:https://github.com/microsoft/playwright/releases,label=Playwright Releases" \
-  "url:https://github.com/usebruno/bruno/releases,label=Bruno Releases" \
-  "url:https://github.com/tailwindlabs/tailwindcss/releases,label=Tailwind Releases"
-```
-
-### Large PR Review (many changed files)
-
-Distill each changed file's diff to review a large PR without exhausting context.
-
-```bash
-# Generate file list from git diff, then create manifest
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Review PR changes for feature X" \
-  --output-dir /tmp/cs-pr --batch-size 5 \
-  "file:backend/src/services/eventService.ts,label=eventService" \
-  "file:backend/src/services/sessionService.ts,label=sessionService" \
-  "file:backend/src/routes/recommendations.ts,label=recommendations route" \
-  "file:frontend/src/components/Results.tsx,label=Results component" \
-  "file:frontend/src/components/Questionnaire.tsx,label=Questionnaire" \
-  "file:mcp-events-server/src/tools/recommend.ts,label=MCP recommend tool"
-```
-
-### Competitive Feature Matrix
-
-Analyze pricing/feature pages across competitors to build a comparison matrix.
-
-```bash
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Compare vacation rental platform features" \
-  --output-dir /tmp/cs-compete --batch-size 3 \
-  "url:https://www.airbnb.com/help/article/2503,label=Airbnb Host Features" \
-  "url:https://www.vrbo.com/discoveryhub/tips-and-resources,label=VRBO Features" \
-  "url:https://www.booking.com/content/about.html,label=Booking.com About" \
-  "url:https://www.tripadvisor.com/business,label=TripAdvisor Business" \
-  "url:https://www.expedia.com/partner-solutions,label=Expedia Partners" \
-  "url:https://www.hotels.com/page/about-us,label=Hotels.com About"
-```
-
-### Security Advisory Review
-
-Fetch and distill CVE/advisory pages when triaging dependency vulnerabilities.
-
-```bash
-"${CLAUDE_SKILL_DIR}/scripts/manage-manifest.sh" create --task "Assess security advisories for dependency update" \
-  --output-dir /tmp/cs-security --batch-size 4 \
-  "url:https://github.com/advisories/GHSA-xxxx-yyyy-zzzz,label=minimatch ReDoS" \
-  "url:https://github.com/advisories/GHSA-aaaa-bbbb-cccc,label=express path traversal" \
-  "url:https://nvd.nist.gov/vuln/detail/CVE-2024-NNNNN,label=CVE-2024-NNNNN" \
-  "url:https://snyk.io/vuln/SNYK-JS-EXAMPLE,label=Snyk Advisory"
-```
+- **Figma frames:** one `figma:fileKey=...,nodeId=...` source per frame.
+- **Competitor pages, feature matrices, security advisories:** one `url:` source per page; for advisories, label each with the package and the issue (`label=minimatch ReDoS`).
+- **Dependency upgrades:** one `url:` source per changelog or release page, labelled with the package and version range.
+- **Large PR review:** one `file:` source per changed file, from `git diff --name-only`; batch size 5.
+- **GitHub wiki:** one `wiki:` source per page.
 
 ## See Also
 

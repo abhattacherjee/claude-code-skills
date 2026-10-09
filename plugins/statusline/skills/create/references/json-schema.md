@@ -2,6 +2,14 @@
 
 Claude Code pipes this JSON to your statusline script via stdin after each assistant message.
 
+## Contents
+
+- Full JSON Structure
+- Field Reference
+- Context Window Details
+- Timing
+- Output Capabilities
+
 ## Full JSON Structure
 
 ```json

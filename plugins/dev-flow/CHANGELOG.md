@@ -2,6 +2,12 @@
 
 All notable changes to the **dev-flow** plugin are documented here.
 
+## [1.0.3] - 2026-10-09
+
+### Changed
+
+- `changelog` 1.0.2: cut the guidance on writing CHANGELOG scripts (#210).
+
 ## [1.0.2] - 2026-10-06
 
 ### Changed

@@ -1,6 +1,7 @@
 """Structure of the statusline plugin (#158): three skills, new names only, plugin-relative paths."""
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -33,19 +34,23 @@ def _skill_docs():
 def test_plugin_manifest():
     data = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
     assert data["name"] == "statusline"
-    # The version this release ships (1.0.1 since #190 added the README meta line).
-    assert data["version"] == "1.0.1"
+    # The version this release ships (1.0.2 since #210 trimmed create's SKILL.md).
+    assert data["version"] == "1.0.2"
 
 
 def test_exactly_the_three_skills():
     assert {p.name for p in (PLUGIN / "skills").iterdir() if p.is_dir()} == SKILLS
 
 
+SKILL_VERSIONS = {"create": "1.0.1", "install": "1.0.0", "context-bar": "1.0.0"}
+
+
 @pytest.mark.parametrize("skill", sorted(SKILLS))
-def test_skill_name_matches_directory_and_version_is_1_0_0(skill):
+def test_skill_name_matches_directory_and_version(skill):
     path = PLUGIN / "skills" / skill / "SKILL.md"
     assert _field(path, "name") == skill
-    assert re.search(r"^metadata:\n\s+version:\s*1\.0\.0\s*$", _frontmatter(path), re.M)
+    want = re.escape(SKILL_VERSIONS[skill])
+    assert re.search(r"^metadata:\n\s+version:\s*" + want + r"\s*$", _frontmatter(path), re.M)
 
 
 @pytest.mark.parametrize("skill,old", [("install", "install-statusline"),
@@ -178,10 +183,13 @@ def test_plugin_readme_counts_match():
 
 
 def test_create_doc_item_count_matches_the_generator():
+    # SKILL.md sends the reader to --list for the item table (#210), so --list must print
+    # every item the generator accepts, and the counts in the docs must match it.
     text = (PLUGIN / "skills" / "create" / "SKILL.md").read_text()
-    rows = re.findall(r"^\| `([a-z0-9-]+)` \| (?:Display|Context|Metrics|Git) \|", text, re.M)
-    gen = (PLUGIN / "skills" / "create" / "scripts" / "generate-statusline.sh").read_text()
-    m = re.search(r"\n    (model\|model-full\|.*?)\) ;;", gen, re.S)
+    script = PLUGIN / "skills" / "create" / "scripts" / "generate-statusline.sh"
+    listed = subprocess.run(["bash", str(script), "--list"], capture_output=True, text=True, check=True).stdout
+    rows = re.findall(r"^  ([a-z0-9-]+) {2,}\S", listed, re.M)
+    m = re.search(r"\n    (model\|model-full\|.*?)\) ;;", script.read_text(), re.S)
     valid = set(re.split(r"[|\\\s]+", m.group(1))) - {""}
     assert len(rows) == len(valid) == 20 and set(rows) == valid
     assert "## Available Items (20 composable blocks)" in text

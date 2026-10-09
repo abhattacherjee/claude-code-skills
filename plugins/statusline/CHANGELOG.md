@@ -2,6 +2,12 @@
 
 All notable changes to the **statusline** plugin are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- `create` 1.0.1: the Available Items section points to `generate-statusline.sh --list` instead of repeating its table; `references/item-recipes.md` and `references/json-schema.md` start with a Contents list. `tests/test_structure.py` checks the item list from `--list` (#210).
+
 ## [1.0.1] - 2026-10-06
 
 ### Changed

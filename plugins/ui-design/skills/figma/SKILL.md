@@ -2,7 +2,7 @@
 name: figma
 description: "Was the figma-ui-designer skill (/figma-ui-designer still works as a phrase). Interactive Figma UI design skill with UX-expert brainstorming, progress tracking, and design-to-code bridging. Spawns a specialized UX designer agent that researches real-world references before proposing design directions. Four workflows: (A) capture running app, (B) new project design, (C) enhancement mockup, (D) extract existing Figma designs as input for specs/plans/code. Use when: (1) user asks for Figma mockups or UI designs, (2) user shares a Figma URL to use as input for a spec or plan, (3) starting a new project and needs Figma designs, (4) mocking up a feature enhancement, (5) user wants to translate a Figma design into implementation requirements."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Figma UI Designer
@@ -50,56 +50,9 @@ The agent will return a structured report with:
 
 Use the agent's structured output to build `AskUserQuestion` options. Each option should include the agent's ASCII mockup, reference URLs, and rationale — NOT generic placeholders.
 
-**For component/feature designs** (Workflow A or C):
-```
-AskUserQuestion({
-  questions: [{
-    question: "Which design direction? (References researched by UX expert)",
-    header: "Design",
-    options: [
-      {
-        label: "[Agent's Direction A name]",
-        description: "[Agent's rationale summary]",
-        markdown: "[Agent's ASCII mockup]\n\nInspired by: [reference URLs]\n\nPros: [from agent]\nCons: [from agent]\nA11y: [contrast/keyboard notes]"
-      },
-      {
-        label: "[Agent's Direction B name]",
-        description: "[Agent's rationale summary]",
-        markdown: "[Agent's ASCII mockup]\n\nInspired by: [reference URLs]\n\nPros: [from agent]\nCons: [from agent]\nA11y: [contrast/keyboard notes]"
-      }
-      // ... up to 4 options from agent
-    ],
-    multiSelect: false
-  }]
-})
-```
+**For component/feature designs** (Workflow A or C): one single-select question, "Which design direction? (References researched by UX expert)", with one option per agent direction (up to 4). Each option's label is the direction's name, its description the agent's rationale, and its markdown preview the agent's ASCII mockup followed by `Inspired by:` (reference URLs), `Pros:`, `Cons:` and `A11y:` (contrast and keyboard notes).
 
-**For new project designs** (Workflow B), also ask about variants:
-```
-AskUserQuestion({
-  questions: [
-    {
-      question: "Which aesthetic direction? (Researched by UX expert)",
-      header: "Aesthetic",
-      options: [
-        // ... populated from agent's design directions
-      ],
-      multiSelect: false
-    },
-    {
-      question: "Which variants do you need?",
-      header: "Variants",
-      options: [
-        { label: "All 4", description: "Desktop + Mobile, Light + Dark" },
-        { label: "Desktop only", description: "Light + Dark, desktop viewport" },
-        { label: "Light only", description: "Desktop + Mobile, light theme" },
-        { label: "Desktop Light only", description: "Single variant" }
-      ],
-      multiSelect: false
-    }
-  ]
-})
-```
+**For new project designs** (Workflow B), ask a second single-select question in the same call: "Which variants do you need?" with `All 4` (Desktop + Mobile, Light + Dark), `Desktop only` (Light + Dark), `Light only` (Desktop + Mobile) and `Desktop Light only`.
 
 **Team mode:** When Agent Teams are enabled, multiple UX expert teammates can explore different design directions simultaneously (e.g., one researching minimalist approaches while another explores bold/editorial styles), then present all findings together for the user to pick from. This is especially valuable for new project designs (Workflow B) where the design space is wide.
 
@@ -107,20 +60,18 @@ AskUserQuestion({
 
 ### Step 0d: Create Task List
 
-After the user picks a direction, create a trackable task list using `TaskCreate`:
+After the user picks a direction, create one `TaskCreate` task per step, in this order (drop the capture tasks for variants the user did not pick):
 
-```
-TaskCreate({ subject: "Extract design tokens", description: "Run extract-design-tokens.sh", activeForm: "Extracting design tokens" })
-TaskCreate({ subject: "Build HTML prototype", description: "Create HTML with chosen design direction", activeForm: "Building prototype" })
-TaskCreate({ subject: "Start dev server", description: "Serve HTML/app locally", activeForm: "Starting server" })
-TaskCreate({ subject: "Capture Desktop Light into Figma", description: "First capture, creates new Figma file", activeForm: "Capturing Desktop Light" })
-TaskCreate({ subject: "Capture Desktop Dark into Figma", description: "Toggle dark mode, capture", activeForm: "Capturing Desktop Dark" })
-TaskCreate({ subject: "Capture Mobile Light into Figma", description: "Resize to 375px, capture", activeForm: "Capturing Mobile Light" })
-TaskCreate({ subject: "Capture Mobile Dark into Figma", description: "Mobile + dark mode, capture", activeForm: "Capturing Mobile Dark" })
-TaskCreate({ subject: "Identify Figma frames", description: "Map node IDs to variants", activeForm: "Identifying frames" })
-TaskCreate({ subject: "Document in spec", description: "Add Figma URLs to story spec", activeForm: "Documenting mockups" })
-TaskCreate({ subject: "Revert temporary changes", description: "git checkout, verify clean tree", activeForm: "Reverting changes" })
-```
+1. Extract design tokens (`extract-design-tokens.sh`)
+2. Build HTML prototype with the chosen direction
+3. Start dev server (serve the HTML or app locally)
+4. Capture Desktop Light into Figma (first capture, creates the Figma file)
+5. Capture Desktop Dark into Figma (toggle dark mode)
+6. Capture Mobile Light into Figma (resize to 375px)
+7. Capture Mobile Dark into Figma
+8. Identify Figma frames (map node IDs to variants)
+9. Document in spec (add the Figma URLs to the story spec)
+10. Revert temporary changes (`git checkout`, verify a clean tree)
 
 Mark each task `in_progress` before starting, `completed` when done.
 
@@ -338,23 +289,7 @@ Match by width (Desktop ~1920px, Mobile ~375-574px) and `get_screenshot` for lig
 
 ## Design Iteration Pattern
 
-After initial capture, present results and iterate:
-
-```
-AskUserQuestion({
-  questions: [{
-    question: "I've captured 4 variants into Figma. Review them and let me know what's next.",
-    header: "Next step",
-    options: [
-      { label: "Approved", description: "Designs look good, document in spec" },
-      { label: "Iterate", description: "Need changes, will provide feedback" },
-      { label: "Add screens", description: "Design additional screens/states" },
-      { label: "Start over", description: "Different direction entirely" }
-    ],
-    multiSelect: false
-  }]
-})
-```
+After the first capture, ask one single-select question, "I've captured the variants into Figma. Review them and let me know what's next.", with the options `Approved` (document in spec), `Iterate` (the user gives feedback), `Add screens` (more screens or states) and `Start over` (a different direction).
 
 ---
 

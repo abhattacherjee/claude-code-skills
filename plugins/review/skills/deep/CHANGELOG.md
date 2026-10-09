@@ -2,6 +2,12 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [1.0.1] - 2026-10-09
+
+### Changed
+
+- `references/audit-trail.md` starts with a Contents list (#210).
+
 ## [1.0.0] - 2026-10-03
 
 ### Changed

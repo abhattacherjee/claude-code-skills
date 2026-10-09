@@ -2,6 +2,12 @@
 
 All notable changes to the **ui-design** plugin are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- `figma` 1.0.1: prose instead of JSON templates for the `AskUserQuestion` and `TaskCreate` calls (#210).
+
 ## [1.0.1] - 2026-10-06
 
 ### Changed

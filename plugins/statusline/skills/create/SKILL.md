@@ -2,7 +2,7 @@
 name: create
 description: "Creates and customizes Claude Code statusline scripts from 20 composable items (model, dir, git, git-sync, context-bar, cost, duration and more). Use when: (1) user wants to add or change their statusline, (2) user asks to show cost, git, context, or other info in the status bar, (3) user says 'customize my statusline' or 'add X to my statusline', (4) user wants to create a statusline from scratch, (5) debugging statusline display issues, (6) statusline-creator (the old name of this skill)."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Create a statusline
@@ -45,28 +45,7 @@ echo '{"model":{"display_name":"Opus"},"workspace":{"current_dir":"/tmp/test"},"
 
 ## Available Items (20 composable blocks)
 
-| Item | Category | Description |
-|------|----------|-------------|
-| `model` | Display | Model name ("Opus") |
-| `model-full` | Display | Model + 1M context indicator |
-| `dir` | Display | Working directory basename |
-| `session-id` | Display | Short session ID (8 chars) |
-| `style` | Display | Output style name |
-| `vim-mode` | Display | Vim mode ([N]/[I]) |
-| `agent` | Display | Agent name when using --agent |
-| `worktree` | Display | Worktree name indicator |
-| `context-bar` | Context | Progress bar with color thresholds |
-| `context-pct` | Context | Percentage number only |
-| `tokens` | Context | Detailed in/out token counts (K) |
-| `warn-200k` | Context | Warning when >200K tokens |
-| `cost` | Metrics | Session cost ($X.XX) |
-| `cost-color` | Metrics | Cost with green/yellow/red thresholds |
-| `duration` | Metrics | Wall-clock time (Xm Ys) |
-| `api-duration` | Metrics | API response time only |
-| `lines-changed` | Metrics | Lines +added -removed |
-| `git` | Git | Branch + staged/modified (5s cache) |
-| `git-sync` | Git | Upstream ahead/behind arrows (with or without `git`, in any order) |
-| `git-link` | Git | Clickable OSC 8 repo link |
+`--list` (above) prints each item with a one-line description, grouped as Display, Context, Cost & Time and Git. `git` caches its status for 5s; `git-sync` works with or without `git`, in any order.
 
 ## Writing Custom Items
 
