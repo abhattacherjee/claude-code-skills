@@ -250,7 +250,13 @@ Launch the `review:cross-examiner` agent (opus). Provide:
   results at least every ~20 minutes of a long run, and never go idle waiting on its own
   background run.
 
-Agent returns `{"verdicts":[{"id":"X-NNN or G-NNN","claude_verdict":"confirm|refute","reason":"..."}]}`. Write to `<RUN_DIR>/r2-claude-verdicts.json`.
+Write its verdicts to `<RUN_DIR>/r2-claude-verdicts.json` in exactly this shape, and say so in the dispatch. The key is `claude_verdict` (not `verdict`), its value `confirm` or `refute`, and `id` the adversary finding's id (`X-NNN` or `G-NNN`) copied verbatim:
+
+```json
+{"verdicts":[{"id":"X-001","claude_verdict":"confirm","reason":"..."},{"id":"X-002","claude_verdict":"refute","reason":"..."}]}
+```
+
+`synthesize.py` stops with exit 5 when an entry lacks it (#189).
 
 **(b) The adversary cross-examines Claude's findings:**
 
@@ -286,20 +292,18 @@ it if it is idle. Never tell the user you're "waiting on" R2 without having look
 <Adversary>'s verdict on Claude's findings (<N> total):
   confirmed=A  refuted=B  judged=J  confirm_rate=R.RRR  low_signal=true|false  unrecognized=U  unjudged=N
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
-  [⚠ UNRECOGNIZED — U verdict(s) had an unrecognized value; judge output may be malformed]
   [⚠ UNJUDGED — N finding(s) got no verdict; the judge skipped them, so they stay unconfirmed]
 Claude's verdict on <Adversary>'s findings (<M> total):
   confirmed=D  refuted=E  judged=K  confirm_rate=S.RRR  low_signal=true|false  unrecognized=V  unjudged=P
   [⚠ LOW SIGNAL — near-unanimous verdicts; judge may be rubber-stamping]
-  [⚠ UNRECOGNIZED — V verdict(s) had an unrecognized value; judge output may be malformed]
   [⚠ UNJUDGED — P finding(s) got no verdict; the judge skipped them, so they stay unconfirmed]
 ```
 
 The per-direction fields `confirmed`, `refuted`, `judged`, `confirm_rate`, `low_signal`, `unrecognized` and `unjudged` come verbatim from `synthesize.py` stdout. The direction lines are named `<adversary>_on_claude:` and `claude_on_<adversary>:` (for example `codex_on_claude:`), and each ends in `unjudged=<n>`.
 
-`unjudged` counts findings that got no verdict entry at all. A judge that answers only some ids still exits 0, so this count is the only sign that work is missing. Always take it from `synthesize.py`; never work it out from the total and `judged`, because `judged` also counts entries with an unrecognized value.
+`unjudged` counts findings that got no verdict entry at all. A judge that answers only some ids still exits 0, so this count is the only sign that work is missing. Always take it from `synthesize.py`; never work it out from the total and `judged`.
 
-The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.950 or <= 0.050 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`. The `UNRECOGNIZED` banner is printed only when `unrecognized > 0`. The `UNJUDGED` banner is printed only when `unjudged > 0`.
+The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_signal=true` for that direction (confirm_rate >= 0.950 or <= 0.050 over a sample of >= 5 judged findings). Omit the banner line when `low_signal=false`. `unrecognized` is always 0 in a run that prints these lines: any unrecognized verdict stops `synthesize.py` with exit 5 first (see Step 4). The `UNJUDGED` banner is printed only when `unjudged > 0`.
 
 **Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge with maximum skepticism and re-synthesize:
 
@@ -321,7 +325,9 @@ Re-run `synthesize.py` after the escalation pass and relay the updated digest. T
   --json "<RUN_DIR>/report.json"
 ```
 
-Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, `unrecognized=` and `unjudged=`. Read and relay these counts to the user, plus any `low_signal=true` flag, any `unrecognized > 0` count, and any `unjudged > 0` count with its `UNJUDGED` banner.
+Script applies the survivor rule and prints `survivors=N unconfirmed=M rejected=K` to stdout, followed by per-direction lines containing `confirmed=`, `refuted=`, `judged=`, `confirm_rate=`, `low_signal=true|false`, `unrecognized=` and `unjudged=`. Read and relay these counts to the user, plus any `low_signal=true` flag and any `unjudged > 0` count with its `UNJUDGED` banner.
+
+**Exit 5** means a verdict has no `confirm` or `refute` under the key its direction reads: `claude_verdict` in `r2-claude-verdicts.json`, `adversary_verdict` in `r2-<ADVERSARY>-verdicts.json`. stderr names the key it expected and the key or value it found (for example `found key 'verdict' on X-002`). No report is written, and any old `report.md` or `report.json` at those paths is deleted. Fix the named entries in that file and run Step 4 again. Never report counts from a run that exited 5.
 
 When `ADVERSARY="claude-only"` (the user chose Claude-only in Step 0, or Degradation Behavior's R1 path fired), there is no second model to feed Step 4 real findings from. Run the same command with `--adversary claude-only`, and write `{"findings":[]}` once to `<RUN_DIR>/r1-empty.json` for `--adversary-findings`, and `{"verdicts":[]}` once to `<RUN_DIR>/r2-empty.json` for both `--adversary-verdicts` and `--claude-verdicts` (R2 never ran). Every Claude finding comes out `status=unconfirmed`; nothing is silently dropped, and `report.json`'s `summary.adversary` is `"claude-only"` — matching what Step 4b passes to the `record` call of `pr-audit.py` as `--adversary "<ADVERSARY>"`, so its adversary/summary mismatch guard does not fire.
 

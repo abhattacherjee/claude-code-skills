@@ -38,10 +38,18 @@ Exit codes:
   0  Success
   1  Error (file not found, parse error, etc.)
   2  Usage error
+  5  A verdict has no confirm or refute under the key its direction reads
+     (claude_verdict for Claude judging the adversary, adversary_verdict for the
+     adversary judging Claude). stderr names the key expected and what was found.
+     No report is written. 3 and 4 are skipped: other review scripts use them.
+
+  Every run first deletes any file at the --md and --json paths, so a failed run
+  never leaves an older report there that looks like this run's.
 """
 
 import argparse
 import json
+import os
 import re
 import sys
 from typing import Any
@@ -102,6 +110,42 @@ def count_unjudged(findings, verdict_map):
     return sum(1 for f in findings if f.get("id") and f["id"] not in verdict_map)
 
 
+UNRECOGNIZED_EXIT = 5
+# Keys a verdict entry carries besides the verdict itself.
+NON_VERDICT_KEYS = {"id", "reason", "confidence"}
+
+
+def describe_unrecognized(verdict_map: dict, verdict_field: str) -> dict[str, list[str]]:
+    """Group the verdicts with no confirm/refute under verdict_field by what they hold
+    instead: "value 'reject'", "key 'verdict'" or "no verdict key". Maps each to the
+    finding ids, sorted."""
+    found: dict[str, list[str]] = {}
+    for fid, v in verdict_map.items():
+        value = v.get(verdict_field)
+        if value in ("confirm", "refute"):
+            continue
+        if verdict_field in v:
+            what = f"value {value!r}"
+        else:
+            others = sorted(k for k in v if k not in NON_VERDICT_KEYS)
+            if not others:
+                what = "no verdict key"
+            else:
+                what = ("key " if len(others) == 1 else "keys ") + ", ".join(repr(k) for k in others)
+        found.setdefault(what, []).append(fid)
+    return {what: sorted(ids) for what, ids in found.items()}
+
+
+def clear_outputs(args: argparse.Namespace) -> None:
+    """Delete any file at the --md / --json paths, so a run that fails leaves no
+    report behind that looks like its own. A path that is also an input is kept."""
+    inputs = {os.path.realpath(p) for p in (args.claude_findings, args.gemini_findings,
+                                            args.gemini_verdicts, args.claude_verdicts)}
+    for path in (args.md, args.json_out):
+        if path and os.path.realpath(path) not in inputs and os.path.lexists(path):
+            os.remove(path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -123,6 +167,7 @@ Exit codes:
   0  Success
   1  Error (file not found, parse error, etc.)
   2  Usage error
+  5  Unrecognized verdict: no confirm/refute under the expected key; no report written
 """,
     )
     parser.add_argument("--claude-findings", required=True, metavar="FILE",
@@ -516,6 +561,7 @@ def format_markdown(
 
 def main() -> None:
     args = parse_args()
+    clear_outputs(args)
 
     claude_findings_raw = load_json(args.claude_findings, "claude-findings")
     gemini_findings_raw = load_json(args.gemini_findings, "gemini-findings")
@@ -562,6 +608,26 @@ def main() -> None:
             )
         seen_ids[fid] = origin
 
+    # An unrecognized verdict stops the run (#189). Counting it as unconfirmed gave a
+    # smaller survivor count that looked valid.
+    errors = []
+    for direction, verdict_map, field in (
+        (f"{adv}_on_claude", gemini_verdict_map, VERDICT_KEY),
+        (f"claude_on_{adv}", claude_verdict_map, "claude_verdict"),
+    ):
+        found = describe_unrecognized(verdict_map, field)
+        if found:
+            count = sum(len(ids) for ids in found.values())
+            detail = "; ".join(f"found {what} on {', '.join(ids)}" for what, ids in found.items())
+            errors.append(f"{direction}: {count} verdict(s) have no confirm or refute under "
+                          f"the expected key '{field}' ({detail})")
+    if errors:
+        for msg in errors:
+            print(f"[synthesize] ERROR: {msg}", file=sys.stderr)
+        print("[synthesize] ERROR: no report written. Fix the verdicts file so every entry "
+              "has its expected key set to confirm or refute, then run again.", file=sys.stderr)
+        sys.exit(UNRECOGNIZED_EXIT)
+
     survivors = [f for f in classified if f.get("status") == "survivor"]
     unconfirmed = [f for f in classified if f.get("status") == "unconfirmed"]
     rejected = [f for f in classified if f.get("status") == "rejected"]
@@ -580,18 +646,6 @@ def main() -> None:
     # "unconfirmed" -- but that count must be visible, not just implied.
     gem_unjudged = count_unjudged(claude_findings, gemini_verdict_map)
     cla_unjudged = count_unjudged(gemini_findings, claude_verdict_map)
-
-    # Warn on unrecognized verdicts (Fix D)
-    if gem_stats["unrecognized"] > 0:
-        _warn(
-            f"confirm-rate({adv}_on_claude): {gem_stats['unrecognized']} verdict(s) had an "
-            "unrecognized verdict value — judge output may be malformed"
-        )
-    if cla_stats["unrecognized"] > 0:
-        _warn(
-            f"confirm-rate(claude_on_{adv}): {cla_stats['unrecognized']} verdict(s) had an "
-            "unrecognized verdict value — judge output may be malformed"
-        )
 
     print(
         f"{adv}_on_claude: confirmed={gem_stats['confirmed']} refuted={gem_stats['refuted']} "

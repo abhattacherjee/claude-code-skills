@@ -636,7 +636,7 @@ class GeminiFallbackShapeTests(unittest.TestCase):
         note = section(self.step22, "**Gemini reliability note:**", "**Missing verdicts")
         return re.search(r"```json\n(.*?)```", note, re.S).group(1)
 
-    def run_synth(self, verdicts_text):
+    def run_synth(self, verdicts_text, expect_exit=0):
         def put(name, obj):
             path = self.tmp / name
             path.write_text(json.dumps(obj) if not isinstance(obj, str) else obj, encoding="utf-8")
@@ -653,7 +653,10 @@ class GeminiFallbackShapeTests(unittest.TestCase):
              "--claude-findings", claude, "--adversary-findings", adv,
              "--adversary-verdicts", gv, "--claude-verdicts", cv, "--json", str(out)],
             capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.returncode, expect_exit, res.stderr)
+        if expect_exit:
+            self.assertFalse(out.exists())
+            return res.stderr
         return {f["id"]: f for f in json.loads(out.read_text())["findings"]}
 
     def test_the_documented_shape_is_read_as_confirm_and_refute(self):
@@ -666,9 +669,11 @@ class GeminiFallbackShapeTests(unittest.TestCase):
 
     def test_the_old_prompt_shape_is_not_what_the_docs_ask_for(self):
         # The earlier text asked for {id, verdict, reason}. synthesize.py does not read
-        # a bare `verdict` key, so every finding would have stayed unconfirmed.
-        got = self.run_synth(json.dumps({"verdicts": [{"id": "C-001", "verdict": "confirm", "reason": "x"}]}))
-        self.assertEqual(got["C-001"]["status"], "unconfirmed")
+        # a bare `verdict` key; since #189 it stops with exit 5 and names both keys.
+        err = self.run_synth(json.dumps({"verdicts": [{"id": "C-001", "verdict": "confirm", "reason": "x"}]}),
+                             expect_exit=5)
+        self.assertIn("expected key 'adversary_verdict'", err)
+        self.assertIn("found key 'verdict' on C-001", err)
         self.assertNotIn("verdict:confirm|refute", self.step22)
         self.assertIn("adversary_verdict", self.documented_json())
 
@@ -679,6 +684,56 @@ class GeminiFallbackShapeTests(unittest.TestCase):
         self.assertIn("Codex", missing)
         got = self.run_synth('{"verdicts":[]}')
         self.assertTrue(all(f["status"] == "unconfirmed" for f in got.values()))
+
+
+class ClaudeVerdictShapeTests(unittest.TestCase):
+    """#189: deep Step 2.2 and adversarial Step 3 name the exact shape the
+    cross-examiner writes to r2-claude-verdicts.json, and synthesize.py reads it."""
+
+    SHAPE = re.compile(r'```json\n\s*(\{"verdicts":\[\{"id":"X-001","claude_verdict".*?)```', re.S)
+
+    def documented(self, text):
+        match = self.SHAPE.search(text)
+        self.assertIsNotNone(match, "no claude_verdict json block")
+        return match.group(1)
+
+    def synth(self, verdicts_text):
+        tmp = Path(tempfile.mkdtemp(prefix="claude-shape-"))
+        self.addCleanup(__import__("shutil").rmtree, str(tmp), True)
+        finding = lambda fid: {"id": fid, "path": "a.py", "line": 1, "severity": "minor",
+                               "category": "bug", "title": fid, "rationale": "r", "origin": "codex"}
+        (tmp / "c.json").write_text('{"findings":[]}')
+        (tmp / "x.json").write_text(json.dumps({"findings": [finding("X-001"), finding("X-002")]}))
+        (tmp / "xv.json").write_text('{"verdicts":[]}')
+        (tmp / "cv.json").write_text(verdicts_text)
+        res = subprocess.run(
+            [sys.executable, str(HERE / "synthesize.py"), "--adversary", "codex",
+             "--claude-findings", str(tmp / "c.json"), "--adversary-findings", str(tmp / "x.json"),
+             "--adversary-verdicts", str(tmp / "xv.json"), "--claude-verdicts", str(tmp / "cv.json"),
+             "--json", str(tmp / "r.json")],
+            capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return {f["id"]: f["status"] for f in json.loads((tmp / "r.json").read_text())["findings"]}
+
+    def check(self, step):
+        self.assertIn("r2-claude-verdicts.json", step)
+        self.assertIn("`claude_verdict` (not `verdict`)", norm(step))
+        self.assertIn("exit 5", step)
+        got = self.synth(self.documented(step))
+        self.assertEqual(got, {"X-001": "survivor", "X-002": "rejected"})
+
+    def test_deep_step_2_2_names_the_shape(self):
+        text = (DEEP / "SKILL.md").read_text(encoding="utf-8")
+        self.check(section(text, "### Step 2.2", "### Step 2.3"))
+
+    def test_adversarial_step_3_names_the_shape(self):
+        self.check(section(SKILL.read_text(encoding="utf-8"), "### Step 3 — R2", "### Step 4 — Converge"))
+
+    def test_cross_examiner_agent_uses_the_same_key(self):
+        agent = (PLUGIN / "agents" / "cross-examiner.md").read_text(encoding="utf-8")
+        self.assertIn('"claude_verdict": "confirm"', agent)
+        self.assertIn('"claude_verdict": "refute"', agent)
+        self.assertNotRegex(agent, r'"verdict"\s*:')
 
 
 if __name__ == "__main__":

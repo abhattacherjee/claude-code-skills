@@ -2195,7 +2195,7 @@ assert_contains  "confirm-rate boundary T9: judged=4 -> low_signal=false (proves
   "confirmed=4 refuted=0 judged=4 confirm_rate=1.000 low_signal=false" "$CR_B9_GEM_LINE"
 
 # ---- Fix D: unrecognized verdict detection ----
-# 5 confirm + 3 "reject" verdicts (unrecognized) -> unrecognized=3, judged=5, low_signal=true
+# 5 confirm + 3 "reject" verdicts (unrecognized) -> exit 5 (#189)
 # Use a fresh 8-finding fixture and inline verdicts
 CR_D_CLAUDE_FINDINGS="$TMP_DIR/cr_d_claude_findings.json"
 cat >"$CR_D_CLAUDE_FINDINGS" <<'JSON'
@@ -2235,14 +2235,76 @@ run_capture CR_D_OUT CR_D_EXIT python3 "$SYNTHESIZE" \
   --gemini-verdicts "$CR_D_VERDICTS" \
   --claude-verdicts "$CR_EMPTY_CLAUDE_VERDICTS"
 
-assert_exit_code "confirm-rate Fix-D: unrecognized verdicts exits 0" 0 "$CR_D_EXIT"
-CR_D_GEM_LINE="$(echo "$CR_D_OUT" | grep '^gemini_on_claude:')"
-assert_contains  "confirm-rate Fix-D: confirmed=5 judged=5 low_signal=true" \
-  "confirmed=5 refuted=0 judged=5 confirm_rate=1.000 low_signal=true" "$CR_D_GEM_LINE"
-assert_contains  "confirm-rate Fix-D: unrecognized=3 in output line" \
-  "unrecognized=3" "$CR_D_GEM_LINE"
-assert_contains  "confirm-rate Fix-D: unrecognized warn on stderr" \
-  "unrecognized verdict value" "$CR_D_OUT"
+# #189: an unrecognized verdict stops the run (exit 5) instead of a smaller
+# survivor count that looks valid. The message names the expected key and the
+# value it found.
+assert_exit_code "Fix-D: unrecognized adversary verdict values exit 5" 5 "$CR_D_EXIT"
+assert_contains  "Fix-D: names the expected key adversary_verdict" \
+  "gemini_on_claude: 3 verdict(s) have no confirm or refute under the expected key 'adversary_verdict'" "$CR_D_OUT"
+assert_contains  "Fix-D: names the value it found" \
+  "found value 'reject' on C-D6, C-D7, C-D8" "$CR_D_OUT"
+assert_eq        "Fix-D: no survivors= line on exit 5" "" \
+  "$(echo "$CR_D_OUT" | grep '^survivors=' || true)"
+
+# ---- #189: Claude verdicts keyed `verdict` (not claude_verdict) -> exit 5 ----
+VK_ADV_FINDINGS="$TMP_DIR/vk_adv_findings.json"
+cat >"$VK_ADV_FINDINGS" <<'JSON'
+{"findings": [
+  {"id":"X-001","path":"src/a.py","line":1,"severity":"important","category":"bug","title":"F1","rationale":"R","origin":"codex"},
+  {"id":"X-002","path":"src/a.py","line":2,"severity":"important","category":"bug","title":"F2","rationale":"R","origin":"codex"},
+  {"id":"X-003","path":"src/a.py","line":3,"severity":"important","category":"bug","title":"F3","rationale":"R","origin":"codex"}
+]}
+JSON
+VK_CLAUDE_VERDICTS="$TMP_DIR/vk_claude_verdicts.json"
+cat >"$VK_CLAUDE_VERDICTS" <<'JSON'
+{"verdicts": [
+  {"id":"X-001","claude_verdict":"confirm","reason":"ok"},
+  {"id":"X-002","verdict":"confirm","reason":"ok"},
+  {"id":"X-003","verdict":"confirm","reason":"ok"}
+]}
+JSON
+VK_EMPTY_FINDINGS="$TMP_DIR/vk_empty_findings.json"
+VK_EMPTY_VERDICTS="$TMP_DIR/vk_empty_verdicts.json"
+echo '{"findings":[]}' >"$VK_EMPTY_FINDINGS"
+echo '{"verdicts":[]}' >"$VK_EMPTY_VERDICTS"
+# A report from an earlier run sits at the output paths; exit 5 must remove it.
+VK_MD="$TMP_DIR/vk_report.md"
+VK_JSON="$TMP_DIR/vk_report.json"
+echo "stale" >"$VK_MD"
+echo '{"stale":true}' >"$VK_JSON"
+
+VK_OUT=""
+VK_EXIT=0
+run_capture VK_OUT VK_EXIT python3 "$SYNTHESIZE" --adversary codex \
+  --claude-findings "$VK_EMPTY_FINDINGS" \
+  --adversary-findings "$VK_ADV_FINDINGS" \
+  --adversary-verdicts "$VK_EMPTY_VERDICTS" \
+  --claude-verdicts "$VK_CLAUDE_VERDICTS" \
+  --md "$VK_MD" --json "$VK_JSON"
+
+assert_exit_code "#189: verdict-keyed claude verdicts exit 5" 5 "$VK_EXIT"
+assert_contains  "#189: names the expected key claude_verdict" \
+  "claude_on_codex: 2 verdict(s) have no confirm or refute under the expected key 'claude_verdict'" "$VK_OUT"
+assert_contains  "#189: names the key it found" "found key 'verdict' on X-002, X-003" "$VK_OUT"
+assert_eq        "#189: no survivors= line on exit 5" "" \
+  "$(echo "$VK_OUT" | grep '^survivors=' || true)"
+assert_eq        "#189: stale --md report removed" "absent" "$([[ -e "$VK_MD" ]] && echo present || echo absent)"
+assert_eq        "#189: stale --json report removed" "absent" "$([[ -e "$VK_JSON" ]] && echo present || echo absent)"
+
+# Positive control: the same run with claude_verdict on every entry exits 0 and
+# writes both reports, so exit 5 above comes from the key, not the fixture.
+sed 's/"verdict":/"claude_verdict":/' "$VK_CLAUDE_VERDICTS" >"$TMP_DIR/vk_claude_verdicts_ok.json"
+VK_OK_OUT=""
+VK_OK_EXIT=0
+run_capture VK_OK_OUT VK_OK_EXIT python3 "$SYNTHESIZE" --adversary codex \
+  --claude-findings "$VK_EMPTY_FINDINGS" \
+  --adversary-findings "$VK_ADV_FINDINGS" \
+  --adversary-verdicts "$VK_EMPTY_VERDICTS" \
+  --claude-verdicts "$TMP_DIR/vk_claude_verdicts_ok.json" \
+  --md "$VK_MD" --json "$VK_JSON"
+assert_exit_code "#189 control: claude_verdict-keyed verdicts exit 0" 0 "$VK_OK_EXIT"
+assert_contains  "#189 control: all three survive" "survivors=3 unconfirmed=0 rejected=0" "$VK_OK_OUT"
+assert_eq        "#189 control: --json report written" "present" "$([[ -s "$VK_JSON" ]] && echo present || echo absent)"
 
 # ---- Fix E: low_signal _warn on stderr ----
 # T1 (all-confirm) should already emit the warn; verify it appears in T1 output
