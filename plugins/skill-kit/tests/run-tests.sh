@@ -130,7 +130,7 @@ vskill() {
 VS="$TMP/vskill/my-skill"
 vskill "$VS" my-skill 499; run_in "$PROJ" "$V" "$VS"
 check "a 499-line body passes" 0 'body: 499 lines'
-check "…and a skill with no reference files says so" 0 'PASS  no reference .md files to check'
+check "…and a skill with no reference files says so" 0 'PASS  no reference Markdown files to check'
 vskill "$VS" my-skill 500; run_in "$PROJ" "$V" "$VS"
 check "a 500-line body fails" 1 'FAIL  body: 500 lines \(must be under 500\)'
 vskill "$VS" my-skill 500; printf '%s' "$(cat "$VS/SKILL.md")" > "$VS/SKILL.md.tmp"; mv "$VS/SKILL.md.tmp" "$VS/SKILL.md"; run_in "$PROJ" "$V" "$VS"
@@ -203,13 +203,30 @@ rskill; { printf '# T\n    ```\n## Contents\n'; nlines 147; } > "$VS/references/
 check "a fence indented 4 spaces is not a fence" 0 'references/short.md: has a Contents heading'
 rskill; { printf '# T\n### Contents\n'; nlines 148; } > "$VS/references/short.md"; vref
 check "a ### Contents heading fails" 1 "FAIL  $S3"
+rskill; mkdir -p "$VS/tests/fixtures"; nlines 150 > "$VS/tests/fixtures/issue.md"; vref
+check "a top-level tests/ directory is not checked (test fixtures)" 0 'Result: PASS'
+rskill; mkdir -p "$VS/references/tests"; printf '# x\n' > "$VS/references/tests/x.md"; vref
+check "a tests/ directory deeper down is still checked" 1 'FAIL  references/tests/x.md: not named'
+rskill; printf '# o\n' > "$VS/references/orphan.md"; printf '#!/usr/bin/env bash\n# --help\ncat "$DIR/orphan.md"\n' > "$TMP/reader.sh"; chmod +x "$TMP/reader.sh"; ln -s "$TMP/reader.sh" "$VS/scripts/reader.sh"; vref
+check "a symlinked script that reads the file counts" 0 'references/orphan.md: named'
+rskill; printf '# b\n' > "$VS/references/a\\tb.md"; printf 'See references/a\tb.md\n' >> "$VS/SKILL.md"; vref
+check "a backslash in a file name is not read as an escape" 1 'FAIL  references/a\\tb.md: not named'
+rskill; printf '# b\n' > "$VS/references/a\\b.md"; printf 'See references/a\\b.md\n' >> "$VS/SKILL.md"; vref
+check "…and a file name with a backslash can be named" 0 'references/a\\b.md: named'
+rskill; printf '# n\n' > "$VS/references/a
+b.md"; vref
+check "a file name with a newline is checked, not skipped" 1 'FAIL  references/a\\nb.md: not named'
+rskill; printf '# x\n' > "$VS/references/x.md"; cp "$V" "$VS/scripts/validate-skill.sh"; vref
+check "a skill that ships validate-skill.sh still fails an unnamed references/x.md" 1 'FAIL  references/x.md: not named'
+bad_names="$( { grep -oE '[A-Za-z0-9_.-]+\.md' "$V" || true; } | { grep -vxE 'SKILL\.md|README\.md|CHANGELOG\.md|CONTRIBUTING\.md|\.md' || true; } | sort -u | tr '\n' ' ')"
+[[ -z "$bad_names" ]] && ok "validate-skill.sh names no .md file a skill could ship" || bad "validate-skill.sh names no .md file a skill could ship" "$bad_names"
 if [[ "$(id -u)" != 0 ]]; then   # root reads anything, so these cannot fail there
   rskill; printf '# s\n' > "$VS/references/secret.md"; printf 'See references/secret.md\n' >> "$VS/SKILL.md"; chmod 000 "$VS/references/secret.md"; vref
   chmod 644 "$VS/references/secret.md"
   check "an unreadable reference fails, exit 1 (not a crash)" 1 'FAIL  references/secret.md: cannot read'
   rskill; mkdir -p "$VS/hidden"; printf '# o\n' > "$VS/hidden/orphan.md"; chmod 000 "$VS/hidden"; vref
   chmod 755 "$VS/hidden"
-  check "a directory find cannot read fails, not skipped" 1 'FAIL  cannot list every .md file'
+  check "a directory find cannot read fails, not skipped" 1 'FAIL  cannot list every Markdown file'
   rskill; mkdir -p "$VS/scripts/locked"; chmod 000 "$VS/scripts/locked"; vref
   chmod 755 "$VS/scripts/locked"
   check "a scripts/ directory find cannot read fails, not skipped" 1 'FAIL  cannot list every file in scripts/'
