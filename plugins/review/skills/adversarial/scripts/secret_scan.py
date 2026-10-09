@@ -34,12 +34,15 @@ EXIT_CLEAN, EXIT_USAGE, EXIT_HIT = 0, 2, 4
 SECRET_NAME_GLOBS = ('.env', '.env.*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*credentials*',
                      '*.p12', '*.pfx')
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
-GIT_HEADER_RE = re.compile(r'^diff --git ("(?:[^"\\]|\\.)*"|\S+) ("(?:[^"\\]|\\.)*"|\S+)$')
+QUOTED_HEADER_RE = re.compile(r'^("(?:[^"\\]|\\.)*"|\S+) ("(?:[^"\\]|\\.)*"|\S+)$')
 
 
 def unquote(path):
-    """A path as git prints it: maybe C-quoted, maybe with an a/ or b/ prefix.
+    """A path as git prints it: maybe C-quoted, maybe with an a/ or b/ prefix, and on
+    ---/+++ lines maybe a tab after it (git adds one when the name has a space).
     Returns None for /dev/null."""
+    if not path.startswith('"'):
+        path = path.split("\t", 1)[0]
     if path.startswith('"') and path.endswith('"'):
         try:
             path = ast.literal_eval("b" + path).decode("utf-8", "replace")
@@ -50,6 +53,22 @@ def unquote(path):
     if path[:2] in ("a/", "b/"):
         path = path[2:]
     return path
+
+
+def header_paths(rest):
+    """(old, new) from the text after "diff --git ". git quotes a path with special
+    characters but not one with spaces, so "a/x y b/x y" is split where both halves
+    match, else at the last " b/"."""
+    if rest.startswith('"'):
+        m = QUOTED_HEADER_RE.match(rest)
+        return (unquote(m.group(1)), unquote(m.group(2))) if m else (None, None)
+    cuts = [i for i in range(len(rest)) if rest.startswith(" b/", i)]
+    for i in cuts:
+        if rest[2:i] == rest[i + 3:]:
+            return unquote(rest[:i]), unquote(rest[i + 1:])
+    if cuts:
+        return unquote(rest[:cuts[-1]]), unquote(rest[cuts[-1] + 1:])
+    return None, None
 
 
 def is_secret_name(path):
@@ -92,10 +111,9 @@ def map_lines(lines):
                 out.append((new_path or old_path, 0, False))
                 continue
             old_left = new_left = 0  # a malformed hunk: fall through to header parsing
-        header = GIT_HEADER_RE.match(raw)
-        if header:
+        if raw.startswith("diff --git "):
             in_file = True
-            old_path, new_path = unquote(header.group(1)), unquote(header.group(2))
+            old_path, new_path = header_paths(raw[len("diff --git "):])
             paths += [p for p in (old_path, new_path) if p]
             new_sides.append(new_path)
             out.append((new_path or old_path, 0, False))

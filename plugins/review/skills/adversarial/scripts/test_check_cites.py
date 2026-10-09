@@ -127,6 +127,14 @@ class SelectionTests(Base):
         self.assertEqual(res.returncode, 1)
         self.assertIn("C-002", res.stdout)
 
+    def test_status_on_findings_with_no_status_field_is_an_error_not_a_pass(self):
+        # r1 findings carry no status; --status survivor would pick none and pass.
+        items = [finding("C-001", "nope.py", 1)]
+        del items[0]["status"]
+        res = self.check(items, "--status", "survivor")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("no finding has a status", res.stderr)
+
     def test_an_id_that_is_not_in_the_findings_fails(self):
         res = self.check([finding("C-001", "src/a.py", 1)], "--id", "C-404")
         self.assertEqual(res.returncode, 1)

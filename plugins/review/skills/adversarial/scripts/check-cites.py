@@ -22,7 +22,8 @@ Prints one line per failing finding, "<id> <reason>", and a count on stderr.
 Exit codes:
   0  every selected finding passed
   1  one or more failed
-  2  usage error, or the diff or findings cannot be read
+  2  usage error, the diff or findings cannot be read, or --status was given
+     but no finding has a status field
 """
 import argparse
 import json
@@ -117,6 +118,11 @@ def main(argv=None):
         findings = load_findings(args.findings)
     except Unreadable as exc:
         print("check-cites: %s" % exc, file=sys.stderr)
+        return EXIT_USAGE
+    if args.status is not None and findings and not any("status" in f for f in findings):
+        # Otherwise --status would pick nothing and the run would pass unchecked.
+        print("check-cites: --status %s given, but no finding has a status field (pass "
+              "synthesize.py's report.json, or leave --status out)" % args.status, file=sys.stderr)
         return EXIT_USAGE
     repo = os.path.realpath(args.repo or repo_root())
     diff_paths = {os.path.normpath(p) for p in new_side_paths(diff_text)}

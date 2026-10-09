@@ -176,6 +176,23 @@ class SecretFileNameTests(Base):
         res = self.run_scan(self.put("bin.diff", text))
         self.assertIn("store.p12:0 secret-file-name", res.stdout)
 
+    def test_an_unquoted_path_with_spaces_is_flagged(self):
+        # Exactly what git 2.x prints: no quotes for a space, a tab after the +++ name.
+        text = ("diff --git a/my credentials.txt b/my credentials.txt\nnew file mode 100644\n"
+                "index 0000000..b68fde2\n--- /dev/null\n+++ b/my credentials.txt\t\n@@ -0,0 +1 @@\n"
+                "+k = '%s'\n" % FAKE_AWS)
+        res = self.run_scan(self.put("sp.diff", text))
+        self.assertEqual(res.stdout.strip().splitlines(),
+                         ["my credentials.txt:0 secret-file-name", "my credentials.txt:1 aws-key-id"])
+
+    def test_new_side_paths_handle_spaces_and_deletions(self):
+        import secret_scan
+        text = ("diff --git a/sp ace.py b/sp ace.py\nindex 1..2 100644\n--- a/sp ace.py\t\n"
+                "+++ b/sp ace.py\t\n@@ -1 +1 @@\n-a\n+b\n"
+                "diff --git a/x b/y.py b/x b/y.py\ndeleted file mode 100644\n--- a/x b/y.py\t\n"
+                "+++ /dev/null\n@@ -1 +0,0 @@\n-a\n")
+        self.assertEqual(secret_scan.new_side_paths(text), {"sp ace.py"})
+
     def test_a_rename_onto_a_secret_name_is_flagged(self):
         text = ("diff --git a/notes.txt b/.env\nsimilarity index 100%\nrename from notes.txt\n"
                 "rename to .env\n")
