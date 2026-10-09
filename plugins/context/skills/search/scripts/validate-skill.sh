@@ -14,7 +14,7 @@ Usage: validate-skill.sh [options] <skill-directory>
 
 Validates a Claude Code skill directory against quality rules:
   - SKILL.md exists with valid YAML frontmatter
-  - name: lowercase + hyphens, ≤64 characters
+  - name: lowercase + hyphens, ≤64 characters, no "anthropic" or "claude"
   - description: ≤1024 characters, third person, "Use when:" present
   - metadata.version: present and valid semver
   - No non-standard frontmatter fields (author, date, tags are disallowed)
@@ -179,6 +179,16 @@ else
   else
     fail "name: too long ($NAME_LEN chars, max 64)"
   fi
+
+  # Reserved words: Anthropic's guide forbids "anthropic" and "claude" anywhere in a name
+  NAME_LC="$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]')"
+  RESERVED=""
+  for word in anthropic claude; do
+    case "$NAME_LC" in
+      *"$word"*) RESERVED="$word"; fail "name: must not contain the reserved word \"$word\" (got: $NAME)" ;;
+    esac
+  done
+  [[ -z "$RESERVED" ]] && pass "name: no reserved words (anthropic, claude)"
 fi
 
 # ============================================================

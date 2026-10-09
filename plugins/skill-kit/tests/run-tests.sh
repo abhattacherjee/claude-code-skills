@@ -134,6 +134,21 @@ vskill "$VS" my-skill 500; run_in "$PROJ" "$V" "$VS"
 check "a 500-line body fails" 1 'FAIL  body: 500 lines \(must be under 500\)'
 vskill "$VS" my-skill 500; printf '%s' "$(cat "$VS/SKILL.md")" > "$VS/SKILL.md.tmp"; mv "$VS/SKILL.md.tmp" "$VS/SKILL.md"; run_in "$PROJ" "$V" "$VS"
 check "a 500-line body with no final newline fails" 1 'FAIL  body: 500 lines'
+N64="$(printf 'a%.0s' $(seq 1 64))"
+vskill "$VS" "$N64" 10; run_in "$PROJ" "$V" "$VS"
+check "a 64-character name passes" 0 'name: length OK \(64 chars'
+vskill "$VS" "${N64}b" 10; run_in "$PROJ" "$V" "$VS"
+check "a 65-character name fails" 1 'FAIL  name: too long \(65 chars'
+for nm in my-claude-helper anthropic-tools headless-claude-job-hardening; do
+  vskill "$VS" "$nm" 10; run_in "$PROJ" "$V" "$VS"
+  check "the name $nm fails (reserved word)" 1 "FAIL  name: must not contain the reserved word"
+done
+vskill "$VS" Claude-Tools 10; run_in "$PROJ" "$V" "$VS"
+check "the reserved-word check ignores case" 1 'FAIL  name: must not contain the reserved word "claude"'
+for nm in clad-tools anthro-pic cla-ude; do
+  vskill "$VS" "$nm" 10; run_in "$PROJ" "$V" "$VS"
+  check "the name $nm passes (only looks like a reserved word)" 0 'name: no reserved words'
+done
 
 echo "generate-task-manifest.sh (author)"
 mkdir -p "$PROJ/my-skill"
