@@ -2,6 +2,26 @@
 
 Reusable jq snippets and bash fragments for common statusline items. Each recipe is a self-contained block that can be composed into a full statusline script.
 
+## Contents
+
+- Safety helpers (put these first)
+- Model Display
+- Context Bar (progress bar)
+- Cost Tracking
+- Duration
+- Lines Changed
+- Git Branch + Status (with cache)
+- Git Sync Indicator
+- Directory (short)
+- Worktree Indicator
+- Vim Mode
+- Agent Name
+- Output Style
+- Session ID (short)
+- Token Counts (detailed)
+- 200K Warning
+- Clickable Repo Link (OSC 8)
+
 ## Safety helpers (put these first)
 
 The statusline runs on every prompt, in whatever directory the session is in. Names come from the session JSON and from the repo, so treat them as untrusted:

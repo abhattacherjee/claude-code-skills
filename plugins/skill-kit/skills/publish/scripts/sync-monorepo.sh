@@ -2351,11 +2351,11 @@ write_file "$MONOREPO_DIR/CHANGELOG.md" "$ROOT_CHANGELOG" "CHANGELOG.md" "true"
 # --- .gitignore ---
 # /build/ is here because prepare-plugin.sh's default --output-dir is
 # ./build/<plugin-name>/: any plugin build run from the monorepo root drops a
-# tree there, and the "Next steps" banner this script prints ends in
-# `git add -A`. A monorepo generated without this line would commit it.
+# tree there, and it shows up in the `git status` of the "Next steps" banner
+# this script prints. A monorepo generated without this line invites committing it.
 # Root-anchored deliberately: an unanchored `build/` matches at every depth, so
 # a plugin that legitimately ships plugins/<name>/build/ would be silently
-# excluded from that same `git add -A`.
+# excluded from that same `git status`.
 GITIGNORE=".DS_Store
 *.swp
 *~
@@ -2384,8 +2384,8 @@ write_file "$MONOREPO_DIR/.gitignore" "$GITIGNORE" ".gitignore"
 # ignoring build/ some other way gets a NOTE it can ignore.
 if [[ -f "$MONOREPO_DIR/.gitignore" ]] && ! grep -qxF '/build/' "$MONOREPO_DIR/.gitignore"; then
   echo "  NOTE: .gitignore exists but has no '/build/' line — prepare-plugin.sh"
-  echo "        writes ./build/<name>/ by default, and the 'git add -A' in the"
-  echo "        Next steps below would commit it. Add: /build/"
+  echo "        writes ./build/<name>/ by default, and it shows up in the"
+  echo "        'git status' of the Next steps below. Leave it out, and add: /build/"
 fi
 
 # --- LICENSE ---
@@ -2598,11 +2598,13 @@ else
   fi
   if ! $INIT_MODE; then
     echo ""
-    echo "Next steps:"
+    echo "Next steps (skill-kit:publish SKILL.md, Step 5): on a feature branch, never main,"
     echo "  cd $MONOREPO_DIR"
-    echo "  git add -A && git diff --cached --stat"
+    echo "  git status --short                  # the paths this sync wrote"
+    echo "  git add -- <PATH>...                # each of them, by name"
     echo "  git commit -m \"Sync skills ($TODAY)\""
-    echo "  git push"
+    echo "  git push -u origin HEAD"
+    echo "  gh pr create --base <BASE_BRANCH> --fill"
   fi
 fi
 

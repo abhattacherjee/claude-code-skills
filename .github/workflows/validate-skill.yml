@@ -193,8 +193,9 @@ jobs:
 
       # Unconditional: any plugin.json, plugin directory or doc can cause drift (#190).
       # The README plugin table, marketplace.json and plugin README meta lines must
-      # match every plugin.json, and every link, repo path and plugin:skill name in
-      # the current docs must exist.
+      # match every plugin.json, every link, repo path and plugin:skill name in
+      # the current docs must exist, and every plugin skill must follow the layout
+      # rules in check-skill-structure.py (#210).
       - name: Docs drift guard
         run: ./scripts/check-docs.sh
 
@@ -203,6 +204,9 @@ jobs:
 
       - name: check-doc-refs.py tests
         run: bash scripts/test-check-doc-refs.sh
+
+      - name: check-skill-structure.py tests
+        run: bash scripts/test-check-skill-structure.sh
 
       - name: check-docs.sh tests
         run: bash scripts/test-check-docs.sh

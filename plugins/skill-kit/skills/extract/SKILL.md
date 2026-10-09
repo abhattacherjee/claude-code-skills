@@ -2,39 +2,24 @@
 name: extract
 description: "Was the claudeception skill. Extracts reusable knowledge from work sessions and codifies it into Claude Code skills. Use when: (1) /skill-kit:extract (was /claudeception) to review session learnings, (2) save this as a skill or extract a skill from this, (3) what did we learn?, (4) after non-obvious debugging, workarounds, or trial-and-error discovery. Evaluates whether current work contains extractable knowledge, checks for existing skills, and creates or updates skills following the skill-kit:author best practices."
 metadata:
-  version: 1.0.1
+  version: 1.1.0
 ---
 
 # Claudeception
 
-You are Claudeception: a continuous learning system that extracts reusable knowledge from work sessions and 
-codifies it into new Claude Code skills. This enables autonomous improvement over time.
-
-## Core Principle: Skill Extraction
-
-When working on tasks, continuously evaluate whether the current work contains extractable 
-knowledge worth preserving. Not every task produces a skill—be selective about what's truly 
-reusable and valuable.
+Extract reusable knowledge from a work session into a Claude Code skill. Be selective: not every task produces a skill.
 
 ## When to Extract a Skill
 
-Extract a skill when you encounter:
+Invoke this skill right after a task when ANY of these apply:
 
-1. **Non-obvious Solutions**: Debugging techniques, workarounds, or solutions that required 
-   significant investigation and wouldn't be immediately apparent to someone facing the same 
-   problem.
+1. **Non-obvious solution**: the fix took >10 minutes of investigation and was not in the documentation.
+2. **Error resolution**: the error message was misleading or the root cause was not obvious.
+3. **Workaround or trial and error**: you found a workaround for a tool or framework limitation, or tried several approaches before one worked.
+4. **Project-specific pattern**: a convention, configuration or architectural decision in this codebase that differs from standard patterns and is not documented elsewhere.
+5. **Tool integration knowledge**: how to use a tool, library or API in a way its documentation does not cover well.
 
-2. **Project-Specific Patterns**: Conventions, configurations, or architectural decisions 
-   specific to this codebase that aren't documented elsewhere.
-
-3. **Tool Integration Knowledge**: How to properly use a specific tool, library, or API in 
-   ways that documentation doesn't cover well.
-
-4. **Error Resolution**: Specific error messages and their actual root causes/fixes, 
-   especially when the error message is misleading.
-
-5. **Workflow Optimizations**: Multi-step processes that can be streamlined or patterns 
-   that make common tasks more efficient.
+Also invoke it when the user runs `/skill-kit:extract`, says "save this as a skill", or asks "what did we learn?".
 
 ## Skill Quality Criteria
 
@@ -51,55 +36,13 @@ Before extracting, verify the knowledge meets these criteria:
 
 **Goal:** Find related skills before creating. Decide: update or create new.
 
+Run `find-skills.sh` from the project directory. It searches the project's skills, the user's, and only the plugin installs that are active for this project. Exit 0 means found and 1 nothing found. Exit 2 means `rg` or `python3` is missing, and exit 3 means the search itself failed (a bad pattern or an unreadable file; `rg`'s error is on stderr). On 2 or 3, stop and fix it: an empty result would read as "nothing related".
+
 ```bash
-# Needs ripgrep and python3. Stop if one is missing: an empty result would read as "nothing related".
-command -v rg >/dev/null || { echo "Stop: ripgrep (rg) is not installed. Install it, then re-run." >&2; exit 1; }
-command -v python3 >/dev/null || { echo "Stop: python3 is not installed. Install it, then re-run." >&2; exit 1; }
-
-# Skill directories: project first, then user level, then ACTIVE plugin installs only.
-# Plugin installs come from ~/.claude/plugins/installed_plugins.json (each install's
-# installPath, user scope or this project's scope). The rest of ~/.claude/plugins/cache
-# and ~/.claude/plugins/marketplaces holds old versions and plugins that are not installed.
-# Only directories that exist are searched; other errors still print.
-SKILL_DIRS=()
-for d in ".claude/skills" "$HOME/.claude/skills" "$HOME/.codex/skills"; do
-  [ -d "$d" ] && SKILL_DIRS+=("$d")
-done
-while IFS= read -r d; do
-  [ -n "$d" ] && [ -d "$d" ] && SKILL_DIRS+=("$d")
-done < <(python3 - "$HOME/.claude/plugins/installed_plugins.json" "$(pwd)" <<'EOF'
-import json, os, sys
-path, cwd = sys.argv[1], os.path.realpath(sys.argv[2])
-try:
-    with open(path, encoding="utf-8") as f:
-        plugins = json.load(f).get("plugins", {})
-except FileNotFoundError:
-    sys.stderr.write("Note: %s not found; skipping plugin skills.\n" % path)
-    sys.exit(0)
-except (OSError, ValueError, AttributeError) as exc:
-    sys.stderr.write("Note: cannot read %s (%s); skipping plugin skills.\n" % (path, exc))
-    sys.exit(0)
-for name, installs in plugins.items():
-    for i in installs if isinstance(installs, list) else []:
-        project = i.get("projectPath")
-        p = os.path.realpath(project) if project else None
-        if i.get("installPath") and (not p or cwd == p or cwd.startswith(p.rstrip("/") + "/")):
-            print(i["installPath"])
-EOF
-)
-[ "${#SKILL_DIRS[@]}" -gt 0 ] || { echo "Stop: no skill directories found." >&2; exit 1; }
-
-# List all skills
-rg --files -g 'SKILL.md' "${SKILL_DIRS[@]}"
-
-# Search by keywords
-rg -i "keyword1|keyword2" "${SKILL_DIRS[@]}"
-
-# Search by exact error message
-rg -F "exact error message" "${SKILL_DIRS[@]}"
-
-# Search by context markers (files, functions, config keys)
-rg -i "getServerSideProps|next.config.js|prisma.schema" "${SKILL_DIRS[@]}"
+"${CLAUDE_SKILL_DIR}/scripts/find-skills.sh"                                   # list all skills
+"${CLAUDE_SKILL_DIR}/scripts/find-skills.sh" -i "keyword1|keyword2"            # search by keywords
+"${CLAUDE_SKILL_DIR}/scripts/find-skills.sh" -F "exact error message"          # search by exact error message
+"${CLAUDE_SKILL_DIR}/scripts/find-skills.sh" -i "getServerSideProps|next.config.js|prisma.schema"   # context markers
 ```
 
 | Found                                            | Action                                                   |
@@ -140,9 +83,9 @@ directory layout (SKILL.md + scripts/ + references/), description writing, templ
 and quality checklist.
 
 **Key rules (quick reference):**
-- Frontmatter: only `name`, `description`, `version` (no author, date, tags)
+- Frontmatter: only `name`, `description`, `metadata.version` (no author, date, tags)
 - Description: third person, ≤1024 chars, numbered trigger conditions
-- SKILL.md body: ≤500 lines, extract lookup material to `references/`
+- SKILL.md body: under 500 lines, extract lookup material to `references/`
 - Scripts: add `--help`, error handling, `chmod +x`
 - Save: project-specific → `.claude/skills/`, user-wide → `~/.claude/skills/`
 
@@ -172,28 +115,6 @@ When `/skill-kit:extract` is invoked at the end of a session:
 4. **Extract**: Create skills for the top candidates (typically 1-3 per session)
 5. **Summarize**: Report what skills were created and why
 
-## Self-Reflection Prompts
-
-Use these prompts during work to identify extraction opportunities:
-
-- "What did I just learn that wasn't obvious before starting?"
-- "If I faced this exact problem again, what would I wish I knew?"
-- "What error message or symptom led me here, and what was the actual cause?"
-- "Is this pattern specific to this project, or would it help in similar projects?"
-- "What would I tell a colleague who hits this same issue?"
-
-## Memory Consolidation
-
-When extracting skills, also consider:
-
-1. **Combining Related Knowledge**: If multiple related discoveries were made, consider 
-   whether they belong in one comprehensive skill or separate focused skills.
-
-2. **Updating Existing Skills**: Check if an existing skill should be updated rather than 
-   creating a new one.
-
-3. **Cross-Referencing**: Note relationships between skills in their documentation.
-
 ## Quality Gates
 
 **Use the `skill-kit:author` skill's quality checklist** for the full pre-publish verification.
@@ -215,44 +136,10 @@ Quick check before saving:
    with trigger conditions, solution steps, and References section linking to official docs.
 4. **Verify**: Tested with real Next.js error → confirmed terminal shows stack trace.
 
-See `examples/` directory for complete sample skills.
-
-## Integration with Workflow
-
-### Automatic Trigger Conditions
-
-Invoke this skill immediately after completing a task when ANY of these apply:
-
-1. **Non-obvious debugging**: The solution required >10 minutes of investigation and
-   wasn't found in documentation
-2. **Error resolution**: Fixed an error where the error message was misleading or the
-   root cause wasn't obvious
-3. **Workaround discovery**: Found a workaround for a tool/framework limitation that
-   required experimentation
-4. **Configuration insight**: Discovered project-specific setup that differs from
-   standard patterns
-5. **Trial-and-error success**: Tried multiple approaches before finding what worked
-
-### Explicit Invocation
-
-Also invoke when:
-- User runs `/skill-kit:extract` to review the session
-- User says "save this as a skill" or similar
-- User asks "what did we learn?"
-
-### Self-Check After Each Task
-
-After completing any significant task, ask yourself:
-- "Did I just spend meaningful time investigating something?"
-- "Would future-me benefit from having this documented?"
-- "Was the solution non-obvious from documentation alone?"
-
-If yes to any, invoke this skill immediately.
-
-Remember: The goal is continuous, autonomous improvement. Every valuable discovery
-should have the opportunity to benefit future work sessions.
+Complete sample skills: [examples/nextjs-server-side-error-debugging/SKILL.md](examples/nextjs-server-side-error-debugging/SKILL.md), [examples/prisma-connection-pool-exhaustion/SKILL.md](examples/prisma-connection-pool-exhaustion/SKILL.md) and [examples/typescript-circular-dependency/SKILL.md](examples/typescript-circular-dependency/SKILL.md).
 
 ## See Also
 - `skill-kit:author` — how to structure, write, and optimize skills (the HOW)
 - `scaffold-backport` — propagates project fixes back to scaffold template (complementary auto-trigger)
+- [resources/research-references.md](resources/research-references.md) — the research papers behind this skill's design (background for people; not needed to run it)
 - Anthropic docs: [Skill authoring best practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices)

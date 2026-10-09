@@ -4,6 +4,12 @@ All notable changes to the `promote-shipped` skill (named `github-release-board-
 before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2026-10-09
+
+### Changed
+
+- `references/projects-v2-graphql-snippets.md` starts with a Contents list (#210).
+
 ## [2.1.2] — 2026-10-08
 
 ### Fixed

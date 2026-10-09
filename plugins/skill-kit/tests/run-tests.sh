@@ -245,6 +245,67 @@ for name in prepare-plugin validate-plugin validate-pre-sync sync-monorepo relea
   check "$name: --help exits 0" 0 "Usage: $name\\.sh"
 done
 
+echo "release-monorepo.sh: main-only guard and --co-author (temp repo, bare remote, no network)"
+# A bare remote and a clone with one plugin skill, committed and pushed on main. `gh` fails
+# (the stub on CLEAN_PATH), so the GitHub release step only warns.
+REL="$TMP/rel"
+mkdir -p "$REL"
+git init -q --bare "$REL/remote.git"
+git -C "$REL/remote.git" symbolic-ref HEAD refs/heads/main
+rel_git() { env -i PATH="$CLEAN_PATH" HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 git -c user.name=T -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+rel_clone() {
+  rm -rf "$1"
+  rel_git clone -q "$REL/remote.git" "$1" 2>/dev/null
+  rel_git -C "$1" symbolic-ref HEAD refs/heads/main
+}
+rel_clone "$REL/seed"
+mkdir -p "$REL/seed/plugins/pg/skills/one"
+printf -- '---\nname: one\ndescription: "A fixture. Use when: (1) testing."\nmetadata:\n  version: 1.0.0\n---\n# One\n' > "$REL/seed/plugins/pg/skills/one/SKILL.md"
+printf '# Changelog\n\n## [0.0.0] - 2026-01-01\n\nBaseline.\n' > "$REL/seed/CHANGELOG.md"
+rel_git -C "$REL/seed" add -- CHANGELOG.md plugins
+rel_git -C "$REL/seed" commit -q -m "feat: baseline"
+rel_git -C "$REL/seed" push -q origin main
+rel_run() { RC=0; OUT="$(cd "$PROJ" && env -i PATH="$CLEAN_PATH" HOME="$TMP/home" GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=T GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=T GIT_COMMITTER_EMAIL=t@example.invalid "$PUBLISH/release-monorepo.sh" --github-user tester "$@" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"; }
+
+rel_clone "$REL/a"
+rel_git -C "$REL/a" switch -q -c feature/x
+rel_run patch "$REL/a"
+check "on a feature branch: refuses, non-zero" nonzero "" 'not on main'
+[[ -z "$(rel_git -C "$REL/a" tag -l)" && "$(rel_git -C "$REL/a" rev-list --count HEAD)" == 1 ]] \
+  && ok "…before any commit or tag" || bad "…before any commit or tag" "tags: $(rel_git -C "$REL/a" tag -l), commits: $(rel_git -C "$REL/a" rev-list --count HEAD)"
+
+rel_clone "$REL/b"
+rel_clone "$REL/c"
+printf 'more\n' >> "$REL/c/CHANGELOG.md"
+rel_git -C "$REL/c" commit -q -am "docs: newer on origin"
+rel_git -C "$REL/c" push -q origin main
+rel_run patch "$REL/b"
+check "main behind origin/main: refuses, non-zero" nonzero "" 'behind origin/main'
+[[ -z "$(rel_git -C "$REL/b" tag -l)" && -z "$(rel_git --git-dir="$REL/remote.git" tag -l)" ]] \
+  && ok "…before any commit or tag, locally or on the remote" || bad "…before any commit or tag, locally or on the remote" "local: $(rel_git -C "$REL/b" tag -l) remote: $(rel_git --git-dir="$REL/remote.git" tag -l)"
+
+rel_clone "$REL/d"
+rel_run --co-author "Co-Authored-By: Fixture Bot <bot@example.invalid>" patch "$REL/d"
+check "on main, up to date: releases v0.0.1, exit 0" 0 'PUSHED'
+rel_git --git-dir="$REL/remote.git" tag -l | grep -qx v0.0.1 && ok "…the tag reaches the remote" || bad "…the tag reaches the remote" "$(rel_git --git-dir="$REL/remote.git" tag -l)"
+MSG="$(rel_git -C "$REL/d" log -1 --format=%B)"
+printf '%s' "$MSG" | grep -qx 'Co-Authored-By: Fixture Bot <bot@example.invalid>' && ok "--co-author: the release commit ends with that line" || bad "--co-author: the release commit ends with that line" "$MSG"
+
+rel_clone "$REL/e"
+rel_run minor "$REL/e"
+check "no --co-author: releases v0.1.0, exit 0" 0 'PUSHED'
+MSG="$(rel_git -C "$REL/e" log -1 --format=%B)"
+printf '%s' "$MSG" | grep -qi 'co-authored-by' && bad "no --co-author: no trailer" "$MSG" || ok "no --co-author: no trailer, and no model name"
+printf '%s' "$MSG" | grep -q 'release: v0.1.0' && ok "…the commit is the release commit" || bad "…the commit is the release commit" "$MSG"
+rel_clone "$REL/f"
+rel_git -C "$REL/f" remote set-url origin "$REL/no-such-remote.git"
+REFS_BEFORE="$(rel_git -C "$REL/f" for-each-ref)"
+rel_run --dry-run patch "$REL/f"
+check "--dry-run with an unreachable origin still previews, exit 0" 0 'Dry run complete'
+[[ "$(rel_git -C "$REL/f" for-each-ref)" == "$REFS_BEFORE" && -z "$(rel_git -C "$REL/f" status --porcelain)" ]] \
+  && ok "…and writes no refs and no files" || bad "…and writes no refs and no files" "$(rel_git -C "$REL/f" for-each-ref; rel_git -C "$REL/f" status --porcelain)"
+grep -q 'Opus 4.6' "$PUBLISH/release-monorepo.sh" && bad "release-monorepo.sh hard-codes no model name" "found Opus 4.6" || ok "release-monorepo.sh hard-codes no model name"
+
 echo "every script named in a SKILL.md exists, is executable and answers --help"
 # Pull each "${CLAUDE_SKILL_DIR}/scripts/<name>" out of a SKILL.md, resolve it against that
 # skill's directory in the plugin copy, and run it with --help from the project dir.
@@ -270,12 +331,7 @@ EOF
     run_in "$PROJ" "$SKILLS/$skill/scripts/$name" --help
     check "$skill SKILL.md command runs: scripts/$name --help" 0
   done <<< "$names"
-  # extract's SKILL.md names no script today; the others must name at least one.
-  if [[ "$skill" == extract ]]; then
-    [[ "$n" -eq 0 ]] && ok "extract SKILL.md names no script" || bad "extract SKILL.md names $n script command(s)" "extract now names a script, so add it to the extractor check (the command-run loop above ran it, but this branch no longer applies)"
-  else
-    [[ "$n" -ge 1 ]] && ok "$skill SKILL.md: found $n script command(s) to run" || bad "$skill SKILL.md: found no script commands to run" "the extractor matched nothing"
-  fi
+  [[ "$n" -ge 1 ]] && ok "$skill SKILL.md: found $n script command(s) to run" || bad "$skill SKILL.md: found no script commands to run" "the extractor matched nothing"
 done
 
 echo "author and extract never show the substituted path tokens in prose"
@@ -309,34 +365,59 @@ EOF
     || bad "$skill SKILL.md: path token outside a code block (it is substituted, so the model sees an absolute path)" "$hits"
 done
 
-echo "extract Step 1 finds a project's plugin installs from inside the project"
-# Run the real Step 1 bash block (cut before "# List all skills", with a printf of SKILL_DIRS
-# added) against a fixture installed_plugins.json, with HOME on a temp dir and never the real one.
-S1="$TMP/step1.sh"
-python3 - "$SKILLS/extract/SKILL.md" "$S1" <<'EOF'
-import re, sys
-text = open(sys.argv[1], encoding="utf-8").read()
-for block in re.findall(r'```bash\n(.*?)```', text, re.S):
-    if "installed_plugins.json" in block and "# List all skills" in block:
-        open(sys.argv[2], "w").write(block.split("# List all skills")[0] + 'printf "%s\\n" "${SKILL_DIRS[@]}"\n')
-        break
-else:
-    sys.exit("Step 1 block not found")
-EOF
+echo "find-skills.sh (extract Step 1)"
+FS="$EXTRACT/find-skills.sh"
 S1HOME="$TMP/s1home"
-mkdir -p "$S1HOME/.claude/plugins" "$TMP/repo/src" "$TMP/repo2" "$TMP/other" "$TMP/inst-repo"
+mkdir -p "$S1HOME/.claude/plugins" "$S1HOME/.claude/skills/user-skill" "$TMP/repo/src" "$TMP/repo2" "$TMP/other" "$TMP/inst-repo/skills/plug-skill"
+printf -- '---\nname: user-skill\n---\nFixes the frobnicate timeout.\n' > "$S1HOME/.claude/skills/user-skill/SKILL.md"
+printf -- '---\nname: plug-skill\n---\nNothing to see.\n' > "$TMP/inst-repo/skills/plug-skill/SKILL.md"
 printf '{"plugins":{"p@m":[{"scope":"project","projectPath":"%s","installPath":"%s"}]}}\n' "$TMP/repo" "$TMP/inst-repo" > "$S1HOME/.claude/plugins/installed_plugins.json"
-# The block only checks that `rg` exists (the cut-off part is what would run it), so a stub is enough.
-mkdir -p "$TMP/s1bin"; printf '#!/bin/sh\nexit 0\n' > "$TMP/s1bin/rg"; chmod +x "$TMP/s1bin/rg"
-step1_from() { RC=0; OUT="$(cd "$1" && env -i PATH="$TMP/s1bin:$CLEAN_PATH" HOME="$S1HOME" bash "$S1" 2>"$TMP/err")" || RC=$?; }
-step1_from "$TMP/repo"
-printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && ok "Step 1: searches a project install from the project root" || bad "Step 1: project root misses the install" "$OUT"
-step1_from "$TMP/repo/src"
-printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && ok "Step 1: searches a project install from a subdirectory" || bad "Step 1: subdirectory misses the project install" "$OUT"
-step1_from "$TMP/other"
-printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && bad "Step 1: searched another project's install" "$OUT" || ok "Step 1: skips a project install from an unrelated directory"
-step1_from "$TMP/repo2"
-printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && bad "Step 1: /repo matched /repo2 (prefix trap)" "$OUT" || ok "Step 1: projectPath /repo does not match /repo2"
+# An rg stub that prints its arguments, one per line, so the tests see exactly what would be searched.
+mkdir -p "$TMP/s1bin"; printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$TMP/s1bin/rg"; chmod +x "$TMP/s1bin/rg"
+fs_from() { local dir="$1"; shift; RC=0; OUT="$(cd "$dir" && env -i PATH="$TMP/s1bin:$CLEAN_PATH" HOME="$S1HOME" "$FS" "$@" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"; }
+fs_from "$TMP/repo" --dirs
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && ok "--dirs: searches a project install from the project root" || bad "--dirs: project root misses the install" "$OUT"
+printf '%s' "$OUT" | grep -qxF "$S1HOME/.claude/skills" && ok "--dirs: searches ~/.claude/skills" || bad "--dirs: misses ~/.claude/skills" "$OUT"
+fs_from "$TMP/repo/src" --dirs
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && ok "--dirs: searches a project install from a subdirectory" || bad "--dirs: subdirectory misses the project install" "$OUT"
+fs_from "$TMP/other" --dirs
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && bad "--dirs: searched another project's install" "$OUT" || ok "--dirs: skips a project install from an unrelated directory"
+fs_from "$TMP/repo2" --dirs
+printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" && bad "--dirs: /repo matched /repo2 (prefix trap)" "$OUT" || ok "--dirs: projectPath /repo does not match /repo2"
+fs_from "$TMP/repo"
+[[ "$RC" == 0 && "$(printf '%s\n' "$OUT" | head -3)" == "$(printf -- '--files\n-g\nSKILL.md')" ]] && ok "no arguments: lists SKILL.md files" || bad "no arguments: lists SKILL.md files" "$OUT"
+fs_from "$TMP/repo" -F "exact error"
+[[ "$(printf '%s\n' "$OUT" | head -2)" == "$(printf -- '-F\nexact error')" ]] && printf '%s' "$OUT" | grep -qxF "$TMP/inst-repo" \
+  && ok "arguments go to rg, then every skill directory" || bad "arguments go to rg, then every skill directory" "$OUT"
+fs_from "$TMP/repo" --help
+check "--help exits 0" 0 'Usage: find-skills\.sh'
+RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="/usr/bin:/bin" HOME="$S1HOME" "$FS" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+if [[ -x /usr/bin/rg || -x /bin/rg ]]; then
+  echo "  SKIP  a missing rg exits 2 (rg is in /usr/bin or /bin here)"
+else
+  check "a missing rg exits 2" 2 "" 'ripgrep \(rg\) is not installed'
+fi
+RC=0; OUT="$(cd "$TMP/other" && env -i PATH="$TMP/s1bin:$CLEAN_PATH" HOME="$TMP/empty-home" "$FS" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+check "no skill directory exits 2" 2 "" 'no skill directories found'
+mkdir -p "$TMP/s1bad"; printf '#!/bin/sh\necho "regex parse error" >&2\nexit 2\n' > "$TMP/s1bad/rg"; chmod +x "$TMP/s1bad/rg"
+RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$TMP/s1bad:$CLEAN_PATH" HOME="$S1HOME" "$FS" -e "(" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+check "an rg error (rg exits 2) exits 3, not 2 or 1" 3 "" 'the search failed'
+printf '%s' "$ERR" | grep -q 'regex parse error' && ok "rg's own error reaches stderr" || bad "rg's own error reaches stderr" "$ERR"
+if command -v rg >/dev/null; then
+  RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" -i "FROBNICATE" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+  check "real rg: a keyword search finds the user skill, exit 0" 0 'user-skill/SKILL.md'
+  RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" -F "no such text anywhere" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+  check "real rg: no match exits 1" 1
+  RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" -e "(" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+  check "real rg: a bad regex exits 3" 3 "" 'the search failed'
+  RC=0; OUT="$(cd "$TMP/repo" && env -i PATH="$CLEAN_PATH" HOME="$S1HOME" "$FS" 2>"$TMP/err")" || RC=$?; ERR="$(cat "$TMP/err")"
+  printf '%s' "$OUT" | grep -q 'plug-skill/SKILL.md' && printf '%s' "$OUT" | grep -q 'user-skill/SKILL.md' \
+    && ok "real rg: lists the user and the plugin skill" || bad "real rg: lists the user and the plugin skill" "$OUT"
+else
+  echo "  SKIP  real rg searches (rg is not installed here)"
+fi
+grep -q 'installed_plugins.json' "$SKILLS/extract/SKILL.md" && grep -q 'python3 -' "$SKILLS/extract/SKILL.md" \
+  && bad "extract SKILL.md no longer carries the inline Step 1 script" "found it" || ok "extract SKILL.md no longer carries the inline Step 1 script"
 
 echo
 echo "passed: $PASS  failed: $FAIL"

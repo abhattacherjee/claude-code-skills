@@ -2,6 +2,12 @@
 
 All notable changes to the **changelog** skill (was `changelog-keeper`) are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- Cut "Multi-Script CHANGELOG Coordination": advice on writing scripts that edit a CHANGELOG, which this skill never does; it only runs its own script (#210).
+
 ## [1.0.1] - 2026-10-05
 
 ### Changed

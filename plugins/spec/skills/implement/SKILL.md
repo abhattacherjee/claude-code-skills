@@ -2,7 +2,7 @@
 name: implement
 description: "Implements a previously created and reviewed story spec end-to-end: reads the spec, creates a feature branch, implements all sub-tasks with progress tracking, validates acceptance criteria, updates tracking files, and creates a PR. Optionally delegates to separately-installed brainstorming, frontend-design, and ui-from-requirements skills for complex UI work. Was the spec-implement skill. Use when: (1) user says /spec:implement (was /spec-implement) or 'implement this spec', (2) a story spec has been created and reviewed and is ready for implementation, (3) user provides a spec file path to implement."
 metadata:
-  version: 1.0.0
+  version: 1.0.1
 ---
 
 # Spec Implement
@@ -211,14 +211,15 @@ Run the target project's build and lint commands (discovered in Phase 1; `npm ru
 
 **TaskUpdate: task 7/9 `in_progress`**
 
-1. **Stage and commit** — use conventional commit format:
+1. **Stage and commit** — stage the files this story changed by name (`git status --short` lists them; leave out build output and stray files), and use conventional commit format. End the message with the commit attribution line your session gives you in place of `<ATTRIBUTION_LINE>` (omit the line if your session gives none); do not copy a model name from here:
    ```bash
-   git add -A
+   git status --short
+   git add -- <PATH>...
    git commit -m "feat: <story title> (Story {E}.{S})
 
    <Summary of changes>
 
-   Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+   <ATTRIBUTION_LINE>"
    ```
 
 2. **Push and create PR:**

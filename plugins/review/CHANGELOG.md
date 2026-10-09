@@ -2,6 +2,12 @@
 
 All notable changes to the **review** plugin are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- `deep` 1.0.1: `references/audit-trail.md` starts with a Contents list (#210).
+
 ## [1.0.1] - 2026-10-06
 
 ### Changed

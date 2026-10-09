@@ -2,6 +2,14 @@
 
 This document compiles the academic research that informed the design of Claudeception.
 
+## Contents
+
+- Core Papers
+- Supporting Research
+- Claude Code Skills Documentation
+- Design Patterns Applied
+- Citation Format
+
 ## Core Papers
 
 ### Voyager: An Open-Ended Embodied Agent with Large Language Models

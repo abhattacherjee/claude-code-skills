@@ -2,6 +2,13 @@
 
 All notable changes to the **spec** plugin are documented here.
 
+## [1.0.6] - 2026-10-09
+
+### Changed
+
+- `implement` 1.0.1: stages named paths and uses the session's own commit attribution line (#210).
+- `create` 1.0.3 and `review` 1.0.2: cut general advice and repeated notes (#210).
+
 ## [1.0.5] - 2026-10-06
 
 ### Changed

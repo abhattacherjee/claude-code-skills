@@ -2,6 +2,12 @@
 
 All notable changes to the **shield** skill (was `context-shield`) are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- Cut the Architecture diagram and token math, which restated the workflow, and eight of the ten near-identical `manage-manifest.sh create` examples. The large-site (auto-ralph) and monorepo-audit examples stay; the other source kinds are one line each under "Other sources" (#210).
+
 ## [1.0.1] - 2026-10-04
 
 ### Changed
