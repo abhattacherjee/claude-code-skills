@@ -437,7 +437,7 @@ while IFS= read -r rel; do
 done < <(printf '%s\n' "$REF_LIST" | LC_ALL=C sort)
 
 if [[ $REF_COUNT -eq 0 ]]; then
-  pass "no reference files besides SKILL.md, README.md and CHANGELOG.md"
+  pass "no reference .md files to check"
 fi
 
 # ============================================================

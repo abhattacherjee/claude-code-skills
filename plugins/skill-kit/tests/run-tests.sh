@@ -130,6 +130,7 @@ vskill() {
 VS="$TMP/vskill/my-skill"
 vskill "$VS" my-skill 499; run_in "$PROJ" "$V" "$VS"
 check "a 499-line body passes" 0 'body: 499 lines'
+check "…and a skill with no reference files says so" 0 'PASS  no reference .md files to check'
 vskill "$VS" my-skill 500; run_in "$PROJ" "$V" "$VS"
 check "a 500-line body fails" 1 'FAIL  body: 500 lines \(must be under 500\)'
 vskill "$VS" my-skill 500; printf '%s' "$(cat "$VS/SKILL.md")" > "$VS/SKILL.md.tmp"; mv "$VS/SKILL.md.tmp" "$VS/SKILL.md"; run_in "$PROJ" "$V" "$VS"
