@@ -391,20 +391,33 @@ has_toc() {
     END { exit (found ? 0 : 1) }' "$1"
 }
 
+# A find that cannot read a directory still prints the rest and exits non-zero. Its
+# list is taken first and its status checked, so a skipped directory is a failure.
 SCRIPT_FILES=()
 if [[ -d "$SKILL_DIR/scripts" ]]; then
+  if ! SCRIPT_LIST="$(cd "$SKILL_DIR/scripts" && find . -type f)"; then
+    fail "cannot list every file in scripts/ (see find's error above)"
+  fi
   while IFS= read -r f; do
-    SCRIPT_FILES+=("$SKILL_DIR/scripts/${f#./}")
-  done < <(cd "$SKILL_DIR/scripts" && find . -type f | LC_ALL=C sort)
+    [[ -n "$f" ]] && SCRIPT_FILES+=("$SKILL_DIR/scripts/${f#./}")
+  done < <(printf '%s\n' "$SCRIPT_LIST" | LC_ALL=C sort)
 fi
 
+if ! REF_LIST="$(cd "$SKILL_DIR" && find . -name '*.md')"; then
+  fail "cannot list every .md file in the skill directory (see find's error above)"
+fi
 REF_COUNT=0
 while IFS= read -r rel; do
+  [[ -n "$rel" ]] || continue
   rel="${rel#./}"
   case "${rel##*/}" in SKILL.md|README.md|CHANGELOG.md|CONTRIBUTING.md) continue ;; esac
   case "/$rel" in */.*) continue ;; esac
   [[ -f "$SKILL_DIR/$rel" ]] || continue
   REF_COUNT=$((REF_COUNT + 1))
+  if [[ ! -r "$SKILL_DIR/$rel" ]]; then
+    fail "$rel: cannot read"
+    continue
+  fi
 
   if names path "$rel" "$SKILL_MD" \
      || { [[ ${#SCRIPT_FILES[@]} -gt 0 ]] && names file "${rel##*/}" "${SCRIPT_FILES[@]}"; }; then
@@ -421,7 +434,7 @@ while IFS= read -r rel; do
       fail "$rel: $REF_LINES lines with no '## Contents' heading in the first $TOC_WITHIN lines"
     fi
   fi
-done < <(cd "$SKILL_DIR" && find . -name '*.md' | LC_ALL=C sort)
+done < <(printf '%s\n' "$REF_LIST" | LC_ALL=C sort)
 
 if [[ $REF_COUNT -eq 0 ]]; then
   pass "no reference files besides SKILL.md, README.md and CHANGELOG.md"
@@ -434,8 +447,10 @@ if [[ -d "$SKILL_DIR/scripts" ]]; then
   echo ""
   echo "--- scripts ---"
 
+  # The .sh files from the checked file list above, so an unreadable directory fails there.
   SCRIPT_COUNT=0
   while IFS= read -r script; do
+    [[ "$script" == *.sh ]] || continue
     SCRIPT_COUNT=$((SCRIPT_COUNT + 1))  # safe with set -e (unlike ((var++)))
     SCRIPT_NAME=$(basename "$script")
 
@@ -462,7 +477,7 @@ if [[ -d "$SKILL_DIR/scripts" ]]; then
     else
       warn "$SCRIPT_NAME: no --help flag detected"
     fi
-  done < <(find "$SKILL_DIR/scripts" -name '*.sh' -type f | sort)
+  done < <(if [[ ${#SCRIPT_FILES[@]} -gt 0 ]]; then printf '%s\n' "${SCRIPT_FILES[@]}"; fi)
 
   if [[ $SCRIPT_COUNT -eq 0 ]]; then
     warn "scripts/ directory exists but contains no .sh files"

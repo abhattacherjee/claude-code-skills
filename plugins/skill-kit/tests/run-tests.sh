@@ -202,6 +202,17 @@ rskill; { printf '# T\n    ```\n## Contents\n'; nlines 147; } > "$VS/references/
 check "a fence indented 4 spaces is not a fence" 0 'references/short.md: has a Contents heading'
 rskill; { printf '# T\n### Contents\n'; nlines 148; } > "$VS/references/short.md"; vref
 check "a ### Contents heading fails" 1 "FAIL  $S3"
+if [[ "$(id -u)" != 0 ]]; then   # root reads anything, so these cannot fail there
+  rskill; printf '# s\n' > "$VS/references/secret.md"; printf 'See references/secret.md\n' >> "$VS/SKILL.md"; chmod 000 "$VS/references/secret.md"; vref
+  chmod 644 "$VS/references/secret.md"
+  check "an unreadable reference fails, exit 1 (not a crash)" 1 'FAIL  references/secret.md: cannot read'
+  rskill; mkdir -p "$VS/hidden"; printf '# o\n' > "$VS/hidden/orphan.md"; chmod 000 "$VS/hidden"; vref
+  chmod 755 "$VS/hidden"
+  check "a directory find cannot read fails, not skipped" 1 'FAIL  cannot list every .md file'
+  rskill; mkdir -p "$VS/scripts/locked"; chmod 000 "$VS/scripts/locked"; vref
+  chmod 755 "$VS/scripts/locked"
+  check "a scripts/ directory find cannot read fails, not skipped" 1 'FAIL  cannot list every file in scripts/'
+fi
 
 # author teaches the four guide rules the validator cannot check, each exactly once (#214).
 for rule in 'gerund form' 'head -100' 'Write evaluations first' 'Justify every constant'; do
