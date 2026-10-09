@@ -2,6 +2,12 @@
 
 All notable changes to the **search** skill (was `conversation-search`) are documented here.
 
+## [1.1.0] - 2026-10-09
+
+### Changed
+
+- The bundled `scripts/validate-skill.sh` (a byte-identical copy of the repo-root validator) has new checks. It fails a SKILL.md body of 500 lines or more (it passed exactly 500, and missed a last line with no newline); a name containing `anthropic` or `claude`; a `.md` file that SKILL.md does not name and no script in `scripts/` reads; and a `.md` file over 100 lines with no `## Contents` heading in its first 30 lines. CONTRIBUTING.md, files under a dot-directory such as `.github/` and files under a top-level `tests/` directory are not checked (#214).
+
 ## [1.0.1] - 2026-10-05
 
 ### Changed

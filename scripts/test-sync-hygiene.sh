@@ -1086,7 +1086,8 @@ metadata:
 
 # objentry-plugin
 
-Fixture content.
+Fixture content. The source directory also holds fixture-command.md and
+fixture-agent.md; naming them here keeps validate-skill.sh's reference check green.
 EOF
 
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-command.md" <<'EOF'
@@ -3651,6 +3652,9 @@ metadata:
 ---
 
 # Good Manifest Skill
+
+The source directory also holds agents-src/control-agent.md; naming it here keeps
+validate-skill.sh's reference check green.
 EOF
 cp "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md" \
    "$MONOREPO_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md"

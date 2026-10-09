@@ -2,6 +2,14 @@
 
 All notable changes to the **author** skill (was `skill-authoring`) are documented here.
 
+## [1.1.0] - 2026-10-09
+
+### Changed
+
+- SKILL.md teaches four rules from Anthropic's skill authoring guide, once each: gerund names (`processing-pdfs`; avoid `helper`, `utils`, `tools`) in the frontmatter rules; a comment giving the reason for every constant in a script; why references stay one level deep (Claude may preview a nested file with `head -100`); and evaluations first, as the new workflow step 3 (at least three scenarios run without the skill, as the baseline). Workflow steps 3 to 13 are now 4 to 14 (#214).
+- `references/quality-checklist.md` matches the new `validate-skill.sh` checks, and its verification commands run `validate-skill.sh` instead of separate body, description and field one-liners (#214).
+- The bundled `scripts/validate-skill.sh` (a byte-identical copy of the repo-root validator) has new checks. It fails a SKILL.md body of 500 lines or more (it passed exactly 500, and missed a last line with no newline); a name containing `anthropic` or `claude`; a `.md` file that SKILL.md does not name and no script in `scripts/` reads; and a `.md` file over 100 lines with no `## Contents` heading in its first 30 lines. CONTRIBUTING.md, files under a dot-directory such as `.github/` and files under a top-level `tests/` directory are not checked (#214).
+
 ## [1.0.2] - 2026-10-09
 
 ### Changed
