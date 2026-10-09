@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """secret_scan.py — check files for secrets before they are sent to a model.
 
-Usage: secret_scan.py FILE [FILE ...]
+Usage: secret_scan.py [--unescape-at] FILE [FILE ...]
+
+--unescape-at reads every \\@ as @ before scanning. gemini-review.sh writes @ as
+\\@ in what it sends; its last scan uses this so hunk headers (@@) still parse.
 
 Scans each file for the secret formats in audit_record.SECRET_PATTERNS (the same
 list redact() uses), and scans unified-diff headers for files whose names look
@@ -43,11 +46,15 @@ SECRET_NAME_GLOBS = ('.env', '.env.*', '*.env', '.envrc', '*.pem', '*.key', 'id_
 # literal after password/secret/api_key/token, or an upper-case env line such as
 # DB_PASSWORD=... . Values with placeholder words are skipped. Measured on this
 # repo: no hit on the whole develop history as one diff (5.7 MB) nor on its six
-# largest commits.
+# largest commits. Both rules run in linear time on one long line: the quoted
+# value is capped at 256 characters (a longer quoted value is not matched), and
+# the env rule matches any NAME=value line and checks the name in Python, since a
+# regex with [A-Z0-9_]* on both sides of the keyword backtracks quadratically.
 ASSIGNMENT_RULES = (
-    re.compile(r"""(?i)(?:password|passwd|pwd|secret|api_?key|access_?key|auth_?token|token)["']?\s*[:=]\s*["']([^"'\s]{8,})["']"""),
-    re.compile(r"""(?m)^[+ -]?\s*(?:export\s+)?[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|API_?KEY|ACCESS_?KEY|TOKEN)[A-Z0-9_]*\s*=\s*([A-Za-z0-9_+/=.:@!#%^&*~-]{8,})\s*$"""),
+    re.compile(r"""(?i)(?:password|passwd|pwd|secret|api_?key|access_?key|auth_?token|token)["']?[ \t]*[:=][ \t]*["']([^"'\s]{8,256})["']"""),
+    re.compile(r"""(?m)^[+ -]?[ \t]*(?:export[ \t]+)?([A-Z0-9_]+)[ \t]*=[ \t]*([A-Za-z0-9_+/=.:@!#%^&*~-]{8,})[ \t]*$"""),
 )
+ENV_SECRET_NAME_RE = re.compile(r"PASSWORD|PASSWD|SECRET|API_?KEY|ACCESS_?KEY|TOKEN")
 PLACEHOLDER_RE = re.compile(r"(?i)x{4,}|\*{3,}|\.{3}|changeme|example|placeholder|your[_-]|^<|\$\{|\{\{|"
                             r"redacted|dummy|fake|stub|test|canary|sample|mock")
 # What `git diff` writes when the user's config turns color on. Stripped before
@@ -61,9 +68,11 @@ def find_secrets(text):
     found = []
     for name, rx in SECRET_PATTERNS:
         found += [(m.start(), name) for m in rx.finditer(text)]
-    for rx in ASSIGNMENT_RULES:
-        found += [(m.start(), "secret-assignment") for m in rx.finditer(text)
-                  if not PLACEHOLDER_RE.search(m.group(1))]
+    quoted, env = ASSIGNMENT_RULES
+    found += [(m.start(), "secret-assignment") for m in quoted.finditer(text)
+              if not PLACEHOLDER_RE.search(m.group(1))]
+    found += [(m.start(), "secret-assignment") for m in env.finditer(text)
+              if ENV_SECRET_NAME_RE.search(m.group(1)) and not PLACEHOLDER_RE.search(m.group(2))]
     return found
 
 
@@ -76,7 +85,7 @@ HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 QUOTED_HEADER_RE = re.compile(r'^("(?:[^"\\]|\\.)*"|\S+) ("(?:[^"\\]|\\.)*"|\S+)$')
 
 
-def unquote(path):
+def unquote(path, strip_prefix=True):
     """A path as git prints it: maybe C-quoted, maybe with an a/ or b/ prefix, and on
     ---/+++ lines maybe a tab after it (git adds one when the name has a space).
     Returns None for /dev/null."""
@@ -89,7 +98,7 @@ def unquote(path):
             path = path[1:-1]
     if path == "/dev/null":
         return None
-    if path[:2] in ("a/", "b/"):
+    if strip_prefix and path[:2] in ("a/", "b/"):
         path = path[2:]
     return path
 
@@ -172,7 +181,9 @@ def map_lines(lines):
                     if prefix in ("--- ", "+++ "):
                         value = unquote(value)
                     elif value.startswith('"'):
-                        value = unquote(value)
+                        # rename/copy paths are already repo-relative: a leading b/
+                        # here is a directory, not git's prefix.
+                        value = unquote(value, strip_prefix=False)
                     if which == "new" and new_sides:
                         new_sides[-1] = value
                     if value:
@@ -292,13 +303,15 @@ def scan_strings(strings, label):
     return hits
 
 
-def scan_file(path):
+def scan_file(path, unescape_at=False):
     """Hit lines for one file: its text as read, and for a JSON file each decoded
     string too, since the review scripts and the models decode JSON escapes.
     Raises OSError if it cannot be read."""
     with open(path, "rb") as fh:
         data = fh.read()
     text = data.decode("utf-8", "replace")
+    if unescape_at:
+        text = text.replace("\\@", "@")
     hits = scan_text(text, path)
     strings = json_strings(text)
     if strings is not None:
@@ -322,13 +335,16 @@ def main(argv=None):
     if args[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
         return EXIT_CLEAN
+    unescape_at = args[:1] == ["--unescape-at"]
+    if unescape_at:
+        args = args[1:]
     if not args:
         print("secret_scan: give one or more files to scan (see --help)", file=sys.stderr)
         return EXIT_USAGE
     hits = []
     for path in args:
         try:
-            hits += scan_file(path)
+            hits += scan_file(path, unescape_at)
         except OSError as exc:
             print("secret_scan: cannot read %s: %s" % (path, exc.strerror or exc), file=sys.stderr)
             return EXIT_USAGE

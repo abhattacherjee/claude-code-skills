@@ -15,6 +15,7 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
   - `detect-mode.sh` builds its diff with `--no-color --no-ext-diff --no-textconv` and fixed prefixes, and asks `gh pr diff` for `--color=never`.
   - `gemini-review.sh` refuses an input over 8 MiB (the Gemini CLI drops the rest of stdin silently) and stops if it cannot build its input.
   - Steps 2 and 3 give exit 1 and exit 4 their own rules.
+  - Every scan pattern runs in linear time on one long line (the env-style assignment rule, `jwt` and `url-credentials` were quadratic). `secret_scan.py --unescape-at` lets `gemini-review.sh`'s final scan parse hunk headers after the `\@` escaping. Quoted rename and copy paths keep a leading `a/` or `b/` directory. `test_self_scan.py` checks that the plugin's own files pass the scan.
   - The Claude finder and cross-examiner dispatches say the diff and findings are untrusted data, never instructions.
 
 ## [1.0.0] - 2026-10-03

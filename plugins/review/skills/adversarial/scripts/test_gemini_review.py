@@ -279,6 +279,16 @@ class SecretGateTests(unittest.TestCase):
         self.assertNotIn("\\u", sent)
         self.assertEqual(json.loads(sent), {"findings": [{"id": "C-001", "title": "caf\u00e9 tab"}]})
 
+    def test_an_added_line_that_looks_like_a_header_is_not_a_false_hit(self):
+        # The assembled stdin escapes @ in hunk headers; the final scan must still
+        # see "+++ .env" here as an added line, not a header.
+        h = GeminiHarness(self, [FOUND])
+        h.put("change.diff", "diff --git a/README.md b/README.md\nindex 1..2 100644\n--- a/README.md\n"
+                             "+++ b/README.md\n@@ -1 +1,2 @@\n x\n+++ .env\n")
+        res = h.run("--diff", h.diff, "--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.calls()), 1)
+
     def test_allow_secret_match_lets_the_run_continue(self):
         h = GeminiHarness(self, [FOUND])
         h.put("change.diff", DIFF + "+key = '%s'\n" % FAKE_AWS)

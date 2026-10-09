@@ -530,7 +530,9 @@ call_gemini() {
   # what is checked is exactly what Gemini gets.
   if [[ "$ALLOW_SECRET_MATCH" != "true" ]]; then
     local scan_rc=0 scan_out
-    scan_out="$(python3 "$SCRIPT_DIR/secret_scan.py" "$COMBINED_INPUT_FILE" 2>&1)" || scan_rc=$?
+    # --unescape-at: the \@ escaping turns hunk headers into \@\@, and without
+    # them an added line such as "+++ .env" would read as a file header.
+    scan_out="$(python3 "$SCRIPT_DIR/secret_scan.py" --unescape-at "$COMBINED_INPUT_FILE" 2>&1)" || scan_rc=$?
     case "$scan_rc" in
       0) ;;
       4)

@@ -17,6 +17,9 @@ All notable changes to the **review** plugin are documented here.
   - `detect-mode.sh` and deep Step 2.6 build diffs with `--no-color --no-ext-diff --no-textconv` and fixed `a/` `b/` prefixes (and `gh pr diff --color=never`), so `color.ui=always`, `diff.mnemonicPrefix`, `diff.noprefix`, an external diff tool or a decrypting textconv cannot hide a header or put plaintext secrets in the diff.
   - `check-cites.py` exits 3 when findings fail and 2 on any internal error, so a crash can no longer read as "some failed, fix the others". It reports entries that are not objects and ids that are not strings, and notes a cited line outside every hunk.
   - `gemini-review.sh` refuses an input over the Gemini CLI's 8 MiB stdin cap (exit 1, nothing sent), and stops if it cannot build its input.
+  - Every scan pattern runs in linear time on one long line. The env-style assignment rule, `jwt` and `url-credentials` backtracked quadratically: a 2 MB minified line would have stalled the scan for hours. Now the worst case is about 0.25 s, checked per pattern by a test.
+  - The final Gemini scan reads `\@` as `@`, so hunk headers still parse and an added line such as `+++ .env` is not mistaken for a file header. A quoted rename or copy into a `b/` or `a/` directory keeps its full path.
+  - The plugin's own files pass its secret scan; `test_self_scan.py` keeps it that way.
   - deep: out-of-tree files are appended as `git diff --no-index /dev/null <path>`; Steps 2.3 and 2.6 handle exit 4; Step 2.6 checks cites against `<BASE_REF>...<FIX_SHA>` with `--id` for confirmed new findings; an empty `gh` login counts as someone else's PR. adversarial: Steps 2 and 3 give exit 1 and exit 4 their own rules.
 
 ## [1.0.2] - 2026-10-09

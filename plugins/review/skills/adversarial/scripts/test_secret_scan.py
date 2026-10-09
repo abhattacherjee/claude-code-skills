@@ -297,6 +297,101 @@ class StrictJsonTests(unittest.TestCase):
         self.assertEqual(secret_scan.scan_text(text, "x")[0].rsplit(" ", 1)[1], "aws-key-id")
 
 
+class LinearTimeTests(unittest.TestCase):
+    """A diff can hold one multi-MB line (minified code). Every pattern must scan it
+    in linear time. Each case runs in its own process with a timeout, so a
+    quadratic pattern fails here in seconds instead of hanging for hours."""
+    SIZE = 2 * 1024 * 1024
+    LIMIT = 5  # seconds; a linear scan of 2 MB takes well under 1 s
+    PK = "PRIVATE" + " KEY"
+    # name -> (unit repeated to SIZE, prefix); each is a near-match for one pattern
+    CASES = {
+        "assignment quoted": ("token:", ""),
+        "assignment quoted, open value": ("a", "token='"),
+        "assignment env name": ("PASSWORD_", ""),
+        "assignment env value": ("a", "API_KEY="),
+        "jwt run": ("eyJ", ""),
+        "jwt segments": ("eyJ" + "a" * 8 + ".", ""),
+        "url dots": ("a.", ""),
+        "url schemes": ("a://b:", ""),
+        "url long user": ("a", "x://"),
+        "private-key header": ("A ", "-----BEGIN "),
+        "private-key lines": ("-----BEGIN RSA " + "PRIVATE" + " KEY-----\n", ""),
+        "github": ("ghp_" + "a" * 35 + "_", ""),
+        "github pat": ("github_" + "pat_", ""),
+        "aws": ("AKIA", ""),
+        "anthropic": ("sk-" + "ant-", ""),
+        "openai": ("sk-", ""),
+        "slack": ("xox" + "b-", ""),
+        "google": ("AI" + "za", ""),
+        "stripe": ("sk" + "_live_", ""),
+    }
+
+    def test_every_pattern_scans_a_2_mb_near_match_line_in_linear_time(self):
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import secret_scan as s; "
+                "unit, prefix = sys.argv[2], sys.argv[3]; n = int(sys.argv[4]); "
+                "line = prefix + unit * (n // len(unit)); "
+                "s.scan_text('diff --git a/m.js b/m.js\\n--- a/m.js\\n+++ b/m.js\\n@@ -1 +1 @@\\n+' + line + '\\n', 'x'); "
+                "s.scan_strings([line], 'y')")
+        for name, (unit, prefix) in self.CASES.items():
+            with self.subTest(case=name):
+                try:
+                    subprocess.run([sys.executable, "-c", code, str(HERE), unit, prefix, str(self.SIZE)],
+                                   check=True, timeout=self.LIMIT, capture_output=True)
+                except subprocess.TimeoutExpired:
+                    self.fail("%s: scanning a 2 MB line took over %d s" % (name, self.LIMIT))
+
+    def test_the_env_rule_still_needs_a_secret_word_in_the_name(self):
+        import secret_scan
+        names = [n for _, n in secret_scan.find_secrets("+DB_" + "PASS" + "WORD=s3cr3tP4ssw0rd\n")]
+        self.assertEqual(names, ["secret-assignment"])
+        self.assertEqual(secret_scan.find_secrets("+LOG_LEVEL=verbose-and-more\n"), [])
+
+    def test_a_jwt_or_url_inside_a_longer_word_still_matches_where_it_starts(self):
+        import secret_scan
+        jwt = "eyJ" + "hbGciOiJIUzI1NiJ9" + ".eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlLXZhbHVl"
+        for text in ("Bearer " + jwt, "t=" + jwt, '"%s"' % jwt):
+            self.assertIn("jwt", [n for _, n in secret_scan.find_secrets(text)])
+        url = "post" + "gres://admin:" + "hunter2pass@db/x"
+        for text in ("DATABASE_URL=" + url, "(" + url + ")", url):
+            self.assertIn("url-credentials", [n for _, n in secret_scan.find_secrets(text)])
+
+
+class RenamePathTests(Base):
+    def test_a_quoted_rename_into_a_b_directory_keeps_its_path(self):
+        import secret_scan
+        repo = self.dir / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "old.py").write_text("x = 1\n" * 20)
+        g = ["git", "-C", str(repo), "-c", "user.email=t@example.com", "-c", "user.name=t"]
+        subprocess.run(g + ["add", "-A"], check=True)
+        subprocess.run(g + ["commit", "-q", "-m", "i"], check=True)
+        (repo / "b").mkdir()
+        subprocess.run(g + ["mv", "old.py", "b/caf\u00e9.py"], check=True)
+        diff = subprocess.run(g + ["-c", "core.quotePath=true", "diff", "--cached", "-M", "--no-color"],
+                              capture_output=True, check=True).stdout.decode()
+        self.assertIn('rename to "b/caf', diff)
+        self.assertEqual(secret_scan.new_side_paths(diff), {"b/caf\u00e9.py"})
+
+    def test_an_unquoted_rename_into_an_a_directory_keeps_its_path(self):
+        import secret_scan
+        text = ("diff --git a/old.py b/a/new.py\nsimilarity index 100%\nrename from old.py\n"
+                "rename to a/new.py\n")
+        self.assertEqual(secret_scan.new_side_paths(text), {"a/new.py"})
+
+
+class UnescapeAtTests(Base):
+    def test_unescape_at_restores_hunk_tracking(self):
+        # gemini-review.sh writes every @ as \@, so hunk headers read \@\@. An added
+        # line "++ .env" shows as "+++ .env" and must not read as a file header.
+        text = ("<diff-0>\ndiff --git a/README.md b/README.md\nindex 1..2 100644\n--- a/README.md\n"
+                "+++ b/README.md\n\\@\\@ -1 +1,2 \\@\\@\n x\n+++ .env\n</diff-0>\n")
+        path = self.put("assembled.txt", text)
+        self.assertEqual(self.run_scan("--unescape-at", path).returncode, 0)
+        self.assertEqual(self.run_scan("--unescape-at", self.put("a2.txt", text.replace("README.md", ".env"))
+                                       ).returncode, 4)
+
+
 class SharedPatternTests(unittest.TestCase):
     def test_one_pattern_list_shared_with_redaction(self):
         import audit_record
