@@ -2,6 +2,13 @@
 
 All notable changes to the **skill-kit** plugin are documented here.
 
+## [1.3.0] - 2026-10-09
+
+### Changed
+
+- `author` 1.1.0: teaches gerund names, a reason for every script constant, the `head -100` reason for one-level references, and evaluations first; the quality checklist matches the validator (#214).
+- `validate-skill.sh` (shipped by `author` 1.1.0, `extract` 1.2.0 and `publish` 1.3.0) now fails a SKILL.md body of 500 lines or more (it passed exactly 500, and missed a last line with no newline); a name containing `anthropic` or `claude`; a `.md` file that SKILL.md does not name and no script in `scripts/` reads; and a `.md` file over 100 lines with no `## Contents` heading in its first 30 lines. CONTRIBUTING.md and files under a dot-directory such as `.github/` are not checked (#214).
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed

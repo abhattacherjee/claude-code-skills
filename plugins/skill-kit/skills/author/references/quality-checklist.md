@@ -27,7 +27,7 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 ## Frontmatter
 
 - [ ] `name`: ≤64 chars, lowercase letters + numbers + hyphens only
-- [ ] `name`: no reserved words (`anthropic`, `claude`)
+- [ ] `name`: no reserved words (`anthropic`, `claude`); `validate-skill.sh` fails either
 - [ ] `description`: non-empty, ≤1024 characters, a double-quoted single line
 - [ ] `description`: written in third person (not "I help..." or "You can...")
 - [ ] `description`: includes what it does AND when to use it
@@ -38,7 +38,7 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 
 ## Content
 
-- [ ] SKILL.md body under 500 lines
+- [ ] SKILL.md body under 500 lines (`validate-skill.sh` fails 500 or more)
 - [ ] Only includes information Claude doesn't already know
 - [ ] Consistent terminology throughout (one term per concept)
 - [ ] No time-sensitive information (or uses "Current" / "Legacy" pattern)
@@ -50,8 +50,8 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 
 - [ ] SKILL.md contains decision workflow and trigger conditions
 - [ ] Lookup tables, code examples, case studies in `references/`
-- [ ] All reference files linked directly from SKILL.md (one level deep)
-- [ ] Reference files > 100 lines have table of contents
+- [ ] Every `.md` file in the skill (other than README, CHANGELOG and CONTRIBUTING) is named in SKILL.md by its path, or read by a script in `scripts/`: one level deep (`validate-skill.sh` fails one that is not)
+- [ ] A reference file over 100 lines has a `## Contents` heading in its first 30 lines (`validate-skill.sh` fails one that does not)
 - [ ] Descriptive filenames (`api-field-reference.md` not `ref1.md`)
 
 ## Progress Tracking (if 3+ phases)
@@ -100,17 +100,9 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 ## Verification Commands
 
 ```bash
-# Body line count (after the frontmatter)
-awk 'c>=2{n++} /^---$/{c++} END{print n}' SKILL.md  # Must be under 500
-
-# Description length
-grep -m1 '^description:' SKILL.md | wc -c  # Must be ≤ 1040: 1024 plus the 'description: ""' wrapper and the newline
-
-# Non-standard frontmatter fields
-awk '/^---$/{c++;next} c==1{print}' SKILL.md | grep -vE '^(name|description|metadata|model|disable-model-invocation|  )' # Should be empty
-
-# Script executability
-ls -la scripts/*.sh scripts/*.py 2>/dev/null  # Check x bit
+# Frontmatter, name, description, body under 500 lines, every reference named,
+# Contents lists, script shebangs and executability: exit 0 pass, 1 fail
+<SCRIPTS_DIR>/validate-skill.sh <SKILL_DIR>
 
 # Cross-reference validation
 for f in $(grep -oE '\(references/[^)]+\)' SKILL.md | tr -d '()'); do

@@ -2,7 +2,7 @@
 name: changelog
 description: "Was the changelog-keeper skill (changelog-keeper still works as a phrase). Keeps CHANGELOG.md up to date by generating categorized entries from git commit history. Use when: (1) user asks to update the changelog, (2) before committing changes that should be documented, (3) preparing a release and need changelog entries, (4) user says 'update changelog' or 'what changed since last release', (5) a commit is about to be pushed and the changelog hasn't been updated."
 metadata:
-  version: 1.0.2
+  version: 1.1.0
 ---
 
 # Changelog Keeper

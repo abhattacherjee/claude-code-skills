@@ -2,7 +2,7 @@
 name: author
 description: "Was the skill-authoring skill. Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 1.0.2
+  version: 1.1.0
 ---
 
 # Skill Authoring
@@ -46,7 +46,7 @@ Supported fields: `name`, `description`, `metadata`, plus `model` (sub-agent ski
 
 ```yaml
 ---
-name: kebab-case-name          # ≤64 chars, lowercase + hyphens only
+name: kebab-case-name          # ≤64 chars, lowercase + hyphens, no "anthropic" or "claude"
 description: "Third-person description. Use when: (1) ..., (2) ..."  # ≤1024 chars, single-line quoted
 metadata:
   version: 1.0.0               # semver: patch=typos, minor=new content, major=breaking
@@ -56,6 +56,11 @@ metadata:
 **Do NOT include:** `author`, `date`, `tags`, `allowed-tools`, `category`, or
 top-level `version` (use `metadata.version` instead). Use double-quoted single-line
 strings for `description` — block scalars (`description: |`) cause VS Code linter errors.
+
+**Name rules:** prefer the gerund form, which says what the skill does (`processing-pdfs`,
+`analyzing-spreadsheets`); a noun phrase (`pdf-processing`) is fine. Avoid vague names
+(`helper`, `utils`, `tools`). `validate-skill.sh` fails a name over 64 characters or one
+that contains `anthropic` or `claude`.
 
 **Description rules:**
 - Write in **third person** ("Processes files..." not "I help you..." or "You can...")
@@ -97,9 +102,13 @@ your-skill/
 | Executable procedures | scripts/ | Predictable, testable, reusable |
 
 ### Reference Rules
-- **One level deep** from SKILL.md — no references linking to other references
+- **One level deep** from SKILL.md — no references linking to other references. Claude may
+  preview a file it reaches through another reference with `head -100` instead of reading
+  all of it, so anything past that is missed.
 - **Descriptive filenames** — `api-field-reference.md` not `ref1.md`
-- Files > 100 lines should have a **table of contents** at the top
+- Files over 100 lines start with a `## Contents` list, so a partial read still shows the scope
+- `validate-skill.sh` fails a `.md` file that SKILL.md does not name (and no script reads),
+  and a file over 100 lines with no `## Contents` heading in its first 30 lines
 
 ## Script Extraction
 
@@ -117,6 +126,8 @@ Extract into `scripts/` when ANY apply:
 - Always support `--help` / `-h` with usage examples
 - Validate inputs before operating (check files exist, directories writable)
 - Use meaningful exit codes (0 = success, 1 = error, 2 = usage)
+- **Justify every constant** — a timeout, retry count or limit gets a comment saying why
+  that value. Nobody can tune `TIMEOUT=47` if nobody wrote down where 47 came from
 - Include a `--fix` mode where applicable (detect + auto-remediate)
 - Make executable: `chmod +x scripts/*.sh`
 - Use `#!/usr/bin/env bash` shebang (portable)
@@ -315,19 +326,22 @@ the full script template with examples.
 
 1. **Check existing skills** — search project + user-level directories
 2. **Decide**: create new vs update existing (see decision table below)
-3. **Evaluate decomposition** — can this be split into parallel agents? (see below)
-4. **Evaluate script-first** — can deterministic parts be captured in scripts? (see below)
-5. **Evaluate progress tracking** — does the skill have 3+ phases? (see below)
-6. **Write agents** (if applicable) — orchestrator + sub-agent definitions
-7. **Write scripts** (if applicable) — with `--help`, error handling, exit codes
-8. **Write task manifest** (if applicable) — `scripts/task-manifest.sh` for each workflow
-9. **Write SKILL.md** — frontmatter + body; reference agents, scripts, and task manifest
-10. **Extract references/** — if lookup material exceeds ~30 lines
-11. **Validate** — run [references/quality-checklist.md](references/quality-checklist.md)
-12. **Dry-run test** — run scripts against real project data (see below)
-13. **Version** — start at `1.0.0`
+3. **Write evaluations first** — before the docs, write at least three scenarios the skill
+   must handle and run each without the skill. What Claude gets wrong is the baseline the
+   skill must beat; write only what closes those gaps
+4. **Evaluate decomposition** — can this be split into parallel agents? (see below)
+5. **Evaluate script-first** — can deterministic parts be captured in scripts? (see below)
+6. **Evaluate progress tracking** — does the skill have 3+ phases? (see below)
+7. **Write agents** (if applicable) — orchestrator + sub-agent definitions
+8. **Write scripts** (if applicable) — with `--help`, error handling, exit codes
+9. **Write task manifest** (if applicable) — `scripts/task-manifest.sh` for each workflow
+10. **Write SKILL.md** — frontmatter + body; reference agents, scripts, and task manifest
+11. **Extract references/** — if lookup material exceeds ~30 lines
+12. **Validate** — run [references/quality-checklist.md](references/quality-checklist.md)
+13. **Dry-run test** — run scripts against real project data (see below)
+14. **Version** — start at `1.0.0`
 
-### Decomposition Evaluation (Step 3)
+### Decomposition Evaluation (Step 4)
 
 Ask: "Can this task be split into independent subtasks that run in parallel?"
 
@@ -338,7 +352,7 @@ Ask: "Can this task be split into independent subtasks that run in parallel?"
 | **Partially — phases with parallel steps** | Phased: script → parallel agents → script | `catalog-maintainer`: backup → fetch → enrich → validate → embed |
 | **No — single sequential task** | No orchestrator needed; single agent or script | `catalog-embedding-sync`: one script checks all |
 
-### Script-First Evaluation (Step 4)
+### Script-First Evaluation (Step 5)
 
 Ask: "Can the skill's core action be expressed as a deterministic check or procedure?"
 
@@ -352,7 +366,7 @@ Ask: "Can the skill's core action be expressed as a deterministic check or proce
 testable, runnable standalone, and composable with CI/hooks. The SKILL.md drops from "explain
 everything" to "explain when/why + point to script".
 
-### Progress Tracking Evaluation (Step 5)
+### Progress Tracking Evaluation (Step 6)
 
 Ask: "Does this skill have 3+ sequential phases or take >2 minutes?"
 
@@ -362,7 +376,7 @@ Ask: "Does this skill have 3+ sequential phases or take >2 minutes?"
 | **Yes — multiple workflows** | Add one `case` branch per workflow | `triage-issues` (github-board plugin): full-audit (5 tasks) + quick-check (2 tasks) |
 | **No — 1-2 fast phases** | Skip task manifest — no tracking needed | `catalog-embedding-sync`: single script, <30 seconds |
 
-### Dry-Run Testing (Step 12)
+### Dry-Run Testing (Step 13)
 
 **Every skill with scripts MUST be dry-run tested against real project data before release.**
 Scripts that look correct often fail due to: regex format mismatches, `grep` pipe chains

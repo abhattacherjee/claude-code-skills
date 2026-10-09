@@ -203,6 +203,12 @@ check "a fence indented 4 spaces is not a fence" 0 'references/short.md: has a C
 rskill; { printf '# T\n### Contents\n'; nlines 148; } > "$VS/references/short.md"; vref
 check "a ### Contents heading fails" 1 "FAIL  $S3"
 
+# author teaches the four guide rules the validator cannot check, each exactly once (#214).
+for rule in 'gerund form' 'head -100' 'Write evaluations first' 'Justify every constant'; do
+  n="$(cat "$SKILLS/author/SKILL.md" "$SKILLS"/author/references/*.md | grep -c -- "$rule" || true)"
+  [[ "$n" == 1 ]] && ok "author says '$rule' once" || bad "author says '$rule' once" "found $n times"
+done
+
 echo "generate-task-manifest.sh (author)"
 mkdir -p "$PROJ/my-skill"
 # The command as author/SKILL.md writes it, with the placeholder path filled in.

@@ -2,6 +2,12 @@
 
 All notable changes to the **context** plugin are documented here.
 
+## [1.1.0] - 2026-10-09
+
+### Changed
+
+- `search` 1.1.0: the bundled `validate-skill.sh` has the new #214 checks: a body under 500 lines, no `anthropic` or `claude` in a name, every `.md` file named from SKILL.md, and a Contents list in one over 100 lines.
+
 ## [1.0.4] - 2026-10-09
 
 ### Changed
