@@ -19,7 +19,7 @@ Validates a Claude Code skill directory against quality rules:
   - metadata.version: present and valid semver
   - No non-standard frontmatter fields (author, date, tags are disallowed)
   - Version matches CHANGELOG.md (if present)
-  - Body: ≤500 lines
+  - Body: under 500 lines
   - Scripts: executable, #!/usr/bin/env bash shebang, --help support
 
 Options:
@@ -279,19 +279,23 @@ else
 fi
 
 # ============================================================
-# 7. Body length (≤500 lines)
+# 7. Body length (under 500 lines)
 # ============================================================
+# Counted as scripts/check-skill-structure.py counts it (S1): the lines after the
+# closing --- of a frontmatter that opens on line 1, else every line. awk counts a
+# last line with no newline, which wc -l does not.
 echo ""
 echo "--- body ---"
 
-TOTAL_LINES=$(wc -l < "$SKILL_MD" | tr -d ' ')
-# Body starts after second ---
-BODY_LINES=$((TOTAL_LINES - FRONTMATTER_END))
+MAX_BODY=500   # Anthropic's guide: keep the SKILL.md body under 500 lines
+BODY_LINES=$(awk '
+  /^[[:space:]]*---[[:space:]]*$/ { if (NR == 1) { open = 1; next } if (open && !shut) shut = NR }
+  END { print (shut ? NR - shut : NR) }' "$SKILL_MD")
 
-if [[ $BODY_LINES -le 500 ]]; then
-  pass "body: $BODY_LINES lines (max 500)"
+if [[ $BODY_LINES -lt $MAX_BODY ]]; then
+  pass "body: $BODY_LINES lines (must be under $MAX_BODY)"
 else
-  fail "body: too long ($BODY_LINES lines, max 500)"
+  fail "body: $BODY_LINES lines (must be under $MAX_BODY)"
 fi
 
 # ============================================================

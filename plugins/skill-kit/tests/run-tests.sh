@@ -119,6 +119,22 @@ for s in author publish extract; do
   check "$s: validate-skill.sh fails on a missing directory" nonzero "" 'not found'
 done
 
+echo "validate-skill.sh rules from Anthropic's skill authoring guide (#214)"
+V="$SKILLS/author/scripts/validate-skill.sh"
+# vskill <dir> <name> <body-lines>: a valid skill whose SKILL.md body has that many lines.
+vskill() {
+  rm -rf "$1"; mkdir -p "$1"
+  { printf -- '---\nname: %s\ndescription: "Does a thing. Use when: (1) testing."\nmetadata:\n  version: 1.0.0\n---\n' "$2"
+    local i; for ((i = 1; i <= $3; i++)); do printf 'line %d\n' "$i"; done; } > "$1/SKILL.md"
+}
+VS="$TMP/vskill/my-skill"
+vskill "$VS" my-skill 499; run_in "$PROJ" "$V" "$VS"
+check "a 499-line body passes" 0 'body: 499 lines'
+vskill "$VS" my-skill 500; run_in "$PROJ" "$V" "$VS"
+check "a 500-line body fails" 1 'FAIL  body: 500 lines \(must be under 500\)'
+vskill "$VS" my-skill 500; printf '%s' "$(cat "$VS/SKILL.md")" > "$VS/SKILL.md.tmp"; mv "$VS/SKILL.md.tmp" "$VS/SKILL.md"; run_in "$PROJ" "$V" "$VS"
+check "a 500-line body with no final newline fails" 1 'FAIL  body: 500 lines'
+
 echo "generate-task-manifest.sh (author)"
 mkdir -p "$PROJ/my-skill"
 # The command as author/SKILL.md writes it, with the placeholder path filled in.
