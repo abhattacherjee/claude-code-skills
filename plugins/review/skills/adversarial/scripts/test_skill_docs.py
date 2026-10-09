@@ -128,11 +128,12 @@ class AdversarialReviewDocTests(unittest.TestCase):
 
     def test_skill_changelog_starts_at_1_0_0_and_names_its_origin(self):
         # The skill and plugin changelogs no longer mirror each other: the plugin
-        # one covers both skills. The skill one starts a fresh 1.0.0 entry that says
-        # where the skill came from and keeps the older history below it.
+        # one covers both skills. The skill one started a fresh 1.0.0 entry that says
+        # where the skill came from and keeps the older history below it. Later
+        # releases go above 1.0.0; the oldest numbered entry stays 1.0.0.
         lines = (HERE.parent / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
-        first = next(l for l in lines if l.startswith("## ["))
-        self.assertTrue(first.startswith("## [1.0.0]"), first)
+        entries = [l for l in lines if l.startswith("## [")]
+        self.assertTrue(entries[-1].startswith("## [1.0.0]"), entries)
         self.assertIn("was `adversarial-review`", "\n".join(lines[:4]))
         self.assertIn("adversarial-review` 0.2.0", "\n".join(lines))
         self.assertIn("## [1.0.0]", (PLUGIN / "CHANGELOG.md").read_text(encoding="utf-8"))
@@ -316,7 +317,8 @@ class AgentNeverIdleOnOwnBackgroundRunTests(unittest.TestCase):
 
 
 AR_SCRIPT_NAME = re.compile(
-    r"\b((?:codex|gemini)-review\.sh|pick-adversary\.sh|ensure-(?:codex|gemini)\.sh|pr-audit\.py|synthesize\.py)\b")
+    r"\b((?:codex|gemini)-review\.sh|pick-adversary\.sh|ensure-(?:codex|gemini)\.sh|pr-audit\.py|synthesize\.py"
+    r"|check-cites\.py|secret_scan\.py)\b")
 
 
 class DeepReviewDocTests(unittest.TestCase):
@@ -330,7 +332,8 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertTrue((DEEP / "references" / "audit-trail.md").is_file())
 
     def test_named_adversarial_review_scripts_exist(self):
-        text = self.read("SKILL.md") + self.read("references/audit-trail.md")
+        text = (self.read("SKILL.md") + self.read("references/audit-trail.md")
+                + self.read("references/untrusted-input.md"))
         for name in sorted(set(AR_SCRIPT_NAME.findall(text))):
             self.assertTrue((HERE / name).is_file(), name)
 
@@ -469,6 +472,154 @@ class DeepReviewDocTests(unittest.TestCase):
             self.assertIn("ADVERSARY_UNAVAILABLE", part, start)
             self.assertIn("stop the run with exit 3", part, start)
             self.assertIn("never fall back", part.lower(), start)
+
+
+GEMINI_COMMAND = re.compile(r"`(gemini [^`]*)`|^\s*(gemini .*)$", re.M)
+
+
+class UntrustedInputDocTests(unittest.TestCase):
+    """#123: the diff is untrusted. It never reaches a shell argument, every model is
+    told it is data, a secret stops the run, and a finding's file:line is checked
+    before the implementer commits and pushes."""
+
+    def setUp(self):
+        self.deep = (DEEP / "SKILL.md").read_text(encoding="utf-8")
+        self.ref = (DEEP / "references" / "untrusted-input.md").read_text(encoding="utf-8")
+        self.adv = SKILL.read_text(encoding="utf-8")
+
+    def gemini_commands(self, text):
+        return [a or b for a, b in GEMINI_COMMAND.findall(text)]
+
+    def test_every_gemini_command_shown_reads_its_prompt_from_a_file_on_stdin(self):
+        for name, text in (("deep", self.deep), ("untrusted-input.md", self.ref), ("adversarial", self.adv)):
+            commands = self.gemini_commands(text)
+            for cmd in commands:
+                with self.subTest(doc=name, cmd=cmd):
+                    self.assertNotIn("$(", cmd)
+                    self.assertNotIn("`", cmd)
+                    self.assertNotRegex(cmd, r'-p\s+"<')
+                    if " -p " in cmd:
+                        self.assertRegex(cmd, r"\s<\s*\S")
+        shown = self.gemini_commands(self.deep) + self.gemini_commands(self.ref)
+        self.assertTrue(any(re.search(r"\s<\s*\S", c) for c in shown), shown)
+
+    def test_the_old_argument_forms_are_gone(self):
+        for text in (self.deep, self.ref, self.adv):
+            self.assertNotIn('-p "<prompt>"', text)
+            self.assertNotIn('-p "<brief', text)
+
+    def test_a_red_flag_forbids_diff_text_in_a_shell_argument(self):
+        flags = norm(section(self.deep, "## Red Flags", "## Integration"))
+        self.assertIn("shell argument", flags)
+        self.assertIn('-p "$(cat f)"', flags)
+        self.assertIn("still unsafe", flags)
+
+    def test_r1_and_r2_mark_the_diff_as_untrusted_data(self):
+        r1 = norm(section(self.deep, "### Step 2.1", "### Step 2.2"))
+        r2 = norm(section(self.deep, "### Step 2.2", "### Step 2.3"))
+        for part in (r1, r2):
+            self.assertIn("untrusted data", part)
+            self.assertIn("never instructions", part)
+        adv_r1 = norm(section(self.adv, "### Step 2 ", "### Step 3 "))
+        adv_r2 = norm(section(self.adv, "### Step 3 ", "### Step 4 "))
+        for part in (adv_r1, adv_r2):
+            self.assertIn("untrusted data", part)
+
+    def test_every_agent_treats_the_diff_as_data(self):
+        for agent in ("bug-hunter.md", "convention-reviewer.md", "cross-examiner.md"):
+            with self.subTest(agent=agent):
+                text = norm((AGENTS_DIR / agent).read_text(encoding="utf-8"))
+                self.assertIn("## Untrusted input", text)
+                self.assertIn("never instructions", text)
+
+    def test_out_of_tree_files_need_confirmation_per_path(self):
+        phase0 = norm(section(self.deep, "## Phase 0", "## Phase 1"))
+        step3 = phase0.split("3. ", 1)[1].split("4. ", 1)[0]
+        self.assertIn("confirm", step3)
+        self.assertIn("each path", step3)
+        self.assertIn("secret scan", step3)
+
+    def test_a_secret_hit_stops_and_never_falls_back(self):
+        for name, text in (("deep", self.deep), ("adversarial", self.adv)):
+            with self.subTest(doc=name):
+                flat = norm(text)
+                self.assertIn("SECRET_SUSPECTED", flat)
+                self.assertIn("--allow-secret-match", flat)
+                self.assertIn("exit code is 4", flat)
+                self.assertRegex(flat, r"[Ee]xit (code )?4 is not exit (code )?3")
+        degrade = norm(section(self.adv, "## Degradation Behavior", "## Same-Diff Invariant"))
+        self.assertIn("exit 4", degrade.lower())
+
+    def test_step_2_5_checks_cites_before_the_implementer(self):
+        step = norm(section(self.deep, "### Step 2.5", "### Step 2.6"))
+        self.assertIn("check-cites.py", step)
+        self.assertLess(step.index("check-cites.py"), step.index("implementer sub-agent"))
+        self.assertIn("--status survivor", step)
+
+    def test_step_2_5_asks_before_pushing_someone_elses_pr(self):
+        step = norm(section(self.deep, "### Step 2.5", "### Step 2.6"))
+        self.assertIn("gh pr view <PR> --json author --jq .author.login", step)
+        self.assertIn("gh api user --jq .login", step)
+        self.assertIn("confirm", step)
+        self.assertLess(step.index("gh api user"), step.index("Commit Phase 2"))
+
+    def test_every_adversary_command_has_an_exit_4_rule_nearby(self):
+        lines = self.deep.splitlines()
+        cmds = [i for i, l in enumerate(lines) if re.search(r'(codex|gemini)-review\.sh" --', l)]
+        self.assertGreaterEqual(len(cmds), 4)
+        for i in cmds:
+            with self.subTest(line=i + 1):
+                near = norm("\n".join(lines[i:i + 16]))
+                self.assertRegex(near, r"[Ee]xit (code is )?4\b", lines[i])
+
+    def test_out_of_tree_files_are_appended_as_a_diff(self):
+        phase0 = norm(section(self.deep, "## Phase 0", "## Phase 1"))
+        self.assertIn("git diff --no-index /dev/null <path> >> <DIFF>", phase0)
+        self.assertIn("git diff --no-index /dev/null <path> >> <DIFF>", norm(self.ref))
+        self.assertIn("not detected", norm(self.ref))
+
+    def test_step_2_6_diffs_are_deterministic_and_cites_are_checked(self):
+        step = norm(section(self.deep, "### Step 2.6", "## Final report"))
+        for flag in ("--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"):
+            self.assertIn(flag, step)
+        self.assertNotRegex(step, r"`git diff <REVIEWED_SHA>")
+        self.assertIn('--findings "<RUN_DIR>/round-<K>.json" --status survivor', step)
+        self.assertIn("<BASE_REF>...<FIX_SHA>", step)
+
+    def test_check_cites_exit_codes_match_the_script(self):
+        step = norm(section(self.deep, "### Step 2.5", "### Step 2.6"))
+        self.assertIn("Exit 3", step)
+        self.assertNotIn("Exit 1:", step)
+        for text in (norm(self.ref), norm(PLUGIN_README.read_text(encoding="utf-8"))):
+            self.assertIn("3 some failed", text)
+
+    def test_step_2_5_treats_an_empty_login_as_someone_else(self):
+        step = norm(section(self.deep, "### Step 2.5", "### Step 2.6"))
+        self.assertIn("If either login is empty", step)
+
+    def test_the_gemini_size_cap_is_stated_correctly(self):
+        self.assertNotIn("well below that", self.ref)
+        self.assertIn("refuses an input over 8 MiB", norm(self.ref))
+
+    def test_the_direct_gemini_fallback_goes_on_only_on_exit_0(self):
+        self.assertIn("Go on only on exit 0", norm(self.ref))
+
+    def test_adversarial_steps_give_exit_1_and_exit_4_their_own_rules(self):
+        for start, end in (("### Step 2 ", "### Step 3 "), ("### Step 3 ", "### Step 4 ")):
+            part = section(self.adv, start, end)
+            with self.subTest(step=start):
+                self.assertIn("**If exit code is 4**", part)
+                self.assertIn("**If exit code is 1**", part)
+
+    def test_agents_and_readme_wording(self):
+        for agent in ("bug-hunter.md", "convention-reviewer.md"):
+            self.assertNotIn("`DIFF_FILE`, and every", (AGENTS_DIR / agent).read_text(encoding="utf-8"))
+        self.assertNotIn("gemini -p ...", PLUGIN_README.read_text(encoding="utf-8"))
+
+    def test_the_reference_is_linked_and_has_contents(self):
+        self.assertIn("references/untrusted-input.md", self.deep)
+        if len(self.ref.splitlines()) > 100:
+            self.assertIn("## Contents", "\n".join(self.ref.splitlines()[:30]))
 
 
 class GeminiFallbackShapeTests(unittest.TestCase):

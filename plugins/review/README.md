@@ -1,7 +1,7 @@
 # review
 
 <!-- plugin-meta:start -->
-**Version:** 1.0.2 · **2** skills · **3** agents · **0** commands
+**Version:** 1.1.0 · **2** skills · **3** agents · **0** commands
 <!-- plugin-meta:end -->
 
 Two review skills in one install. `deep` converges a changeset to zero actionable issues in two phases. `adversarial` is the single-pass version: Claude and an opposing model (Codex, else Gemini) find issues independently, cross-examine each other, and only findings the other side confirms are reported.
@@ -54,7 +54,7 @@ detect-mode → R1 parallel independent discovery → R2 parallel symmetric cros
 ### Modes
 
 - **PR mode** (a PR exists for the current branch): reviews `gh pr diff`, then saves the exchange on the PR. There is one thread per finding, the opposing model's verdict is a reply, refuted threads are resolved, and one summary review is posted. `--no-post` skips posting.
-- **Local mode** (no PR found): reviews the working tree against the merge base with the base branch: committed, staged and unstaged changes to tracked files. Your index is not touched. The base is `--base <branch>` if you pass it, else a guess from the branch prefix (`feature/*` to `develop`, `release/*` and `hotfix/*` to `main`, else the repo default). A guessed base that does not exist falls back to the repo default branch with a note on stderr; if no base exists the run stops. Untracked files are left out and listed on stderr (paths only), because the diff is sent to the adversary model (Codex or Gemini) and an untracked file may hold a secret. `--include-untracked` adds them, but files named like secrets (`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*credentials*`, `*.p12`, `*.pfx`) are never sent. It prints a terminal report and writes a gitignored `<branch>.adversarial-review.md` file.
+- **Local mode** (no PR found): reviews the working tree against the merge base with the base branch: committed, staged and unstaged changes to tracked files. Your index is not touched. The base is `--base <branch>` if you pass it, else a guess from the branch prefix (`feature/*` to `develop`, `release/*` and `hotfix/*` to `main`, else the repo default). A guessed base that does not exist falls back to the repo default branch with a note on stderr; if no base exists the run stops. Untracked files are left out and listed on stderr (paths only), because the diff is sent to the adversary model (Codex or Gemini) and an untracked file may hold a secret. `--include-untracked` adds them, but files named like secrets (`.env`, `.env.*`, `*.env`, `.envrc`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`, `*credentials*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`) are never sent. It prints a terminal report and writes a gitignored `<branch>.adversarial-review.md` file.
 
 ### Degradation
 
@@ -76,13 +76,13 @@ The skills pick **Codex** first when `codex login status` says you are logged in
 The Gemini notes below apply when Gemini is the adversary. The skill detects and guides setup at the start of every run through `ensure-gemini.sh` and Step 0:
 
 - **Not installed:** the skill tells you what is missing, shows the install command (`npm install -g @google/gemini-cli`) and asks whether to run it. If you decline or the install fails, it goes on Claude-only with a loud banner.
-- **Installed but not authenticated:** the skill asks for a headless-capable credential. Interactive `gemini` Google login is not enough, because the headless calls (`gemini -p ... -o json`) need a `GEMINI_API_KEY` or Vertex AI credentials. Recommended: add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`, which the gemini CLI loads in every shell, sub-agents included. Get a key at [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey). `export GEMINI_API_KEY=<key>` also works for the current session. If you decline, it goes on Claude-only.
+- **Installed but not authenticated:** the skill asks for a headless-capable credential. Interactive `gemini` Google login is not enough, because the headless calls (`gemini-review.sh` runs `gemini -o json` with all input on stdin) need a `GEMINI_API_KEY` or Vertex AI credentials. Recommended: add `GEMINI_API_KEY=<key>` to `~/.gemini/.env`, which the gemini CLI loads in every shell, sub-agents included. Get a key at [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey). `export GEMINI_API_KEY=<key>` also works for the current session. If you decline, it goes on Claude-only.
 - **Auth state unknown** (installed, no detectable headless credential): the skill goes on and relies on the runtime guard in `gemini-review.sh` (exit 3) to catch a failure.
 - **Installed and authenticated:** no questions.
 
 No manual pre-flight is needed; the check runs at the start of every run.
 
-The `gemini` binary at version 0.38.2 or later supports `gemini -p "<prompt>" -o json` for headless use.
+The `gemini` binary at version 0.38.2 or later supports headless use. `gemini-review.sh` runs `gemini -o json` with all input on stdin and a fixed `-p` sentence.
 
 ## Contents
 
@@ -93,8 +93,10 @@ The `gemini` binary at version 0.38.2 or later supports `gemini -p "<prompt>" -o
 - `ensure-gemini.sh`: Step 0 detection. Prints `KEY=VALUE` status lines (installed, version, authed, install hint, auth hint). It never installs anything and never calls the network.
 - `ensure-codex.sh`: Codex install and login detection (the exit code of `codex login status`). It never installs anything.
 - `pick-adversary.sh`: picks Codex, then Gemini, then Claude-only. `--adversary` forces one.
-- `codex-review.sh`: Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`.
-- `gemini-review.sh`: `--mode find` is Gemini's independent R1 pass. `--mode judge` is its R2 cross-examination of Claude's findings. It extracts JSON from the CLI envelope and retries once on a parse failure.
+- `codex-review.sh`: Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`. Exit 4 (`SECRET_SUSPECTED`) means the secret scan hit an input and nothing was sent; `--allow-secret-match` sends anyway after the user confirms.
+- `gemini-review.sh`: `--mode find` is Gemini's independent R1 pass. `--mode judge` is its R2 cross-examination of Claude's findings. It extracts JSON from the CLI envelope and retries once on a parse failure. The diff and findings go on stdin only, in nonce-tagged blocks marked as untrusted data, with every `@` written as `\@` so the Gemini CLI does not read it as a file include. Exit 4 works as for `codex-review.sh`.
+- `secret_scan.py`: scans files for secret formats and secret-looking file names in diff headers. Prints `<path>:<line> <pattern-name>`, never the value. Exit 0 clean, 4 hit, 2 unreadable. Both adversary scripts run it on their inputs before any model call.
+- `check-cites.py`: checks that each finding's path is a file in the diff, inside the repo, and that its line exists. `deep` runs it before an implementer acts on the survivors. Exit codes: 0 all passed, 3 some failed, 2 unreadable input or an internal error. A cited line outside every hunk passes with a `note:` on stderr.
 - `detect-mode.sh`: resolves PR or local mode and writes the shared diff that both models read. `--base <branch>` sets the local base; `--include-untracked` adds untracked files, minus secret-looking names.
 - `synthesize.py`: applies the survivor rule to the four symmetric inputs (Claude findings, adversary findings, adversary verdicts, Claude verdicts) and sorts findings into SURVIVORS, UNCONFIRMED and REJECTED.
 - `sink.sh`: delivers the report. It posts the PR audit trail in PR mode, and prints the terminal report and writes the markdown file in local mode.

@@ -30,6 +30,14 @@ ONE_FINDING = {"findings": [{"path": "src/a.py", "line": 2, "severity": "importa
 NONCED_DIFF_TAG = re.compile(r"<diff-([0-9a-f]{8})>")
 # Keys the stub's own launch adds (bash's exec wrapper, macOS, Python's locale
 # coercion); they were not in the env codex-review passed.
+ESC_KEY = "\\u0041KIA" + "EXAMPLEEXAMPLE12"
+NOT_STRICT = [
+    # trailing comma: json.loads fails, so a scanner that needs it would skip decoding
+    '{"findings":[{"id":"C-001","title":"t","rationale":"key %s"}],}' % ESC_KEY,
+    # duplicate key: json.loads keeps the last value, the secret is in the first
+    '{"findings":[{"id":"C-001","title":"t","rationale":"key %s","rationale":"fine"}]}' % ESC_KEY,
+    '{"findings":[{"id":"C-001","title":"t","rationale":"r","confidence":NaN}]}',
+]
 LAUNCH_NOISE = {"PWD", "OLDPWD", "SHLVL", "_", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 
 
@@ -737,6 +745,112 @@ class IsolationGateTests(unittest.TestCase):
         self.assertIsNotNone(shared_nonce(call))
         self.assertEqual(env_keys(call), ["CODEX_HOME", "HOME", "PATH", "TMPDIR"])
         self.assertEqual(h.leftovers(), [])
+
+
+class ScanLayerTests(unittest.TestCase):
+    """Each scan layer in scan_inputs is pinned on its own: with the other layer
+    stubbed out, a key only it can see must still stop the run."""
+    FAKE_AWS = "AKIA" + "EXAMPLEEXAMPLE12"
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="codex-scan-layer-"))
+        self.addCleanup(shutil.rmtree, str(self.dir), True)
+        self.diff = self.dir / "c.diff"
+        self.diff.write_text(DIFF)
+
+    def args(self, findings=None):
+        return cr.parse_args(["--diff", str(self.diff), "--mode", "judge" if findings else "find"]
+                             + (["--findings", str(findings)] if findings else []))
+
+    def test_the_file_scan_alone_catches_a_field_codex_never_gets(self):
+        f = self.dir / "f.json"
+        f.write_text(json.dumps({"findings": [{"id": "C-001", "title": "t", "notes": "k " + self.FAKE_AWS}]}))
+        args = self.args(f)
+        with mock.patch.object(cr, "build_stdin", return_value="clean\n"):
+            with self.assertRaises(cr.SecretSuspected):
+                cr.scan_inputs(args, DIFF, cr.load_findings(str(f)), None)
+
+    def test_the_stdin_scan_alone_catches_what_is_sent(self):
+        args = self.args()
+        with mock.patch.object(cr.secret_scan, "scan_file", return_value=[]):
+            with mock.patch.object(cr, "build_stdin", return_value="+k = %s\n" % self.FAKE_AWS):
+                with self.assertRaises(cr.SecretSuspected):
+                    cr.scan_inputs(args, DIFF, None, None)
+            cr.scan_inputs(args, DIFF, None, None)  # negative control: clean stdin passes
+
+
+class SecretGateTests(unittest.TestCase):
+    """Every input codex-review sends is scanned before Codex runs at all. A hit
+    exits 4, never 3, so the skill cannot mistake it for an unavailable adversary."""
+    FAKE_AWS = "AKIA" + "EXAMPLEEXAMPLE12"
+
+    def test_a_secret_in_the_diff_stops_before_codex_runs(self):
+        h = Harness(self)
+        h.diff.write_text(DIFF + "+key = '%s'\n" % self.FAKE_AWS)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 4, res.stderr)
+        self.assertIn("SECRET_SUSPECTED:", res.stderr)
+        self.assertIn("src/a.py:", res.stderr)
+        self.assertNotIn(self.FAKE_AWS, res.stderr + res.stdout)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+        self.assertEqual(h.calls(), [])
+        self.assertFalse(h.out.exists())
+
+    def test_a_secret_in_findings_or_prior_stops_the_run(self):
+        secret = {"findings": [{"id": "C-001", "title": "t", "rationale": "uses " + FAKE_GH}]}
+        for mode, flag in (("judge", "--findings"), ("counter", "--findings"), ("find", "--prior")):
+            with self.subTest(mode=mode):
+                h = Harness(self)
+                res = h.run("--mode", mode, flag, h.write("in.json", secret))
+                self.assertEqual(res.returncode, 4, res.stderr)
+                self.assertEqual(h.calls(), [])
+
+    def test_a_json_escaped_secret_in_findings_or_prior_stops_the_run(self):
+        # Codex gets the decoded value on stdin, so the escape must not hide it.
+        for raw in ("\\u0041KIA" + "EXAMPLEEXAMPLE12", "AKIA" + "EXAMPLEEXAMPLE12"):
+            text = '{"findings":[{"id":"C-001","title":"t","rationale":"key %s"}]}' % raw
+            for mode, flag in (("judge", "--findings"), ("find", "--prior")):
+                with self.subTest(raw=raw, mode=mode):
+                    h = Harness(self)
+                    path = h.dir / "in.json"
+                    path.write_text(text)
+                    res = h.run("--mode", mode, flag, path)
+                    self.assertEqual(res.returncode, 4, res.stderr)
+                    self.assertEqual(h.calls(), [])
+
+    def test_findings_or_prior_that_are_not_strict_json_are_refused(self):
+        for text in NOT_STRICT:
+            for mode, flag in (("judge", "--findings"), ("find", "--prior")):
+                with self.subTest(text=text[:60], mode=mode):
+                    h = Harness(self)
+                    path = h.dir / "in.json"
+                    path.write_text(text)
+                    res = h.run("--mode", mode, flag, path)
+                    self.assertEqual(res.returncode, 1, res.stderr)
+                    self.assertIn("not strict JSON", res.stderr)
+                    self.assertEqual(h.calls(), [])
+
+    def test_allow_secret_match_does_not_send_a_file_that_is_not_strict_json(self):
+        h = Harness(self)
+        path = h.dir / "in.json"
+        path.write_text(NOT_STRICT[1])
+        res = h.run("--mode", "judge", "--findings", path, "--allow-secret-match")
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(h.calls(), [])
+
+    def test_allow_secret_match_lets_the_run_continue(self):
+        h = Harness(self)
+        h.diff.write_text(DIFF + "+key = '%s'\n" % self.FAKE_AWS)
+        res = h.run("--mode", "find", "--allow-secret-match")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.exec_calls()), 1)
+        self.assertIn("--allow-secret-match", res.stderr)
+
+    def test_a_clean_run_is_unchanged(self):
+        h = Harness(self)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn("SECRET_SUSPECTED", res.stderr)
 
 
 if __name__ == "__main__":

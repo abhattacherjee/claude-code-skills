@@ -23,12 +23,17 @@ Its output is untrusted: it is checked against the schema, capped, and redacted.
 
 Exit codes:
   0  success
-  1  error (an input file is missing or unreadable, or the --out file cannot be
-     written; the result then goes to stdout)
+  1  error (an input file is missing or unreadable, --findings or --prior is not
+     strict JSON (a duplicate key, NaN or Infinity, bad syntax), or the --out file
+     cannot be written; the result then goes to stdout)
   2  usage error
   3  adversary unavailable (codex missing or logged out, a non-zero exit,
      a timeout, no valid output after one retry, a missing isolation flag,
      or a leaked isolation canary)
+  4  secret suspected: secret_scan.py found a secret format or a secret-looking
+     file name in --diff, --findings or --prior, so nothing was sent. The hits
+     go to stderr as <path>:<line> <pattern-name>, never the value.
+     --allow-secret-match sends anyway; pass it only after the user confirms.
   128+N  stopped by signal N (130 for SIGINT, 143 for SIGTERM); Codex's process
      group is killed and the temp dirs are removed first, and nothing is written
 """
@@ -48,8 +53,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_record as ar  # noqa: E402
+import secret_scan  # noqa: E402
 
-EXIT_OK, EXIT_ERROR, EXIT_UNAVAILABLE = 0, 1, 3
+EXIT_OK, EXIT_ERROR, EXIT_UNAVAILABLE, EXIT_SECRET = 0, 1, 3, 4
 # Seconds per codex exec call. Below the Claude Code Bash tool's 600 s cap, so one
 # call cannot outlive the tool call that started it. CODEX_REVIEW_TIMEOUT or
 # --timeout overrides it.
@@ -83,6 +89,14 @@ class Unavailable(RuntimeError):
 
 class InputError(RuntimeError):
     """An input file is missing or unreadable."""
+
+
+class SecretSuspected(RuntimeError):
+    """secret_scan found something in an input, so nothing was sent."""
+
+    def __init__(self, hits):
+        super().__init__("%d hit(s)" % len(hits))
+        self.hits = hits
 
 
 class Interrupted(BaseException):
@@ -826,9 +840,14 @@ def load_findings(path):
     without a string id are dropped."""
     try:
         with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
+            text = fh.read()
     except (OSError, ValueError) as exc:
         raise InputError("cannot read %s: %s" % (path, exc))
+    try:
+        # Strict, so what build_stdin re-serializes is all there was to scan.
+        data = secret_scan.load_strict_json(text)
+    except ValueError as exc:
+        raise InputError("%s is not strict JSON (%s); nothing was sent" % (path, exc))
     items = data.get("findings") if isinstance(data, dict) else data
     if not isinstance(items, list):
         raise InputError("%s has no findings list" % path)
@@ -885,7 +904,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="codex-review.sh",
         description="Run Codex as the adversary in a locked-down codex exec. "
-                    "Exit codes: 0 ok, 1 input error, 2 usage, 3 adversary unavailable.")
+                    "Exit codes: 0 ok, 1 input error, 2 usage, 3 adversary unavailable, "
+                    "4 secret suspected (nothing sent).")
     p.add_argument("--diff", help="the shared diff file (required unless --self-test)")
     p.add_argument("--mode", choices=("find", "judge", "counter"),
                    help="required unless --self-test")
@@ -902,6 +922,9 @@ def parse_args(argv=None):
     p.add_argument("--strict", action="store_true",
                    help="judge only: use the hardened judge prompt (confirm only with the "
                         "offending line quoted verbatim)")
+    p.add_argument("--allow-secret-match", action="store_true",
+                   help="send the inputs even when secret_scan.py finds a suspected secret "
+                        "(exit 4 otherwise); pass it only after the user confirms")
     p.add_argument("--self-test", action="store_true",
                    help="run the isolation canary now; exit 0 and stamp this Codex version if it "
                         "passes, exit 3 and delete the stamp if it leaks")
@@ -959,6 +982,30 @@ def _require_stamp(codex, env, version):
                           % version)
 
 
+def scan_inputs(args, diff_text, findings, prior):
+    """Scan what this run will send, before Codex is even located: each input file
+    (for secret-looking file names, and JSON strings with their escapes decoded),
+    and the stdin text exactly as build_stdin makes it, after load_findings has
+    decoded the JSON. The nonce does not change what the scan sees. A hit raises
+    SecretSuspected unless --allow-secret-match; an unreadable file is an
+    InputError, never clean."""
+    hits = []
+    for path in (args.diff, args.findings, args.prior):
+        if path:
+            try:
+                hits += secret_scan.scan_file(path)
+            except OSError as exc:
+                raise InputError("cannot read %s for the secret scan: %s" % (path, exc.strerror or exc))
+    if not hits:
+        stdin_text = build_stdin(diff_text, args.mode, findings, prior, nonce="0" * 8)
+        hits = secret_scan.scan_text(stdin_text, "<codex stdin>")
+    if hits and not args.allow_secret_match:
+        raise SecretSuspected(hits)
+    if hits:
+        print("codex-review: --allow-secret-match: sending %d suspected secret(s) the user confirmed"
+              % len(hits), file=sys.stderr)
+
+
 def review(args):
     if not os.path.isfile(args.diff):
         raise InputError("diff file not found: %s" % args.diff)
@@ -971,6 +1018,7 @@ def review(args):
               % (args.findings, args.mode), file=sys.stderr)
         return {"adversary": "codex", "verdicts": []} if args.mode == "judge" \
             else {"adversary": "codex", "counters": []}
+    scan_inputs(args, diff_text, findings, prior)
     env = _codex_env()
     codex = _ready_codex(env)
     version = ensure_isolation(codex, env, args.timeout)
@@ -1026,6 +1074,13 @@ def main(argv=None):
     except InputError as exc:
         print("codex-review: %s" % exc, file=sys.stderr)
         return EXIT_ERROR
+    except SecretSuspected as exc:
+        print("SECRET_SUSPECTED: %d possible secret(s) in the review input; nothing was sent to "
+              "Codex. Ask the user; rerun with --allow-secret-match only if they confirm." % len(exc.hits),
+              file=sys.stderr)
+        for hit in exc.hits:
+            print(hit, file=sys.stderr)
+        return EXIT_SECRET
     except Interrupted as exc:
         print("codex-review: interrupted by signal %d; killed Codex's process group and removed "
               "the temp dirs" % exc.signum, file=sys.stderr)
