@@ -51,18 +51,57 @@ def jq_scripts():
                   and "--jq" in p.read_text())
 
 
+MAX_JOIN = 20  # following lines joined to close a regex string that runs past its line
+
+
+def first_string_is_open(text):
+    """True when the first jq string after the call opens but does not close in text. Escape-aware,
+    like STRING. Only that first literal (the regex) counts: a later quote on the line may close
+    a string opened on an earlier line, as in "\\(.t | gsub("x"; "y"))"."""
+    start = text.find('"')
+    i = start + 1
+    while start >= 0 and i < len(text):
+        if text[i] == "\\":
+            i += 1
+        elif text[i] == '"':
+            return False
+        i += 1
+    return start >= 0
+
+
+def regex_text(lines, n):
+    """The text of the regex call on lines[n]. If its regex string is still open at the end of the
+    line, join the next lines (at most MAX_JOIN) until it closes. Pairing stays local to the
+    call: a whole-file scan would misalign on the first stray quote in shell source.
+    Returns (text, closed)."""
+    text = lines[n][REGEX_CALL.search(lines[n]).end():]
+    joined = 0
+    while first_string_is_open(text) and joined < MAX_JOIN and n + 1 + joined < len(lines):
+        text += "\n" + lines[n + 1 + joined]
+        joined += 1
+    return text, not first_string_is_open(text)
+
+
 def scan(text):
-    """(line number, problem) for every look-around, and every backreference on a line that
-    calls a jq regex function."""
+    """(line number, problem) for every look-around, and every backreference or possessive
+    quantifier on a line that calls a jq regex function. A regex string that runs onto
+    following lines is joined; one still open after MAX_JOIN lines is reported."""
     bad = []
-    for i, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for n, line in enumerate(lines):
+        i = n + 1
         for token in LOOKAROUND:
             if token in line:
                 bad.append((i, f"look-around {token}"))
-        if REGEX_CALL.search(line) and BACKREF.search(line):
+        if not REGEX_CALL.search(line):
+            continue
+        if BACKREF.search(line):
             bad.append((i, "backreference"))
-        if REGEX_CALL.search(line) and has_possessive(line):
+        joined, closed = regex_text(lines, n)
+        if has_possessive(joined):
             bad.append((i, "possessive quantifier"))
+        if not closed and joined.count("\n") >= MAX_JOIN:
+            bad.append((i, "unterminated regex string"))
     return bad
 
 
@@ -97,6 +136,8 @@ def test_the_scan_catches_a_planted_lookbehind_and_backreference():
     ('x | test("a{2}+b")', "possessive quantifier"),
     ('x | [test("a++")]', "possessive quantifier"),
     ('[.[] | select(test("a*+"))]', "possessive quantifier"),
+    ('x | test("a++\nb")', "possessive quantifier"),
+    ('x | test("b\na*+")', "possessive quantifier"),
 ])
 def test_the_scan_catches_each_forbidden_form(snippet, problem):
     assert (1, problem) in scan(snippet)
@@ -107,6 +148,7 @@ def test_the_scan_catches_each_forbidden_form(snippet, problem):
     'x | test("(?i)(?<name>close[sd]?) (?<num>[0-9]+)")',
     'x | test("(?P<issue>[0-9]+)")',
     'x | test("[?+]+")',
+    'x | test("[?+]\n+")',
     'x | test("[*]+")',
     'x | test("\\\\++")',
     'x | test("a+b*c?[0-9]+\\\\s+x{2}y+?")',
@@ -210,3 +252,13 @@ def test_the_go_check_rejects_a_lookbehind(tmp_path):
     # The instrument works: the old pattern is the error real gh printed.
     r = go_compile(tmp_path, ["(?i)(?<![A-Za-z0-9_])closes"])
     assert r.returncode == 1 and "invalid" in r.stdout
+
+
+def test_a_regex_string_left_open_for_more_than_the_join_cap_is_reported():
+    text = 'x | test("a' + "\nb" * (MAX_JOIN + 1)
+    assert (1, "unterminated regex string") in scan(text)
+
+
+def test_a_regex_string_that_closes_within_the_join_cap_is_not_reported():
+    text = 'x | test("a' + "\nb" * (MAX_JOIN - 1) + '")'
+    assert scan(text) == []
