@@ -4,6 +4,18 @@ Reference for the queries and mutations used by `promote-shipped`. The skill's
 scripts already wrap these — this file exists for debugging, schema exploration, and
 when you need to vary a field outside the script defaults.
 
+## Contents
+
+- Required token scopes
+- 1. Discover boards linked to a repository
+- 2. Inventory items + fields
+  - Metadata + fields
+  - Items (paged, 100 per call)
+  - Fallback: discovering the closing PR from the issue timeline
+- 3. Mutation — set Status to Done
+- Common debugging recipes
+- Status option name conventions seen in the wild
+
 ## Required token scopes
 
 ```bash

@@ -2,6 +2,15 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.2.2] - 2026-10-09
+
+### Changed
+
+- `triage-issues` 2.0.1: Phase 2 links `references/verification-patterns.md` (it was never linked) in place of the shorter inline table; cut the batch-label loop and two `gh` basics from Notes (#210).
+- `create-board` 3.0.1: cut the Sub-Agent Registry, which repeated the phase table (#210).
+- `plan-milestones` 2.2.1: cut the key rule that repeated "Always pass `--unassigned`" (#210).
+- `promote-shipped` 2.1.3: `references/projects-v2-graphql-snippets.md` starts with a Contents list (#210).
+
 ## [1.2.1] - 2026-10-08
 
 ### Fixed
