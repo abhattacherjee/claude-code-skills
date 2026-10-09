@@ -297,6 +297,13 @@ check "no --co-author: releases v0.1.0, exit 0" 0 'PUSHED'
 MSG="$(rel_git -C "$REL/e" log -1 --format=%B)"
 printf '%s' "$MSG" | grep -qi 'co-authored-by' && bad "no --co-author: no trailer" "$MSG" || ok "no --co-author: no trailer, and no model name"
 printf '%s' "$MSG" | grep -q 'release: v0.1.0' && ok "…the commit is the release commit" || bad "…the commit is the release commit" "$MSG"
+rel_clone "$REL/f"
+rel_git -C "$REL/f" remote set-url origin "$REL/no-such-remote.git"
+REFS_BEFORE="$(rel_git -C "$REL/f" for-each-ref)"
+rel_run --dry-run patch "$REL/f"
+check "--dry-run with an unreachable origin still previews, exit 0" 0 'Dry run complete'
+[[ "$(rel_git -C "$REL/f" for-each-ref)" == "$REFS_BEFORE" && -z "$(rel_git -C "$REL/f" status --porcelain)" ]] \
+  && ok "…and writes no refs and no files" || bad "…and writes no refs and no files" "$(rel_git -C "$REL/f" for-each-ref; rel_git -C "$REL/f" status --porcelain)"
 grep -q 'Opus 4.6' "$PUBLISH/release-monorepo.sh" && bad "release-monorepo.sh hard-codes no model name" "found Opus 4.6" || ok "release-monorepo.sh hard-codes no model name"
 
 echo "every script named in a SKILL.md exists, is executable and answers --help"

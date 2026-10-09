@@ -140,7 +140,17 @@ if [[ "$BRANCH" != main ]]; then
   echo "  git -C \"$MONOREPO_DIR\" switch main && git -C \"$MONOREPO_DIR\" pull --ff-only" >&2
   exit 1
 fi
-if git remote get-url origin >/dev/null 2>&1; then
+if $DRY_RUN; then
+  # A dry run writes nothing, not even a fetched ref, and works offline: compare with
+  # the origin/main this clone already has, which may be stale.
+  if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+    BEHIND="$(git rev-list --count HEAD..origin/main)"
+    echo "Note: compared with the local origin/main ref, not fetched; it may be stale."
+    if [[ "$BEHIND" != 0 ]]; then
+      echo "WOULD REFUSE  main is $BEHIND commit(s) behind origin/main (pull --ff-only first)"
+    fi
+  fi
+elif git remote get-url origin >/dev/null 2>&1; then
   if ! git fetch -q origin main; then
     echo "Error: git fetch origin main failed, so it is unknown whether main is behind origin/main" >&2
     exit 1

@@ -232,7 +232,7 @@ git -C "<MONOREPO_DIR>" push -u origin HEAD
 (cd "<MONOREPO_DIR>" && gh pr create --base "<BASE_BRANCH>" --fill)
 ```
 
-If `status` lists nothing, there is nothing to commit: delete the branch and skip the PR.
+If `status` lists nothing, skip the `add` and `commit` lines. Skip the push and the PR only when the branch also has no commits of its own (`git -C "<MONOREPO_DIR>" rev-list --count origin/<BASE_BRANCH>..HEAD` prints 0); otherwise push and open the PR. Never delete a branch that has commits.
 
 ### Step 6: Monorepo Release (MANDATORY)
 

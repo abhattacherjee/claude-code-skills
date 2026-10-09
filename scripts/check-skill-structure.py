@@ -35,7 +35,9 @@ TOC_MIN_LINES = 100   # S3: files longer than this need a Contents list
 TOC_WITHIN = 30       # S3: ...in this many first lines
 EXCLUDED = {"SKILL.md", "README.md", "CHANGELOG.md"}
 TOC = re.compile(r"^##\s+(contents|table of contents)\s*$", re.I)
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# A fence opens with 3+ backticks or tildes (up to 3 spaces of indent). CommonMark
+# forbids a backtick in a backtick fence's info string, so ```inline``` is not a fence.
+FENCE = re.compile(r"^ {0,3}(?:(`{3,})(?!.*`)|(~{3,}))")
 
 
 def body_lines(text):
@@ -72,7 +74,7 @@ def has_toc(lines):
     for line in lines:
         m = FENCE.match(line)
         if m:
-            tok = m.group(1)
+            tok = m.group(1) or m.group(2)
             if fence is None:
                 fence = (tok[0], len(tok))
             elif tok[0] == fence[0] and len(tok) >= fence[1] and not line.strip()[len(tok):]:

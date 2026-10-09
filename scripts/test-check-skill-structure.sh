@@ -91,6 +91,8 @@ fresh; { printf '# T\n```markdown\n## Contents\n```\n'; lines 120; } > "$S/refer
 expect "a ## Contents heading inside a code fence does not count" 1 "references/short.md: S3"
 fresh; { printf '# T\n~~~\n## Contents\n~~~\n## Contents\n'; lines 120; } > "$S/references/short.md"; run
 clean "a real ## Contents heading after a fenced one counts"
+fresh; { printf '# T\n```inline``` is not a fence\n## Contents\n'; lines 120; } > "$S/references/short.md"; run
+clean "a line like \`\`\`inline\`\`\` (backtick in the info string) is not a fence"
 fresh; { printf '# T\n### Contents\n'; lines 120; } > "$S/references/short.md"; run
 expect "a ### Contents heading is not a level-2 heading and fails" 1 "references/short.md: S3"
 

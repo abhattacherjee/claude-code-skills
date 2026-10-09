@@ -6,8 +6,8 @@ All notable changes to the **publish** skill (was `skill-publishing`) are docume
 
 ### Changed
 
-- Step 5 says which branch to sync on: stay on the feature branch that already holds an in-place skill change; otherwise `git fetch` and branch from `origin/<BASE_BRANCH>`. `sync-monorepo.sh` prints the same branch, named-path and PR steps as its "Next steps", not `git add -A` and `git push` (#210).
-- `release-monorepo.sh` refuses (exit 1, before any commit or tag) when HEAD is not `main` or `main` is behind `origin/main`. It used to commit and tag on any branch and push the tag. Step 6 switches to `main` and runs `git pull --ff-only` first (#210).
+- Step 5 says which branch to sync on: stay on the feature branch that already holds an in-place skill change; otherwise `git fetch` and branch from `origin/<BASE_BRANCH>`. When the sync changes nothing, it still pushes and opens the PR if the branch has commits of its own, and never deletes such a branch. `sync-monorepo.sh` prints the same branch, named-path and PR steps as its "Next steps", not `git add -A` and `git push` (#210).
+- `release-monorepo.sh` refuses (exit 1, before any commit or tag) when HEAD is not `main` or `main` is behind `origin/main`. It used to commit and tag on any branch and push the tag. Under `--dry-run` it fetches nothing and compares with the local `origin/main` ref, so the preview writes no refs and works offline. Step 6 switches to `main` and runs `git pull --ff-only` first (#210).
 - `release-monorepo.sh --co-author "<line>"` ends the release commit with that line; with no flag there is no trailer. It used to hard-code `Co-Authored-By: Claude Opus 4.6` (#210).
 - Workflow D notes the CHANGELOG gotchas the two scripts share: each must recognise the other's heading, and `$(...)` strips trailing newlines. Its bump table, a copy of Step 6's, is cut (#210).
 - Step 5 syncs on a `feature/sync-skills-<date>` branch from the monorepo's own base branch (`develop` for `claude-code-skills`), stages the paths the sync wrote by name, and opens a PR. It no longer runs `git add -A` or pushes to `main`. Workflows B, D and E point to Step 5 (#210).
