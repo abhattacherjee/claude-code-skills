@@ -2,6 +2,14 @@
 
 All notable changes to the **publish** skill (was `skill-publishing`) are documented here.
 
+## [1.2.0] - 2026-10-09
+
+### Changed
+
+- Step 5 syncs on a `feature/sync-skills-<date>` branch from the monorepo's own base branch (`develop` for `claude-code-skills`), stages the paths the sync wrote by name, and opens a PR. It no longer runs `git add -A` or pushes to `main`. Workflows B, D and E point to Step 5 (#210).
+- Step 6 runs `release-monorepo.sh` (which pushes `origin main --tags` itself) only after the sync PR merges and the user approves the push to `main`; a Git Flow monorepo releases through its own release flow (#210).
+- Removed `references/readme-template.md`: nothing read it. `prepare-skill-repo.sh` builds the README itself, despite the template's header (#210).
+
 ## [1.1.1] - 2026-10-06
 
 ### Fixed

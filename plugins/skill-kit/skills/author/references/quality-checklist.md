@@ -2,21 +2,43 @@
 
 Pre-publish verification for Claude Code skills. Run through before committing.
 
+## Contents
+
+- Decomposition & Agents
+- Frontmatter
+- Content
+- Progressive Disclosure
+- Progress Tracking (if 3+ phases)
+- Teams (optional)
+- Scripts (if present)
+- Cross-References
+- Testing
+- Verification Commands
+
+## Decomposition & Agents
+
+- [ ] Decomposition evaluated: can this be split into parallel sub-agents?
+- [ ] If yes: orchestrator defined as pure delegator (never does the work itself)
+- [ ] Independent agents launched in a SINGLE Task tool message (not sequentially)
+- [ ] Each sub-agent has a single focused responsibility
+- [ ] Sub-agents use an appropriate model tier (haiku/sonnet/opus)
+- [ ] Agent definitions include a structured output format
+
 ## Frontmatter
 
 - [ ] `name`: ≤64 chars, lowercase letters + numbers + hyphens only
 - [ ] `name`: no reserved words (`anthropic`, `claude`)
-- [ ] `description`: non-empty, ≤1024 characters
+- [ ] `description`: non-empty, ≤1024 characters, a double-quoted single line
 - [ ] `description`: written in third person (not "I help..." or "You can...")
 - [ ] `description`: includes what it does AND when to use it
 - [ ] `description`: has numbered trigger conditions `Use when: (1)...(2)...`
 - [ ] `description`: includes specific terms for semantic matching (error messages, tool names)
-- [ ] `version`: present, follows semver
-- [ ] No non-standard fields (no `author`, `date`, `tags`, `allowed-tools`, `category`)
+- [ ] `metadata.version`: present, follows semver (no top-level `version`)
+- [ ] No non-standard fields (only `name`, `description`, `metadata`, `compatibility`, `license`)
 
 ## Content
 
-- [ ] SKILL.md body ≤ 500 lines
+- [ ] SKILL.md body under 500 lines
 - [ ] Only includes information Claude doesn't already know
 - [ ] Consistent terminology throughout (one term per concept)
 - [ ] No time-sensitive information (or uses "Current" / "Legacy" pattern)
@@ -41,6 +63,13 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 - [ ] Task update rules documented (in_progress → completed, abort → deleted)
 - [ ] Gate/abort points identified (e.g., "if tests fail, delete remaining tasks")
 
+## Teams (optional)
+
+- [ ] Team mode evaluated: does this skill have multi-phase feedback loops?
+- [ ] If yes: team pattern documented alongside the sub-agent pattern
+- [ ] Conditional check for `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` documented
+- [ ] TeamDelete cleanup documented in the workflow
+
 ## Scripts (if present)
 
 - [ ] All scripts support `--help` / `-h` flag
@@ -50,6 +79,8 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 - [ ] Scripts use portable shebang (`#!/usr/bin/env bash`)
 - [ ] Scripts handle error conditions (missing deps, files, permissions)
 - [ ] Scripts referenced from SKILL.md with usage examples
+- [ ] If present: `--fix`/`--dry-run` support
+- [ ] Scripts dry-run tested against real project data (2-3 varied inputs)
 
 ## Cross-References
 
@@ -69,14 +100,14 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 ## Verification Commands
 
 ```bash
-# Line count
-wc -l SKILL.md  # Must be ≤ 500
+# Body line count (after the frontmatter)
+awk 'c>=2{n++} /^---$/{c++} END{print n}' SKILL.md  # Must be under 500
 
 # Description length
-awk '/^description:/{found=1;next} found && /^[a-z]/{exit} found{print}' SKILL.md | wc -c  # Must be ≤ 1024
+grep -m1 '^description:' SKILL.md | wc -c  # Must be ≤ 1040: 1024 plus the 'description: ""' wrapper and the newline
 
 # Non-standard frontmatter fields
-awk '/^---$/{c++;next} c==1{print}' SKILL.md | grep -vE '^(name|description|version|  )' # Should be empty
+awk '/^---$/{c++;next} c==1{print}' SKILL.md | grep -vE '^(name|description|metadata|compatibility|license|  )' # Should be empty
 
 # Script executability
 ls -la scripts/*.sh scripts/*.py 2>/dev/null  # Check x bit

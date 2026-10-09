@@ -2,6 +2,14 @@
 
 All notable changes to the **skill-kit** plugin are documented here.
 
+## [1.2.0] - 2026-10-09
+
+### Changed
+
+- `extract` 1.1.0: Step 1 calls the new `scripts/find-skills.sh` instead of an inline script; removed `resources/skill-template.md` (its frontmatter broke the `author` rules it points to); `resources/research-references.md` is linked and has a Contents list; cut repeated trigger lists and prompts (#210).
+- `publish` 1.2.0: syncs on a branch and opens a PR instead of `git add -A` and a push to `main`; the release step waits for the merge and the user's approval; removed the unused `references/readme-template.md`; body under 500 lines (#210).
+- `author` 1.0.2: links `references/quality-checklist.md` instead of an inline copy, and cuts repeated principles (#210).
+
 ## [1.1.1] - 2026-10-06
 
 ### Fixed

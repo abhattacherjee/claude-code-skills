@@ -2,6 +2,14 @@
 
 All notable changes to the **author** skill (was `skill-authoring`) are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- `references/quality-checklist.md` is now linked from the workflow (step 11) and the Quality Checklist section, which replaces the inline copy. The inline items it lacked (decomposition and agents, teams, dry-run testing) moved into it, and it starts with a Contents list. Its body-length, description-length and frontmatter commands now match the current rules (`metadata.version`, under 500 lines, a single-line description) (#210).
+- Cut repeats: principle 7 merged into principle 4, the `set -e` pitfall list (the `set` flag rule stays), and the anti-patterns that restated a rule above (#210).
+- `references/task-tracking-pattern.md` starts with a Contents list (#210).
+
 ## [1.0.1] - 2026-10-05
 
 ### Changed

@@ -2,7 +2,7 @@
 name: publish
 description: "Was the skill-publishing skill. Publishes Claude Code skills as installable plugins and syncs them to a GitHub monorepo. Plugin-first: every skill with a plugin-manifest.json is auto-assembled and synced as a plugin. Also supports bare skill publishing and individual repos. Use when: (1) user says 'publish', 'share', or 'sync' a skill, (2) a skill needs to be made installable by others, (3) syncing skills/plugins to the monorepo, (4) creating a versioned monorepo release, (5) assembling a plugin from skills + commands, (6) user says 'publish plugin' or 'package plugin'."
 metadata:
-  version: 1.1.1
+  version: 1.2.0
 ---
 
 # Publish Skills & Plugins
@@ -219,28 +219,23 @@ When Agent Teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and publ
 - Skills **with** `plugin-manifest.json` → auto-assembled via `prepare-plugin.sh` and synced to `plugins/`
 - Skills **without** manifest → synced as bare directories at monorepo root
 
+Sync on a branch and open a PR; never commit or push to `main`. `<BASE_BRANCH>` is the branch the monorepo's own rules (its CLAUDE.md or CONTRIBUTING.md) send feature PRs to: `develop` for `claude-code-skills`, which uses Git Flow. Stage the paths the sync wrote by name: staging everything would also sweep in `./build/` output and stray files.
+
 ```bash
-# 1. Sync all skills + auto-build plugins (single command does both)
-"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"
-
-# 2. Commit and push
-cd "<MONOREPO_DIR>"
-git add -A
-CHANGED=$(git diff --cached --stat)
-if [[ -n "$CHANGED" ]]; then
-  git commit -m "Sync skills ($(date +%Y-%m-%d))"
-  git push origin main
-fi
+git -C "<MONOREPO_DIR>" switch -c "feature/sync-skills-<YYYY-MM-DD>" "<BASE_BRANCH>"
+"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"   # sync all skills + auto-build plugins
+git -C "<MONOREPO_DIR>" status --short                            # the paths the sync wrote
+git -C "<MONOREPO_DIR>" add -- <PATH>...                          # each path from that list, by name
+git -C "<MONOREPO_DIR>" commit -m "Sync skills (<YYYY-MM-DD>)"
+git -C "<MONOREPO_DIR>" push -u origin HEAD
+(cd "<MONOREPO_DIR>" && gh pr create --base "<BASE_BRANCH>" --fill)
 ```
 
-**Important**: The `prevent-direct-push` hook in some projects blocks `git push origin main` via Claude. If push is blocked, instruct the user to push manually from their terminal:
-```
-cd "<MONOREPO_DIR>" && git push origin main
-```
+If `status` lists nothing, there is nothing to commit: delete the branch and skip the PR.
 
 ### Step 6: Monorepo Release (MANDATORY)
 
-**After every sync that changes skill content, ALWAYS create a monorepo release.** Do NOT ask whether to release — just do it.
+**After every sync that changes skill content, ALWAYS create a monorepo release** once the sync PR has merged. `release-monorepo.sh` commits the CHANGELOG on the current branch and pushes `origin main --tags` itself, so run it on `main` only when the user has approved that push. A Git Flow monorepo such as `claude-code-skills` releases through its own release flow (`git-flow:release`) instead of this script.
 
 ```bash
 # Determine bump level from what changed:
@@ -352,10 +347,9 @@ This creates the directory, syncs the skills you name with `--skills` (or `--add
 "${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --dry-run "<MONOREPO_DIR>"
 # Sync
 "${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"
-# Then commit and push
-cd "<MONOREPO_DIR>"
-git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))" && git push
 ```
+
+Then commit on a branch and open a PR, as in Step 5.
 
 ### Adding a New Skill to the Monorepo
 
@@ -387,13 +381,7 @@ When you update a skill locally and want to push changes to its individual GitHu
 After syncing skills to the monorepo and committing, create a versioned release:
 
 ```bash
-# 1. Sync skills first
-"${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" "<MONOREPO_DIR>"
-cd "<MONOREPO_DIR>"
-git add -A && git commit -m "Sync skills ($(date +%Y-%m-%d))"
-git push
-
-# 2. Create a versioned release
+# After the sync PR from Step 5 has merged, on main, with the user's approval to push to main:
 "${CLAUDE_SKILL_DIR}/scripts/release-monorepo.sh" minor "<MONOREPO_DIR>"
 ```
 
@@ -472,9 +460,9 @@ This creates `./build/<plugin-name>/` with the official plugin format, scaffoldi
 
 ```bash
 "${CLAUDE_SKILL_DIR}/scripts/sync-monorepo.sh" --add-plugin <plugin-name> "<MONOREPO_DIR>"
-cd "<MONOREPO_DIR>"
-git add -A && git commit -m "feat: add <plugin-name> plugin" && git push
 ```
+
+Then commit `plugins/<plugin-name>/` and the catalogue files the sync lists on a branch, and open a PR, as in Step 5.
 
 ### Step 5: Install (Consumer)
 
