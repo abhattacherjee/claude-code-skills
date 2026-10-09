@@ -2,6 +2,13 @@
 
 All notable changes to the **review** plugin are documented here.
 
+## [1.2.0] - 2026-10-09
+
+### Changed
+
+- `synthesize.py` exits 5 on an unrecognized verdict, instead of a warning and a smaller survivor count that looked valid (#189). stderr names the key it expected (`claude_verdict` or `adversary_verdict`) and the key or value it found, for example `found key 'verdict' on X-002`. It writes no report, and every run first deletes any old file at the `--md` and `--json` paths. `deep` 1.2.0 and `adversarial` 1.2.0 give the exact `r2-claude-verdicts.json` shape.
+- Every agent dispatch writes its results to a file the orchestrator named, and the orchestrator reads results from disk (#121). Silence is `NO REPORT`, a coverage gap listed in the final report and never counted as converged. Chasing stops after two tries; then one fresh dispatch, or the orchestrator runs that dimension itself. New `deep` reference `references/dispatch-contract.md` holds the contract and the never-idle rule, which `deep/SKILL.md` repeated six times. The three agents write their results file before replying.
+
 ## [1.1.0] - 2026-10-09
 
 ### Fixed
