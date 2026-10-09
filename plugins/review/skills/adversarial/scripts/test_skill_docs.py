@@ -432,7 +432,7 @@ class DeepReviewDocTests(unittest.TestCase):
 
     def test_phase1_convergence_excludes_no_report(self):
         conv = norm(section(self.read("SKILL.md"), "### Phase 1 convergence", "Commit Phase 1"))
-        self.assertIn("`NO REPORT` is not CONVERGED", conv)
+        self.assertIn("`NO REPORT` and `PARTIAL` are not CONVERGED", conv)
 
     def test_step_2_1_r1_briefs_use_the_contract(self):
         step21 = norm(section(self.read("SKILL.md"), "### Step 2.1", "### Step 2.2"))
@@ -684,10 +684,44 @@ class DispatchContractTests(unittest.TestCase):
         self.assertIn("**The path must not exist when you dispatch.**", self.flat)
         self.assertIn("-retry1", self.flat)
 
+    def test_a_delivered_retry_is_copied_to_the_base_name(self):
+        # PR #218 review I4: synthesize.py reads the fixed name, never -retry1.
+        self.assertIn("When a retry delivers, copy it to the slot's base name before any step or "
+                      "script reads that name", self.flat)
+
+    def test_partial_never_counts_as_converged(self):
+        # PR #218 review I3: a reviewer writes "partial" early; that file must not converge.
+        block = norm(fenced_code(section(self.text, "## The block every dispatch starts with",
+                                         "## Results files")))
+        self.assertIn("Never mark partial work CONVERGED or complete", block)
+        collect = norm(section(self.text, "## Collect results from disk", "## Silence"))
+        self.assertIn("still marked partial: **not delivered yet**", collect)
+        self.assertIn("A PARTIAL file never counts as CONVERGED", collect)
+
+    def test_markdown_results_have_their_own_partial_marker(self):
+        # PR #218 review S4: the implementer files are Markdown, not JSON.
+        self.assertIn("the first line PARTIAL in Markdown", self.flat)
+        self.assertIn("one `## Fix <i>` heading per numbered fix", self.flat)
+
+    def test_step_2_6_names_the_recheck_judge_file(self):
+        step26 = norm(section((DEEP / "SKILL.md").read_text(encoding="utf-8"), "### Step 2.6", "## Final report"))
+        self.assertIn("<RUN_DIR>/r2-claude-verdicts-recheck-<K>.json", step26)
+
+    def test_exit_5_never_lets_the_orchestrator_pick_a_verdict(self):
+        # PR #218 review S3: re-ask the judge; renaming a key or deleting an entry only.
+        deep = norm(section((DEEP / "SKILL.md").read_text(encoding="utf-8"), "### Step 2.4", "### Step 2.5"))
+        adv = norm(section(SKILL.read_text(encoding="utf-8"), "### Step 4 ", "### Step 4b"))
+        self.assertIn("never set a verdict value yourself", deep)
+        self.assertIn("never set or change a verdict value yourself", adv)
+        for text in (deep, adv):
+            self.assertIn("rename a wrong key", text)
+
     def test_results_file_names_do_not_collide_with_script_outputs(self):
         table = section(self.text, "| Dispatch | Results file | Shape |", "\n\n")
         names = re.findall(r"^\|[^|]*\| `([^`]+)` \|", table, re.M)
-        self.assertEqual(len(names), 7, names)
+        self.assertEqual(len(names), 8, names)
+        # PR #218 review I4: the Step 2.6 re-check judge has its own name per round.
+        self.assertIn("r2-claude-verdicts-recheck-<K>.json", names)
         script_outputs = re.compile(
             r"^(r1-(codex|gemini|claude-only|claude|empty)\.json|r2-(codex|gemini|claude-only|empty)"
             r"(-verdicts)?\.json|r3-codex-counters\.json|report\.(md|json)|round-.*\.json|"

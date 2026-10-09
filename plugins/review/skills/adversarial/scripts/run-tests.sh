@@ -1429,7 +1429,13 @@ run_capture SLUG_C_OUT SLUG_C_EXIT python3 "$SYNTHESIZE" \
   --claude-verdicts "$UNMATCHED_VERDICTS_FILE" \
   --json "$UNMATCHED_OUT_JSON"
 
-assert_exit_code "truly-unmatched verdict: synthesize exits 0" 0 "$SLUG_C_EXIT"
+# Since PR #218 review I2: a verdict that cannot be attached to any finding is
+# lost, so the run stops (exit 5) instead of reporting that finding unconfirmed.
+assert_exit_code "truly-unmatched verdict: synthesize exits 5" 5 "$SLUG_C_EXIT"
+assert_contains "truly-unmatched verdict: names the lost id and why" \
+  "claude_on_gemini: 1 verdict(s) could not be attached to a finding: 'no-such-finding-zzz' (matches no single finding)" "$SLUG_C_OUT"
+assert_eq "truly-unmatched verdict: no report written" "absent" \
+  "$([[ -e "$UNMATCHED_OUT_JSON" ]] && echo present || echo absent)"
 
 # The fix will emit: [synthesize] WARNING: verdict id 'no-such-finding-zzz' ...
 # on stderr (captured via run_capture's 2>&1 merge).
@@ -1482,34 +1488,13 @@ run_capture DTEST_OUT DTEST_EXIT python3 "$SYNTHESIZE" \
   --claude-verdicts "$DTEST_CLAUDE_VERDICTS" \
   --json "$DTEST_OUT_JSON"
 
-assert_exit_code "Test D: ambiguous slug synthesize exits 0" 0 "$DTEST_EXIT"
-
-DTEST_CHECK=""
-DTEST_CHECK_EXIT=0
-run_capture DTEST_CHECK DTEST_CHECK_EXIT python3 - "$DTEST_OUT_JSON" <<'PYEOF'
-import json, sys
-data = json.load(open(sys.argv[1]))
-findings = {f["id"]: f for f in data["findings"]}
-errors = []
-g101 = findings.get("G-101", {})
-g102 = findings.get("G-102", {})
-if g101.get("status") == "rejected":
-    errors.append(f"G-101.status='{g101.get('status')}' but expected NOT rejected (ambiguous slug must not mis-match)")
-if g102.get("status") == "rejected":
-    errors.append(f"G-102.status='{g102.get('status')}' but expected NOT rejected (ambiguous slug must not mis-match)")
-if errors:
-    for e in errors:
-        print(f"FAIL: {e}")
-    sys.exit(1)
-else:
-    print("OK")
-    sys.exit(0)
-PYEOF
-
-if [[ "$DTEST_CHECK_EXIT" -eq 0 ]]; then
+# Since PR #218 review I2: an abstained recovery loses the verdict, so the run
+# stops with exit 5 and writes no report. A mis-match would exit 0 instead.
+assert_exit_code "Test D: ambiguous slug synthesize exits 5" 5 "$DTEST_EXIT"
+if [[ ! -e "$DTEST_OUT_JSON" ]]; then
   pass "synthesize.py: ambiguous slug does NOT mis-match (both stay unconfirmed)"
 else
-  fail "synthesize.py: ambiguous slug does NOT mis-match (both stay unconfirmed)" "$DTEST_CHECK"
+  fail "synthesize.py: ambiguous slug does NOT mis-match (both stay unconfirmed)" "a report was written"
 fi
 
 assert_contains "Test D: ambiguous slug stderr mentions could not be recovered" \
@@ -1818,34 +1803,13 @@ run_capture ITEST_OUT ITEST_EXIT python3 "$SYNTHESIZE" \
   --claude-verdicts "$ITEST_CLAUDE_VERDICTS" \
   --json "$ITEST_OUT_JSON"
 
-assert_exit_code "Test I: multi-location reason synthesize exits 0" 0 "$ITEST_EXIT"
-
-ITEST_CHECK=""
-ITEST_CHECK_EXIT=0
-run_capture ITEST_CHECK ITEST_CHECK_EXIT python3 - "$ITEST_OUT_JSON" <<'PYEOF'
-import json, sys
-data = json.load(open(sys.argv[1]))
-findings = {f["id"]: f for f in data["findings"]}
-g501 = findings.get("G-501", {})
-g502 = findings.get("G-502", {})
-errors = []
-if g501.get("status") == "rejected":
-    errors.append(f"G-501.status='rejected' but expected NOT rejected (multi-location must abstain)")
-if g502.get("status") == "rejected":
-    errors.append(f"G-502.status='rejected' but expected NOT rejected (multi-location must abstain)")
-if errors:
-    for e in errors:
-        print(f"FAIL: {e}")
-    sys.exit(1)
-else:
-    print("OK")
-    sys.exit(0)
-PYEOF
-
-if [[ "$ITEST_CHECK_EXIT" -eq 0 ]]; then
+# Since PR #218 review I2: an abstained recovery loses the verdict, so the run
+# stops with exit 5 and writes no report. A mis-match would exit 0 instead.
+assert_exit_code "Test I: multi-location reason synthesize exits 5" 5 "$ITEST_EXIT"
+if [[ ! -e "$ITEST_OUT_JSON" ]]; then
   pass "synthesize.py: multi-location reason abstains (no mis-match)"
 else
-  fail "synthesize.py: multi-location reason abstains (no mis-match)" "$ITEST_CHECK"
+  fail "synthesize.py: multi-location reason abstains (no mis-match)" "a report was written"
 fi
 
 assert_contains "Test I: multi-location reason stderr mentions could not be recovered" \
@@ -1988,34 +1952,13 @@ run_capture KTEST_OUT KTEST_EXIT python3 "$SYNTHESIZE" \
   --claude-verdicts "$KTEST_CLAUDE_VERDICTS" \
   --json "$KTEST_OUT_JSON"
 
-assert_exit_code "Test K: conflicting signals synthesize exits 0" 0 "$KTEST_EXIT"
-
-KTEST_CHECK=""
-KTEST_CHECK_EXIT=0
-run_capture KTEST_CHECK KTEST_CHECK_EXIT python3 - "$KTEST_OUT_JSON" <<'PYEOF'
-import json, sys
-data = json.load(open(sys.argv[1]))
-findings = {f["id"]: f for f in data["findings"]}
-ga = findings.get("G-A", {})
-gb = findings.get("G-B", {})
-errors = []
-if ga.get("status") == "rejected":
-    errors.append(f"G-A.status='rejected' but expected NOT rejected (conflicting signals must abstain)")
-if gb.get("status") == "rejected":
-    errors.append(f"G-B.status='rejected' but expected NOT rejected (conflicting signals must abstain)")
-if errors:
-    for e in errors:
-        print(f"FAIL: {e}")
-    sys.exit(1)
-else:
-    print("OK")
-    sys.exit(0)
-PYEOF
-
-if [[ "$KTEST_CHECK_EXIT" -eq 0 ]]; then
+# Since PR #218 review I2: an abstained recovery loses the verdict, so the run
+# stops with exit 5 and writes no report. A mis-match would exit 0 instead.
+assert_exit_code "Test K: conflicting signals synthesize exits 5" 5 "$KTEST_EXIT"
+if [[ ! -e "$KTEST_OUT_JSON" ]]; then
   pass "synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)"
 else
-  fail "synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)" "$KTEST_CHECK"
+  fail "synthesize.py: conflicting slug vs reason-location signals abstain (no mis-match)" "a report was written"
 fi
 
 assert_contains "Test K: conflicting signals warns on stderr" \
@@ -2305,6 +2248,59 @@ run_capture VK_OK_OUT VK_OK_EXIT python3 "$SYNTHESIZE" --adversary codex \
 assert_exit_code "#189 control: claude_verdict-keyed verdicts exit 0" 0 "$VK_OK_EXIT"
 assert_contains  "#189 control: all three survive" "survivors=3 unconfirmed=0 rejected=0" "$VK_OK_OUT"
 assert_eq        "#189 control: --json report written" "present" "$([[ -s "$VK_JSON" ]] && echo present || echo absent)"
+
+# ---- PR #218 review: malformed verdict files stop with exit 5, no report ----
+# Each case: the adversary findings and empty claude side from the #189 block,
+# with a broken --claude-verdicts file. A run that exits 0 would report X-001..3
+# as unconfirmed, which is the #189 failure one level up.
+vk_bad() {  # vk_bad NAME FILE-CONTENT EXPECTED-SUBSTRING
+  local name="$1" body="$2" want="$3" f="$TMP_DIR/vk_bad.json" vb_out="" vb_code=0
+  printf '%s\n' "$body" >"$f"
+  rm -f "$VK_JSON"
+  run_capture vb_out vb_code python3 "$SYNTHESIZE" --adversary codex \
+    --claude-findings "$VK_EMPTY_FINDINGS" \
+    --adversary-findings "$VK_ADV_FINDINGS" \
+    --adversary-verdicts "$VK_EMPTY_VERDICTS" \
+    --claude-verdicts "$f" --json "$VK_JSON"
+  assert_exit_code "$name: exit 5" 5 "$vb_code"
+  assert_contains  "$name: message" "$want" "$vb_out"
+  assert_eq        "$name: no report" "absent" "$([[ -e "$VK_JSON" ]] && echo present || echo absent)"
+  assert_eq        "$name: no traceback" "" "$(echo "$vb_out" | grep Traceback || true)"
+}
+vk_bad "I1 wrong top-level key" '{"verdict":[{"id":"X-001","claude_verdict":"confirm"}]}' \
+  "expected top-level key 'verdicts' holding a list (found key 'verdict')"
+vk_bad "I1 no keys at all" '{}' \
+  "expected top-level key 'verdicts' holding a list (found no keys)"
+vk_bad "S1 verdicts is null" '{"verdicts":null}' \
+  "expected top-level key 'verdicts' holding a list (found 'verdicts' holding null)"
+vk_bad "S1 verdicts is an object" '{"verdicts":{"X-001":"confirm"}}' \
+  "expected top-level key 'verdicts' holding a list (found 'verdicts' holding an object)"
+vk_bad "S1 entry is a string" '{"verdicts":["X-001"]}' \
+  "entry 0 is not an object (found a string)"
+vk_bad "I2 entry keyed finding_id" '{"verdicts":[{"finding_id":"X-001","claude_verdict":"refute"}]}' \
+  "entry 0 has no usable 'id' (found keys 'claude_verdict', 'finding_id')"
+vk_bad "I2 id is a number" '{"verdicts":[{"id":7,"claude_verdict":"refute"}]}' \
+  "entry 0 has no usable 'id' (found 'id' holding a number)"
+vk_bad "I2 unknown id with a wrong key" '{"verdicts":[{"id":"X-999","verdict":"confirm"}]}' \
+  "1 verdict(s) could not be attached to a finding: 'X-999' (matches no single finding)"
+# The adversary's file is checked the same way.
+printf '%s\n' '{"verdict":[]}' >"$TMP_DIR/vk_bad_adv.json"
+VK_ADV_OUT=""; VK_ADV_EXIT=0
+run_capture VK_ADV_OUT VK_ADV_EXIT python3 "$SYNTHESIZE" --adversary codex \
+  --claude-findings "$VK_EMPTY_FINDINGS" --adversary-findings "$VK_ADV_FINDINGS" \
+  --adversary-verdicts "$TMP_DIR/vk_bad_adv.json" --claude-verdicts "$VK_EMPTY_VERDICTS"
+assert_exit_code "I1 adversary file wrong top-level key: exit 5" 5 "$VK_ADV_EXIT"
+assert_contains  "I1 adversary file: names the file" "adversary-verdicts (" "$VK_ADV_OUT"
+
+# ---- PR #218 review S2: an output path that is also an input is never deleted ----
+VK_SAME="$TMP_DIR/vk_same.json"
+cp "$VK_CLAUDE_VERDICTS" "$VK_SAME"   # verdict-keyed: the run exits 5
+VK_SAME_OUT=""; VK_SAME_EXIT=0
+run_capture VK_SAME_OUT VK_SAME_EXIT python3 "$SYNTHESIZE" --adversary codex \
+  --claude-findings "$VK_EMPTY_FINDINGS" --adversary-findings "$VK_ADV_FINDINGS" \
+  --adversary-verdicts "$VK_EMPTY_VERDICTS" --claude-verdicts "$VK_SAME" --json "$VK_SAME"
+assert_exit_code "S2 --json equal to an input: exit 5" 5 "$VK_SAME_EXIT"
+assert_eq        "S2 --json equal to an input: the input is kept" "$(cat "$VK_CLAUDE_VERDICTS")" "$(cat "$VK_SAME" 2>/dev/null || echo MISSING)"
 
 # ---- Fix E: low_signal _warn on stderr ----
 # T1 (all-confirm) should already emit the warn; verify it appears in T1 output

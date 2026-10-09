@@ -24,9 +24,10 @@ DELIVERY CONTRACT — READ FIRST. Agents doing this job have finished their
 analysis and never delivered it. Your deliverable is a file, not your reply.
 Before you reply, use the Write tool to write your results to <RESULTS_FILE>
 in this shape: <SHAPE>. Write it even if you found nothing, and even if your
-work is not finished: write early, overwrite as you go, and add
-"partial": true at the top level until you are done. Your reply can be one
-word. Budget about 15 tool calls (an implementer: write the file after each
+work is not finished: write early, overwrite as you go, and mark the file
+partial until you are done ("partial": true at the top level of JSON; the
+first line PARTIAL in Markdown). Never mark partial work CONVERGED or
+complete. Your reply can be one word. Budget about 15 tool calls (an implementer: write the file after each
 numbered fix). A partial file that lands beats a full analysis that does not.
 
 LONG RUNS. Run long harnesses (mutation runs, fuzzers, full suites) in the
@@ -53,7 +54,11 @@ Gemini fallback writes `r2-gemini-prompt.txt`; `review:adversarial` also writes
 | R1 `review:convention-reviewer` | `r1-convention.json` | `{"findings":[...]}`, the agent's own format |
 | R2 `review:cross-examiner` | `r2-claude-verdicts.json` | `{"verdicts":[{"id","claude_verdict":"confirm\|refute","reason"}]}` |
 | R3 Claude agent that concedes or defends | `r3-claude-counters.json` | `{"counters":[{"id","position":"concede\|defend","reason"}]}` |
+| Step 2.6 re-check cross-examiner, re-check round `K` | `r2-claude-verdicts-recheck-<K>.json` | as R2; never reuse `r2-claude-verdicts.json` |
 | Phase 2 implementer, fix pass `n` | `p2-fix-<n>.md` | as the Phase 1 implementer |
+
+A Markdown results file has one `## Fix <i>` heading per numbered fix, and its first line is
+`PARTIAL` until the work is done.
 
 `N` is the Phase 1 round number (1, 2, ...), not the audit-trail counter `K`. `n` is 1 for the
 first Step 2.5 pass and goes up by 1 each time Step 2.6 sends you back. `<D>` is a short dimension
@@ -63,7 +68,9 @@ no critical or important item.
 
 **The path must not exist when you dispatch.** A file left by an earlier dispatch would read as
 this one's delivery. Check first (`ls "<RESULTS_FILE>"` must fail). A retry of the same slot gets
-a new name: add `-retry1`, `-retry2` before the extension. Before the `review:adversarial`
+a new name: add `-retry1`, `-retry2` before the extension. When a retry delivers, copy it to the
+slot's base name before any step or script reads that name (move a malformed file already at the
+base name to `<name>.bad` first). Before the `review:adversarial`
 low-signal re-judge, move the old `r2-claude-verdicts.json` to `r2-claude-verdicts.prev.json`.
 
 ## Collect results from disk
@@ -72,7 +79,10 @@ When every agent in the step has replied or gone idle, read each results file fr
 reply is not the result, and a lost reply costs nothing.
 
 - The file parses and has the shape: **delivered**.
-- It has `"partial": true`: **PARTIAL**. Use what is there, and report the rest as a gap.
+- It is still marked partial: **not delivered yet**. Chase it like a missing file (next section).
+  If it is still partial after the chase cap and the switch, record **PARTIAL**: use its findings
+  and report the rest as a gap. A PARTIAL file never counts as CONVERGED, "no findings" or a
+  complete set of verdicts.
 - It is missing, empty or does not parse: **not delivered**. Go to the next section.
 - The reply carries results but no file was written: write the reply's content to the file
   yourself and note "delivered by reply".
@@ -86,8 +96,8 @@ Then merge, aggregate or synthesize from the files, as the step says.
 2. **Then switch mechanism once.** Do not chase a third time. Either send a fresh dispatch with
    this contract and a `-retry1` path, or run that dimension yourself when it is small. Chase the
    replacement at most twice as well.
-3. **Then record `NO REPORT`.** A dimension with no file after that is a coverage gap. It is
-   never CONVERGED and never "no findings":
+3. **Then record `NO REPORT`** (or `PARTIAL`, if only a partial file landed). Either is a
+   coverage gap. It is never CONVERGED and never "no findings":
    - Phase 1: the round cannot converge. Run the next round or, at `--max-rounds`, report it.
    - R1: say in the R1 digest which Claude finder is missing; the merged `r1-claude.json` holds
      only what was delivered.

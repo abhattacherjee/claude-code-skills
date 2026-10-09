@@ -146,8 +146,8 @@ dimension** AND the previous round's fixes introduced nothing new.
 
 ### Phase 1 convergence is real only when
 
-- Every dimension returned CONVERGED in its results file in the SAME round (`NO REPORT` is not
-  CONVERGED), and
+- Every dimension returned CONVERGED in its results file in the SAME round (`NO REPORT` and
+  `PARTIAL` are not CONVERGED), and
 - That round was a re-review *after* the latest fixes (so "converged" reflects the current tree),
   and
 - Fixes were verified by running tests/build, not by inspection alone — except concerns explicitly
@@ -321,8 +321,10 @@ finding gets `rejected`.
   --json "<RUN_DIR>/report.json"
 ```
 
-**Exit 5:** a verdict lacks `confirm`/`refute` under its expected key; stderr names the key and
-what it found (`found key 'verdict' on X-002`). No report is written. Fix that file and rerun.
+**Exit 5:** a verdicts file is malformed: no `verdicts` list, an entry with no usable or unknown
+`id`, or no `confirm`/`refute` under its expected key. stderr says which (`found key 'verdict' on
+X-002`). No report is written. You may rename a wrong key or delete an entry, which leaves its
+finding unjudged. Otherwise ask the judge that wrote the file again; never set a verdict value yourself.
 
 It does not know about the R3 concessions. Apply those by hand from the `phase2-r3` record: a
 finding the refuter backed down on becomes a survivor, and one the origin gave up on stays
@@ -400,7 +402,7 @@ after writing the `phase2-fix` record, note four values and write them into the 
    next fix range to only what changed since *this* re-check, not every earlier fix stacked
    together. Step 2.5 writes a new `phase2-fix` record; set `FIX_K` to its round and `FIX_SHA` to
    its `head_sha`, then repeat from 1. New findings in the re-check record: judge them with the
-   cross-examiner (Step 2.2), fix the survivors (Step 2.5) the same way, and repeat from 1.
+   cross-examiner (Step 2.2, results file `<RUN_DIR>/r2-claude-verdicts-recheck-<K>.json`), fix the survivors (Step 2.5) the same way, and repeat from 1.
    Before either fix, check cites against the whole change, so a `missed` finding in a file the
    last fix did not touch still passes:
    `git -c color.ui=never diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ <BASE_REF>...<FIX_SHA> > "<RUN_DIR>/cites-<K>.diff"`, then

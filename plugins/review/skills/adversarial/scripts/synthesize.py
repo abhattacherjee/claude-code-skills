@@ -38,13 +38,18 @@ Exit codes:
   0  Success
   1  Error (file not found, parse error, etc.)
   2  Usage error
-  5  A verdict has no confirm or refute under the key its direction reads
-     (claude_verdict for Claude judging the adversary, adversary_verdict for the
-     adversary judging Claude). stderr names the key expected and what was found.
-     No report is written. 3 and 4 are skipped: other review scripts use them.
+  5  A verdicts file the judge got wrong. Either file has no top-level
+     "verdicts" list; an entry is not an object or has no non-empty string id;
+     an entry's id cannot be attached to any finding (one whose only match
+     already has a verdict is a duplicate and only warns); or an entry has no
+     confirm or refute under the key its direction reads (claude_verdict for
+     Claude judging the adversary, adversary_verdict for the adversary judging
+     Claude). stderr names what was expected and what was found. No report is
+     written. 3 and 4 are skipped: other review scripts use them.
 
   Every run first deletes any file at the --md and --json paths, so a failed run
-  never leaves an older report there that looks like this run's.
+  never leaves an older report there that looks like this run's. A path that is
+  also an input is never deleted; on exit 0 it is overwritten by the report.
 """
 
 import argparse
@@ -146,6 +151,53 @@ def clear_outputs(args: argparse.Namespace) -> None:
             os.remove(path)
 
 
+def _kind(value: Any) -> str:
+    """How a JSON value reads in an error message."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, (int, float)):
+        return "a number"
+    return {str: "a string", list: "a list", dict: "an object"}.get(type(value), type(value).__name__)
+
+
+def _keys(d: dict) -> str:
+    keys = sorted(map(str, d))
+    if not keys:
+        return "no keys"
+    return ("key " if len(keys) == 1 else "keys ") + ", ".join(repr(k) for k in keys)
+
+
+def verdict_shape_errors(raw: dict, label: str, path: str) -> list[str]:
+    """Errors for a verdicts file that is not {"verdicts":[{"id": "<non-empty string>", ...}]}.
+    Each one would otherwise drop verdicts without a word and exit 0 (PR #218 review)."""
+    where = f"{label} ({path})"
+    if not isinstance(raw.get("verdicts"), list):
+        found = (f"'verdicts' holding {_kind(raw['verdicts'])}" if "verdicts" in raw
+                 else _keys(raw))
+        return [f"{where}: expected top-level key 'verdicts' holding a list (found {found})"]
+    errors = []
+    for i, v in enumerate(raw["verdicts"]):
+        if not isinstance(v, dict):
+            errors.append(f"{where}: entry {i} is not an object (found {_kind(v)})")
+        elif not (isinstance(v.get("id"), str) and v["id"].strip()):
+            found = f"'id' holding {_kind(v['id'])}" if "id" in v else _keys(v)
+            errors.append(f"{where}: entry {i} has no usable 'id' (found {found})")
+    return errors
+
+
+def stop_on_bad_verdicts(errors: list[str]) -> None:
+    """Print each error and exit 5 with no report written."""
+    if not errors:
+        return
+    for msg in errors:
+        print(f"[synthesize] ERROR: {msg}", file=sys.stderr)
+    print("[synthesize] ERROR: no report written. Rename a wrong key, or ask the judge that "
+          "wrote the file to answer again; never set a verdict value yourself.", file=sys.stderr)
+    sys.exit(UNRECOGNIZED_EXIT)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -167,7 +219,7 @@ Exit codes:
   0  Success
   1  Error (file not found, parse error, etc.)
   2  Usage error
-  5  Unrecognized verdict: no confirm/refute under the expected key; no report written
+  5  Bad verdicts file (shape, id, or no confirm/refute under the expected key); no report
 """,
     )
     parser.add_argument("--claude-findings", required=True, metavar="FILE",
@@ -225,7 +277,8 @@ def _warn(msg: str) -> None:
     print(f"[synthesize] WARNING: {msg}", file=sys.stderr)
 
 
-def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_field: str) -> dict[str, dict]:
+def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_field: str,
+                          lost: list | None = None) -> dict[str, dict]:
     """Map finding-id -> verdict, recovering verdicts whose 'id' is a slug or
     other non-canonical value instead of the orchestrator's C-NNN/G-NNN id.
 
@@ -239,6 +292,10 @@ def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_fi
     verdict is logged to stderr for audit. Returns a finding-id -> verdict dict;
     recovered verdicts are keyed by the resolved finding id. Every recovery and
     every unrecoverable verdict is logged to stderr for audit.
+
+    When `lost` is a list, each verdict that could not be attached is appended to
+    it as (id, why). A verdict whose only candidate already has a verdict is a
+    duplicate, not lost: it is only logged, like a repeated exact id.
     """
     findings = [f for f in findings if f.get("id")]
     finding_ids = {f["id"] for f in findings}
@@ -292,6 +349,8 @@ def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_fi
         }
         if len(loc_cands) == 1:
             candidates.add(next(iter(loc_cands)))
+        claimed = slug_cand in resolved or any(
+            loc_index.get(tok) in resolved for tok in re.findall(r"[\w./-]+:\d+", reason))
         if len(candidates) == 1:
             target = next(iter(candidates))
             resolved[target] = v
@@ -302,10 +361,16 @@ def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_fi
                   f"(slug and reason-location point to different findings: "
                   f"{sorted(candidates)}); abstaining — the targeted finding stays "
                   f"'unconfirmed' (its {verdict_field} is ignored)")
+            if lost is not None:
+                lost.append((vid, "conflicting recovery signals"))
         else:
             _warn(f"verdict id '{vid}' did not match any finding id and could not "
                   f"be recovered; the targeted finding stays 'unconfirmed' "
                   f"(its {verdict_field} is ignored)")
+            if lost is not None and not claimed:
+                why = ("its reason cites more than one finding" if len(loc_cands) > 1
+                       else "matches no single finding")
+                lost.append((vid, why))
     return resolved
 
 
@@ -315,6 +380,8 @@ def classify_findings(
     gemini_verdicts_raw: dict,
     claude_verdicts_raw: dict,
     adversary="gemini",
+    lost_adversary: list | None = None,
+    lost_claude: list | None = None,
 ) -> tuple[list[dict], dict[str, dict], dict[str, dict]]:
     """Apply symmetric convergence and return (findings, gemini_verdict_map, claude_verdict_map).
 
@@ -327,12 +394,12 @@ def classify_findings(
     # resolved Claude finding id (C-NNN); reconcile recovers slug/location-keyed
     # verdicts back to that id.
     gemini_verdict_map: dict[str, dict] = reconcile_verdict_map(
-        gemini_verdicts_raw.get("verdicts", []), claude_findings, "adversary_verdict"
+        gemini_verdicts_raw.get("verdicts", []), claude_findings, "adversary_verdict", lost_adversary
     )
     # claude_verdict_map: Claude's verdicts on Gemini findings, keyed by the
     # resolved Gemini finding id (G-NNN); same recovery applies.
     claude_verdict_map: dict[str, dict] = reconcile_verdict_map(
-        claude_verdicts_raw.get("verdicts", []), gemini_findings, "claude_verdict"
+        claude_verdicts_raw.get("verdicts", []), gemini_findings, "claude_verdict", lost_claude
     )
 
     classified: list[dict] = []
@@ -586,13 +653,19 @@ def main() -> None:
         )
         sys.exit(1)
 
+    stop_on_bad_verdicts(
+        verdict_shape_errors(gemini_verdicts_raw, "adversary-verdicts", args.gemini_verdicts)
+        + verdict_shape_errors(claude_verdicts_raw, "claude-verdicts", args.claude_verdicts))
+
     upgrade_verdict_key(claude_findings)
     upgrade_verdict_key(gemini_findings)
-    if isinstance(gemini_verdicts_raw.get("verdicts"), list):
-        upgrade_verdict_key(gemini_verdicts_raw["verdicts"])
+    upgrade_verdict_key(gemini_verdicts_raw["verdicts"])
     adv = args.adversary
+    lost_adversary: list = []
+    lost_claude: list = []
     classified, gemini_verdict_map, claude_verdict_map = classify_findings(
-        claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw, adv
+        claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw, adv,
+        lost_adversary, lost_claude,
     )
 
     # Warn on id collisions across origins (both are preserved in the list)
@@ -608,25 +681,25 @@ def main() -> None:
             )
         seen_ids[fid] = origin
 
-    # An unrecognized verdict stops the run (#189). Counting it as unconfirmed gave a
-    # smaller survivor count that looked valid.
+    # An unrecognized verdict, or one that cannot be attached to a finding, stops the
+    # run (#189, PR #218 review). Counting it as unconfirmed gave a smaller survivor
+    # count that looked valid.
     errors = []
-    for direction, verdict_map, field in (
-        (f"{adv}_on_claude", gemini_verdict_map, VERDICT_KEY),
-        (f"claude_on_{adv}", claude_verdict_map, "claude_verdict"),
+    for direction, verdict_map, field, lost in (
+        (f"{adv}_on_claude", gemini_verdict_map, VERDICT_KEY, lost_adversary),
+        (f"claude_on_{adv}", claude_verdict_map, "claude_verdict", lost_claude),
     ):
+        if lost:
+            detail = ", ".join(f"'{vid}' ({why})" for vid, why in lost)
+            errors.append(f"{direction}: {len(lost)} verdict(s) could not be attached to a "
+                          f"finding: {detail}")
         found = describe_unrecognized(verdict_map, field)
         if found:
             count = sum(len(ids) for ids in found.values())
             detail = "; ".join(f"found {what} on {', '.join(ids)}" for what, ids in found.items())
             errors.append(f"{direction}: {count} verdict(s) have no confirm or refute under "
                           f"the expected key '{field}' ({detail})")
-    if errors:
-        for msg in errors:
-            print(f"[synthesize] ERROR: {msg}", file=sys.stderr)
-        print("[synthesize] ERROR: no report written. Fix the verdicts file so every entry "
-              "has its expected key set to confirm or refute, then run again.", file=sys.stderr)
-        sys.exit(UNRECOGNIZED_EXIT)
+    stop_on_bad_verdicts(errors)
 
     survivors = [f for f in classified if f.get("status") == "survivor"]
     unconfirmed = [f for f in classified if f.get("status") == "unconfirmed"]

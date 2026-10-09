@@ -6,8 +6,9 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 
 ### Changed
 
-- Every dispatch follows the new `references/dispatch-contract.md` (#121): Phase 1 reviewers and implementer, R1, R2, R3 and the Step 2.5 implementer. Each writes its results to a named `<RUN_DIR>` file before replying, and the orchestrator reads the file. Silence is `NO REPORT`: chase at most twice, switch mechanism once, then list it in the final report. `NO REPORT` is never CONVERGED. New Red Flag: treating agent silence as a clean verdict. The never-idle rule, repeated six times, now lives once in that reference. The body is 486 lines (was 489).
+- Every dispatch follows the new `references/dispatch-contract.md` (#121): Phase 1 reviewers and implementer, R1, R2, R3 and the Step 2.5 implementer. Each writes its results to a named `<RUN_DIR>` file before replying, and the orchestrator reads the file. Silence is `NO REPORT`: chase at most twice, switch mechanism once, then list it in the final report. `NO REPORT` is never CONVERGED. New Red Flag: treating agent silence as a clean verdict. The never-idle rule, repeated six times, now lives once in that reference. The body is 488 lines (was 489).
 - Step 2.2 gives the exact `r2-claude-verdicts.json` shape, `{"verdicts":[{"id","claude_verdict":"confirm|refute","reason"}]}`, and Step 2.4 says what `synthesize.py` exit 5 means (#189).
+- `NO REPORT` and `PARTIAL` are not CONVERGED. The contract marks partial Markdown files with a first line `PARTIAL`, names the Step 2.6 re-check judge's file `r2-claude-verdicts-recheck-<K>.json`, and says to copy a delivered retry to the base name. The Step 2.4 exit-5 note covers malformed verdict files and never lets you set a verdict value.
 
 ## [1.1.0] - 2026-10-09
 
