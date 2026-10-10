@@ -399,59 +399,73 @@ class DeepReviewDocTests(unittest.TestCase):
         self.assertIn("leave the remaining threads open", exit1)
         self.assertIn("round summary", exit1)
 
-    def test_phase1_step1_dispatch_never_idle_on_its_own_background_run(self):
-        # #137: reviewers must run long harnesses in the foreground and never go
-        # idle waiting on their own background job.
-        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
-        step1 = norm(section(each_round, "1. **Dispatch", "2. **Aggregate"))
-        self.assertIn("10-minute cap", step1)
-        self.assertIn("20 minutes", step1)
-        self.assertIn("Never go idle", step1)
+    # #137 put the never-idle rule in every dispatch step. #121 moved it, with the
+    # delivery contract, into references/dispatch-contract.md: each step now points
+    # there and names its own results file. DispatchContractTests checks the rule text.
+    CONTRACT = "./references/dispatch-contract.md"
 
-    def test_phase1_step2_aggregate_checks_before_reporting_waiting(self):
-        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
-        step2 = section(each_round, "2. **Aggregate", "3. **Fix")
-        self.assertIn("ps -axo pid,etime,command", step2)
-        self.assertIn("10 minutes", step2)
-        self.assertIn('Never report "waiting on X"', step2)
+    def each_round(self):
+        return section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
 
-    def test_phase1_step3_fix_implementer_never_idle_on_its_own_background_run(self):
-        # #137 follow-up: item 2 (Aggregate) tells the orchestrator to watch a
-        # background job, but item 3 (Fix) never told the implementer itself the
-        # never-idle rule. It must carry the same rule as the reviewers.
-        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
-        step3 = norm(section(each_round, "3. **Fix", "4. **Re-review"))
-        self.assertIn("10-minute cap", step3)
-        self.assertIn("20 minutes", step3)
-        self.assertIn("never go idle", step3.lower())
+    def test_phase1_step1_dispatch_uses_the_contract(self):
+        step1 = norm(section(self.each_round(), "1. **Dispatch", "2. **Aggregate"))
+        self.assertIn(self.CONTRACT, step1)
+        self.assertIn("<RUN_DIR>/p1-r<N>-<dimension>.json", step1)
 
-    def test_phase1_step4_rereview_never_idle_on_its_own_background_run(self):
-        each_round = section(self.read("SKILL.md"), "### Each round", "### Phase 1 convergence")
-        step4 = section(each_round, "4. **Re-review", "5. **Converge")
-        self.assertIn("foreground", step4)
-        self.assertIn("never go idle", step4.lower())
+    def test_phase1_step2_aggregate_collects_from_disk_and_checks_waiting(self):
+        step2 = norm(section(self.each_round(), "2. **Aggregate", "3. **Fix"))
+        self.assertIn(self.CONTRACT, step2)
+        self.assertIn("from disk", step2)
+        self.assertIn("NO REPORT", step2)
+        self.assertIn("waiting on a background job", step2)
 
-    def test_step_2_1_r1_briefs_never_idle_and_orchestrator_checks(self):
-        step21 = section(self.read("SKILL.md"), "### Step 2.1", "### Step 2.2")
-        self.assertIn("10-minute cap", step21)
-        self.assertIn("never go idle", step21.lower())
-        self.assertIn("ps -axo pid,etime,command", step21)
-        self.assertIn("10 minutes", step21)
+    def test_phase1_step3_fix_implementer_uses_the_contract(self):
+        step3 = norm(section(self.each_round(), "3. **Fix", "4. **Re-review"))
+        self.assertIn(self.CONTRACT, step3)
+        self.assertIn("<RUN_DIR>/p1-r<N>-fix.md", step3)
 
-    def test_step_2_2_r2_briefs_never_idle_and_orchestrator_checks(self):
+    def test_phase1_step4_rereview_uses_the_contract_with_a_new_path(self):
+        step4 = norm(section(self.each_round(), "4. **Re-review", "5. **Converge"))
+        self.assertIn("contract block again", step4)
+        self.assertIn("p1-r<N+1>-<dimension>.json", step4)
+        self.assertIn("from disk", step4)
+
+    def test_phase1_convergence_excludes_no_report(self):
+        conv = norm(section(self.read("SKILL.md"), "### Phase 1 convergence", "Commit Phase 1"))
+        self.assertIn("`NO REPORT` and `PARTIAL` are not CONVERGED", conv)
+
+    def test_step_2_1_r1_briefs_use_the_contract(self):
+        step21 = norm(section(self.read("SKILL.md"), "### Step 2.1", "### Step 2.2"))
+        self.assertIn(self.CONTRACT, step21)
+        self.assertIn("<RUN_DIR>/r1-bug-hunter.json", step21)
+        self.assertIn("<RUN_DIR>/r1-convention.json", step21)
+        self.assertIn("from disk", step21)
+
+    def test_step_2_2_r2_brief_uses_the_contract(self):
         step22 = norm(section(self.read("SKILL.md"), "### Step 2.2", "### Step 2.3"))
-        self.assertIn("10-minute cap", step22)
-        self.assertIn("never go idle", step22.lower())
-        self.assertIn("ps -axo pid,etime,command", step22)
-        self.assertIn("10 minutes", step22)
+        self.assertIn(self.CONTRACT, step22)
+        self.assertIn("NO REPORT", step22)
 
-    def test_step_2_5_implementer_never_idle_on_its_own_background_run(self):
-        # #137 follow-up: Step 2.5's implementer dispatch (Phase 2's fix step) must
-        # carry the same never-idle rule as Phase 1's Fix step and the R1/R2 briefs.
+    def test_step_2_5_implementer_uses_the_contract(self):
         step25 = norm(section(self.read("SKILL.md"), "### Step 2.5", "### Step 2.6"))
-        self.assertIn("10-minute cap", step25)
-        self.assertIn("20 minutes", step25)
-        self.assertIn("never go idle", step25.lower())
+        self.assertIn(self.CONTRACT, step25)
+        self.assertIn("<RUN_DIR>/p2-fix-<n>.md", step25)
+
+    def test_the_never_idle_rule_lives_in_one_place(self):
+        # The rule used to be repeated six times in SKILL.md.
+        skill = self.read("SKILL.md")
+        self.assertNotIn("10-minute cap", skill)
+        self.assertNotIn("ps -axo pid,etime,command", skill)
+
+    def test_final_report_lists_every_no_report(self):
+        final = norm(section(self.read("SKILL.md"), "## Final report", "## Red Flags"))
+        self.assertIn("`NO REPORT`", final)
+        self.assertIn('Never fold one into "converged"', final)
+
+    def test_red_flags_names_agent_silence(self):
+        red_flags = norm(section(self.read("SKILL.md"), "## Red Flags", "## Integration"))
+        self.assertIn("**Treat agent silence as a clean verdict.**", red_flags)
+        self.assertIn("Chase at most twice", red_flags)
 
     def test_red_flags_names_idle_reviewer_wait(self):
         red_flags = section(self.read("SKILL.md"), "## Red Flags", "## Integration")
@@ -622,6 +636,132 @@ class UntrustedInputDocTests(unittest.TestCase):
             self.assertIn("## Contents", "\n".join(self.ref.splitlines()[:30]))
 
 
+class DispatchContractTests(unittest.TestCase):
+    """#121: references/dispatch-contract.md holds the delivery contract and the
+    never-idle rule that every dispatch in deep and adversarial points to."""
+
+    def setUp(self):
+        self.text = (DEEP / "references" / "dispatch-contract.md").read_text(encoding="utf-8")
+        self.flat = norm(self.text)
+
+    def test_the_block_says_write_the_file_before_replying(self):
+        block = section(self.text, "## The block every dispatch starts with", "## Results files")
+        block = norm(fenced_code(block))
+        self.assertIn("DELIVERY CONTRACT — READ FIRST", block)
+        self.assertIn("use the Write tool to write your results to <RESULTS_FILE>", block)
+        self.assertIn("Write it even if you found nothing", block)
+        self.assertIn("Your reply can be one word", block)
+        self.assertIn("Budget about 15 tool calls", block)
+
+    def test_the_block_carries_the_never_idle_rule(self):
+        block = norm(fenced_code(section(self.text, "## The block every dispatch starts with",
+                                         "## Results files")))
+        self.assertIn("in the foreground", block)
+        self.assertIn("10-minute cap", block)
+        self.assertIn("20 minutes", block)
+        self.assertIn("Never go idle", block)
+
+    def test_the_orchestrator_checks_before_reporting_waiting(self):
+        part = norm(self.text.split("## When an agent says it is waiting", 1)[1])
+        self.assertIn("ps -axo pid,etime,command", part)
+        self.assertIn("10 minutes", part)
+        self.assertIn('Never report "waiting on X"', part)
+
+    def test_silence_is_no_report_with_a_chase_cap_of_two(self):
+        part = norm(section(self.text, "## Silence, the chase cap, and NO REPORT", "## When an agent"))
+        self.assertIn("**Chase at most twice.**", part)
+        self.assertIn("Do not chase a third time", part)
+        self.assertIn("switch mechanism once", part)
+        self.assertIn("never CONVERGED", part)
+        self.assertIn("List every NO REPORT and PARTIAL in the final report", part)
+
+    def test_results_are_read_from_disk_not_replies(self):
+        part = norm(section(self.text, "## Collect results from disk", "## Silence"))
+        self.assertIn("read each results file from disk", part)
+        self.assertIn("The reply is not the result", part)
+
+    def test_a_dispatch_path_must_not_exist_yet(self):
+        self.assertIn("**The path must not exist when you dispatch.**", self.flat)
+        self.assertIn("-retry1", self.flat)
+
+    def test_a_delivered_retry_is_copied_to_the_base_name(self):
+        # PR #218 review I4: synthesize.py reads the fixed name, never -retry1.
+        self.assertIn("When a retry delivers, copy it to the slot's base name before any step or "
+                      "script reads that name", self.flat)
+
+    def test_partial_never_counts_as_converged(self):
+        # PR #218 review I3: a reviewer writes "partial" early; that file must not converge.
+        block = norm(fenced_code(section(self.text, "## The block every dispatch starts with",
+                                         "## Results files")))
+        self.assertIn("Never mark partial work CONVERGED or complete", block)
+        collect = norm(section(self.text, "## Collect results from disk", "## Silence"))
+        self.assertIn("still marked partial: **not delivered yet**", collect)
+        self.assertIn("A PARTIAL file never counts as CONVERGED", collect)
+
+    def test_a_partial_r2_delivery_keeps_its_verdicts(self):
+        # PR #218 Codex X-003: only NO REPORT empties r2-claude-verdicts.json.
+        part = norm(section(self.text, "## Silence, the chase cap, and NO REPORT", "## When an agent"))
+        r2 = part.split("- R2,", 1)[1].split("- Implementer:", 1)[0]
+        self.assertIn('NO REPORT: write `{"verdicts":[]}`', r2)
+        self.assertIn("PARTIAL: keep the delivered verdicts", r2)
+        self.assertIn("Never replace a partial file with an empty one", r2)
+
+    def test_markdown_results_have_their_own_partial_marker(self):
+        # PR #218 review S4: the implementer files are Markdown, not JSON.
+        self.assertIn("the first line PARTIAL in Markdown", self.flat)
+        self.assertIn("one `## Fix <i>` heading per numbered fix", self.flat)
+
+    def test_step_2_6_names_the_recheck_judge_file(self):
+        step26 = norm(section((DEEP / "SKILL.md").read_text(encoding="utf-8"), "### Step 2.6", "## Final report"))
+        self.assertIn("<RUN_DIR>/r2-claude-verdicts-recheck-<K>.json", step26)
+
+    def test_exit_5_never_lets_the_orchestrator_pick_a_verdict(self):
+        # PR #218 review S3: re-ask the judge; renaming a key or deleting an entry only.
+        deep = norm(section((DEEP / "SKILL.md").read_text(encoding="utf-8"), "### Step 2.4", "### Step 2.5"))
+        adv = norm(section(SKILL.read_text(encoding="utf-8"), "### Step 4 ", "### Step 4b"))
+        self.assertIn("never set a verdict value yourself", deep)
+        self.assertIn("never set or change a verdict value yourself", adv)
+        for text in (deep, adv):
+            self.assertIn("rename a wrong key", text)
+
+    def test_results_file_names_do_not_collide_with_script_outputs(self):
+        table = section(self.text, "| Dispatch | Results file | Shape |", "\n\n")
+        names = re.findall(r"^\|[^|]*\| `([^`]+)` \|", table, re.M)
+        self.assertEqual(len(names), 8, names)
+        # PR #218 review I4: the Step 2.6 re-check judge has its own name per round.
+        self.assertIn("r2-claude-verdicts-recheck-<K>.json", names)
+        script_outputs = re.compile(
+            r"^(r1-(codex|gemini|claude-only|claude|empty)\.json|r2-(codex|gemini|claude-only|empty)"
+            r"(-verdicts)?\.json|r3-codex-counters\.json|report\.(md|json)|round-.*\.json|"
+            r"fix-range-.*\.diff|cites-.*\.diff|recheck-.*\.json|r2-gemini-prompt\.txt)$")
+        for name in names:
+            self.assertNotRegex(name, script_outputs)
+        # r2-claude-verdicts.json is the one name a Claude agent and synthesize.py share on purpose.
+        self.assertIn("r2-claude-verdicts.json", names)
+
+    def test_the_skills_name_the_contract_file(self):
+        self.assertIn("references/dispatch-contract.md", (DEEP / "SKILL.md").read_text(encoding="utf-8"))
+        adv = norm(SKILL.read_text(encoding="utf-8"))
+        self.assertIn("`../deep/references/dispatch-contract.md`", adv)
+        self.assertTrue((SKILL.parent / "../deep/references/dispatch-contract.md").is_file())
+
+    def test_adversarial_dispatches_name_their_results_files(self):
+        adv = SKILL.read_text(encoding="utf-8")
+        step2 = section(adv, "### Step 2 — R1", "### Step 3 — R2")
+        self.assertIn("<RUN_DIR>/r1-bug-hunter.json", step2)
+        self.assertIn("<RUN_DIR>/r1-convention.json", step2)
+        self.assertIn("Read both files from disk", step2)
+        step3 = section(adv, "### Step 3 — R2", "### Step 4 — Converge")
+        self.assertIn("same delivery contract", step3)
+        self.assertIn("r2-claude-verdicts.prev.json", step3)
+
+    def test_every_agent_writes_its_results_file_first(self):
+        for name in ("bug-hunter.md", "convention-reviewer.md", "cross-examiner.md"):
+            rules = (PLUGIN / "agents" / name).read_text(encoding="utf-8").split("## Rules", 1)[1]
+            self.assertIn("**Write your results file before you reply.**", rules, name)
+            self.assertIn("`NO REPORT`", rules, name)
+
+
 class GeminiFallbackShapeTests(unittest.TestCase):
     """Step 2.2 of deep tells you to write Gemini's verdicts by hand when
     gemini-review.sh fails. synthesize.py must read the file exactly as documented."""
@@ -636,7 +776,7 @@ class GeminiFallbackShapeTests(unittest.TestCase):
         note = section(self.step22, "**Gemini reliability note:**", "**Missing verdicts")
         return re.search(r"```json\n(.*?)```", note, re.S).group(1)
 
-    def run_synth(self, verdicts_text):
+    def run_synth(self, verdicts_text, expect_exit=0):
         def put(name, obj):
             path = self.tmp / name
             path.write_text(json.dumps(obj) if not isinstance(obj, str) else obj, encoding="utf-8")
@@ -653,7 +793,10 @@ class GeminiFallbackShapeTests(unittest.TestCase):
              "--claude-findings", claude, "--adversary-findings", adv,
              "--adversary-verdicts", gv, "--claude-verdicts", cv, "--json", str(out)],
             capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.returncode, expect_exit, res.stderr)
+        if expect_exit:
+            self.assertFalse(out.exists())
+            return res.stderr
         return {f["id"]: f for f in json.loads(out.read_text())["findings"]}
 
     def test_the_documented_shape_is_read_as_confirm_and_refute(self):
@@ -666,9 +809,11 @@ class GeminiFallbackShapeTests(unittest.TestCase):
 
     def test_the_old_prompt_shape_is_not_what_the_docs_ask_for(self):
         # The earlier text asked for {id, verdict, reason}. synthesize.py does not read
-        # a bare `verdict` key, so every finding would have stayed unconfirmed.
-        got = self.run_synth(json.dumps({"verdicts": [{"id": "C-001", "verdict": "confirm", "reason": "x"}]}))
-        self.assertEqual(got["C-001"]["status"], "unconfirmed")
+        # a bare `verdict` key; since #189 it stops with exit 5 and names both keys.
+        err = self.run_synth(json.dumps({"verdicts": [{"id": "C-001", "verdict": "confirm", "reason": "x"}]}),
+                             expect_exit=5)
+        self.assertIn("expected key 'adversary_verdict'", err)
+        self.assertIn("found key 'verdict' on C-001", err)
         self.assertNotIn("verdict:confirm|refute", self.step22)
         self.assertIn("adversary_verdict", self.documented_json())
 
@@ -679,6 +824,56 @@ class GeminiFallbackShapeTests(unittest.TestCase):
         self.assertIn("Codex", missing)
         got = self.run_synth('{"verdicts":[]}')
         self.assertTrue(all(f["status"] == "unconfirmed" for f in got.values()))
+
+
+class ClaudeVerdictShapeTests(unittest.TestCase):
+    """#189: deep Step 2.2 and adversarial Step 3 name the exact shape the
+    cross-examiner writes to r2-claude-verdicts.json, and synthesize.py reads it."""
+
+    SHAPE = re.compile(r'```json\n\s*(\{"verdicts":\[\{"id":"X-001","claude_verdict".*?)```', re.S)
+
+    def documented(self, text):
+        match = self.SHAPE.search(text)
+        self.assertIsNotNone(match, "no claude_verdict json block")
+        return match.group(1)
+
+    def synth(self, verdicts_text):
+        tmp = Path(tempfile.mkdtemp(prefix="claude-shape-"))
+        self.addCleanup(__import__("shutil").rmtree, str(tmp), True)
+        finding = lambda fid: {"id": fid, "path": "a.py", "line": 1, "severity": "minor",
+                               "category": "bug", "title": fid, "rationale": "r", "origin": "codex"}
+        (tmp / "c.json").write_text('{"findings":[]}')
+        (tmp / "x.json").write_text(json.dumps({"findings": [finding("X-001"), finding("X-002")]}))
+        (tmp / "xv.json").write_text('{"verdicts":[]}')
+        (tmp / "cv.json").write_text(verdicts_text)
+        res = subprocess.run(
+            [sys.executable, str(HERE / "synthesize.py"), "--adversary", "codex",
+             "--claude-findings", str(tmp / "c.json"), "--adversary-findings", str(tmp / "x.json"),
+             "--adversary-verdicts", str(tmp / "xv.json"), "--claude-verdicts", str(tmp / "cv.json"),
+             "--json", str(tmp / "r.json")],
+            capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return {f["id"]: f["status"] for f in json.loads((tmp / "r.json").read_text())["findings"]}
+
+    def check(self, step):
+        self.assertIn("r2-claude-verdicts.json", step)
+        self.assertIn("`claude_verdict` (not `verdict`)", norm(step))
+        self.assertRegex(step, r"exits? 5")
+        got = self.synth(self.documented(step))
+        self.assertEqual(got, {"X-001": "survivor", "X-002": "rejected"})
+
+    def test_deep_step_2_2_names_the_shape(self):
+        text = (DEEP / "SKILL.md").read_text(encoding="utf-8")
+        self.check(section(text, "### Step 2.2", "### Step 2.3"))
+
+    def test_adversarial_step_3_names_the_shape(self):
+        self.check(section(SKILL.read_text(encoding="utf-8"), "### Step 3 — R2", "### Step 4 — Converge"))
+
+    def test_cross_examiner_agent_uses_the_same_key(self):
+        agent = (PLUGIN / "agents" / "cross-examiner.md").read_text(encoding="utf-8")
+        self.assertIn('"claude_verdict": "confirm"', agent)
+        self.assertIn('"claude_verdict": "refute"', agent)
+        self.assertNotRegex(agent, r'"verdict"\s*:')
 
 
 if __name__ == "__main__":

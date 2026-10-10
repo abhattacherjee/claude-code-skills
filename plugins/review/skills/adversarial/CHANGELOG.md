@@ -2,6 +2,14 @@
 
 All notable changes to the **adversarial** skill (was `adversarial-review`) are documented here.
 
+## [1.2.0] - 2026-10-09
+
+### Changed
+
+- `synthesize.py` exits 5 when a verdict has no `confirm` or `refute` under the key its direction reads (#189). stderr names the key it expected and the key or value it found. No report is written, and any old report at the `--md` and `--json` paths is deleted. Step 3 gives the exact `r2-claude-verdicts.json` shape, and Step 4 says what exit 5 means. The R2 digest drops its `UNRECOGNIZED` banner: a run that prints counts always has `unrecognized=0`.
+- Steps 2 and 3 follow the delivery contract in the `deep` skill's `references/dispatch-contract.md` (#121). Bug-hunter writes `r1-bug-hunter.json`, convention-reviewer `r1-convention.json` and cross-examiner `r2-claude-verdicts.json`, and you read the files, not the replies. Silence is `NO REPORT`, relayed to the user. The low-signal re-judge moves the old verdicts file aside first.
+- `synthesize.py` exit 5 also covers a malformed verdicts file: no `verdicts` list, an entry with no usable `id`, or an `id` that matches no finding. Step 4 says to rename a key, delete an entry or rerun the judge, never to set a verdict value.
+
 ## [1.1.0] - 2026-10-09
 
 ### Fixed
