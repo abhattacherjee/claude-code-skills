@@ -101,9 +101,10 @@ Then merge, aggregate or synthesize from the files, as the step says.
    - Phase 1: the round cannot converge. Run the next round or, at `--max-rounds`, report it.
    - R1: say in the R1 digest which Claude finder is missing; the merged `r1-claude.json` holds
      only what was delivered.
-   - R2: write `{"verdicts":[]}` to `r2-claude-verdicts.json` so `synthesize.py` can run, and say
-     in the R2 digest that Claude's verdicts are missing. The adversary's findings stay
-     unconfirmed.
+   - R2, NO REPORT: write `{"verdicts":[]}` to `r2-claude-verdicts.json` so `synthesize.py` can
+     run, and say in the R2 digest that Claude's verdicts are missing. The adversary's findings
+     stay unconfirmed. R2, PARTIAL: keep the delivered verdicts; the findings it did not reach
+     stay unjudged. Never replace a partial file with an empty one.
    - Implementer: verify against ground truth (`./delegated-verification.md`) before you trust
      any fix.
 4. **List every NO REPORT and PARTIAL in the final report:** phase, round, dimension, and what

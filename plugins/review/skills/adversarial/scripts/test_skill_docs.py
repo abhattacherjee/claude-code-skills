@@ -698,6 +698,14 @@ class DispatchContractTests(unittest.TestCase):
         self.assertIn("still marked partial: **not delivered yet**", collect)
         self.assertIn("A PARTIAL file never counts as CONVERGED", collect)
 
+    def test_a_partial_r2_delivery_keeps_its_verdicts(self):
+        # PR #218 Codex X-003: only NO REPORT empties r2-claude-verdicts.json.
+        part = norm(section(self.text, "## Silence, the chase cap, and NO REPORT", "## When an agent"))
+        r2 = part.split("- R2,", 1)[1].split("- Implementer:", 1)[0]
+        self.assertIn('NO REPORT: write `{"verdicts":[]}`', r2)
+        self.assertIn("PARTIAL: keep the delivered verdicts", r2)
+        self.assertIn("Never replace a partial file with an empty one", r2)
+
     def test_markdown_results_have_their_own_partial_marker(self):
         # PR #218 review S4: the implementer files are Markdown, not JSON.
         self.assertIn("the first line PARTIAL in Markdown", self.flat)

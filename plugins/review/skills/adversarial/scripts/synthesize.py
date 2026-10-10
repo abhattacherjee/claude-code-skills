@@ -57,7 +57,7 @@ import json
 import os
 import re
 import sys
-from typing import Any
+from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
 # Confirm-rate guard: detects rubber-stamping (all-confirm) and
@@ -278,7 +278,7 @@ def _warn(msg: str) -> None:
 
 
 def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_field: str,
-                          lost: list | None = None) -> dict[str, dict]:
+                          lost: Optional[list] = None) -> dict[str, dict]:
     """Map finding-id -> verdict, recovering verdicts whose 'id' is a slug or
     other non-canonical value instead of the orchestrator's C-NNN/G-NNN id.
 
@@ -294,8 +294,9 @@ def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_fi
     every unrecoverable verdict is logged to stderr for audit.
 
     When `lost` is a list, each verdict that could not be attached is appended to
-    it as (id, why). A verdict whose only candidate already has a verdict is a
-    duplicate, not lost: it is only logged, like a repeated exact id.
+    it as (id, why). A verdict whose slug and cited locations all point at one
+    finding that already has a verdict is a duplicate, not lost: it is only
+    logged, like a repeated exact id.
     """
     findings = [f for f in findings if f.get("id")]
     finding_ids = {f["id"] for f in findings}
@@ -349,8 +350,12 @@ def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_fi
         }
         if len(loc_cands) == 1:
             candidates.add(next(iter(loc_cands)))
-        claimed = slug_cand in resolved or any(
-            loc_index.get(tok) in resolved for tok in re.findall(r"[\w./-]+:\d+", reason))
+        # A duplicate only when every signal points at one finding and it already has
+        # a verdict; a reason that also cites unjudged findings is lost (Codex X-002).
+        pointed = {loc_index[tok] for tok in re.findall(r"[\w./-]+:\d+", reason) if tok in loc_index}
+        if slug_cand:
+            pointed.add(slug_cand)
+        claimed = len(pointed) == 1 and next(iter(pointed)) in resolved
         if len(candidates) == 1:
             target = next(iter(candidates))
             resolved[target] = v
@@ -380,8 +385,8 @@ def classify_findings(
     gemini_verdicts_raw: dict,
     claude_verdicts_raw: dict,
     adversary="gemini",
-    lost_adversary: list | None = None,
-    lost_claude: list | None = None,
+    lost_adversary: Optional[list] = None,
+    lost_claude: Optional[list] = None,
 ) -> tuple[list[dict], dict[str, dict], dict[str, dict]]:
     """Apply symmetric convergence and return (findings, gemini_verdict_map, claude_verdict_map).
 

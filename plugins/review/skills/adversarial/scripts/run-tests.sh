@@ -2283,6 +2283,11 @@ vk_bad "I2 id is a number" '{"verdicts":[{"id":7,"claude_verdict":"refute"}]}' \
   "entry 0 has no usable 'id' (found 'id' holding a number)"
 vk_bad "I2 unknown id with a wrong key" '{"verdicts":[{"id":"X-999","verdict":"confirm"}]}' \
   "1 verdict(s) could not be attached to a finding: 'X-999' (matches no single finding)"
+# PR #218 Codex X-002: one cited finding already has a verdict, but the reason
+# cites two unjudged ones too. That is not a duplicate; the verdict is lost.
+vk_bad "X-002 reason cites a judged and two unjudged findings" \
+  '{"verdicts":[{"id":"X-001","claude_verdict":"confirm","reason":"ok"},{"id":"zzz","claude_verdict":"refute","reason":"see src/a.py:1 src/a.py:2 src/a.py:3"}]}' \
+  "'zzz' (its reason cites more than one finding)"
 # The adversary's file is checked the same way.
 printf '%s\n' '{"verdict":[]}' >"$TMP_DIR/vk_bad_adv.json"
 VK_ADV_OUT=""; VK_ADV_EXIT=0
