@@ -3,7 +3,7 @@ set -euo pipefail
 
 # test-check-docs.sh — tests for scripts/check-docs.sh, the docs drift guard (#190).
 #
-# Each case copies check-docs.sh and its two checkers into a small fixture repo
+# Each case copies check-docs.sh and its three checkers into a small fixture repo
 # under a temp dir, so nothing here touches the live repo or the network.
 #
 # Usage: bash scripts/test-check-docs.sh   (CHECK_DOCS=<path> tests another copy)
@@ -29,6 +29,7 @@ fixture() {
   mkdir -p "$r/scripts" "$r/.claude-plugin" "$p/.claude-plugin" "$p/skills/publish/scripts"
   cp "$CHECK_DOCS" "$r/scripts/check-docs.sh"
   cp "$REPO_ROOT/scripts/check-doc-refs.py" "$r/scripts/check-doc-refs.py"
+  cp "$REPO_ROOT/scripts/check-skill-structure.py" "$r/scripts/check-skill-structure.py"
   cp "$CAT_SRC/catalogue.py" "$CAT_SRC/standalone-plugins.txt" "$p/skills/publish/scripts/"
   printf '{"name":"skill-kit","version":"1.0.0","description":"Fixture."}\n' > "$p/.claude-plugin/plugin.json"
   printf -- '---\nname: publish\n---\n' > "$p/skills/publish/SKILL.md"
@@ -43,7 +44,7 @@ fresh() { n=$((n + 1)); R="$TMP/r$n"; fixture "$R"; }
 run() { OUT="$(bash "$R/scripts/check-docs.sh" 2>&1)" && RC=0 || RC=$?; }
 expect() { if [[ "$RC" == "$2" && "$OUT" == *"$3"* ]]; then ok "$1"; else bad "$1" "rc=$RC (want $2): $OUT"; fi; }
 
-fresh; run; expect "a clean fixture exits 0" 0 "catalogue and doc references are clean"
+fresh; run; expect "a clean fixture exits 0" 0 "catalogue, doc references and skill structure are clean"
 fresh; sed -i.bak 's/"1.0.0"/"1.0.1"/' "$R/plugins/skill-kit/.claude-plugin/plugin.json"; run
 expect "seeded catalogue drift exits 1" 1 "README.md: row skill-kit: version 1.0.0 != plugin.json 1.0.1"
 fresh; printf '\nSee `scripts/gone.sh`.\n' >> "$R/AGENTS.md"; run
@@ -51,8 +52,12 @@ expect "a broken doc reference exits 1" 1 "AGENTS.md:3: scripts/gone.sh: no such
 fresh; sed -i.bak 's/"1.0.0"/"1.0.1"/' "$R/plugins/skill-kit/.claude-plugin/plugin.json"; printf '\nSee `scripts/gone.sh`.\n' >> "$R/AGENTS.md"; run
 expect "with both, both checks run and both are reported" 1 "scripts/gone.sh: no such path"
 [[ "$OUT" == *"row skill-kit"* ]] && ok "…the catalogue line too" || bad "…the catalogue line too" "$OUT"
+fresh; printf '# orphan\n' > "$R/plugins/skill-kit/skills/publish/orphan.md"; run
+expect "an orphan reference file exits 1" 1 "plugins/skill-kit/skills/publish/orphan.md: S2"
 fresh; rm "$R/plugins/skill-kit/skills/publish/scripts/catalogue.py"; run
 expect "catalogue.py removed exits 2" 2 "catalogue.py is missing"
+fresh; rm "$R/scripts/check-skill-structure.py"; run
+expect "check-skill-structure.py removed exits 2" 2 "check-skill-structure.py is missing"
 fresh; rm "$R/scripts/check-doc-refs.py"; run
 expect "check-doc-refs.py removed exits 2" 2 "check-doc-refs.py is missing"
 fresh; printf 'import no_such_module_for_190\n' > "$R/scripts/check-doc-refs.py"; run

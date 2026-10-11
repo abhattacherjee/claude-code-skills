@@ -2,7 +2,7 @@
 name: author
 description: "Was the skill-authoring skill. Creates and optimizes Claude Code skills following Anthropic's official best practices with emphasis on agent parallelization and script-first determinism. Use when: (1) creating a new skill from scratch, (2) optimizing an existing skill that exceeds 500 lines or has poor discoverability, (3) extracting inline code into scripts/ or reference material into references/, (4) designing orchestrator + sub-agent architectures for complex skills, (5) restructuring a skill directory into SKILL.md + scripts/ + references/ layout, (6) auditing skill cross-references for stale links. Covers: agent-first orchestration, parallel sub-agent design, script-first determinism, frontmatter rules, progressive disclosure, directory layout, description writing, and quality checklist."
 metadata:
-  version: 1.0.1
+  version: 1.1.0
 ---
 
 # Skill Authoring
@@ -30,24 +30,23 @@ metadata:
    are testable, runnable outside Claude, and keep SKILL.md lean. Agents handle
    judgement; scripts handle procedure.
 4. **Concise is key** — the context window is a shared resource. Only add what Claude
-   doesn't already know. Challenge each paragraph: "Does this justify its token cost?"
+   doesn't already know: skip basic concepts, library purposes and general programming
+   knowledge. Challenge each paragraph: "Does this justify its token cost?"
 5. **Progressive disclosure** — SKILL.md is the overview; reference files load on-demand.
    Keep SKILL.md body under 500 lines.
 6. **Match freedom to fragility** — text instructions for flexible tasks, exact scripts
    for fragile operations, specialized agents for judgement-heavy tasks.
-7. **Default assumption** — Claude is already very smart. Skip explanations of basic
-   concepts, library purposes, or general programming knowledge.
-8. **Track progress for long workflows** — skills with 3+ sequential phases must include
+7. **Track progress for long workflows** — skills with 3+ sequential phases must include
    a task manifest script. Use TaskCreate/TaskUpdate to give real-time progress visibility.
    Users should never wonder "what phase is it on?" during a 5-minute workflow.
 
 ## Frontmatter Rules
 
-Supported fields: `name`, `description`, `metadata`, `compatibility`, `license`.
+Supported fields: `name`, `description`, `metadata`, plus `model` (sub-agent skills) and `disable-model-invocation` (slash-command-only skills). `validate-skill.sh` rejects any other.
 
 ```yaml
 ---
-name: kebab-case-name          # ≤64 chars, lowercase + hyphens only
+name: kebab-case-name          # ≤64 chars, lowercase + hyphens, no "anthropic" or "claude"
 description: "Third-person description. Use when: (1) ..., (2) ..."  # ≤1024 chars, single-line quoted
 metadata:
   version: 1.0.0               # semver: patch=typos, minor=new content, major=breaking
@@ -57,6 +56,11 @@ metadata:
 **Do NOT include:** `author`, `date`, `tags`, `allowed-tools`, `category`, or
 top-level `version` (use `metadata.version` instead). Use double-quoted single-line
 strings for `description` — block scalars (`description: |`) cause VS Code linter errors.
+
+**Name rules:** prefer the gerund form, which says what the skill does (`processing-pdfs`,
+`analyzing-spreadsheets`); a noun phrase (`pdf-processing`) is fine. Avoid vague names
+(`helper`, `utils`, `tools`). `validate-skill.sh` fails a name over 64 characters or one
+that contains `anthropic` or `claude`.
 
 **Description rules:**
 - Write in **third person** ("Processes files..." not "I help you..." or "You can...")
@@ -98,9 +102,13 @@ your-skill/
 | Executable procedures | scripts/ | Predictable, testable, reusable |
 
 ### Reference Rules
-- **One level deep** from SKILL.md — no references linking to other references
+- **One level deep** from SKILL.md — no references linking to other references. Claude may
+  preview a file it reaches through another reference with `head -100` instead of reading
+  all of it, so anything past that is missed.
 - **Descriptive filenames** — `api-field-reference.md` not `ref1.md`
-- Files > 100 lines should have a **table of contents** at the top
+- Files over 100 lines start with a `## Contents` list, so a partial read still shows the scope
+- `validate-skill.sh` fails a `.md` file that SKILL.md does not name (and no script reads),
+  and a file over 100 lines with no `## Contents` heading in its first 30 lines
 
 ## Script Extraction
 
@@ -118,18 +126,16 @@ Extract into `scripts/` when ANY apply:
 - Always support `--help` / `-h` with usage examples
 - Validate inputs before operating (check files exist, directories writable)
 - Use meaningful exit codes (0 = success, 1 = error, 2 = usage)
+- **Justify every constant** — a timeout, retry count or limit gets a comment saying why
+  that value. Nobody can tune `TIMEOUT=47` if nobody wrote down where 47 came from
 - Include a `--fix` mode where applicable (detect + auto-remediate)
 - Make executable: `chmod +x scripts/*.sh`
 - Use `#!/usr/bin/env bash` shebang (portable)
-- **Choose `set` flags by script purpose** (see Pitfall below)
-
-**Pitfall: `set -e` interacts badly with bash arithmetic and pipes.**
-Common triggers: (1) `find | sort | head -N` — `head` closes the pipe causing SIGPIPE
-(exit 141) with `pipefail`, (2) `grep -c` returns exit 1 when count is 0,
-(3) a `while read` loop fed by a pipe (it runs in a subshell), (4) **`((var++))` when var=0** — `((0))`
-evaluates to false, causing `set -e` to terminate the script. Fix: use
-`VAR=$((VAR + 1))` instead of `((VAR++))`. Use `set -euo pipefail` for **validation**
-scripts; use `set -eu` (without pipefail) for **context-gathering** scripts.
+- **Choose `set` flags by script purpose:** `set -euo pipefail` for **validation**
+  scripts; `set -eu` (without pipefail) for **context-gathering** scripts, whose
+  `head`-terminated pipes and zero-count `grep -c` would otherwise abort them. Under `set -e`,
+  `((var++))` with var=0 aborts the script (use `VAR=$((VAR + 1))`), and a `while read` loop
+  at the end of a pipe runs in a subshell, so its variables are lost (use a `for` loop or `< file`)
 
 **After writing the script, slim SKILL.md:**
 - Replace procedural prose with a Quick Check section pointing to the script
@@ -320,19 +326,22 @@ the full script template with examples.
 
 1. **Check existing skills** — search project + user-level directories
 2. **Decide**: create new vs update existing (see decision table below)
-3. **Evaluate decomposition** — can this be split into parallel agents? (see below)
-4. **Evaluate script-first** — can deterministic parts be captured in scripts? (see below)
-5. **Evaluate progress tracking** — does the skill have 3+ phases? (see below)
-6. **Write agents** (if applicable) — orchestrator + sub-agent definitions
-7. **Write scripts** (if applicable) — with `--help`, error handling, exit codes
-8. **Write task manifest** (if applicable) — `scripts/task-manifest.sh` for each workflow
-9. **Write SKILL.md** — frontmatter + body; reference agents, scripts, and task manifest
-10. **Extract references/** — if lookup material exceeds ~30 lines
-11. **Validate** — run the quality checklist
-12. **Dry-run test** — run scripts against real project data (see below)
-13. **Version** — start at `1.0.0`
+3. **Write evaluations first** — before the docs, write at least three scenarios the skill
+   must handle and run each without the skill. What Claude gets wrong is the baseline the
+   skill must beat; write only what closes those gaps
+4. **Evaluate decomposition** — can this be split into parallel agents? (see below)
+5. **Evaluate script-first** — can deterministic parts be captured in scripts? (see below)
+6. **Evaluate progress tracking** — does the skill have 3+ phases? (see below)
+7. **Write agents** (if applicable) — orchestrator + sub-agent definitions
+8. **Write scripts** (if applicable) — with `--help`, error handling, exit codes
+9. **Write task manifest** (if applicable) — `scripts/task-manifest.sh` for each workflow
+10. **Write SKILL.md** — frontmatter + body; reference agents, scripts, and task manifest
+11. **Extract references/** — if lookup material exceeds ~30 lines
+12. **Validate** — run [references/quality-checklist.md](references/quality-checklist.md)
+13. **Dry-run test** — run scripts against real project data (see below)
+14. **Version** — start at `1.0.0`
 
-### Decomposition Evaluation (Step 3)
+### Decomposition Evaluation (Step 4)
 
 Ask: "Can this task be split into independent subtasks that run in parallel?"
 
@@ -343,7 +352,7 @@ Ask: "Can this task be split into independent subtasks that run in parallel?"
 | **Partially — phases with parallel steps** | Phased: script → parallel agents → script | `catalog-maintainer`: backup → fetch → enrich → validate → embed |
 | **No — single sequential task** | No orchestrator needed; single agent or script | `catalog-embedding-sync`: one script checks all |
 
-### Script-First Evaluation (Step 4)
+### Script-First Evaluation (Step 5)
 
 Ask: "Can the skill's core action be expressed as a deterministic check or procedure?"
 
@@ -357,7 +366,7 @@ Ask: "Can the skill's core action be expressed as a deterministic check or proce
 testable, runnable standalone, and composable with CI/hooks. The SKILL.md drops from "explain
 everything" to "explain when/why + point to script".
 
-### Progress Tracking Evaluation (Step 5)
+### Progress Tracking Evaluation (Step 6)
 
 Ask: "Does this skill have 3+ sequential phases or take >2 minutes?"
 
@@ -367,7 +376,7 @@ Ask: "Does this skill have 3+ sequential phases or take >2 minutes?"
 | **Yes — multiple workflows** | Add one `case` branch per workflow | `triage-issues` (github-board plugin): full-audit (5 tasks) + quick-check (2 tasks) |
 | **No — 1-2 fast phases** | Skip task manifest — no tracking needed | `catalog-embedding-sync`: single script, <30 seconds |
 
-### Dry-Run Testing (Step 12)
+### Dry-Run Testing (Step 13)
 
 **Every skill with scripts MUST be dry-run tested against real project data before release.**
 Scripts that look correct often fail due to: regex format mismatches, `grep` pipe chains
@@ -401,66 +410,20 @@ See [references/skill-templates.md](references/skill-templates.md) for the simpl
 
 ## Quality Checklist
 
-**Decomposition & agents:**
-- [ ] Decomposition evaluated: can this be split into parallel sub-agents?
-- [ ] If yes: orchestrator defined as pure delegator (never does the work itself)
-- [ ] Independent agents launched in SINGLE Task tool message (not sequentially)
-- [ ] Each sub-agent has single focused responsibility
-- [ ] Sub-agents use appropriate model tier (haiku/sonnet/opus)
-- [ ] Agent definitions include structured output format
-
-**Scripts & determinism:**
-- [ ] Script-first evaluated: can deterministic parts be captured in scripts?
-- [ ] If yes: script written first, SKILL.md references it (not duplicates it)
-- [ ] Scripts have `--help` and `--fix`/`--dry-run` support and are executable
-- [ ] Scripts dry-run tested against real project data (2-3 varied inputs)
-
-**Progress tracking:**
-- [ ] Progress tracking evaluated: does the skill have 3+ sequential phases?
-- [ ] If yes: `scripts/task-manifest.sh` created with one `case` per workflow
-- [ ] Each workflow defines tasks with `subject`, `activeForm`, `description`
-- [ ] SKILL.md includes "Progress Tracking (MANDATORY)" section with task table
-- [ ] Task update rules documented (in_progress → completed, abort → deleted)
-
-**Teams (optional):**
-- [ ] Team mode evaluated: does this skill have multi-phase feedback loops?
-- [ ] If yes: team pattern documented alongside sub-agent pattern
-- [ ] Conditional check for `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` documented
-- [ ] TeamDelete cleanup documented in workflow
-
-**Structure & content:**
-- [ ] SKILL.md body ≤ 500 lines
-- [ ] Description ≤ 1024 chars, third person, with trigger conditions, double-quoted single-line
-- [ ] Frontmatter has only `name`, `description`, `metadata`
-- [ ] References are one level deep from SKILL.md
-- [ ] All cross-reference links resolve to existing files
+Before you publish, go through [references/quality-checklist.md](references/quality-checklist.md): decomposition and agents, scripts, progress tracking, teams, frontmatter, structure, cross-references and testing, with commands that check them.
 
 ## Anti-Patterns
 
-- **Sequential when parallel is possible** — if agents don't depend on each other's
-  output, launch them in a SINGLE message. Sequential = N x latency for no reason.
-- **Monolithic agent** — one agent doing 5 things. Split into 5 focused agents.
-- **Orchestrator doing work** — the orchestrator should delegate, not fetch/validate/enrich.
-- **Missing structured output** — agents returning prose instead of parseable JSON/reports
-  forces the orchestrator to guess at results.
-- **Verbose explanations** — Claude knows what PDFs are. Skip the intro paragraph.
+Not covered by the rules above:
+
 - **Too many options** — provide a default with escape hatch, not 5 alternatives.
-- **Deeply nested references** — SKILL.md → ref.md → detail.md causes partial reads.
 - **Time-sensitive info** — "After August 2025, use X" becomes stale. Use "Current method" / "Legacy" sections.
 - **Inconsistent terminology** — pick one term ("endpoint" not alternating "URL/route/path").
-- **Non-standard frontmatter** — `author`, `date`, `tags` waste tokens and aren't used.
 - **Incomplete CLI templates in agents** — when agents create GitHub artifacts (`gh issue
   create`, `gh pr create`), include ALL metadata flags (`--label`, `--assignee`,
   `--milestone`) explicitly in the template. Agents improvise missing fields with
   plausible-but-wrong values (e.g., `dependencies` label instead of project's `dependabot`
   label). Include a selection guide for dynamic fields like priority labels.
-- **Silent long-running workflows** — skills with 3+ phases that don't use TaskCreate leave
-  users staring at a spinner for minutes with no visibility. Always include a task manifest
-  and update tasks between phases. If a sub-agent takes >30 seconds, the user should see
-  which task is `in_progress`.
-- **Untested scripts shipped as "done"** — scripts that pass code review but fail on real
-  data. Always dry-run against the current project with varied inputs before declaring
-  complete. Bugs cluster: if one heuristic is wrong, test the others too.
 - **Using teams for one-shot parallel work** — teams add overhead (shared task list, message
   routing). For independent fan-out tasks, sub-agents are faster and cheaper.
 

@@ -5,6 +5,21 @@ workflows (3+ phases or >2 minutes).
 
 `<SKILL_SCRIPTS>` below is the scripts prefix a skill's SKILL.md uses; `skill-templates.md` (section "Script paths") shows what to write in its place. `<SCRIPTS_DIR>` is the skill-kit author skill's own scripts directory.
 
+## Contents
+
+- Task Manifest Script Template
+- Task Fields
+- Using the Manifest in SKILL.md
+- Task Update Patterns
+  - Sequential phases
+  - Sub-agent handling multiple phases
+  - Abort on failure
+- Real-World Examples
+  - review-dependabot-prs (8 tasks)
+  - triage-issues (5 tasks)
+  - catalog-maintainer (6 tasks)
+- Scaffolding a New Manifest
+
 ## Task Manifest Script Template
 
 Every skill with tracking should include `scripts/task-manifest.sh`:

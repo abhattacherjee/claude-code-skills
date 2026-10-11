@@ -2,6 +2,12 @@
 
 All notable changes to the **create** skill (was `spec-creator`) are documented here.
 
+## [1.0.3] - 2026-10-09
+
+### Changed
+
+- Phase 3 states the vertical-slice rule and the scope rule in two lines instead of the general agile advice (#210).
+
 ## [1.0.2] - 2026-10-04
 
 ### Changed

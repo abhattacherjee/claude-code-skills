@@ -2,6 +2,12 @@
 
 All notable changes to the **demo-video** plugin are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- `produce` 1.0.2: cut the Agent Definitions table, which repeated the architecture tree; `record` 1.0.2 follows the plugin version (#210).
+
 ## [1.0.1] - 2026-10-06
 
 ### Changed

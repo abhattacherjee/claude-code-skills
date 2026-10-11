@@ -52,7 +52,7 @@ Run the validation script before pushing:
 scripts/validate-skill.sh <skill-directory>
 ```
 
-The plugin catalogue is generated. The README plugin table, `.claude-plugin/marketplace.json` and the meta line at the top of each plugin README come from each plugin's `plugin.json`. After you change a `plugin.json`, run `python3 plugins/skill-kit/skills/publish/scripts/catalogue.py .` to write them. `scripts/check-docs.sh` checks the catalogue and every link, repo path and `plugin:skill` name in the docs. It runs in `scripts/commit-preflight.sh` and in CI.
+The plugin catalogue is generated. The README plugin table, `.claude-plugin/marketplace.json` and the meta line at the top of each plugin README come from each plugin's `plugin.json`. After you change a `plugin.json`, run `python3 plugins/skill-kit/skills/publish/scripts/catalogue.py .` to write them. `scripts/check-docs.sh` checks the catalogue and every link, repo path and `plugin:skill` name in the docs. It also runs `scripts/check-skill-structure.py`: every plugin SKILL.md body is under 500 lines, every `.md` file in a skill directory is linked from its SKILL.md (or read by one of its scripts), and every such file over 100 lines has a `## Contents` list in its first 30 lines. It runs in `scripts/commit-preflight.sh` and in CI.
 
 ## Submitting a Pull Request
 

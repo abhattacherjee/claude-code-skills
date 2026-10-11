@@ -2,6 +2,12 @@
 
 All notable changes to the **review** skill (was `spec-review`) are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- Cut three notes that repeated Phase 2 (the `feature-dev` fallback) and Part 1 (verify every path) (#210).
+
 ## [1.0.1] - 2026-10-04
 
 ### Changed

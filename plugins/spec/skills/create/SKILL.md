@@ -2,7 +2,7 @@
 name: create
 description: "Creates detailed story specification files from various inputs (Claude plan, requirement file, prompt, GitHub issue). Discovers project spec conventions at runtime, brainstorms approaches with vertical splitting recommendations for large stories, generates template-compliant specs, checks for over-engineering, and optionally chains to spec:review. Was the spec-creator skill. Use when: (1) user wants to write a new story spec, (2) converting a plan or requirements into a formal spec, (3) creating specs from GitHub issues, (4) breaking a large feature into shippable vertical slices."
 metadata:
-  version: 1.0.2
+  version: 1.0.3
 ---
 
 # Spec Create
@@ -194,15 +194,9 @@ split option alongside the single-story approaches.
 | Testable hypotheses | 2+ assumptions to validate | Ship one, learn, then decide on next |
 | Estimate | > 6 hours | Diminishing returns on large stories |
 
-**3.3 Vertical slice rules** — each slice must be:
-- **End-to-end**: Touches all layers needed to deliver ONE user-visible behavior
-- **Independently deployable**: Can merge to develop without waiting for sibling slices
-- **Independently testable**: Has its own acceptance criteria and tests
-- **Valuable alone**: Delivers customer value or validates a hypothesis even if
-  other slices are never built
-
-**Anti-pattern**: Horizontal slicing (Story A = backend, Story B = frontend, Story C =
-tests). This creates integration risk and blocks deployment until all slices merge.
+**3.3 Vertical slices** — each slice delivers one user-visible behavior end to end, merges
+to develop without waiting for its siblings, and has its own acceptance criteria and tests.
+Never split by layer (backend story, frontend story, tests story).
 
 **3.4 Present options** via `AskUserQuestion`. Structure depends on scope assessment:
 
@@ -253,11 +247,7 @@ on user feedback via `SendMessage` rather than running as one-shot sub-agents. T
 the Feature Scout to refine its research based on real-time Convention Scanner findings.
 
 **Brainstorming rules:**
-- **YAGNI ruthlessly** — strip unnecessary features from all approaches before presenting.
-  If a feature isn't needed for the stated success criteria, don't include it.
-- **Design for isolation** — break into units with clear boundaries. For each unit:
-  can someone understand it without reading internals? Can you change internals without
-  breaking consumers? If not, the boundaries need work.
+- Strip every feature the stated success criteria do not need from all approaches.
 - Apply the simplification decision tree before presenting:
   - Does this need a new file, or can existing code absorb it?
   - Does this need a new abstraction, or can it be inline?

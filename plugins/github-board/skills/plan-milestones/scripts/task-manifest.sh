@@ -7,8 +7,9 @@ usage() {
 Usage: task-manifest.sh WORKFLOW
 
 Workflows:
-  refocus       Full pass: gather -> judge -> plan -> confirm -> apply -> verify (6 tasks)
-  audit-only    Gather and judge, produce a plan, stop before writing (3 tasks)
+  refocus       Full pass: release check -> gather -> judge -> plan -> confirm -> apply
+                -> verify (7 tasks)
+  audit-only    Release check, gather and judge, produce a plan, stop before writing (4 tasks)
 
 Options:
   --list        Machine-readable workflow names
@@ -27,6 +28,7 @@ case "$1" in
   refocus)
     cat <<'JSON'
 [
+  {"subject":"Check closed issues against their releases","activeForm":"Checking closed issues against their releases","description":"Step 0. Run scripts/release-reconcile.sh --repo O/R --json <file> from a checkout of the repo. Show its summary line even when clean. Fold its closed_moves into the plan before any theme work, and raise every FLAG line with the user."},
   {"subject":"Gather milestone + issue state","activeForm":"Gathering milestone and issue state","description":"Run scripts/milestone-report.sh. Note which milestones have no theme set and which open issues are flagged ACCRETION."},
   {"subject":"Establish the theme for each milestone","activeForm":"Establishing milestone themes","description":"Read each open milestone's description. A milestone with no theme cannot be triaged — write one with the user before judging membership."},
   {"subject":"Judge each open issue against its milestone theme","activeForm":"Judging issues against themes","description":"Inline classification over the report JSON: does this issue's failure mode match the theme? Priority label is NOT the criterion."},
@@ -39,6 +41,7 @@ JSON
   audit-only)
     cat <<'JSON'
 [
+  {"subject":"Check closed issues against their releases","activeForm":"Checking closed issues against their releases","description":"Step 0. Run scripts/release-reconcile.sh --repo O/R --json <file> from a checkout of the repo. Show its summary line even when clean. Fold its closed_moves into the plan before any theme work, and raise every FLAG line with the user."},
   {"subject":"Gather milestone + issue state","activeForm":"Gathering milestone and issue state","description":"Run scripts/milestone-report.sh --json."},
   {"subject":"Judge each open issue against its milestone theme","activeForm":"Judging issues against themes","description":"Inline classification. Produce keep/defer with a rationale per issue."},
   {"subject":"Write the plan file","activeForm":"Writing the plan file","description":"Emit plan JSON for scripts/apply-plan.sh. Do not apply it."}

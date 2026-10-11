@@ -25,7 +25,7 @@ BASE_ARG=""
 INCLUDE_UNTRACKED=false
 # Untracked files with these names are never put in the diff, even with
 # --include-untracked. Matched against the lower-cased file name (not the directory).
-SECRET_NAME_GLOBS=('.env' '.env.*' '*.pem' '*.key' 'id_rsa*' 'id_ed25519*' '*credentials*' '*.p12' '*.pfx')
+SECRET_NAME_GLOBS=('.env' '.env.*' '*.env' '.envrc' '*.pem' '*.key' 'id_rsa*' 'id_ed25519*' 'id_ecdsa*' 'id_dsa*' '*credentials*' '*.p12' '*.pfx' '.netrc' '.npmrc' '.pypirc' '.pgpass')
 MAX_LISTED=20
 SCRIPT_NAME="$(basename "$0")"
 
@@ -43,8 +43,9 @@ Options:
                    the branch prefix. Unknown branch -> exit 2. Ignored in PR mode.
   --include-untracked
                    Local mode: also put untracked (not ignored) files in the diff.
-                   Names that look like secrets (.env, .env.*, *.pem, *.key, id_rsa*,
-                   id_ed25519*, *credentials*, *.p12, *.pfx) are still left out.
+                   Names that look like secrets (.env, .env.*, *.env, .envrc, *.pem,
+                   *.key, id_rsa*, id_ed25519*, id_ecdsa*, id_dsa*, *credentials*,
+                   *.p12, *.pfx, .netrc, .npmrc, .pypirc, .pgpass) are still left out.
   --help           Show this help and exit
 
 Local mode diffs the working tree against the merge base: committed, staged and
@@ -126,6 +127,16 @@ base_ref() {
   fi
 }
 
+# git diff with the same output whatever the user's config says: no color, a/ and
+# b/ prefixes, paths from the repo root, and no external diff tool or textconv (a
+# decrypting textconv would put plaintext secrets in the diff). The secret scan and
+# check-cites parse this output.
+plain_git_diff() {
+  git -c color.ui=never -c color.diff=never -c diff.noprefix=false -c diff.mnemonicPrefix=false \
+    -c diff.relative=false \
+    diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "$@"
+}
+
 # True when the file name (last path part, lower-cased) matches SECRET_NAME_GLOBS.
 is_secret_name() {
   local name glob
@@ -193,7 +204,7 @@ DIFF_FILE="$(mktemp /tmp/adversarial-review-diff.XXXXXX)"
 FILES_FILE="$(mktemp /tmp/adversarial-review-files.XXXXXX)"
 
 if [[ "$MODE" == "pr" ]]; then
-  if ! gh pr diff "$PR_NUMBER" >"$DIFF_FILE" 2>/dev/null; then
+  if ! gh pr diff "$PR_NUMBER" --color=never >"$DIFF_FILE" 2>/dev/null; then
     rm -f "$DIFF_FILE" "$FILES_FILE"
     die "Failed to fetch diff for PR #$PR_NUMBER"
   fi
@@ -239,11 +250,11 @@ else
     printf '%s\0' "${SEND[@]}" | GIT_INDEX_FILE="$TMP_INDEX" xargs -0 git add -N -- 2>/dev/null || true
     export GIT_INDEX_FILE="$TMP_INDEX"
   fi
-  if ! git diff "$MERGE_BASE" >"$DIFF_FILE" 2>/dev/null; then
+  if ! plain_git_diff "$MERGE_BASE" >"$DIFF_FILE" 2>/dev/null; then
     rm -f "$DIFF_FILE" "$FILES_FILE"
     die "Failed to produce git diff against merge base of $BASE and HEAD"
   fi
-  git diff --name-only "$MERGE_BASE" >"$FILES_FILE" 2>/dev/null || true
+  plain_git_diff --name-only "$MERGE_BASE" >"$FILES_FILE" 2>/dev/null || true
   # Guard 2 (fail closed): whatever went wrong above, no untracked path may be in the
   # diff unless it was chosen (SEND) and has a non-secret name. Check the paths the diff
   # really holds. On any hit, send nothing.
@@ -256,7 +267,7 @@ else
         die "Refusing to send a partial or unsafe diff: untracked path '$p' is in the diff but was not chosen or has a secret-looking name. Nothing was written."
       fi
     fi
-  done < <(git diff --name-only -z "$MERGE_BASE" 2>/dev/null)
+  done < <(plain_git_diff --name-only -z "$MERGE_BASE" 2>/dev/null)
 fi
 
 # ---- large-diff cap ----

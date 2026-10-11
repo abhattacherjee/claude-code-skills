@@ -2,7 +2,7 @@
 name: produce
 description: "Was the product-video-creation skill (/product-video-creation still works as a phrase). Creates polished, narrated product demo videos using Remotion (React) with AI-crafted storytelling (Opus 4.6), real app screenshots, animated phone mockups, brand-aligned styling, and TTS voiceover (OpenAI or macOS). Use when: (1) user asks to create a product video or demo reel, (2) user wants an Instagram Reel or YouTube video showcasing their app, (3) user has a running web app and wants animated marketing content, (4) user provides brand guidelines to apply to a video project."
 metadata:
-  version: 1.0.1
+  version: 1.0.2
 ---
 
 # Remotion Product Video Generator
@@ -295,15 +295,6 @@ For frame-by-frame scrubbing during development:
 ```bash
 npx remotion studio  # Opens at http://localhost:3000
 ```
-
-## Agent Definitions
-
-| Agent type | Model | Role |
-|-------|-------|------|
-| `demo-video:product-video-storyteller` | **Opus** | Crafts narrative arc, scene copy, voiceover scripts. Uses deep reasoning — not templates. |
-| `demo-video:product-video-narrator` | Sonnet | Generates TTS audio files via OpenAI API or macOS `say` command. |
-| `demo-video:product-video-music-curator` | Sonnet | Searches royalty-free music libraries, recommends tracks matching brand tone and narrative arc. |
-| `demo-video:product-video-audio-mixer` | Sonnet | Mixes voiceover + background music with ducking, fades, and volume balancing. |
 
 ## Critical Rules
 

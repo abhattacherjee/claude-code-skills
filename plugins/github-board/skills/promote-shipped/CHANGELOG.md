@@ -4,6 +4,78 @@ All notable changes to the `promote-shipped` skill (named `github-release-board-
 before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2026-10-09
+
+### Changed
+
+- `references/projects-v2-graphql-snippets.md` starts with a Contents list (#210).
+
+## [2.1.2] — 2026-10-08
+
+### Fixed
+- `find-promotable.sh` matches a closing keyword's issue URL on `$GH_HOST` when it is set,
+  else github.com, with the dots escaped. It was fixed to github.com, so on GitHub Enterprise
+  it disagreed with `release-reconcile.sh`. A `GH_HOST` that is not a hostname makes discovery
+  report FAILED (the card is held as `hold-discovery-failed`) instead of going into the jq filter.
+  The `GH_HOST`, repo and number checks now test the whole value with `[[ =~ ]]`; `grep -Eq`
+  passed a multi-line value if any one line fit. The filter still has no look-around (gh
+  runs it as Go RE2). (#208)
+
+## [2.1.1] — 2026-10-07
+
+### Changed
+- `apply-promotions.sh` maps a release tag to its milestone through the shared
+  `lib/config.py milestone-for-tag` (`gb_milestone_for_tag`), which move-card and
+  plan-milestones also use, instead of its own copy of the rules. The rules are
+  unchanged, and every #203 test passes unedited. (#204)
+- All three skip warnings now read `WARN: <reason> in <repo>; release milestone not set.`,
+  still once per repo and tag. The reasons are `no milestone titled X.Y.Z or X.Y for
+  <tag>`, `ambiguous: <title> #<n>, … for <tag>`, and `tag '<tag>' is not vX.Y.Z or
+  vX.Y`. (#204)
+- A tag that is not a version is now checked before the milestone list is read. With an
+  unreadable list, such an item is counted as SKIPPED, not FAILED. (#204)
+
+### Fixed
+- `find-promotable.sh`'s fallback read a closing keyword inside a longer word: a PR body
+  saying "Encloses #42" credited the PR to #42. The keyword is now a whole word, the same
+  rule as plan-milestones' `release-reconcile.sh`. (#204)
+- The boundary is written `(^|[^A-Za-z0-9_])`, not a lookbehind, because gh's jq (gojq,
+  with Go's RE2 regexps) has no lookbehind: real gh failed every discovery query with
+  `invalid named capture`. A test now scans every script that uses `--jq` for
+  look-around and backreferences, and compiles the real filter with Go's regexp. (#204)
+
+## [2.1.0] — 2026-10-07
+
+### Added
+- **Each promoted `merged` item gets its release milestone (#203).** `apply-promotions.sh`
+  maps the release tag it resolves (or `--release-tag`) to a milestone: the exact
+  `vX.Y.Z` title first, then `vX.Y`, with the leading `v` optional on both sides. When
+  the item is in another milestone, or none, it is set after the board move with
+  `gh api -X PATCH repos/O/R/issues/N -F milestone=<number> --jq .milestone.number`.
+  Unlike `gh issue edit --milestone`, this can assign a closed milestone. A reply that
+  names another milestone counts as a failed write; on an HTTP error the response body
+  is printed. The milestone list (`state=all`, paginated) is read once per repo and run.
+  No match, two matches, or a tag that is not a version prints a warning and changes
+  nothing. `nopr` and `wontfix` items keep their milestone.
+- Dry run: `would set milestone: <current|none> -> <target> (<tag>)`, printed only when
+  the milestone would change, and `milestone: skipped — <reason>` when it is left alone.
+- Summary line, shown only when at least one item is `merged`. After `--apply`:
+  `Milestones: N set, N unchanged, N skipped, N failed`. After `--dry-run`:
+  `Milestones: N to set, N unchanged, N skipped, N cannot check`.
+- `inventory-board.sh` fetches `milestone { number title state }` for issues and PRs;
+  `find-promotable.sh` passes it through in each candidate.
+
+### Changed
+- `--no-release-comment` still looks up the release, so the milestone can be set.
+  `--release-tag` still skips the lookup and is used for the milestone too.
+- A failed milestone write, or a milestone list that cannot be read, is reported like a
+  comment failure: it is counted, and it never undoes the board move or changes the
+  exit code. A failed list, or an empty reply, is not cached as an empty one. The
+  `ACTION NEEDED` text says to re-run against the same candidates file with
+  `--apply --no-release-comment`.
+- A candidate repo with a `.` or `..` part gets no milestone write
+  (`FAILED — malformed issue number or repo`).
+
 ## [2.0.0] — 2026-10-02
 
 ### Security

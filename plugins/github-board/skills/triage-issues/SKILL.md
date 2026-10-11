@@ -2,7 +2,7 @@
 name: triage-issues
 description: "Reviews, triages, updates, prioritizes, and closes open GitHub issues against the current codebase state. Use when: (1) open issues have accumulated and need audit, (2) user asks to clean up or review GitHub issues, (3) after a release to close resolved issues, (4) periodic backlog grooming to identify stale or duplicate issues, (5) need to prioritize open issues by impact and effort, (6) 'github issue triage' or /github-issue-triage (the old name of this skill)."
 metadata:
-  version: 2.0.0
+  version: 2.0.1
 ---
 
 # GitHub Issue Triage
@@ -44,17 +44,7 @@ gh issue edit <NUMBER> --add-label "duplicate"
 
 This is the most important phase. Launch parallel sub-agents to verify each issue against the codebase. Group issues by area for efficient searching.
 
-**Verification patterns — what to search for each issue type:**
-
-| Issue Type | What to Search | How to Verify |
-|-----------|----------------|---------------|
-| "Add tests for X" | `grep -r "describe.*X" tests/` | Count matching test cases |
-| "Add feature X" | `grep -r "functionName" src/` | Check if function exists |
-| "Fix bug in X" | Read the file, check if pattern is fixed | Compare against issue description |
-| "Update dependency X" | `grep "X" package.json` | Compare version numbers |
-| "Add docs for X" | `ls docs/` + read content | Check if documentation exists |
-| "Refactor X" | Read function, count lines | Compare against issue's description |
-| "Security: tighten X" | Read config file | Check if config was tightened |
+**Verification patterns:** for the search commands and verdict criteria per issue type (tests, dependency updates, security/config, refactoring, docs, performance), read [references/verification-patterns.md](references/verification-patterns.md) and pass the matching section to each sub-agent. For a feature or bug issue, find the function the issue names, or read the code it points at, and compare it with the issue's description.
 
 **Key principle: Evidence-based closure only.** For each issue, find the exact file, line number, and code that proves it's resolved. Never close based on "I think this was done."
 
@@ -125,13 +115,6 @@ gh label create "P5-not-needed" --description "Could be closed" --color "D4C5F9"
 
 **Category labels to ensure exist:** `performance`, `security`, `accessibility`, `testing`, `dependabot`, `documentation`, `infrastructure`
 
-**Batch-apply labels:**
-```bash
-for i in <number1> <number2> <number3>; do
-  gh issue edit $i --add-label "<label>"
-done
-```
-
 ## Prioritization Framework
 
 Score each issue on three axes:
@@ -187,8 +170,6 @@ Two people file issues about the same CSP directive but frame them differently (
 
 ## Notes
 
-- Always use `gh issue list --json` for structured data, not plain text output
-- The `--jq` flag enables inline JSON filtering without piping to `jq`
 - Issue bodies over ~25KB need the `gh issue view <N> --json body` approach (one at a time)
 - Batch `gh issue edit` calls in loops, not parallel, to avoid GitHub API rate limits
 - Add `_Closed during open issue audit (YYYY-MM-DD)._` to all closure comments for traceability

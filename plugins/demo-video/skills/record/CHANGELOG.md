@@ -2,6 +2,12 @@
 
 All notable changes to the **record** skill (was `smart-screen-recorder`) are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- No change to this skill. Its version follows the `demo-video` plugin version (#210).
+
 ## [1.0.1] - 2026-10-06
 
 ### Changed

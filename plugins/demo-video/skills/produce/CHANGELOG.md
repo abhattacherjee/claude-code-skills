@@ -2,6 +2,12 @@
 
 All notable changes to the **produce** skill (was `product-video-creation`) are documented here.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- Cut the Agent Definitions table: the architecture tree and each step already name every agent, its type and its model (#210).
+
 ## [1.0.1] - 2026-10-06
 
 ### Changed

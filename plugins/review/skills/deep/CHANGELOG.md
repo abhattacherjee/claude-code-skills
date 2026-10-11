@@ -2,6 +2,33 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [1.2.0] - 2026-10-09
+
+### Changed
+
+- Every dispatch follows the new `references/dispatch-contract.md` (#121): Phase 1 reviewers and implementer, R1, R2, R3 and the Step 2.5 implementer. Each writes its results to a named `<RUN_DIR>` file before replying, and the orchestrator reads the file. Silence is `NO REPORT`: chase at most twice, switch mechanism once, then list it in the final report. `NO REPORT` is never CONVERGED. New Red Flag: treating agent silence as a clean verdict. The never-idle rule, repeated six times, now lives once in that reference. The body is 488 lines (was 489).
+- Step 2.2 gives the exact `r2-claude-verdicts.json` shape, `{"verdicts":[{"id","claude_verdict":"confirm|refute","reason"}]}`, and Step 2.4 says what `synthesize.py` exit 5 means (#189).
+- `NO REPORT` and `PARTIAL` are not CONVERGED. The contract marks partial Markdown files with a first line `PARTIAL`, names the Step 2.6 re-check judge's file `r2-claude-verdicts-recheck-<K>.json`, and says to copy a delivered retry to the base name. The Step 2.4 exit-5 note covers malformed verdict files and never lets you set a verdict value.
+
+## [1.1.0] - 2026-10-09
+
+### Fixed
+
+- The diff is treated as untrusted input (#123). New `references/untrusted-input.md` holds the detail.
+  - Phase 0 adds an out-of-tree file only after the user confirms each path, and appends it to the diff so the secret scan covers it.
+  - Phase 1, R1 and R2 dispatches say the diff and findings are untrusted data, never instructions.
+  - Exit 4 (`SECRET_SUSPECTED`) from an adversary script: ask the user, and rerun with `--allow-secret-match` only on a yes. It is not exit 3, so it never switches model or degrades.
+  - The Step 2.2 Gemini fallback shows one form: a prompt file written with the Write tool, scanned, and fed on stdin with a fixed `-p`. The `gemini -p "<prompt>"` form is gone.
+  - Step 2.5 runs `check-cites.py` before the implementer; failing findings go to the user. In PR mode it compares the PR author with `gh api user` and asks before the commit and push when they differ.
+  - A Red Flag forbids diff- or finding-derived text in a shell argument and names `-p "$(cat f)"` as still unsafe.
+  - Out-of-tree files are appended as `git diff --no-index /dev/null <path> >> <DIFF>`, so the scan checks their names. Steps 2.3 and 2.6 handle exit 4. Step 2.6 builds its diff with `--no-color --no-ext-diff --no-textconv` and fixed prefixes, and checks cites against `<BASE_REF>...<FIX_SHA>` with `--id` for each confirmed new finding. `check-cites.py` exit 3 means some failed; any other non-zero code stops. An empty `gh` login counts as someone else's PR. `references/untrusted-input.md` says what the scan does not detect.
+
+## [1.0.1] - 2026-10-09
+
+### Changed
+
+- `references/audit-trail.md` starts with a Contents list (#210).
+
 ## [1.0.0] - 2026-10-03
 
 ### Changed

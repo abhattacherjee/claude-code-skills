@@ -150,14 +150,26 @@ def parse_marker(body):
 
 
 _PK = "PRIVATE" + " KEY"
+# The one list of secret formats: redact() uses it on model output, and
+# secret_scan.py uses it on everything sent to the adversary model.
+# The sk- patterns need a left boundary: without it, kebab-case words such as
+# "task-..." or "risk-..." matched as OpenAI keys. The jwt and url-credentials
+# patterns start only where their run starts (a lookbehind, not \b), so one long
+# line of near-matches costs linear time, not quadratic; test_secret_scan.py
+# LinearTimeTests checks every pattern on a 2 MB line.
 SECRET_PATTERNS = [
     ("github-token", re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),
     ("aws-key-id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}")),
-    ("openai-key", re.compile(r"sk-(?!ant-)[A-Za-z0-9_-]{20,}")),
+    ("anthropic-key", re.compile(r"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}")),
+    ("openai-key", re.compile(r"(?<![A-Za-z0-9_-])sk-(?!ant-)[A-Za-z0-9_-]{20,}")),
+    ("slack-token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
+    ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}")),
+    ("stripe-key", re.compile(r"\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}")),
+    ("url-credentials", re.compile(
+        r"(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,30}://[^/\s:@]{1,256}:[^/\s@]{1,256}@")),
     ("private-key", re.compile(
         r"-----BEGIN [A-Z ]*" + _PK + r"-----[\s\S]*?(?:-----END [A-Z ]*" + _PK + r"-----|\Z)")),
-    ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
+    ("jwt", re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
 ]
 TRUNC_NOTE = "\n\n… truncated ({n} chars); full record in the run dir"
 

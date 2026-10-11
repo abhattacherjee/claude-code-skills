@@ -2,21 +2,43 @@
 
 Pre-publish verification for Claude Code skills. Run through before committing.
 
+## Contents
+
+- Decomposition & Agents
+- Frontmatter
+- Content
+- Progressive Disclosure
+- Progress Tracking (if 3+ phases)
+- Teams (optional)
+- Scripts (if present)
+- Cross-References
+- Testing
+- Verification Commands
+
+## Decomposition & Agents
+
+- [ ] Decomposition evaluated: can this be split into parallel sub-agents?
+- [ ] If yes: orchestrator defined as pure delegator (never does the work itself)
+- [ ] Independent agents launched in a SINGLE Task tool message (not sequentially)
+- [ ] Each sub-agent has a single focused responsibility
+- [ ] Sub-agents use an appropriate model tier (haiku/sonnet/opus)
+- [ ] Agent definitions include a structured output format
+
 ## Frontmatter
 
 - [ ] `name`: ≤64 chars, lowercase letters + numbers + hyphens only
-- [ ] `name`: no reserved words (`anthropic`, `claude`)
-- [ ] `description`: non-empty, ≤1024 characters
+- [ ] `name`: no reserved words (`anthropic`, `claude`); `validate-skill.sh` fails either
+- [ ] `description`: non-empty, ≤1024 characters, a double-quoted single line
 - [ ] `description`: written in third person (not "I help..." or "You can...")
 - [ ] `description`: includes what it does AND when to use it
 - [ ] `description`: has numbered trigger conditions `Use when: (1)...(2)...`
 - [ ] `description`: includes specific terms for semantic matching (error messages, tool names)
-- [ ] `version`: present, follows semver
-- [ ] No non-standard fields (no `author`, `date`, `tags`, `allowed-tools`, `category`)
+- [ ] `metadata.version`: present, follows semver (no top-level `version`)
+- [ ] No non-standard fields (only `name`, `description`, `metadata`, plus `model` for a sub-agent skill and `disable-model-invocation` for a slash-command-only skill; `validate-skill.sh` rejects any other)
 
 ## Content
 
-- [ ] SKILL.md body ≤ 500 lines
+- [ ] SKILL.md body under 500 lines (`validate-skill.sh` fails 500 or more)
 - [ ] Only includes information Claude doesn't already know
 - [ ] Consistent terminology throughout (one term per concept)
 - [ ] No time-sensitive information (or uses "Current" / "Legacy" pattern)
@@ -28,8 +50,8 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 
 - [ ] SKILL.md contains decision workflow and trigger conditions
 - [ ] Lookup tables, code examples, case studies in `references/`
-- [ ] All reference files linked directly from SKILL.md (one level deep)
-- [ ] Reference files > 100 lines have table of contents
+- [ ] Every `.md` file in the skill (other than README, CHANGELOG and CONTRIBUTING) is named in SKILL.md by its path, or read by a script in `scripts/`: one level deep (`validate-skill.sh` fails one that is not)
+- [ ] A reference file over 100 lines has a `## Contents` heading in its first 30 lines (`validate-skill.sh` fails one that does not)
 - [ ] Descriptive filenames (`api-field-reference.md` not `ref1.md`)
 
 ## Progress Tracking (if 3+ phases)
@@ -41,6 +63,13 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 - [ ] Task update rules documented (in_progress → completed, abort → deleted)
 - [ ] Gate/abort points identified (e.g., "if tests fail, delete remaining tasks")
 
+## Teams (optional)
+
+- [ ] Team mode evaluated: does this skill have multi-phase feedback loops?
+- [ ] If yes: team pattern documented alongside the sub-agent pattern
+- [ ] Conditional check for `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` documented
+- [ ] TeamDelete cleanup documented in the workflow
+
 ## Scripts (if present)
 
 - [ ] All scripts support `--help` / `-h` flag
@@ -50,6 +79,8 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 - [ ] Scripts use portable shebang (`#!/usr/bin/env bash`)
 - [ ] Scripts handle error conditions (missing deps, files, permissions)
 - [ ] Scripts referenced from SKILL.md with usage examples
+- [ ] If present: `--fix`/`--dry-run` support
+- [ ] Scripts dry-run tested against real project data (2-3 varied inputs)
 
 ## Cross-References
 
@@ -69,17 +100,9 @@ Pre-publish verification for Claude Code skills. Run through before committing.
 ## Verification Commands
 
 ```bash
-# Line count
-wc -l SKILL.md  # Must be ≤ 500
-
-# Description length
-awk '/^description:/{found=1;next} found && /^[a-z]/{exit} found{print}' SKILL.md | wc -c  # Must be ≤ 1024
-
-# Non-standard frontmatter fields
-awk '/^---$/{c++;next} c==1{print}' SKILL.md | grep -vE '^(name|description|version|  )' # Should be empty
-
-# Script executability
-ls -la scripts/*.sh scripts/*.py 2>/dev/null  # Check x bit
+# Frontmatter, name, description, body under 500 lines, every reference named,
+# Contents lists, script shebangs and executability: exit 0 pass, 1 fail
+<SCRIPTS_DIR>/validate-skill.sh <SKILL_DIR>
 
 # Cross-reference validation
 for f in $(grep -oE '\(references/[^)]+\)' SKILL.md | tr -d '()'); do

@@ -4,6 +4,12 @@ Every round of Phase 1 and Phase 2 is saved on the PR (or, with no PR, in the lo
 the `adversarial` skill's `scripts/pr-audit.py`. You write one JSON record per round; the
 script posts it. Never post comments by hand.
 
+## Contents
+
+- Setup (Phase 0)
+- After each round
+- What goes in each record
+
 ## Setup (Phase 0)
 
 The Bash tool keeps no shell variables between calls, so nothing below is a shell variable. Each

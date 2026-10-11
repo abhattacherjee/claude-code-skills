@@ -2,6 +2,23 @@
 
 All notable changes to the **author** skill (was `skill-authoring`) are documented here.
 
+## [1.1.0] - 2026-10-09
+
+### Changed
+
+- SKILL.md teaches four rules from Anthropic's skill authoring guide, once each: gerund names (`processing-pdfs`; avoid `helper`, `utils`, `tools`) in the frontmatter rules; a comment giving the reason for every constant in a script; why references stay one level deep (Claude may preview a nested file with `head -100`); and evaluations first, as the new workflow step 3 (at least three scenarios run without the skill, as the baseline). Workflow steps 3 to 13 are now 4 to 14 (#214).
+- `references/quality-checklist.md` matches the new `validate-skill.sh` checks, and its verification commands run `validate-skill.sh` instead of separate body, description and field one-liners (#214).
+- The bundled `scripts/validate-skill.sh` (a byte-identical copy of the repo-root validator) has new checks. It fails a SKILL.md body of 500 lines or more (it passed exactly 500, and missed a last line with no newline); a name containing `anthropic` or `claude`; a `.md` file that SKILL.md does not name and no script in `scripts/` reads; and a `.md` file over 100 lines with no `## Contents` heading in its first 30 lines. CONTRIBUTING.md, files under a dot-directory such as `.github/` and files under a top-level `tests/` directory are not checked (#214).
+
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- The supported frontmatter fields, in SKILL.md and the checklist, match `validate-skill.sh`: `name`, `description`, `metadata`, `model`, `disable-model-invocation` (#210).
+- `references/quality-checklist.md` is now linked from the workflow (step 11) and the Quality Checklist section, which replaces the inline copy. The inline items it lacked (decomposition and agents, teams, dry-run testing) moved into it, and it starts with a Contents list. Its body-length, description-length and frontmatter commands now match the current rules (`metadata.version`, under 500 lines, a single-line description) (#210).
+- Cut repeats: principle 7 merged into principle 4, the `set -e` pitfall list down to its rule and the two incident-backed pitfalls (`((var++))` at 0, `while read` at the end of a pipe), and the anti-patterns that restated a rule above (#210).
+- `references/task-tracking-pattern.md` starts with a Contents list (#210).
+
 ## [1.0.1] - 2026-10-05
 
 ### Changed

@@ -1086,7 +1086,8 @@ metadata:
 
 # objentry-plugin
 
-Fixture content.
+Fixture content. The source directory also holds fixture-command.md and
+fixture-agent.md; naming them here keeps validate-skill.sh's reference check green.
 EOF
 
 cat > "$PREPARE_FIXTURE_DIR/objentry-plugin/fixture-command.md" <<'EOF'
@@ -1269,6 +1270,14 @@ SYNC_RC=0
 run_sync "$SKILLS_HOME_FIXTURE" "$MONOREPO_FIXTURE" "$STDOUT_LOG" "$STDERR_LOG" || SYNC_RC=$?
 SYNC_STDOUT="$(cat "$STDOUT_LOG")"
 SYNC_STDERR="$(cat "$STDERR_LOG")"
+
+# The "Next steps" banner follows skill-kit:publish Step 5: a branch, named paths, a PR.
+# It used to print `git add -A` and a bare `git push` (#210).
+assert_contains "Next steps: stage the paths the sync wrote by name (#210)" \
+    'git add -- <PATH>...' "$SYNC_STDOUT"
+assert_contains "Next steps: open a PR, as in skill-kit:publish Step 5 (#210)" \
+    'gh pr create --base <BASE_BRANCH>' "$SYNC_STDOUT"
+assert_not_contains "Next steps: no git add -A (#210)" 'git add -A' "$SYNC_STDOUT"
 
 ADD_STDOUT_LOG="$SCRATCH_DIR/add.stdout"
 ADD_STDERR_LOG="$SCRATCH_DIR/add.stderr"
@@ -3643,6 +3652,9 @@ metadata:
 ---
 
 # Good Manifest Skill
+
+The source directory also holds agents-src/control-agent.md; naming it here keeps
+validate-skill.sh's reference check green.
 EOF
 cp "$SKILLS_HOME_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md" \
    "$MONOREPO_GOODMANIFEST_FIXTURE/goodmanifest-skill/SKILL.md"

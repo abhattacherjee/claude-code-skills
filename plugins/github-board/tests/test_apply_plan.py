@@ -1,0 +1,385 @@
+"""apply-plan.sh writes milestones through REST by number (#203).
+
+`gh issue edit --milestone <title>` cannot assign a closed milestone, so every write is
+`gh api -X PATCH repos/O/R/issues/N -F milestone=<number>`. `closed_moves` fixes the
+milestone of a closed issue without a rationale or a comment. A failed write prints gh's
+error and makes the run exit 1. Every `gh` call here is a stub on PATH.
+"""
+import json
+import os
+import shutil
+import subprocess
+
+import pytest
+
+from gbtest import SKILLS_DIR
+
+APPLY_PLAN = SKILLS_DIR / "plan-milestones" / "scripts" / "apply-plan.sh"
+
+pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="needs jq")
+
+MILESTONES = [{"title": "v0.5", "number": 5, "state": "closed"},
+              {"title": "v0.6", "number": 6, "state": "open"}]
+
+# Logs every call. The milestone list comes from $MS_JSON: closed milestones only with
+# state=all in argv, and past the first entry only with --paginate, as GitHub does. $MS_EMPTY
+# makes it exit 0 with no output. PATCH prints the milestone number it was sent (what
+# --jq .milestone.number prints), 99 for an issue in $PATCH_WRONG, and a 422 body on stdout
+# for an issue in $PATCH_FAIL. An issue state read prints open for an issue in $OPEN_ISSUES,
+# fails for one in $STATE_FAIL, else closed. POST prints $POST_NUMBER (a warning on stderr
+# first when $POST_WARN is set), or fails when it is empty. `issue comment` appends its
+# stdin body to $BODY_LOG.
+_STUB = r"""#!/usr/bin/env bash
+echo "$*" >> "$GH_LOG"
+case "$*" in
+  "api -X PATCH repos/"*"/issues/"*)
+    n="${4##*/}"; m="${6#milestone=}"
+    for f in ${PATCH_FAIL:-}; do
+      if [ "$f" = "$n" ]; then
+        echo '{"message":"Validation Failed","errors":[{"resource":"Issue","field":"milestone","code":"invalid"}]}'
+        echo "gh: Validation Failed (HTTP 422)" >&2; exit 1
+      fi
+    done
+    for f in ${PATCH_WRONG:-}; do [ "$f" = "$n" ] && { echo 99; exit 0; }; done
+    echo "$m"; exit 0 ;;
+  "api repos/"*"/issues/"*" --jq .state")
+    n="${2##*/}"
+    for f in ${STATE_FAIL:-}; do [ "$f" = "$n" ] && { echo "HTTP 404: Not Found" >&2; exit 1; }; done
+    for f in ${OPEN_ISSUES:-}; do [ "$f" = "$n" ] && { echo open; exit 0; }; done
+    echo closed; exit 0 ;;
+  "api repos/"*"/milestones -X POST"*)
+    [ -n "${POST_WARN:-}" ] && echo "warning: rate limit is low" >&2
+    [ -n "${POST_NUMBER:-}" ] || { echo "HTTP 403: Resource not accessible" >&2; exit 1; }
+    echo "$POST_NUMBER"; exit 0 ;;
+  "api repos/"*"/milestones?"*)
+    [ -n "${MS_EMPTY:-}" ] && exit 0
+    f='.'
+    case "$*" in *state=all*) ;; *) f='map(select(.state != "closed"))' ;; esac
+    case "$*" in *--paginate*) ;; *) f="$f | .[0:1]" ;; esac
+    jq -c "$f" "$MS_JSON"; exit 0 ;;
+  "issue comment"*)
+    { cat; echo; echo "----"; } >> "$BODY_LOG"; exit 0 ;;
+esac
+echo "unexpected gh call: $*" >&2
+exit 1
+"""
+
+
+def _run(tmp_path, plan, *args, milestones=None, patch_fail="", post_number="", **extra):
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    gh = bindir / "gh"
+    gh.write_text(_STUB)
+    gh.chmod(0o755)
+    ms = tmp_path / "ms.json"
+    ms.write_text(json.dumps(MILESTONES if milestones is None else milestones))
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(dict({"repo": "O/R"}, **plan) if isinstance(plan, dict)
+                                    else plan))
+    log = tmp_path / "gh.log"
+    bodies = tmp_path / "bodies.log"
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", GH_LOG=str(log),
+               MS_JSON=str(ms), PATCH_FAIL=patch_fail, POST_NUMBER=post_number,
+               BODY_LOG=str(bodies), **extra)
+    r = subprocess.run(["bash", str(APPLY_PLAN), "--plan", str(plan_path), *args],
+                       capture_output=True, text=True, env=env, timeout=60)
+    calls = log.read_text().splitlines() if log.exists() else []
+    return r, calls, (bodies.read_text() if bodies.exists() else "")
+
+
+def _patches(calls):
+    return [c for c in calls if c.startswith("api -X PATCH")]
+
+
+def test_move_into_closed_milestone_uses_rest_by_number(tmp_path):
+    r, calls, _ = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.5", "rationale": "shipped inside v0.5.0"}]}, "--apply")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "api -X PATCH repos/O/R/issues/11 -F milestone=5 --jq .milestone.number" in calls
+    assert not [c for c in calls if c.startswith("issue edit")]
+
+
+def test_moves_still_post_their_rationale_comment(tmp_path):
+    r, calls, bodies = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.6", "rationale": "belongs with the v0.6 theme"}]}, "--apply")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert calls.index("api -X PATCH repos/O/R/issues/11 -F milestone=6 --jq .milestone.number") < \
+        calls.index("issue comment 11 --repo O/R --body-file -")
+    assert "belongs with the v0.6 theme" in bodies
+
+
+def test_rationale_newlines_survive_into_the_comment(tmp_path):
+    # @tsv wrote a newline as the two characters \n, so the comment showed a backslash.
+    r, _, bodies = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.6", "rationale": "line one\nline two\twith a tab"}]},
+        "--apply")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "line one\nline two\twith a tab" in bodies, repr(bodies)
+    assert "\\n" not in bodies
+
+
+def test_closed_moves_need_no_rationale_and_post_no_comment(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 181, "to": "v0.6"}]}, "--apply")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "api -X PATCH repos/O/R/issues/181 -F milestone=6 --jq .milestone.number" in calls
+    assert not [c for c in calls if c.startswith("issue comment")]
+
+
+def test_closed_moves_unknown_target_is_refused(tmp_path):
+    # The valid entry proves the refusal comes before ANY write, not per issue.
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 182, "to": "v0.6"},
+                                                   {"issue": 181, "to": "v9.9"}]}, "--apply")
+    assert r.returncode != 0
+    assert "v9.9" in r.stderr
+    assert _patches(calls) == []
+
+
+def test_dry_run_lists_closed_moves(tmp_path):
+    r, calls, _ = _run(tmp_path, {
+        "moves": [{"issue": 11, "to": "v0.6", "rationale": "belongs with the v0.6 theme"}],
+        "closed_moves": [{"issue": 181, "to": "v0.5"}]})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "MOVE   #11 -> v0.6" in r.stdout
+    lines = [ln for ln in r.stdout.splitlines() if "#181" in ln]
+    assert lines and "v0.5" in lines[0] and "MOVE" not in lines[0], r.stdout
+    assert "closed milestone" in lines[0], "the dry run hides that the target is closed"
+    assert _patches(calls) == []
+
+
+def test_failed_write_prints_error_and_exits_1(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 181, "to": "v0.6"},
+                                                   {"issue": 182, "to": "v0.6"}]},
+                       "--apply", patch_fail="181")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "422" in r.stdout + r.stderr
+    assert "#181" in r.stderr
+    # One failure does not stop the rest of the plan.
+    assert "api -X PATCH repos/O/R/issues/182 -F milestone=6 --jq .milestone.number" in calls
+
+
+def test_failed_move_posts_no_rationale_comment(tmp_path):
+    r, calls, _ = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.6", "rationale": "belongs with the v0.6 theme"}]},
+        "--apply", patch_fail="11")
+    assert r.returncode == 1
+    assert not [c for c in calls if c.startswith("issue comment")]
+
+
+def test_ambiguous_title_is_refused(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 181, "to": "v0.5"}]}, "--apply",
+                       milestones=[{"title": "v0.5", "number": 5, "state": "closed"},
+                                   {"title": "v0.5", "number": 9, "state": "open"}])
+    assert r.returncode != 0
+    assert "v0.5" in r.stderr and "ambiguous" in r.stderr.lower()
+    assert _patches(calls) == []
+
+
+def test_created_milestone_number_comes_from_the_post_response(tmp_path):
+    r, calls, _ = _run(tmp_path, {
+        "create_milestones": [{"title": "v0.7", "description": "Theme: next"}],
+        "moves": [{"issue": 11, "to": "v0.7", "rationale": "belongs with the v0.7 theme"}]},
+        "--apply", post_number="7")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "api -X PATCH repos/O/R/issues/11 -F milestone=7 --jq .milestone.number" in calls
+
+
+def test_failed_create_fails_its_moves_and_exits_1(tmp_path):
+    r, calls, _ = _run(tmp_path, {
+        "create_milestones": [{"title": "v0.7", "description": "Theme: next"}],
+        "moves": [{"issue": 11, "to": "v0.7", "rationale": "belongs with the v0.7 theme"},
+                  {"issue": 12, "to": "v0.6", "rationale": "belongs with the v0.6 theme"}]},
+        "--apply")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "403" in r.stderr
+    assert not [c for c in calls if "issues/11" in c]
+    assert "api -X PATCH repos/O/R/issues/12 -F milestone=6 --jq .milestone.number" in calls
+
+
+@pytest.mark.parametrize("entry", [
+    pytest.param({"issue": "11/lock", "to": "v0.6"}, id="path-in-issue"),
+    pytest.param({"issue": 0, "to": "v0.6"}, id="zero"),
+    pytest.param({"issue": 1.5, "to": "v0.6"}, id="fraction"),
+    pytest.param({"issue": 11}, id="no-target"),
+    pytest.param({"issue": 11, "to": ""}, id="empty-target"),
+])
+def test_malformed_entry_is_refused_before_any_write(tmp_path, entry):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [entry]}, "--apply")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert _patches(calls) == []
+
+
+def test_issue_listed_twice_is_refused(tmp_path):
+    r, calls, _ = _run(tmp_path, {
+        "moves": [{"issue": 11, "to": "v0.6", "rationale": "belongs with the v0.6 theme"}],
+        "closed_moves": [{"issue": 11, "to": "v0.5"}]}, "--apply")
+    assert r.returncode == 1
+    assert "#11" in r.stderr and "more than once" in r.stderr
+    assert _patches(calls) == []
+
+
+def test_malformed_repo_is_refused(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 1, "to": "v0.6"}]}, "--apply",
+                       "--repo", "O/R/issues/2")
+    assert r.returncode == 1
+    assert calls == []
+
+
+def test_milestone_without_a_number_is_refused(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 181, "to": "v0.5"}]}, "--apply",
+                       milestones=[{"title": "v0.5", "state": "closed"}])
+    assert r.returncode == 1
+    assert "no number" in r.stderr
+    assert _patches(calls) == []
+
+
+def test_move_without_a_real_rationale_is_refused(tmp_path):
+    r, calls, _ = _run(tmp_path, {"moves": [{"issue": 11, "to": "v0.6", "rationale": "short"}]},
+                       "--apply")
+    assert r.returncode == 1
+    assert "rationale" in r.stderr
+    assert _patches(calls) == []
+
+
+@pytest.mark.parametrize("flag", ["--plan", "--repo"])
+def test_flag_without_a_value_is_a_usage_error(tmp_path, flag):
+    # `shift 2` with one argument left failed under set -e: exit 1, no message.
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 1, "to": "v0.6"}]}, flag)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "needs a value" in r.stderr
+    assert calls == []
+
+
+# ---- PR #205 review round 1 ---------------------------------------------------------------
+
+def _posts(calls):
+    return [c for c in calls if "-X POST" in c]
+
+
+CREATE_V07 = {"create_milestones": [{"title": "v0.7", "description": "Theme: next"}],
+              "moves": [{"issue": 11, "to": "v0.7", "rationale": "belongs with the v0.7 theme"}]}
+
+
+def test_create_with_a_stderr_warning_still_completes(tmp_path):
+    # stderr went into the number, and `--argjson n` crashed the run under set -e.
+    r, calls, _ = _run(tmp_path, CREATE_V07, "--apply", post_number="7", POST_WARN="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "api -X PATCH repos/O/R/issues/11 -F milestone=7 --jq .milestone.number" in calls
+
+
+def test_create_returning_a_non_number_exits_1(tmp_path):
+    r, calls, _ = _run(tmp_path, CREATE_V07, "--apply", post_number="7\n8")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "v0.7" in r.stderr
+    assert _patches(calls) == []
+
+
+def test_failed_create_with_no_moves_still_exits_1(tmp_path):
+    r, calls, _ = _run(tmp_path, {"create_milestones": [{"title": "v0.7"}]}, "--apply")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "403" in r.stderr
+
+
+def test_create_target_that_exists_is_not_posted(tmp_path):
+    r, calls, _ = _run(tmp_path, {"create_milestones": [{"title": "v0.5"}],
+                                  "closed_moves": [{"issue": 181, "to": "v0.5"}]}, "--apply")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _posts(calls) == []
+    assert "v0.5: EXISTS (closed), will not create" in r.stdout
+    assert "api -X PATCH repos/O/R/issues/181 -F milestone=5 --jq .milestone.number" in calls
+
+
+def test_dry_run_says_an_existing_create_target_will_not_be_created(tmp_path):
+    r, calls, _ = _run(tmp_path, {"create_milestones": [{"title": "v0.5"}, {"title": "v0.6"},
+                                                        {"title": "v0.7"}]})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "CREATE milestone v0.5: EXISTS (closed), will not create" in r.stdout
+    assert "CREATE milestone v0.6: EXISTS (open), will not create" in r.stdout
+    assert "CREATE milestone v0.7\n" in r.stdout
+    assert _posts(calls) == []
+
+
+@pytest.mark.parametrize("entry", [
+    pytest.param({}, id="no-title"),
+    pytest.param({"title": ""}, id="empty-title"),
+    pytest.param({"title": 5}, id="number-title"),
+])
+def test_create_entry_without_a_string_title_is_refused(tmp_path, entry):
+    r, calls, _ = _run(tmp_path, {"create_milestones": [entry]}, "--apply", post_number="7")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "title" in r.stderr
+    assert _posts(calls) == [] and _patches(calls) == []
+
+
+@pytest.mark.parametrize("plan,key", [
+    pytest.param({"moves": "x"}, "moves", id="moves-string"),
+    pytest.param({"moves": 5}, "moves", id="moves-number"),
+    pytest.param({"moves": ["x"]}, "moves[0]", id="moves-entry-string"),
+    pytest.param({"closed_moves": {"issue": 1}}, "closed_moves", id="closed-moves-object"),
+    pytest.param({"create_milestones": "v0.7"}, "create_milestones", id="creates-string"),
+    pytest.param({"keep": 5}, "keep", id="keep-number"),
+    pytest.param([1, 2], "plan", id="plan-is-a-list"),
+])
+def test_wrong_shape_is_refused_not_a_jq_crash(tmp_path, plan, key):
+    r, calls, _ = _run(tmp_path, plan, "--apply", "--repo", "O/R")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert key in r.stderr, r.stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize("repo", ["../..", "o/..", "./r", "../r"])
+def test_dot_segments_in_repo_are_refused(tmp_path, repo):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 1, "to": "v0.6"}]}, "--apply",
+                       "--repo", repo)
+    assert r.returncode == 1
+    assert calls == []
+
+
+def test_empty_milestone_listing_is_an_error(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 181, "to": "v0.6"}]}, "--apply",
+                       MS_EMPTY="1")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "could not" in r.stderr
+    assert _patches(calls) == []
+
+
+@pytest.mark.parametrize("mode", [[], ["--apply"]])
+def test_closed_moves_open_issue_is_refused(tmp_path, mode):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 182, "to": "v0.6"},
+                                                   {"issue": 181, "to": "v0.6"}]}, *mode,
+                       OPEN_ISSUES="181")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "#181" in r.stderr and "moves" in r.stderr and "rationale" in r.stderr
+    assert "api repos/O/R/issues/181 --jq .state" in calls
+    assert _patches(calls) == []
+
+
+def test_closed_moves_state_read_failure_is_refused(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 182, "to": "v0.6"},
+                                                   {"issue": 181, "to": "v0.6"}]}, "--apply",
+                       STATE_FAIL="181")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "#181" in r.stderr and "404" in r.stderr
+    assert _patches(calls) == []
+
+
+def test_patch_reply_with_another_milestone_is_a_failure(tmp_path):
+    r, calls, _ = _run(tmp_path, {"closed_moves": [{"issue": 181, "to": "v0.6"}]}, "--apply",
+                       PATCH_WRONG="181")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "99" in r.stderr and "#181" in r.stderr
+
+
+def test_422_body_detail_is_printed(tmp_path):
+    r, _, _ = _run(tmp_path, {"closed_moves": [{"issue": 181, "to": "v0.6"}]}, "--apply",
+                   patch_fail="181")
+    assert r.returncode == 1
+    assert '"code":"invalid"' in r.stderr, r.stderr
+
+
+def test_final_line_lists_the_failed_issues(tmp_path):
+    r, _, _ = _run(tmp_path, {"closed_moves": [{"issue": 11, "to": "v0.6"},
+                                               {"issue": 12, "to": "v0.6"},
+                                               {"issue": 13, "to": "v0.6"}]}, "--apply",
+                   patch_fail="11 13")
+    assert r.returncode == 1
+    assert "completed with 2 failure(s): #11 #13" in r.stderr, r.stderr

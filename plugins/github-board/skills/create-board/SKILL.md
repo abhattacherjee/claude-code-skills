@@ -3,7 +3,7 @@ name: create-board
 description: "Replicates a GitHub ProjectV2 board (Kanban view, Status columns, Milestone swimlanes, custom fields) onto a target repository by copying a known-good template, then verifies the copy and reports the one workflow that must be enabled by hand. Also audits existing boards for drift, read-only. Use when: (1) the user runs `/github-board:create-board <owner/repo>` or /create-gh-board (the old name of this skill), (2) the user asks to create, clone, copy, or replicate a project board across repos, (3) a new repo needs the standard board layout (Status: Todo/Up Next/In Progress/Development Complete/Done) wired up, (4) the user asks which existing boards have drifted or are missing auto-add. The template board comes from the github-board config (`create-board init`)."
 disable-model-invocation: true
 metadata:
-  version: 3.0.0
+  version: 3.0.1
 ---
 
 # create-board
@@ -225,18 +225,6 @@ Replacing a different template, after the user confirmed: the same call with `--
 
 Add `"owner": "<login>"` to the payload only when `init-config.sh --show` exits 4 (no config yet).
 Exit 3: a different template is configured; ask before passing `--force`.
-
-## Sub-Agent Registry
-
-| Agent | Concurrency | Purpose | Model |
-|---|---|---|---|
-| `github-board:template-inspector` | sequential (1) | Snapshot template structure to JSON | `haiku` |
-| `github-board:board-creator` | sequential (2, 3, 5) | Copy, link, backfill | `haiku` |
-| `github-board:workflow-syncer` | sequential (4) | Report auto-add absence + UI URL and filter | `sonnet` |
-| `github-board:board-verifier` | sequential (6) | Diff new board vs snapshot | `sonnet` |
-
-Phases are sequential because each needs the previous one's output. Sub-agents
-still keep the orchestrator's context lean and right-size the model per task.
 
 ## Output
 

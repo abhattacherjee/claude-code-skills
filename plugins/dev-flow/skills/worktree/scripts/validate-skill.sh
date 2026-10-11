@@ -14,12 +14,14 @@ Usage: validate-skill.sh [options] <skill-directory>
 
 Validates a Claude Code skill directory against quality rules:
   - SKILL.md exists with valid YAML frontmatter
-  - name: lowercase + hyphens, ≤64 characters
+  - name: lowercase + hyphens, ≤64 characters, no "anthropic" or "claude"
   - description: ≤1024 characters, third person, "Use when:" present
   - metadata.version: present and valid semver
   - No non-standard frontmatter fields (author, date, tags are disallowed)
   - Version matches CHANGELOG.md (if present)
-  - Body: ≤500 lines
+  - Body: under 500 lines
+  - Reference .md files: named in SKILL.md (or read by a script); over 100 lines,
+    a ## Contents heading in the first 30 lines
   - Scripts: executable, #!/usr/bin/env bash shebang, --help support
 
 Options:
@@ -179,6 +181,16 @@ else
   else
     fail "name: too long ($NAME_LEN chars, max 64)"
   fi
+
+  # Reserved words: Anthropic's guide forbids "anthropic" and "claude" anywhere in a name
+  NAME_LC="$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]')"
+  RESERVED=""
+  for word in anthropic claude; do
+    case "$NAME_LC" in
+      *"$word"*) RESERVED="$word"; fail "name: must not contain the reserved word \"$word\" (got: $NAME)" ;;
+    esac
+  done
+  [[ -z "$RESERVED" ]] && pass "name: no reserved words (anthropic, claude)"
 fi
 
 # ============================================================
@@ -279,19 +291,170 @@ else
 fi
 
 # ============================================================
-# 7. Body length (≤500 lines)
+# 7. Body length (under 500 lines)
 # ============================================================
+# Counted as scripts/check-skill-structure.py counts it (S1): the lines after the
+# closing --- of a frontmatter that opens on line 1, else every line. awk counts a
+# last line with no newline, which wc -l does not.
 echo ""
 echo "--- body ---"
 
-TOTAL_LINES=$(wc -l < "$SKILL_MD" | tr -d ' ')
-# Body starts after second ---
-BODY_LINES=$((TOTAL_LINES - FRONTMATTER_END))
+MAX_BODY=500   # Anthropic's guide: keep the SKILL.md body under 500 lines
+BODY_LINES=$(LC_ALL=C awk '
+  /^[ \t\r\v\f]*---[ \t\r\v\f]*$/ { if (NR == 1) { open = 1; next } if (open && !shut) shut = NR }
+  END { print (shut ? NR - shut : NR) }' "$SKILL_MD")
 
-if [[ $BODY_LINES -le 500 ]]; then
-  pass "body: $BODY_LINES lines (max 500)"
+if [[ $BODY_LINES -lt $MAX_BODY ]]; then
+  pass "body: $BODY_LINES lines (must be under $MAX_BODY)"
 else
-  fail "body: too long ($BODY_LINES lines, max 500)"
+  fail "body: $BODY_LINES lines (must be under $MAX_BODY)"
+fi
+
+# ============================================================
+# 7b. Reference files: named from SKILL.md, and a Contents list
+# ============================================================
+# The rules of scripts/check-skill-structure.py (S2, S3); a parity test in
+# scripts/test-check-skill-structure.sh keeps the two in step. Checked: every Markdown
+# file under the skill directory except SKILL, README, CHANGELOG and CONTRIBUTING, and
+# except files under a dot-directory (.github/) or a top-level tests/ directory (test
+# fixtures). A symlink to a file counts; a symlinked directory is not entered.
+#   S2  SKILL.md names its path relative to the skill directory (bare, ./ or
+#       ${CLAUDE_SKILL_DIR}/ in front), or a file under scripts/ names its file name.
+#   S3  a file over 100 lines has a ## Contents or ## Table of contents heading in
+#       its first 30 lines, outside a fenced code block.
+# Whitespace is ASCII: space, tab, CR, VT, FF. A file name with a newline can never
+# be named (names match within one line); it is shown with \n.
+# Blind spots, as in the Python checker: any mention counts (a comment, a "do not
+# read" line); other file types are not checked. Names are matched byte by byte, so a
+# non-ASCII letter glued to a path does not stop it counting here (it does in Python).
+# This file must not spell out a <name>.md file name: every skill that ships a copy
+# would then count a reference of that name as read by a script.
+echo ""
+echo "--- references ---"
+
+TOC_MIN_LINES=100  # Anthropic's guide: a reference file over 100 lines needs a contents list
+TOC_WITHIN=30      # ...near the top, where a partial read (head) still shows it
+
+# names <path|file> <target> <file>...: exit 0 when a file names target on its own.
+# After target, the next char must not extend it: not a word char or -, and not a .
+# followed by a word char (so <name>.md. ends a sentence; <name>.md.bak is another file).
+# path: the char before target (after an optional ./ or ${CLAUDE_SKILL_DIR}/) must not
+#   be part of a path, so other/./references/<name>.md does not count.
+# file: the char before must not be a word char, . or -; a / is fine ("$DIR/<name>.md").
+# The target goes through the environment: awk -v would read its backslashes as escapes.
+names() {
+  local mode="$1"
+  NAMES_TARGET="$2"
+  shift 2
+  NAMES_TARGET="$NAMES_TARGET" LC_ALL=C awk -v mode="$mode" '
+    function w(c) { return c ~ /^[A-Za-z0-9_]$/ }
+    BEGIN { pfx = "${CLAUDE_SKILL_DIR}/"; t = ENVIRON["NAMES_TARGET"] }
+    {
+      s = $0; off = 0
+      while ((i = index(substr(s, off + 1), t)) > 0) {
+        p = off + i; off = p
+        nx = substr(s, p + length(t), 1)
+        if (w(nx) || nx == "-" || (nx == "." && w(substr(s, p + length(t) + 1, 1)))) continue
+        pre = substr(s, 1, p - 1)
+        if (mode == "path") {
+          if (length(pre) >= 2 && substr(pre, length(pre) - 1) == "./") pre = substr(pre, 1, length(pre) - 2)
+          else if (length(pre) >= length(pfx) && substr(pre, length(pre) - length(pfx) + 1) == pfx) pre = substr(pre, 1, length(pre) - length(pfx))
+          c = substr(pre, length(pre), 1)
+          if (c == "" || !(w(c) || index("./${}-", c))) { found = 1; exit }
+        } else {
+          c = substr(pre, length(pre), 1)
+          if (c == "" || !(w(c) || c == "." || c == "-")) { found = 1; exit }
+        }
+      }
+    }
+    END { exit (found ? 0 : 1) }' "$@"
+}
+
+# has_toc <file>: exit 0 when a ## Contents heading sits in the first TOC_WITHIN lines,
+# outside a fenced block. A fence is 3+ backticks or tildes after at most 3 spaces; a
+# backtick fence line has no other backtick (so ```inline``` is not one). A fence closes
+# on the same char, at least as long, with nothing but whitespace after it.
+has_toc() {
+  LC_ALL=C awk -v within="$TOC_WITHIN" '
+    NR > within { exit }
+    {
+      line = $0; ind = 0
+      while (ind < 4 && substr(line, ind + 1, 1) == " ") ind++
+      if (ind < 4) {
+        rest = substr(line, ind + 1); c = substr(rest, 1, 1)
+        if (c == "`" || c == "~") {
+          n = 0
+          while (substr(rest, n + 1, 1) == c) n++
+          after = substr(rest, n + 1)
+          if (n >= 3 && (c == "~" || index(after, "`") == 0)) {
+            if (fc == "") { fc = c; fn = n }
+            else if (c == fc && n >= fn && after ~ /^[ \t\r\v\f]*$/) fc = ""
+            next
+          }
+        }
+      }
+      if (fc == "" && tolower(line) ~ /^##[ \t\r\v\f]+(contents|table of contents)[ \t\r\v\f]*$/) { found = 1; exit }
+    }
+    END { exit (found ? 0 : 1) }' "$1"
+}
+
+# A find that cannot read a directory still lists the rest and exits non-zero, so each
+# list goes to a temp file first and find's status is checked: a skipped directory is a
+# failure. NUL-separated, so a file name with a newline is checked, not split.
+LIST_TMP="$(mktemp)"
+trap 'rm -f "$LIST_TMP"' EXIT
+SCRIPT_FILES=()
+if [[ -d "$SKILL_DIR/scripts" ]]; then
+  if ! (cd "$SKILL_DIR/scripts" && find . \( -type f -o -type l \) -print0) > "$LIST_TMP"; then
+    fail "cannot list every file in scripts/ (see find's error above)"
+  fi
+  while IFS= read -r -d '' f; do
+    f="${f#./}"
+    [[ -f "$SKILL_DIR/scripts/$f" ]] || continue   # a symlink to a file counts; to a directory, not
+    if [[ -r "$SKILL_DIR/scripts/$f" ]]; then
+      SCRIPT_FILES+=("$SKILL_DIR/scripts/$f")
+    else
+      fail "scripts/${f//$'\n'/\\n}: cannot read"
+    fi
+  done < <(LC_ALL=C sort -z "$LIST_TMP")
+fi
+
+if ! (cd "$SKILL_DIR" && find . -name '*.md' -print0) > "$LIST_TMP"; then
+  fail "cannot list every Markdown file in the skill directory (see find's error above)"
+fi
+REF_COUNT=0
+while IFS= read -r -d '' rel; do
+  rel="${rel#./}"
+  shown="${rel//$'\n'/\\n}"
+  case "${rel##*/}" in SKILL.md|README.md|CHANGELOG.md|CONTRIBUTING.md) continue ;; esac
+  case "/$rel" in */.*) continue ;; esac
+  case "$rel" in tests/*) continue ;; esac
+  [[ -f "$SKILL_DIR/$rel" ]] || continue
+  REF_COUNT=$((REF_COUNT + 1))
+  if [[ ! -r "$SKILL_DIR/$rel" ]]; then
+    fail "$shown: cannot read"
+    continue
+  fi
+
+  if names path "$rel" "$SKILL_MD" \
+     || { [[ ${#SCRIPT_FILES[@]} -gt 0 ]] && names file "${rel##*/}" "${SCRIPT_FILES[@]}"; }; then
+    pass "$shown: named in SKILL.md or read by a script"
+  else
+    fail "$shown: not named in SKILL.md or read by a script in scripts/"
+  fi
+
+  REF_LINES=$(awk 'END { print NR }' "$SKILL_DIR/$rel")
+  if [[ $REF_LINES -gt $TOC_MIN_LINES ]]; then
+    if has_toc "$SKILL_DIR/$rel"; then
+      pass "$shown: has a Contents heading ($REF_LINES lines)"
+    else
+      fail "$shown: $REF_LINES lines with no '## Contents' heading in the first $TOC_WITHIN lines"
+    fi
+  fi
+done < <(LC_ALL=C sort -z "$LIST_TMP")
+
+if [[ $REF_COUNT -eq 0 ]]; then
+  pass "no reference Markdown files to check"
 fi
 
 # ============================================================
@@ -301,8 +464,10 @@ if [[ -d "$SKILL_DIR/scripts" ]]; then
   echo ""
   echo "--- scripts ---"
 
+  # The .sh files from the checked file list above, so an unreadable directory fails there.
   SCRIPT_COUNT=0
-  while IFS= read -r script; do
+  for script in ${SCRIPT_FILES[@]+"${SCRIPT_FILES[@]}"}; do
+    [[ "$script" == *.sh ]] || continue
     SCRIPT_COUNT=$((SCRIPT_COUNT + 1))  # safe with set -e (unlike ((var++)))
     SCRIPT_NAME=$(basename "$script")
 
@@ -329,7 +494,7 @@ if [[ -d "$SKILL_DIR/scripts" ]]; then
     else
       warn "$SCRIPT_NAME: no --help flag detected"
     fi
-  done < <(find "$SKILL_DIR/scripts" -name '*.sh' -type f | sort)
+  done
 
   if [[ $SCRIPT_COUNT -eq 0 ]]; then
     warn "scripts/ directory exists but contains no .sh files"

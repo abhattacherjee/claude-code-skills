@@ -2,6 +2,12 @@
 
 All notable changes to the **implement** skill (was `spec-implement`) are documented here.
 
+## [1.0.1] - 2026-10-09
+
+### Fixed
+
+- Phase 8 stages the story's files by name instead of `git add -A`, and ends the commit with the session's own attribution line instead of a hard-coded `Claude Opus 4.6 (1M context)` trailer, and omits it when the session gives none (#210).
+
 ## [1.0.0] - 2026-10-04
 
 ### Changed

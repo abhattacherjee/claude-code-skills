@@ -2,7 +2,7 @@
 name: review
 description: "Reviews a story or design spec (not code, a diff or a pull request: use review:deep or review:adversarial for those) and enriches it with codebase-verified technical sub-tasks, architecture alignment checks, design simplification suggestions, and API test plans. Dynamically discovers project architecture at runtime. Was the spec-review skill. Use when: (1) a new story spec needs review before implementation, (2) a spec has high-level tasks but lacks implementation-ready detail, (3) need to verify spec assumptions against actual codebase, (4) a spec references API changes but has no test plan, (5) reviewing specs that reference data shapes or pipeline ordering, (6) spec subtasks mention add field X to object Y or call function at line N."
 metadata:
-  version: 1.0.1
+  version: 1.0.2
 ---
 
 # Spec Review
@@ -377,11 +377,8 @@ Ask the user whether to:
 ## Notes
 
 - This skill is a PRE-implementation review. It enriches specs, not code.
-- Feature-dev's code-explorer agents are reused for codebase verification when the `feature-dev` plugin is installed; otherwise `general-purpose` agents are substituted.
-- Feature-dev's code-architect agents are reused for design analysis when the `feature-dev` plugin is installed; otherwise `general-purpose` agents are substituted.
 - The test plan produced here is a SPECIFICATION — use appropriate tooling
   during implementation to create actual test files.
-- Always verify spec claims with `grep`/`read` — never trust assumed file paths.
 - The most common failure mode is field-on-wrong-object: a field exists in the codebase but
   on a different layer's object than the spec assumes.
 - For multi-path systems (e.g., sync + async + streaming code paths), ensure the spec

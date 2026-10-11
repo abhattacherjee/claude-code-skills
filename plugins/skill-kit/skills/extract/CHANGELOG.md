@@ -2,6 +2,19 @@
 
 All notable changes to the **extract** skill (was `claudeception`) are documented here.
 
+## [1.2.0] - 2026-10-09
+
+### Changed
+
+- The bundled `scripts/validate-skill.sh` (a byte-identical copy of the repo-root validator) has new checks. It fails a SKILL.md body of 500 lines or more (it passed exactly 500, and missed a last line with no newline); a name containing `anthropic` or `claude`; a `.md` file that SKILL.md does not name and no script in `scripts/` reads; and a `.md` file over 100 lines with no `## Contents` heading in its first 30 lines. CONTRIBUTING.md, files under a dot-directory such as `.github/` and files under a top-level `tests/` directory are not checked (#214).
+
+## [1.1.0] - 2026-10-09
+
+### Added
+
+- `find-skills.sh` exits 3 when `rg` itself fails (a bad pattern or an unreadable file), so that is never read as "nothing found" (1) or a missing tool (2) (#210).
+- `scripts/find-skills.sh` runs Step 1, the search for existing skills: it lists or searches (`rg` arguments) the project, user and active plugin-install skill directories, and `--dirs` prints them. It exits 2 when `rg` or `python3` is missing or no skill directory exists. It replaces the ~50-line inline script in SKILL.md (#210).
+
 ## [1.0.1] - 2026-10-05
 
 ### Changed
