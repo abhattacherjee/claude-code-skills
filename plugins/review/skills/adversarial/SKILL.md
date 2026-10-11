@@ -399,6 +399,7 @@ If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not
 - **`ADVERSARY_FLAG` is set** (the user passed `--adversary`): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, as in Step 0. Never fall back to Claude-only or to the other model: the user asked for that model. No report is written.
 - **Auto mode, at R1** (after the one Codex-to-Gemini switch allowed in Step 2): degrade to Claude-only, below.
 - **Auto mode, at R2**: degrade, but keep what R1 and Claude's R2 already produced, below.
+- **Codex says a model "is not supported when using Codex with a ChatGPT account"** (the `ADVERSARY_UNAVAILABLE` line then says the CLI `looks stale`): run `"${CLAUDE_SKILL_DIR}/scripts/ensure-codex.sh" --check` and read `CODEX_STALE` and `CODEX_STALE_HINT` before changing the model or logging in again. An old Codex CLI gets this error for new models; `CODEX_STALE_HINT` gives the `ln -sfn` command or the version to update to.
 
 In auto mode, print this banner:
 
@@ -447,7 +448,7 @@ Both Claude agents (R1) and the adversary (R1 find + R2 judge) receive the **byt
 ## See Also
 
 - `scripts/ensure-gemini.sh` — Step 0 detection: emits Gemini install/auth status + hints; never installs or calls the network
-- `scripts/ensure-codex.sh` — Step 0 detection for Codex: installed, version, and logged in (from the exit code of `codex login status`)
+- `scripts/ensure-codex.sh` — Step 0 detection for Codex: installed, version, and logged in (from the exit code of `codex login status`); `CODEX_STALE` says whether the CLI is older than `models_cache.json`'s `client_version` or the ChatGPT app's bundled codex
 - `scripts/pick-adversary.sh` — Step 0: picks Codex, then Gemini, then Claude-only; `--adversary` forces one, with no fallback
 - `scripts/codex-review.sh` — Codex's R1 find and R2 judge, plus `counter` and `find --prior` re-checks for `review:deep`, through a locked-down `codex exec` (see Codex sandbox); `--self-test` reruns the isolation canary
 - `scripts/detect-mode.sh` — diff extraction and mode detection

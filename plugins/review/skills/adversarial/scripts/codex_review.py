@@ -29,7 +29,9 @@ Exit codes:
   2  usage error
   3  adversary unavailable (codex missing or logged out, a non-zero exit,
      a timeout, no valid output after one retry, a missing isolation flag,
-     or a leaked isolation canary)
+     or a leaked isolation canary). A codex exec whose stderr has an
+     "ERROR: ... is not supported when using Codex with a ChatGPT account"
+     line gets a stale-CLI message: check ensure-codex.sh --check's CODEX_STALE.
   4  secret suspected: secret_scan.py found a secret format or a secret-looking
      file name in --diff, --findings or --prior, so nothing was sent. The hits
      go to stderr as <path>:<line> <pattern-name>, never the value.
@@ -604,6 +606,26 @@ def _tail(text, n=400):
     return text[-n:]
 
 
+# Matched only on stderr of a codex exec that exited non-zero, and only on a line
+# that starts with Codex's own "ERROR:". The diff goes in on stdin and may be
+# echoed to stderr, but a diff line starts with " ", "+", "-", "@" or a header,
+# never "ERROR:".
+STALE_CLI_RE = re.compile(r"(?m)^ERROR: [^\n]*is not supported when using Codex with a ChatGPT account")
+
+
+def exec_failure(rc, err, version=None, generic="codex exec exited %d"):
+    """The Unavailable to raise for a codex exec that exited rc with stderr err.
+    A known cause gets its own message; anything else gets `generic % rc` and the
+    stderr tail."""
+    detail = "%s: %s" % (generic % rc, _tail(err))
+    if STALE_CLI_RE.search(err):
+        return Unavailable(
+            "codex CLI %slooks stale: the server refused the model for this client. Check for a "
+            "newer CLI (ensure-codex.sh --check prints CODEX_STALE) before changing the model or "
+            "logging in again. (%s)" % (version + " " if version else "", detail))
+    return Unavailable(detail)
+
+
 def codex_version(codex, env=None):
     try:
         proc = subprocess.run([codex, "--version"], env=env, stdin=subprocess.DEVNULL,
@@ -738,7 +760,7 @@ def _write(path, text):
         fh.write(text)
 
 
-def run_canary(codex, env, timeout):
+def run_canary(codex, env, timeout, version=None):
     """One isolated review of a throwaway git repo that carries a canary on each
     repo surface Codex could load: AGENTS.md (a title order), .codex/config.toml
     (a model name), .agents/skills (a skill with a title order) and .mcp.json (a
@@ -799,8 +821,8 @@ def run_canary(codex, env, timeout):
         if os.path.exists(marker):
             return False, "the test repo's .mcp.json reached Codex"
         if rc != 0:
-            raise Unavailable("the isolation self-test could not run: codex exec exited %d: %s"
-                              % (rc, _tail(err)))
+            raise exec_failure(rc, err, version,
+                               "the isolation self-test could not run: codex exec exited %d")
         # A pass needs proof that Codex answered: an exit 0 with no or a malformed
         # answer says nothing about whether the canaries were read.
         try:
@@ -821,7 +843,7 @@ def ensure_isolation(codex, env, timeout, force=False):
     stamp, fields = current_stamp(codex, env, version)
     if not force and stamp_valid(stamp, fields):
         return version
-    ok, why = run_canary(codex, env, timeout)
+    ok, why = run_canary(codex, env, timeout, version)
     if not ok:
         remove_stamps(version)
         raise Unavailable("isolation canary leaked on Codex %s: %s; codex-review.sh refuses to run"
@@ -1041,7 +1063,7 @@ def review(args):
             rc, _, err = _run_isolated(codex, repo, schema_path, out_path, prompt, stdin_data,
                                        env, args.timeout, args.model)
             if rc != 0:
-                raise Unavailable("codex exec exited %d: %s" % (rc, _tail(err)))
+                raise exec_failure(rc, err, version)
             try:
                 result = validate_output(args.mode, read_output(out_path), findings or [], prior,
                                          args.id_start)

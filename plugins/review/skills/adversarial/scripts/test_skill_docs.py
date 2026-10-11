@@ -505,6 +505,20 @@ def review_commands(text):
     return cmds
 
 
+class StaleCliDocTests(unittest.TestCase):
+    def test_degradation_says_to_check_the_cli_version_first(self):
+        # #185: "not supported" reads like a model or login problem; it is a stale CLI.
+        part = norm(section(SKILL.read_text(encoding="utf-8"), "## Degradation Behavior", "## Same-Diff"))
+        self.assertIn("not supported when using Codex with a ChatGPT account", part)
+        self.assertIn("ensure-codex.sh", part)
+        self.assertIn("CODEX_STALE", part)
+        self.assertIn("before changing the model or logging in again", part)
+
+    def test_the_new_ensure_codex_lines_are_listed(self):
+        for text in (SKILL.read_text(encoding="utf-8"), PLUGIN_README.read_text(encoding="utf-8")):
+            self.assertIn("CODEX_STALE", text)
+
+
 class TimeoutFlagDocTests(unittest.TestCase):
     """#207: every review command in both skills passes --timeout, because callers
     reach for `timeout`, which macOS does not have (exit 127 before the review)."""

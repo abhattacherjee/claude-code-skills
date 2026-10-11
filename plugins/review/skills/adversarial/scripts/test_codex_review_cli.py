@@ -454,6 +454,61 @@ class StampWriteTests(unittest.TestCase):
         self.assertEqual(h.exec_calls(), [])
 
 
+# The real failure from a stale codex-cli 0.155.1 (#185), on two stderr lines.
+STALE_STDERR = (
+    "warning: Model metadata for `gpt-6.1-sol` not found. Defaulting to fallback metadata\n"
+    'ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":'
+    '"The \'gpt-6.1-sol\' model is not supported when using Codex with a ChatGPT account."}}')
+
+
+class StaleCliTests(unittest.TestCase):
+    """#185: a stale CLI shows up as a model "not supported" error. Name the likely
+    cause instead of a generic failure; it is still exit 3."""
+
+    def test_the_real_400_gives_the_stale_cli_message(self):
+        h = Harness(self, exec_actions=[{"exit": 1, "stderr": STALE_STDERR}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("ADVERSARY_UNAVAILABLE: codex CLI 0.155.1 looks stale", res.stderr)
+        self.assertIn("ensure-codex.sh --check", res.stderr)
+        self.assertIn("CODEX_STALE", res.stderr)
+        self.assertNotIn("ADVERSARY_REFUSED", res.stderr)
+        self.assertEqual(len(h.exec_calls()), 1)
+
+    def test_a_stale_cli_is_named_at_the_canary_too(self):
+        # A new Codex version runs the canary first, so that is where it fails.
+        h = Harness(self, stamp=False, canary_exit=1, canary_stderr=STALE_STDERR)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("looks stale", res.stderr)
+        self.assertEqual(h.exec_calls(), [])
+        self.assertFalse(h.stamp.exists())
+
+    def test_a_generic_failure_keeps_the_generic_message(self):
+        h = Harness(self, exec_actions=[{"exit": 2, "stderr": "ERROR: stream disconnected"}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("ADVERSARY_UNAVAILABLE: codex exec exited 2", res.stderr)
+        self.assertNotIn("stale", res.stderr)
+
+    def test_the_phrase_counts_only_on_an_error_line(self):
+        # The diff is on stdin and may be echoed; its lines never start with ERROR:.
+        echoed = "+ msg = 'is not supported when using Codex with a ChatGPT account'"
+        for stderr in (echoed, "warning: " + echoed):
+            with self.subTest(stderr=stderr):
+                h = Harness(self, exec_actions=[{"exit": 1, "stderr": stderr}])
+                res = h.run("--mode", "find")
+                self.assertEqual(res.returncode, 3, res.stderr)
+                self.assertIn("codex exec exited 1", res.stderr)
+                self.assertNotIn("looks stale", res.stderr)
+
+    def test_the_phrase_on_a_successful_exec_is_ignored(self):
+        h = Harness(self, exec_actions=[{"exit": 0, "stderr": STALE_STDERR, "out": ONE_FINDING}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(h.result()["findings"][0]["id"], "X-001")
+
+
 class CanaryAnswerTests(unittest.TestCase):
     def test_a_canary_with_no_answer_is_not_stamped(self):
         h = Harness(self, stamp=False, canary_answer="none")

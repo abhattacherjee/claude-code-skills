@@ -4,11 +4,15 @@
 # Exit codes: 0=status reported (always, for --check), 2=usage error
 #
 # Never installs anything and never starts a Codex session. `codex login status`
-# only reads the local login.
+# only reads the local login. CODEX_STALE compares `codex --version` with two
+# optional sources: client_version in ${CODEX_HOME:-~/.codex}/models_cache.json
+# and the codex bundled with the ChatGPT app (#185).
 
 set -eu
 
 SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_APP_BIN="/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
 
 usage() {
   cat <<EOF
@@ -27,6 +31,19 @@ Output lines (--check):
   CODEX_AUTHED=yes|no|unknown     unknown when codex is not installed
   CODEX_INSTALL_HINT=<install command>
   CODEX_AUTH_HINT=<login command>
+  CODEX_STALE=yes|no|unknown      yes: a source below has a newer version
+  CODEX_NEWER_BIN=<path>|-        the bundled binary, when it is newer
+  CODEX_STALE_HINT=<fix>|-        an ln -sfn command, or which version to update to
+
+CODEX_STALE compares MAJOR.MINOR.PATCH (a prerelease suffix is ignored) of
+\`codex --version\` with two sources, each optional: client_version in
+\${CODEX_HOME:-~/.codex}/models_cache.json, and the codex bundled with the
+ChatGPT app (\$CODEX_APP_BIN, default
+$DEFAULT_APP_BIN), run with
+\`--version\`, stdin closed and a 10 s limit on its whole process group. no
+needs at least one source read; unknown means none could be read, or codex or
+its version is missing. A stale CLI makes the server refuse new models ("is not
+supported when using Codex with a ChatGPT account").
 
 CODEX_AUTHED comes from the exit code of \`codex login status\`: 0 means logged
 in. That command prints to stderr, so its output is never read.
@@ -67,6 +84,83 @@ if command -v codex >/dev/null 2>&1; then
   fi
 fi
 
+# ---- stale CLI check (#185) ----
+# The first MAJOR.MINOR.PATCH in $1, or nothing. A prerelease suffix is dropped.
+semver() {
+  printf '%s' "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+}
+
+# Exit 0 when version $1 is lower than version $2 (both MAJOR.MINOR.PATCH).
+ver_lt() {
+  local a1 a2 a3 b1 b2 b3
+  IFS=. read -r a1 a2 a3 <<EOF_V
+$1
+EOF_V
+  IFS=. read -r b1 b2 b3 <<EOF_V
+$2
+EOF_V
+  if [ "$((10#$a1))" -ne "$((10#$b1))" ]; then [ "$((10#$a1))" -lt "$((10#$b1))" ]; return; fi
+  if [ "$((10#$a2))" -ne "$((10#$b2))" ]; then [ "$((10#$a2))" -lt "$((10#$b2))" ]; return; fi
+  [ "$((10#$a3))" -lt "$((10#$b3))" ]
+}
+
+CODEX_STALE="unknown"
+CODEX_NEWER_BIN="-"
+CODEX_STALE_HINT="-"
+if [ "$CODEX_INSTALLED" = "yes" ] && [ "$CODEX_VERSION" != "-" ]; then
+  sources_read=0
+  newest=""
+  # models_cache.json: read with python3, never eval'd. Anything but a JSON object
+  # with a string client_version counts as unread.
+  cache_file="${CODEX_HOME:-$HOME/.codex}/models_cache.json"
+  cache_ver=""
+  if [ -f "$cache_file" ]; then
+    cache_raw="$(python3 -c 'import json,sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+v = d.get("client_version") if isinstance(d, dict) else None
+print(v if isinstance(v, str) else "")' "$cache_file" 2>/dev/null </dev/null || true)"
+    cache_ver="$(semver "$cache_raw")"
+  fi
+  if [ -n "$cache_ver" ]; then
+    sources_read=1
+    if ver_lt "$CODEX_VERSION" "$cache_ver"; then newest="$cache_ver"; fi
+  fi
+  # The ChatGPT-bundled codex: --version only, stdin closed, through run_bounded.py
+  # with a 10 s limit (macOS has no timeout). run_bounded.py kills the whole process
+  # group; perl's alarm would kill only the binary, and a child of it holding the
+  # output pipe would hang this script. A non-zero exit counts as unread.
+  app_bin="${CODEX_APP_BIN:-$DEFAULT_APP_BIN}"
+  app_ver=""
+  if [ -f "$app_bin" ] && [ -x "$app_bin" ]; then
+    app_tmp="$(mktemp -d /tmp/ensure-codex.XXXXXX 2>/dev/null || true)"
+    if [ -n "$app_tmp" ]; then
+      : > "$app_tmp/marker"
+      if python3 "$SCRIPT_DIR/run_bounded.py" 10 /dev/null "$app_tmp/out" /dev/null "$app_tmp/marker" \
+           "$app_bin" --version </dev/null >/dev/null 2>&1; then
+        app_ver="$(semver "$(cat "$app_tmp/out" 2>/dev/null || true)")"
+      fi
+      rm -rf "$app_tmp"
+    fi
+  fi
+  if [ -n "$app_ver" ]; then
+    sources_read=1
+    if ver_lt "$CODEX_VERSION" "$app_ver"; then
+      CODEX_NEWER_BIN="$app_bin"
+      if [ -z "$newest" ] || ver_lt "$newest" "$app_ver"; then newest="$app_ver"; fi
+    fi
+  fi
+  if [ -n "$newest" ]; then
+    CODEX_STALE="yes"
+    if [ "$CODEX_NEWER_BIN" != "-" ]; then
+      CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than the ChatGPT app's $app_ver. Point codex at it: ln -sfn '$CODEX_NEWER_BIN' '$(command -v codex)'"
+    else
+      CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than $newest (client_version in $cache_file); update the Codex CLI to $newest or later"
+    fi
+  elif [ "$sources_read" -eq 1 ]; then
+    CODEX_STALE="no"
+  fi
+fi
+
 CODEX_INSTALL_HINT="npm install -g @openai/codex"
 CODEX_AUTH_HINT="Run: codex login   (then re-run the review; the skill checks 'codex login status')"
 
@@ -85,5 +179,8 @@ emit CODEX_VERSION      "$CODEX_VERSION"
 emit CODEX_AUTHED       "$CODEX_AUTHED"
 emit CODEX_INSTALL_HINT "$CODEX_INSTALL_HINT"
 emit CODEX_AUTH_HINT    "$CODEX_AUTH_HINT"
+emit CODEX_STALE        "$CODEX_STALE"
+emit CODEX_NEWER_BIN    "$CODEX_NEWER_BIN"
+emit CODEX_STALE_HINT   "$CODEX_STALE_HINT"
 
 exit 0
