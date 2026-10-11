@@ -7,7 +7,8 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 ### Changed
 
 - Every `codex-review.sh` and `gemini-review.sh` review command passes `--timeout 540`, and the Codex sandbox section says not to wrap the scripts in `timeout` (macOS has none: exit 127) (#207). `gemini-review.sh` now bounds each call itself (#53).
-- Degradation Behavior lists `ADVERSARY_REFUSED:` as a kind of exit 3 (#171), and says to run `ensure-codex.sh --check` and read `CODEX_STALE` when Codex says a model "is not supported when using Codex with a ChatGPT account", before changing the model or logging in again (#185).
+- Degradation Behavior lists `ADVERSARY_REFUSED:` as a kind of exit 3, found as a stderr line that starts with that prefix (#171), and says to run `ensure-codex.sh --check` and read `CODEX_STALE` when Codex says a model "is not supported when using Codex with a ChatGPT account", before changing the model or logging in again (#185). It offers `ln -sfn` only for a link into the standalone installer's `packages/` or to the ChatGPT app's codex, never over an npm or Homebrew link.
+- A stop after a forced adversary shows the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line, and Step 2 no longer says to renumber Gemini's ids: `gemini-review.sh` numbers them itself.
 
 ## [1.2.0] - 2026-10-09
 

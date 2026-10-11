@@ -189,7 +189,7 @@ With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 
 **If exit code is 3** (`ADVERSARY_UNAVAILABLE`, or `ADVERSARY_REFUSED` when Codex refused the content):
 
-- `ADVERSARY_FLAG` is set (the user forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as exit 3 in Step 0. Never fall back to another model or to Claude-only.
+- `ADVERSARY_FLAG` is set (the user forced this adversary): show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line and stop the run with exit 3, the same as exit 3 in Step 0. Never fall back to another model or to Claude-only.
 - Codex was picked automatically and `GEMINI_AUTHED=yes`: switch to Gemini for the whole run (`ADVERSARY` is now `gemini`; run `gemini-review.sh` from here on), tell the user, and rerun this step once.
 - Otherwise: go to the R1 path in Degradation Behavior.
 
@@ -197,7 +197,7 @@ With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 
 **If exit code is 1**: the script could not use its inputs (a missing file, an input over Gemini's 8 MiB stdin cap). Show the stderr line and stop. Exit 1 is not exit 3, so there is no fallback.
 
-Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemini findings arrive with `origin="gemini"`; renumber them `G-001`, `G-002`, ... The file is `<RUN_DIR>/r1-<ADVERSARY>.json`.
+Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemini findings arrive numbered `G-001`, `G-002`, ... with `origin="gemini"`. The file is `<RUN_DIR>/r1-<ADVERSARY>.json`.
 
 **r1-claude.json and r1-<adversary>.json format:**
 
@@ -277,7 +277,7 @@ With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 
 **If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
 
-- `ADVERSARY_FLAG` is set: show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3. Never fall back to Claude-only.
+- `ADVERSARY_FLAG` is set: show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line and stop the run with exit 3. Never fall back to Claude-only.
 - Otherwise: go to the R2 path in Degradation Behavior. It keeps the adversary's R1 findings. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
 
 **If exit code is 4** (`SECRET_SUSPECTED`): the same as in Step 2(b). Exit 4 is not exit 3: never fall back. Ask the user; rerun with `--allow-secret-match` only if they confirm.
@@ -396,10 +396,10 @@ Nothing is ever silently discarded.
 
 If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not installed, not logged in, no credential, a network error, a timeout, a tripped isolation canary, or no valid JSON after one retry) at **either** the R1 find step or the R2 judge step:
 
-- **`ADVERSARY_FLAG` is set** (the user passed `--adversary`): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, as in Step 0. Never fall back to Claude-only or to the other model: the user asked for that model. No report is written.
+- **`ADVERSARY_FLAG` is set** (the user passed `--adversary`): show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line and stop the run with exit 3, as in Step 0. Never fall back to Claude-only or to the other model: the user asked for that model. No report is written.
 - **Auto mode, at R1** (after the one Codex-to-Gemini switch allowed in Step 2): degrade to Claude-only, below.
 - **Auto mode, at R2**: degrade, but keep what R1 and Claude's R2 already produced, below.
-- **`ADVERSARY_REFUSED:`** is a kind of exit 3: Codex refused the diff as a possible cybersecurity risk (its own `ERROR:` line, never text inside the diff). It is handled like any other exit 3 here; at R1 the auto switch to Gemini in Step 2(b) already covers it. `review:deep` uses the prefix to fall back to a Gemini sweep at a re-check.
+- **`ADVERSARY_REFUSED:`** is a kind of exit 3: Codex refused the diff as a possible cybersecurity risk (an `ERROR:` line on Codex's stderr after a non-zero exit, so a quoted sentence in the diff does not count). Look for a stderr line that starts with `ADVERSARY_REFUSED:`; a notice or a retry warning can come before it. It is handled like any other exit 3 here; at R1 the auto switch to Gemini in Step 2(b) already covers it. `review:deep` uses the prefix, in auto mode when Gemini is set up, to fall back to a Gemini sweep at a re-check.
 - **Codex says a model "is not supported when using Codex with a ChatGPT account"** (the `ADVERSARY_UNAVAILABLE` line then says the CLI `looks stale`): run `"${CLAUDE_SKILL_DIR}/scripts/ensure-codex.sh" --check` and read `CODEX_STALE` and `CODEX_STALE_HINT` before changing the model or logging in again. An old Codex CLI gets this error for new models; `CODEX_STALE_HINT` gives the fix: an `ln -sfn` command only when `codex` is a link into the standalone installer's `packages/` or to the ChatGPT app's codex, else which install to update, how to reorder `PATH`, or which version to update to. Never `ln -sfn` over an npm or Homebrew link.
 
 In auto mode, print this banner:

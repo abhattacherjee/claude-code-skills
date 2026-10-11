@@ -130,8 +130,9 @@ that line: Step 2.6 counts those findings as not resolved. Exit 2 means the inpu
 "After each round" step 3 above, so a posting failure there (or a `pr-audit.py` crash) follows the
 generic Exit codes section above (0/1/3) — `recheck`'s own exit 2 covers only the record-building
 step itself. When Codex refused the re-check (`ADVERSARY_REFUSED:`) and Gemini swept the fix range
-(Step 2.6), pass `--gemini-sweep` and the Gemini output as `--rechecks`: every Codex finding is
-carried over with no events, so no Codex thread closes, and Gemini's findings are added with
-`origin` `gemini` and `status` `unconfirmed`. With Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay
+(Step 2.6), pass `--gemini-sweep` and the Gemini output as `--rechecks`: every earlier finding
+(Codex's and Claude's) is carried over unchanged with no events, so no thread closes, and Gemini's
+findings are added with `origin` `gemini` and `status` `unconfirmed` (a severity outside
+critical/important/minor is mapped as in `record`). With Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay
 open. On repos that require conversation resolution before merge, resolve those threads by hand
 after checking the fix.
