@@ -425,6 +425,25 @@ class TimeoutTests(unittest.TestCase):
         self.assertNotIn("timed out", res.stderr)
         self.assertIn("non-zero exit", res.stderr)
 
+    def test_stale_marker_content_is_not_a_timeout(self):
+        # Only exit 124 together with a non-empty marker is a timeout: content that
+        # someone else put in the marker before a call that failed for another
+        # reason must not turn that failure into a fake timeout.
+        h = GeminiHarness(self, [FOUND])
+        h.env["GEMINI_STUB_EXIT"] = "1"
+        script = patched_copy(self, h, [(': > "$TIMEOUT_MARKER_FILE"',
+                                         ': > "$TIMEOUT_MARKER_FILE"; echo stale > "$TIMEOUT_MARKER_FILE"')])
+        res = subprocess.run(["bash", str(script), "--diff", str(h.diff), "--mode", "find", "--timeout", "30"],
+                             capture_output=True, text=True, env=h.env, timeout=60, stdin=subprocess.DEVNULL)
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertNotIn("timed out", res.stderr)
+        self.assertIn("non-zero exit", res.stderr)
+
+    def test_the_marker_is_a_private_mktemp_file(self):
+        text = SCRIPT.read_text()
+        self.assertIn('TIMEOUT_MARKER_FILE="$(mktemp /tmp/adversarial-gemini-timeout.XXXXXX)"', text)
+        self.assertNotIn('rm -f "$TIMEOUT_MARKER_FILE"', text)
+
     def test_a_call_that_finishes_in_time_is_unchanged(self):
         h = GeminiHarness(self, [FOUND])
         res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "30")
@@ -455,6 +474,44 @@ class TimeoutTests(unittest.TestCase):
         self.assertIn("--timeout <secs>", res.stdout)
         self.assertIn("GEMINI_REVIEW_TIMEOUT", res.stdout)
         self.assertIn("timed out", res.stdout)
+
+
+RUN_BOUNDED = HERE / "run_bounded.py"
+
+
+class RunBoundedMarkerTests(unittest.TestCase):
+    """The timeout marker is written only through an existing regular file: never
+    created, never followed through a symlink."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="run-bounded-test-"))
+        self.addCleanup(shutil.rmtree, str(self.dir), True)
+        self.inp = self.dir / "in"
+        self.inp.write_text("")
+
+    def run_sleep(self, marker):
+        return subprocess.run([sys.executable, str(RUN_BOUNDED), "1", str(self.inp), str(self.dir / "out"),
+                               str(self.dir / "err"), str(marker), "sleep", "30"],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_a_timeout_writes_the_existing_marker(self):
+        marker = self.dir / "marker"
+        marker.write_text("")
+        self.assertEqual(self.run_sleep(marker).returncode, 124)
+        self.assertNotEqual(marker.read_text(), "")
+
+    def test_a_symlinked_marker_is_not_followed(self):
+        target = self.dir / "target"
+        target.write_text("keep\n")
+        marker = self.dir / "marker"
+        os.symlink(str(target), str(marker))
+        self.assertEqual(self.run_sleep(marker).returncode, 124)
+        self.assertEqual(target.read_text(), "keep\n")
+
+    def test_a_missing_marker_is_not_created(self):
+        marker = self.dir / "marker"
+        self.assertEqual(self.run_sleep(marker).returncode, 124)
+        self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

@@ -536,8 +536,10 @@ RAW_OUTPUT_FILE="$(mktemp /tmp/adversarial-gemini-raw.XXXXXX)"
 EXTRACTED_JSON_FILE="$(mktemp /tmp/adversarial-gemini-json.XXXXXX)"
 GEMINI_STDERR_FILE="$(mktemp /tmp/adversarial-gemini-stderr.XXXXXX)"
 VALIDATE_ERR_FILE="$(mktemp /tmp/adversarial-validate-err.XXXXXX)"
-# run_bounded.py creates this file only when it kills a call for running too long.
-TIMEOUT_MARKER_FILE="$RAW_OUTPUT_FILE.timed-out"
+# run_bounded.py writes to this file (never creates it, never through a symlink)
+# only when it kills a call for running too long. It is our own mktemp file, not a
+# name derived from another one, so no other local user can plant it.
+TIMEOUT_MARKER_FILE="$(mktemp /tmp/adversarial-gemini-timeout.XXXXXX)"
 
 trap 'rm -f "$SENT_FINDINGS_FILE" "$BRIEF_FILE" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE" "$GEMINI_STDERR_FILE" "$VALIDATE_ERR_FILE" "$TIMEOUT_MARKER_FILE"' EXIT
 
@@ -589,11 +591,13 @@ call_gemini() {
   # -o json for output format, -m for model. run_bounded.py runs gemini in its own
   # process group and kills the group after TIMEOUT seconds.
   local gemini_rc=0
-  rm -f "$TIMEOUT_MARKER_FILE"
+  : > "$TIMEOUT_MARKER_FILE"
   python3 "$SCRIPT_DIR/run_bounded.py" "$TIMEOUT" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" \
     "$GEMINI_STDERR_FILE" "$TIMEOUT_MARKER_FILE" \
     gemini -p "$GEMINI_P_CONSTANT" -o json -m "$MODEL" || gemini_rc=$?
-  if [[ -e "$TIMEOUT_MARKER_FILE" ]]; then
+  # A timeout is exit 124 AND a marker the runner wrote. Either alone is not:
+  # gemini can exit 124 itself.
+  if [[ "$gemini_rc" -eq 124 && -s "$TIMEOUT_MARKER_FILE" ]]; then
     # Never retried: a second call would most likely hang the same way.
     echo "ADVERSARY_UNAVAILABLE: gemini timed out after ${TIMEOUT}s; killed its process group" >&2
     exit 3

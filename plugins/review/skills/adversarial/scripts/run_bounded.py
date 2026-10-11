@@ -6,14 +6,17 @@ Usage: run_bounded.py <secs> <stdin-file> <stdout-file> <stderr-file> <timeout-m
 macOS has no `timeout` and no `setsid`, so gemini-review.sh runs Gemini through
 this. The command starts in its own session (so in its own process group), with
 its stdin, stdout and stderr on the given files. When it runs past <secs>, the
-whole group gets SIGKILL, <timeout-marker> is created, and this exits 124. The
-caller tells a timeout apart by the marker, not the exit code, because the
-command could return 124 itself. After a normal exit the group is killed too,
-so no child the command started is left running. SIGINT, SIGTERM or SIGHUP kills
+whole group gets SIGKILL, a line is written to <timeout-marker>, and this exits
+124. The marker must already exist (the caller makes it with mktemp): it is
+opened without O_CREAT and with O_NOFOLLOW, so a missing marker or a symlink is
+never written through; the exit is 124 either way. The caller treats a timeout
+as exit 124 AND a non-empty marker, because the command could return 124
+itself. After a normal exit the group is killed too, so no child the command
+started is left running. SIGINT, SIGTERM or SIGHUP kills
 the group and exits 128+N. A child that calls setsid() leaves the group and
 escapes every kill.
 
-Exit codes: the command's own code; 124 on a timeout (marker created); 125 on a
+Exit codes: the command's own code; 124 on a timeout (marker written); 125 on a
 usage error; 127 when the command cannot start; 128+N when stopped by signal N.
 """
 import os
@@ -38,6 +41,21 @@ def reap(proc):
         proc.wait(timeout=POST_KILL_WAIT)
     except subprocess.TimeoutExpired:
         pass
+
+
+def write_marker(marker, secs):
+    """Write to the caller's existing marker file. Never create it and never follow
+    a symlink: the path is in a shared temp dir."""
+    try:
+        fd = os.open(marker, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW)
+    except OSError:
+        return
+    try:
+        os.write(fd, ("timed out after %ds\n" % secs).encode("ascii"))
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def main(argv):
@@ -69,8 +87,7 @@ def main(argv):
         except subprocess.TimeoutExpired:
             kill_group(proc.pid)
             reap(proc)
-            with open(marker, "w") as fh:
-                fh.write("%d\n" % secs)
+            write_marker(marker, secs)
             return EXIT_TIMEOUT
         kill_group(proc.pid)
     return rc if rc >= 0 else 128 - rc
