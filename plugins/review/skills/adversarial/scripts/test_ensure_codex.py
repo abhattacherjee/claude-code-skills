@@ -169,14 +169,85 @@ class StaleCliTests(unittest.TestCase):
         self.assertIn(str(app), hint)
         self.assertIn("in PATH", hint)
 
-    def test_a_symlinked_codex_gets_the_ln_hint(self):
+    def link_codex(self, env, target):
+        """Move the stub codex to `target` and leave a symlink to it on PATH."""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        (env.bin / "codex").rename(target)
+        (env.bin / "codex").symlink_to(target)
+
+    def test_a_standalone_install_link_gets_the_ln_hint(self):
+        # The standalone installer links codex into ${CODEX_HOME:-~/.codex}/packages/.
+        for codex_home in (None, "ch"):
+            with self.subTest(codex_home=codex_home):
+                env = StubEnv(self)
+                base = env.home / ".codex"
+                if codex_home:
+                    base = env.root / codex_home
+                    env.env["CODEX_HOME"] = str(base)
+                app = env.app('echo "codex-cli 0.159.0-alpha.12.1"')
+                self.link_codex(env, base / "packages" / "standalone" / "0.155.1" / "codex")
+                out = self.check(env)
+                self.assertEqual(out["CODEX_NEWER_BIN"], str(app))
+                self.assertIn("ln -sfn '%s' '%s'" % (app, env.bin / "codex"), out["CODEX_STALE_HINT"])
+
+    def test_a_package_manager_link_gets_no_ln_hint(self):
+        # npm and Homebrew install codex as a symlink too; ln -sfn over it would
+        # break the package manager's link (code I3).
+        for rel in ("lib/node_modules/@openai/codex/bin/codex.js", "Caskroom/codex/0.155.1/codex",
+                    "home/.codex-other/packages/codex", "home/.codex/packagesX/codex"):
+            with self.subTest(target=rel):
+                env = StubEnv(self)
+                app = env.app('echo "codex-cli 0.159.0"')
+                self.link_codex(env, env.root / rel)
+                hint = self.check(env)["CODEX_STALE_HINT"]
+                self.assertNotIn("ln -sfn", hint)
+                self.assertIn(str(app), hint)
+                self.assertIn("in PATH", hint)
+
+    def test_a_cache_newer_than_the_app_gets_no_app_hint(self):
+        # Linking the app binary would leave the CLI stale (code S2).
+        for link in (False, True):
+            with self.subTest(standalone_link=link):
+                env = StubEnv(self)
+                env.cache({"client_version": "0.161.2"})
+                app = env.app('echo "codex-cli 0.160.0-alpha.1"')
+                if link:
+                    self.link_codex(env, env.home / ".codex" / "packages" / "standalone" / "codex")
+                out = self.check(env)
+                self.assertEqual(out["CODEX_STALE"], "yes")
+                self.assertEqual(out["CODEX_NEWER_BIN"], "-")
+                self.assertNotIn("ln -sfn", out["CODEX_STALE_HINT"])
+                self.assertNotIn(str(app), out["CODEX_STALE_HINT"])
+                self.assertIn("0.161.2", out["CODEX_STALE_HINT"])
+
+    def test_an_app_as_new_as_the_cache_gets_the_app_hint(self):
         env = StubEnv(self)
-        app = env.app('echo "codex-cli 0.159.0-alpha.12.1"')
-        real = env.bin / "codex-real"
-        (env.bin / "codex").rename(real)
-        (env.bin / "codex").symlink_to(real)
-        hint = self.check(env)["CODEX_STALE_HINT"]
-        self.assertIn("ln -sfn '%s' '%s'" % (app, env.bin / "codex"), hint)
+        env.cache({"client_version": "0.160.0"})
+        app = env.app('echo "codex-cli 0.160.0"')
+        out = self.check(env)
+        self.assertEqual(out["CODEX_NEWER_BIN"], str(app))
+        self.assertIn(str(app), out["CODEX_STALE_HINT"])
+
+    def test_major_versions_compare_first(self):
+        # tests I3: no 0.x version reaches the major compare.
+        for cli, cache, want in (("1.0.0", "0.200.0", "no"), ("0.200.0", "1.0.0", "yes"),
+                                 ("2.0.0", "10.0.0", "yes")):
+            with self.subTest(cli=cli, cache=cache):
+                env = StubEnv(self, version="codex-cli " + cli)
+                env.cache({"client_version": cache})
+                self.assertEqual(self.check(env)["CODEX_STALE"], want)
+
+    def test_leading_zeros_are_decimal(self):
+        # tests S4: without 10#, bash reads 08 as a bad octal number.
+        for cli, cache, want in (("0.155.1", "0.08.0", "no"), ("0.07.0", "0.08.0", "yes"),
+                                 ("0.155.09", "0.155.10", "yes")):
+            with self.subTest(cli=cli, cache=cache):
+                env = StubEnv(self, version="codex-cli " + cli)
+                env.cache({"client_version": cache})
+                res = env.run(ENSURE, "--check")
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertEqual(res.stderr, "")
+                self.assertEqual(parse_lines(res.stdout)["CODEX_STALE"], want)
 
     def test_current(self):
         env = StubEnv(self)
@@ -230,6 +301,34 @@ class StaleCliTests(unittest.TestCase):
                 env = StubEnv(self)
                 env.app(body)
                 self.assertEqual(self.check(env)["CODEX_STALE"], "unknown")
+
+    def test_an_unread_app_with_a_current_cache_gives_unknown(self):
+        # errors I2: the app binary is there but gave no version, so it was not
+        # checked; that must never read as "not stale".
+        for body in ("exit 3", "echo garbage", "echo codex-cli 9.9.9; exit 1", "sleep 60"):
+            with self.subTest(body=body):
+                env = StubEnv(self)
+                env.cache({"client_version": "0.155.1"})
+                env.app(body)
+                out = self.check(env)
+                self.assertEqual(out["CODEX_STALE"], "unknown")
+                self.assertEqual(out["CODEX_NEWER_BIN"], "-")
+
+    def test_a_missing_helper_gives_unknown(self):
+        env = StubEnv(self)
+        env.cache({"client_version": "0.155.1"})
+        env.app('echo "codex-cli 0.200.0"')
+        copy = env.root / "scripts" / "ensure-codex.sh"
+        copy.parent.mkdir()
+        shutil.copy(str(ENSURE), str(copy))
+        res = env.run(copy, "--check")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(parse_lines(res.stdout)["CODEX_STALE"], "unknown")
+
+    def test_a_current_cache_and_no_app_gives_no(self):
+        env = StubEnv(self)
+        env.cache({"client_version": "0.155.1"})
+        self.assertEqual(self.check(env)["CODEX_STALE"], "no")
 
     def test_a_hanging_bundled_binary_is_bounded(self):
         env = StubEnv(self)

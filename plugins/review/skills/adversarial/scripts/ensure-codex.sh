@@ -32,8 +32,12 @@ Output lines (--check):
   CODEX_INSTALL_HINT=<install command>
   CODEX_AUTH_HINT=<login command>
   CODEX_STALE=yes|no|unknown      yes: a source below has a newer version
-  CODEX_NEWER_BIN=<path>|-        the bundled binary, when it is newer
-  CODEX_STALE_HINT=<fix>|-        an ln -sfn command, or which version to update to
+  CODEX_NEWER_BIN=<path>|-        the bundled binary, when it is newer than
+                                  codex and at least as new as the cache
+  CODEX_STALE_HINT=<fix>|-        an ln -sfn command (codex is a link into the
+                                  standalone installer's packages/ or to the
+                                  app), else which install to update or how to
+                                  reorder PATH, or which version to update to
 
 CODEX_STALE compares MAJOR.MINOR.PATCH (a prerelease suffix is ignored) of
 \`codex --version\` with two sources, each optional: client_version in
@@ -41,8 +45,9 @@ CODEX_STALE compares MAJOR.MINOR.PATCH (a prerelease suffix is ignored) of
 ChatGPT app (\$CODEX_APP_BIN, default
 $DEFAULT_APP_BIN), run with
 \`--version\`, stdin closed and a 10 s limit on its whole process group. no
-needs at least one source read; unknown means none could be read, or codex or
-its version is missing. A stale CLI makes the server refuse new models ("is not
+needs at least one source read and the app binary, when it exists, read too;
+unknown means a source that exists could not be read, or codex or its version
+is missing. A stale CLI makes the server refuse new models ("is not
 supported when using Codex with a ChatGPT account").
 
 CODEX_AUTHED comes from the exit code of \`codex login status\`: 0 means logged
@@ -128,9 +133,15 @@ print(v if isinstance(v, str) else "")' "$cache_file" 2>/dev/null </dev/null || 
   # The ChatGPT-bundled codex: --version only, stdin closed, through run_bounded.py
   # with a 10 s limit (macOS has no timeout). run_bounded.py kills the whole process
   # group; perl's alarm would kill only the binary, and a child of it holding the
-  # output pipe would hang this script. A non-zero exit counts as unread.
+  # output pipe would hang this script. A non-zero exit, a timeout, no version in
+  # the output or a missing run_bounded.py leaves the app unread: then the result
+  # is never "no", because the one source that drives the app hint was not checked.
   app_bin="${CODEX_APP_BIN:-$DEFAULT_APP_BIN}"
   app_ver=""
+  app_unread=0
+  if [ -e "$app_bin" ]; then
+    app_unread=1
+  fi
   if [ -f "$app_bin" ] && [ -x "$app_bin" ]; then
     app_tmp="$(mktemp -d /tmp/ensure-codex.XXXXXX 2>/dev/null || true)"
     if [ -n "$app_tmp" ]; then
@@ -143,19 +154,35 @@ print(v if isinstance(v, str) else "")' "$cache_file" 2>/dev/null </dev/null || 
     fi
   fi
   if [ -n "$app_ver" ]; then
+    app_unread=0
     sources_read=1
     if ver_lt "$CODEX_VERSION" "$app_ver"; then
-      CODEX_NEWER_BIN="$app_bin"
       if [ -z "$newest" ] || ver_lt "$newest" "$app_ver"; then newest="$app_ver"; fi
+      # Point at the app only when nothing is newer than it: linking an app older
+      # than the cache's client_version would leave the CLI stale.
+      if ! ver_lt "$app_ver" "$newest"; then CODEX_NEWER_BIN="$app_bin"; fi
     fi
   fi
   if [ -n "$newest" ]; then
     CODEX_STALE="yes"
     if [ "$CODEX_NEWER_BIN" != "-" ]; then
       codex_path="$(command -v codex)"
-      # Only re-point a symlink. ln -sfn over a real file would replace an install
-      # (npm, Homebrew) that another tool manages.
-      if [ -L "$codex_path" ]; then
+      # ln -sfn only over a link this tool may re-point: one into the standalone
+      # installer's ${CODEX_HOME:-~/.codex}/packages/, or one to the app binary.
+      # npm and Homebrew install codex as a symlink too, and re-pointing their
+      # link would break the next upgrade, so any other link or file gets the
+      # update-or-PATH advice.
+      link_kind="$(python3 -c 'import os, sys
+path, home, app = sys.argv[1:4]
+if not os.path.islink(path):
+    print("file")
+else:
+    real = os.path.realpath(path)
+    packages = os.path.join(os.path.realpath(home), "packages") + os.sep
+    ok = real.startswith(packages) or real == os.path.realpath(app)
+    print("ours" if ok else "managed")' "$codex_path" "${CODEX_HOME:-$HOME/.codex}" "$CODEX_NEWER_BIN" \
+        2>/dev/null </dev/null || true)"
+      if [ "$link_kind" = "ours" ]; then
         CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than the ChatGPT app's $app_ver. Point codex at it: ln -sfn '$CODEX_NEWER_BIN' '$codex_path'"
       else
         CODEX_STALE_HINT="Codex CLI $CODEX_VERSION ($codex_path) is older than the ChatGPT app's $app_ver at '$CODEX_NEWER_BIN'. Update that install, or put '$(dirname "$CODEX_NEWER_BIN")' before '$(dirname "$codex_path")' in PATH"
@@ -163,6 +190,8 @@ print(v if isinstance(v, str) else "")' "$cache_file" 2>/dev/null </dev/null || 
     else
       CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than $newest (client_version in $cache_file); update the Codex CLI to $newest or later"
     fi
+  elif [ "$app_unread" -eq 1 ]; then
+    CODEX_STALE="unknown"
   elif [ "$sources_read" -eq 1 ]; then
     CODEX_STALE="no"
   fi
