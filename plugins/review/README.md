@@ -1,7 +1,7 @@
 # review
 
 <!-- plugin-meta:start -->
-**Version:** 1.2.0 · **2** skills · **3** agents · **0** commands
+**Version:** 1.3.0 · **2** skills · **3** agents · **0** commands
 <!-- plugin-meta:end -->
 
 Two review skills in one install. `deep` converges a changeset to zero actionable issues in two phases. `adversarial` is the single-pass version: Claude and an opposing model (Codex, else Gemini) find issues independently, cross-examine each other, and only findings the other side confirms are reported.
@@ -91,16 +91,17 @@ The `gemini` binary at version 0.38.2 or later supports headless use. `gemini-re
 ### Scripts (in `skills/adversarial/scripts/`)
 
 - `ensure-gemini.sh`: Step 0 detection. Prints `KEY=VALUE` status lines (installed, version, authed, install hint, auth hint). It never installs anything and never calls the network.
-- `ensure-codex.sh`: Codex install and login detection (the exit code of `codex login status`). It never installs anything.
+- `ensure-codex.sh`: Codex install and login detection (the exit code of `codex login status`). It never installs anything. `CODEX_STALE=yes|no|unknown` compares `codex --version` with `client_version` in `${CODEX_HOME:-~/.codex}/models_cache.json` and with the codex bundled in the ChatGPT app. An app binary that exists but gives no version makes it `unknown`, never `no`. `CODEX_STALE_HINT` gives the fix. It is an `ln -sfn` command only when `codex` is a symlink into the standalone installer's `${CODEX_HOME:-~/.codex}/packages/` or to the app binary, and the app is the newest source. npm and Homebrew also install `codex` as a symlink, so any other `codex` gets "update that install, or reorder `PATH`", and a cache newer than the app gets the version to update to. When Codex rejects a model as "not supported when using Codex with a ChatGPT account", `codex-review.sh` exits 3 and says the CLI looks stale.
 - `pick-adversary.sh`: picks Codex, then Gemini, then Claude-only. `--adversary` forces one.
-- `codex-review.sh`: Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`. Exit 4 (`SECRET_SUSPECTED`) means the secret scan hit an input and nothing was sent; `--allow-secret-match` sends anyway after the user confirms.
-- `gemini-review.sh`: `--mode find` is Gemini's independent R1 pass. `--mode judge` is its R2 cross-examination of Claude's findings. It extracts JSON from the CLI envelope and retries once on a parse failure. The diff and findings go on stdin only, in nonce-tagged blocks marked as untrusted data, with every `@` written as `\@` so the Gemini CLI does not read it as a file include. Exit 4 works as for `codex-review.sh`.
+- `codex-review.sh`: Codex's find, judge and counter passes, and re-checks, in a locked-down `codex exec`. Exit 4 (`SECRET_SUSPECTED`) means the secret scan hit an input and nothing was sent; `--allow-secret-match` sends anyway after the user confirms. A content refusal by Codex is still exit 3, with the stderr prefix `ADVERSARY_REFUSED:` in place of `ADVERSARY_UNAVAILABLE:`; `deep` then falls back to a Gemini sweep at a re-check, in auto mode when Gemini is set up.
+- `gemini-review.sh`: `--mode find` is Gemini's independent R1 pass. `--mode judge` is its R2 cross-examination of Claude's findings. It extracts JSON from the CLI envelope and retries once on a parse failure. The diff and findings go on stdin only, in nonce-tagged blocks marked as untrusted data, with every `@` written as `\@` so the Gemini CLI does not read it as a file include. Exit 4 works as for `codex-review.sh`. Each `gemini` call has a time limit (`--timeout`, else `GEMINI_REVIEW_TIMEOUT`, else 540 s); a call past it is killed with its process group, and the script exits 3 without a retry. In find mode the script numbers the findings `G-001`, ... itself; `--id-start <n>` starts at `G-<n>`.
+- `run_bounded.py`: runs one command in its own process group with a time limit and kills the whole group when it runs over. `gemini-review.sh` runs `gemini` through it, because macOS has no `timeout` or `setsid`.
 - `secret_scan.py`: scans files for secret formats and secret-looking file names in diff headers. Prints `<path>:<line> <pattern-name>`, never the value. Exit 0 clean, 4 hit, 2 unreadable. Both adversary scripts run it on their inputs before any model call.
 - `check-cites.py`: checks that each finding's path is a file in the diff, inside the repo, and that its line exists. `deep` runs it before an implementer acts on the survivors. Exit codes: 0 all passed, 3 some failed, 2 unreadable input or an internal error. A cited line outside every hunk passes with a `note:` on stderr.
 - `detect-mode.sh`: resolves PR or local mode and writes the shared diff that both models read. `--base <branch>` sets the local base; `--include-untracked` adds untracked files, minus secret-looking names.
 - `synthesize.py`: applies the survivor rule to the four symmetric inputs (Claude findings, adversary findings, adversary verdicts, Claude verdicts) and sorts findings into SURVIVORS, UNCONFIRMED and REJECTED.
 - `sink.sh`: delivers the report. It posts the PR audit trail in PR mode, and prints the terminal report and writes the markdown file in local mode.
-- `pr-audit.py`: the PR audit trail. Both skills use it, and `deep` uses it for every round.
+- `pr-audit.py`: the PR audit trail. Both skills use it, and `deep` uses it for every round. `recheck --gemini-sweep` records a Gemini sweep after Codex refused a re-check, and closes no Codex thread.
 - `run-tests.sh` and the `test_*.py` files: the test suite. `test_skill_paths.py` checks that every command in the skills spells out its script path.
 
 ## Installation

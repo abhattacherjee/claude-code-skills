@@ -2,6 +2,20 @@
 
 All notable changes to the **review** plugin are documented here.
 
+## [1.3.0] - 2026-10-11
+
+### Added
+
+- `gemini-review.sh --timeout <secs>` (else `GEMINI_REVIEW_TIMEOUT`, else 540) (#53). Each `gemini` call runs through the new `run_bounded.py` in its own process group. A call past the limit is killed with its whole group, and the script exits 3 with `ADVERSARY_UNAVAILABLE: gemini timed out after <N>s; killed its process group`, without a retry. A timeout is exit 124 from the runner and a non-empty private `mktemp` marker; the runner writes the marker with `O_NOFOLLOW` and never creates it. A missing `run_bounded.py`, or a runner that cannot run the call (exit 125), is exit 1, not exit 3. Each call starts with empty stderr and output files, so a retry never reports the first call's stderr. A SIGTERM, SIGINT or SIGHUP to `gemini-review.sh` stops the runner, which kills gemini's group, and exits 128+N. The direct `gemini` fallback in `deep` runs through `run_bounded.py` too: the Gemini CLI relaunches itself as a child `node` process, so `perl`'s `alarm` would kill only the first one.
+- `ensure-codex.sh` prints `CODEX_STALE=yes|no|unknown`, `CODEX_NEWER_BIN` and `CODEX_STALE_HINT` (#185). It compares `codex --version` with `client_version` in `${CODEX_HOME:-~/.codex}/models_cache.json` and with the codex bundled in the ChatGPT app (`CODEX_APP_BIN` overrides the path), run with stdin closed and a 10 s limit. A source that cannot be read never gives `no`: a `models_cache.json` that exists but does not parse, or has no string `client_version`, makes it `unknown`; so does an app binary that exists but gives no version (a hang, a non-zero exit, no version in its output, or a missing `run_bounded.py`) makes it `unknown`. `CODEX_STALE_HINT` is an `ln -sfn` command only when `codex` is a symlink into the standalone installer's `${CODEX_HOME:-~/.codex}/packages/` or to the app binary, and the app is at least as new as the cache. npm and Homebrew install `codex` as a symlink too, so any other `codex` gets "update that install, or reorder `PATH`", and a cache newer than the app gets the version to update to. It still always exits 0.
+- `gemini-review.sh --id-start <n>` (find mode only): the script numbers Gemini's findings `G-<n>`, `G-<n+1>`, ... itself, and keeps a finding the model gave no id (#171).
+- `pr-audit.py recheck --gemini-sweep` records a Gemini sweep of a fix range after Codex refused the re-check: every earlier finding (Codex's and Claude's) is carried over unchanged with no events, so no thread closes, and Gemini's findings are added with origin `gemini` (#171). Their severity is mapped as in `record` ("high" and "medium" become important, "low" minor, any other spelling or a missing one important with a note), a non-string or blank category becomes "other", and other non-string fields become strings, so one odd value never fails the round.
+
+### Changed
+
+- `codex-review.sh` names the cause of two `codex exec` failures, matched only on a stderr line that starts with `ERROR:` after a non-zero exit, so a quoted line in the diff cannot trigger either. A content refusal ("flagged for possible cybersecurity risk") prints `ADVERSARY_REFUSED:` in place of `ADVERSARY_UNAVAILABLE:` (#171); look for a stderr line that starts with it, since a notice can come first. A model "not supported when using Codex with a ChatGPT account" says the CLI looks stale and points at `ensure-codex.sh --check`, at the review and at the isolation canary (#185). Both still exit 3.
+- Every `codex-review.sh` and `gemini-review.sh` review command in both skills passes `--timeout 540`, and both skills say not to wrap the scripts in `timeout` (#207). `adversarial` 1.3.0 and `deep` 1.3.0.
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed

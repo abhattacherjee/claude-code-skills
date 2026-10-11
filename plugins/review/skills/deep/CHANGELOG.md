@@ -2,6 +2,14 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [1.3.0] - 2026-10-11
+
+### Changed
+
+- Step 2.6 splits exit 3 (#171). The refusal is a stderr line that starts with `ADVERSARY_REFUSED:` (other lines can come first), and its bullet now comes before "any other exit 3". In auto mode with `GEMINI_AUTHED=yes`, Gemini sweeps the fix-range diff once (`gemini-review.sh --mode find --id-start <ID_START>`), and the round is recorded with the full `pr-audit.py recheck --gemini-sweep ...` command given inline. Every earlier thread (Codex's and Claude's) stays open, marked "Codex refused the re-check; not closed". The new findings are judged and fixed, and then Step 2.6 ends: step 4's "repeat from 1" does not apply, so there is no second Codex call and no second sweep. Any other exit 3 stops the loop as before. Both `--id-start` values use one `ID_START` value: the highest finding number used in the run + 1.
+- Every `codex-review.sh` and `gemini-review.sh` command passes `--timeout 540`, and Step 2.0 says not to wrap the scripts in `timeout` (#207). The direct `gemini` fallback in Step 2.2 and `references/untrusted-input.md` runs through `run_bounded.py` with a `mktemp` marker, which kills Gemini's whole process group after 540 s; exit 124 with a "timed out" marker means the limit fired (#53). `perl`'s `alarm` is not used: the Gemini CLI relaunches itself as a child `node` process, and the alarm killed only the first one.
+- A stop after a forced adversary shows the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line, and Step 2.0 no longer says to renumber Gemini's ids: `gemini-review.sh` numbers them itself.
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed

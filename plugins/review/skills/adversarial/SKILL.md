@@ -2,7 +2,7 @@
 name: adversarial
 description: "Runs an adversarial code review of a PR diff or working-tree diff between Claude and an opposing model (Codex when installed and logged in, else Gemini), surfacing only findings both models independently confirm (high-precision, both-confirm rule). Use when: (1) reviewing a PR or working-tree diff with adversarial rigor and you want fewer false positives, (2) you want only findings two independent AI models agree on rather than a single-model opinion, (3) replacing a lost external PR reviewer (e.g. Copilot) with a second independent model cross-examining Claude's analysis, (4) running a high-precision pre-merge review before shipping to production. Supports automatic PR mode (saves the exchange as PR threads) and local mode (terminal report + gitignored markdown file). Degrades loudly to Claude-only review when no adversary is available. Was the adversarial-review skill, now review:adversarial."
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # Adversarial Review
@@ -24,7 +24,7 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 - `-c project_doc_max_bytes=0` and `-c project_doc_fallback_filenames=[]`, so the reviewed repo's `AGENTS.md` cannot instruct Codex; `-c skills.include_instructions=false`, so its `.agents/skills` cannot either — that setting defaults to true, so a repo's own skill instructions would otherwise land in the prompt. A repo's `.codex/config.toml` applies only to trusted repos, and trust lives in the `config.toml` that is ignored;
 - `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout per Codex call (default 540 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group. A SIGTERM or SIGINT sent to `codex-review.sh` kills that group too, removes its temp dirs, and exits 128+N.
 
-One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. That can pass the Bash tool's 600 s cap, so run the adversary script (`codex-review.sh` or `gemini-review.sh`) with the Bash tool's `run_in_background`. When you do, do not go idle waiting on it: check its output or process within about 10 minutes (`ps -axo pid,etime,command | grep codex` or `grep gemini`, or the run directory's output file), and ping or re-check it if it looks stuck. Never tell the user you're "waiting on" the adversary script without having looked at it. Unlike a reviewer that goes quiet on its own background job, your background Bash call here does notify you when it finishes — but a turn that ends without acting on that notification, or without checking in the meantime, leaves the same gap, so still check within about 10 minutes.
+One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. Each Codex call is bounded by `--timeout` (540 s in every command below); `gemini-review.sh` takes the same flag (`GEMINI_REVIEW_TIMEOUT`) and kills Gemini's process group the same way. Do not wrap either script in `timeout`: macOS has none, so the wrapper fails with exit 127 before the review starts. The scripts bound themselves. A whole script run (up to three Codex runs, or two Gemini calls) can still pass the Bash tool's 600 s cap, so run the adversary script (`codex-review.sh` or `gemini-review.sh`) with the Bash tool's `run_in_background`. When you do, do not go idle waiting on it: check its output or process within about 10 minutes (`ps -axo pid,etime,command | grep codex` or `grep gemini`, or the run directory's output file), and ping or re-check it if it looks stuck. Never tell the user you're "waiting on" the adversary script without having looked at it. Unlike a reviewer that goes quiet on its own background job, your background Bash call here does notify you when it finishes — but a turn that ends without acting on that notification, or without checking in the meantime, leaves the same gap, so still check within about 10 minutes.
 
 Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `"${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" --self-test` reruns the canary on demand.
 
@@ -181,14 +181,15 @@ Read both files from disk. Merge both arrays. Renumber with unified prefix: `C-0
 "${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" \
   --diff "<DIFF_FILE>" \
   --mode find \
+  --timeout 540 \
   --out "<RUN_DIR>/r1-<ADVERSARY>.json"
 ```
 
 With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 
-**If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
+**If exit code is 3** (`ADVERSARY_UNAVAILABLE`, or `ADVERSARY_REFUSED` when Codex refused the content):
 
-- `ADVERSARY_FLAG` is set (the user forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as exit 3 in Step 0. Never fall back to another model or to Claude-only.
+- `ADVERSARY_FLAG` is set (the user forced this adversary): show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line and stop the run with exit 3, the same as exit 3 in Step 0. Never fall back to another model or to Claude-only.
 - Codex was picked automatically and `GEMINI_AUTHED=yes`: switch to Gemini for the whole run (`ADVERSARY` is now `gemini`; run `gemini-review.sh` from here on), tell the user, and rerun this step once.
 - Otherwise: go to the R1 path in Degradation Behavior.
 
@@ -196,7 +197,7 @@ With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 
 **If exit code is 1**: the script could not use its inputs (a missing file, an input over Gemini's 8 MiB stdin cap). Show the stderr line and stop. Exit 1 is not exit 3, so there is no fallback.
 
-Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemini findings arrive with `origin="gemini"`; renumber them `G-001`, `G-002`, ... The file is `<RUN_DIR>/r1-<ADVERSARY>.json`.
+Codex findings arrive numbered `X-001`, `X-002`, ... with `origin="codex"`. Gemini findings arrive numbered `G-001`, `G-002`, ... with `origin="gemini"`. The file is `<RUN_DIR>/r1-<ADVERSARY>.json`.
 
 **r1-claude.json and r1-<adversary>.json format:**
 
@@ -268,6 +269,7 @@ Write its verdicts to `<RUN_DIR>/r2-claude-verdicts.json` in exactly this shape,
   --diff "<DIFF_FILE>" \
   --findings "<RUN_DIR>/r1-claude.json" \
   --mode judge \
+  --timeout 540 \
   --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"
 ```
 
@@ -275,7 +277,7 @@ With Gemini, run `gemini-review.sh` in place of `codex-review.sh`.
 
 **If exit code is 3** (`ADVERSARY_UNAVAILABLE`):
 
-- `ADVERSARY_FLAG` is set: show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3. Never fall back to Claude-only.
+- `ADVERSARY_FLAG` is set: show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line and stop the run with exit 3. Never fall back to Claude-only.
 - Otherwise: go to the R2 path in Degradation Behavior. It keeps the adversary's R1 findings. The Codex-to-Gemini auto-switch in Step 2(b) is R1-only — by R2 the run is already committed to whichever adversary found in R1, so there is no switch here.
 
 **If exit code is 4** (`SECRET_SUSPECTED`): the same as in Step 2(b). Exit 4 is not exit 3: never fall back. Ask the user; rerun with `--allow-secret-match` only if they confirm.
@@ -310,7 +312,7 @@ The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_s
 
 **Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge with maximum skepticism and re-synthesize:
 
-- The adversary rubber-stamping Claude's findings: `"${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" --diff "<DIFF_FILE>" --findings "<RUN_DIR>/r1-claude.json" --mode judge --strict --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"` (`gemini-review.sh` with Gemini; `--strict`, judge mode only, adds the hardened judge prompt: confirm only when the finding's defect is visible in the diff or source, quoting the offending line verbatim in the reason; otherwise refute)
+- The adversary rubber-stamping Claude's findings: `"${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" --diff "<DIFF_FILE>" --findings "<RUN_DIR>/r1-claude.json" --mode judge --strict --timeout 540 --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"` (`gemini-review.sh` with Gemini; `--strict`, judge mode only, adds the hardened judge prompt: confirm only when the finding's defect is visible in the diff or source, quoting the offending line verbatim in the reason; otherwise refute)
 - Claude rubber-stamping the adversary's findings: first move `<RUN_DIR>/r2-claude-verdicts.json` to `<RUN_DIR>/r2-claude-verdicts.prev.json`, so the old file cannot pass for the new delivery. Then re-spawn the `review:cross-examiner` agent, under the delivery contract, with an explicit instruction for a maximum-skepticism re-judge — refute unless the evidence is unambiguous and cite the proving line
 
 Re-run `synthesize.py` after the escalation pass and relay the updated digest. The `low_signal` flag is informational only — it does not change survivor classification; surviving findings are still those confirmed by the opposing model (see Survivor Rule).
@@ -394,9 +396,11 @@ Nothing is ever silently discarded.
 
 If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not installed, not logged in, no credential, a network error, a timeout, a tripped isolation canary, or no valid JSON after one retry) at **either** the R1 find step or the R2 judge step:
 
-- **`ADVERSARY_FLAG` is set** (the user passed `--adversary`): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, as in Step 0. Never fall back to Claude-only or to the other model: the user asked for that model. No report is written.
+- **`ADVERSARY_FLAG` is set** (the user passed `--adversary`): show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line and stop the run with exit 3, as in Step 0. Never fall back to Claude-only or to the other model: the user asked for that model. No report is written.
 - **Auto mode, at R1** (after the one Codex-to-Gemini switch allowed in Step 2): degrade to Claude-only, below.
 - **Auto mode, at R2**: degrade, but keep what R1 and Claude's R2 already produced, below.
+- **`ADVERSARY_REFUSED:`** is a kind of exit 3: Codex refused the diff as a possible cybersecurity risk (an `ERROR:` line on Codex's stderr after a non-zero exit, so a quoted sentence in the diff does not count). Look for a stderr line that starts with `ADVERSARY_REFUSED:`; a notice or a retry warning can come before it. It is handled like any other exit 3 here; at R1 the auto switch to Gemini in Step 2(b) already covers it. `review:deep` uses the prefix, in auto mode when Gemini is set up, to fall back to a Gemini sweep at a re-check.
+- **Codex says a model "is not supported when using Codex with a ChatGPT account"** (the `ADVERSARY_UNAVAILABLE` line then says the CLI `looks stale`): run `"${CLAUDE_SKILL_DIR}/scripts/ensure-codex.sh" --check` and read `CODEX_STALE` and `CODEX_STALE_HINT` before changing the model or logging in again. An old Codex CLI gets this error for new models; `CODEX_STALE_HINT` gives the fix: an `ln -sfn` command only when `codex` is a link into the standalone installer's `packages/` or to the ChatGPT app's codex, else which install to update, how to reorder `PATH`, or which version to update to. Never `ln -sfn` over an npm or Homebrew link.
 
 In auto mode, print this banner:
 
@@ -445,11 +449,12 @@ Both Claude agents (R1) and the adversary (R1 find + R2 judge) receive the **byt
 ## See Also
 
 - `scripts/ensure-gemini.sh` — Step 0 detection: emits Gemini install/auth status + hints; never installs or calls the network
-- `scripts/ensure-codex.sh` — Step 0 detection for Codex: installed, version, and logged in (from the exit code of `codex login status`)
+- `scripts/ensure-codex.sh` — Step 0 detection for Codex: installed, version, and logged in (from the exit code of `codex login status`); `CODEX_STALE` says whether the CLI is older than `models_cache.json`'s `client_version` or the ChatGPT app's bundled codex
 - `scripts/pick-adversary.sh` — Step 0: picks Codex, then Gemini, then Claude-only; `--adversary` forces one, with no fallback
 - `scripts/codex-review.sh` — Codex's R1 find and R2 judge, plus `counter` and `find --prior` re-checks for `review:deep`, through a locked-down `codex exec` (see Codex sandbox); `--self-test` reruns the isolation canary
 - `scripts/detect-mode.sh` — diff extraction and mode detection
-- `scripts/gemini-review.sh` — R1 find + R2 judge Gemini calls, with all input on stdin
+- `scripts/gemini-review.sh` — R1 find + R2 judge Gemini calls, with all input on stdin; `--timeout` bounds each call (default 540 s)
+- `scripts/run_bounded.py` — runs `gemini` in its own process group and kills the group at the time limit (macOS has no `timeout`)
 - `scripts/secret_scan.py` — the secret scan both adversary scripts run before sending; exit 4 on a hit
 - `scripts/check-cites.py` — checks each finding's `file:line` against the diff and the repo before `review:deep` hands it to an implementer
 - `scripts/synthesize.py` — survivor rule application (4-file symmetric input)

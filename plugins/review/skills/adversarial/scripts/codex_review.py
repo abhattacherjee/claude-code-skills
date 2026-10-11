@@ -29,7 +29,15 @@ Exit codes:
   2  usage error
   3  adversary unavailable (codex missing or logged out, a non-zero exit,
      a timeout, no valid output after one retry, a missing isolation flag,
-     or a leaked isolation canary)
+     or a leaked isolation canary). A codex exec that exited non-zero and
+     whose stderr has an "ERROR: ... is not supported when using Codex with a
+     ChatGPT account" line gets a stale-CLI message: check ensure-codex.sh
+     --check's CODEX_STALE.
+     A content refusal (an "ERROR: ... flagged for possible cybersecurity risk"
+     line from a codex exec that exited non-zero) is also exit 3, but its last
+     stderr line starts with ADVERSARY_REFUSED: instead of ADVERSARY_UNAVAILABLE:.
+     Other lines (a --allow-secret-match notice, a retry warning) can come
+     before it, so look for a line that starts with the prefix.
   4  secret suspected: secret_scan.py found a secret format or a secret-looking
      file name in --diff, --findings or --prior, so nothing was sent. The hits
      go to stderr as <path>:<line> <pattern-name>, never the value.
@@ -85,6 +93,12 @@ class BadOutput(ValueError):
 
 class Unavailable(RuntimeError):
     """Codex cannot be used for this run."""
+
+
+class Refused(Unavailable):
+    """Codex refused the content (its own "flagged for possible cybersecurity
+    risk" error). Still exit 3, printed as ADVERSARY_REFUSED: so a caller can
+    tell it from a login, network or timeout failure."""
 
 
 class InputError(RuntimeError):
@@ -604,6 +618,32 @@ def _tail(text, n=400):
     return text[-n:]
 
 
+# Matched only on stderr of a codex exec that exited non-zero, and only on a line
+# that starts with "ERROR:". stdin is the diff and JSON findings, and may be
+# echoed to stderr: a diff line starts with " ", "+", "-", "@" or a header, never
+# "ERROR:", and JSON escapes newlines inside strings. codex exec also streams the
+# model's messages and the output of commands it runs to stderr, so a line from
+# there can match too; the worst case is a refusal or stale message where a
+# generic exit 3 was due, and neither closes a thread.
+STALE_CLI_RE = re.compile(r"(?m)^ERROR: [^\n]*is not supported when using Codex with a ChatGPT account")
+REFUSED_RE = re.compile(r"(?m)^ERROR: [^\n]*flagged for possible cybersecurity risk")
+
+
+def exec_failure(rc, err, version=None, generic="codex exec exited %d"):
+    """The Unavailable to raise for a codex exec that exited rc with stderr err.
+    A known cause gets its own message; anything else gets `generic % rc` and the
+    stderr tail."""
+    detail = "%s: %s" % (generic % rc, _tail(err))
+    if REFUSED_RE.search(err):
+        return Refused("Codex refused the content as a possible cybersecurity risk (%s)" % detail)
+    if STALE_CLI_RE.search(err):
+        return Unavailable(
+            "codex CLI %slooks stale: the server refused the model for this client. Check for a "
+            "newer CLI (ensure-codex.sh --check prints CODEX_STALE) before changing the model or "
+            "logging in again. (%s)" % (version + " " if version else "", detail))
+    return Unavailable(detail)
+
+
 def codex_version(codex, env=None):
     try:
         proc = subprocess.run([codex, "--version"], env=env, stdin=subprocess.DEVNULL,
@@ -738,7 +778,7 @@ def _write(path, text):
         fh.write(text)
 
 
-def run_canary(codex, env, timeout):
+def run_canary(codex, env, timeout, version=None):
     """One isolated review of a throwaway git repo that carries a canary on each
     repo surface Codex could load: AGENTS.md (a title order), .codex/config.toml
     (a model name), .agents/skills (a skill with a title order) and .mcp.json (a
@@ -799,8 +839,8 @@ def run_canary(codex, env, timeout):
         if os.path.exists(marker):
             return False, "the test repo's .mcp.json reached Codex"
         if rc != 0:
-            raise Unavailable("the isolation self-test could not run: codex exec exited %d: %s"
-                              % (rc, _tail(err)))
+            raise exec_failure(rc, err, version,
+                               "the isolation self-test could not run: codex exec exited %d")
         # A pass needs proof that Codex answered: an exit 0 with no or a malformed
         # answer says nothing about whether the canaries were read.
         try:
@@ -821,7 +861,7 @@ def ensure_isolation(codex, env, timeout, force=False):
     stamp, fields = current_stamp(codex, env, version)
     if not force and stamp_valid(stamp, fields):
         return version
-    ok, why = run_canary(codex, env, timeout)
+    ok, why = run_canary(codex, env, timeout, version)
     if not ok:
         remove_stamps(version)
         raise Unavailable("isolation canary leaked on Codex %s: %s; codex-review.sh refuses to run"
@@ -904,7 +944,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="codex-review.sh",
         description="Run Codex as the adversary in a locked-down codex exec. "
-                    "Exit codes: 0 ok, 1 input error, 2 usage, 3 adversary unavailable, "
+                    "Exit codes: 0 ok, 1 input error, 2 usage, 3 adversary unavailable "
+                    "(ADVERSARY_UNAVAILABLE:) or refused the content (ADVERSARY_REFUSED:), "
                     "4 secret suspected (nothing sent).")
     p.add_argument("--diff", help="the shared diff file (required unless --self-test)")
     p.add_argument("--mode", choices=("find", "judge", "counter"),
@@ -1041,7 +1082,7 @@ def review(args):
             rc, _, err = _run_isolated(codex, repo, schema_path, out_path, prompt, stdin_data,
                                        env, args.timeout, args.model)
             if rc != 0:
-                raise Unavailable("codex exec exited %d: %s" % (rc, _tail(err)))
+                raise exec_failure(rc, err, version)
             try:
                 result = validate_output(args.mode, read_output(out_path), findings or [], prior,
                                          args.id_start)
@@ -1068,6 +1109,9 @@ def main(argv=None):
             print("codex-review: isolation self-test passed on Codex %s" % self_test(args))
             return EXIT_OK
         result = review(args)
+    except Refused as exc:
+        print("ADVERSARY_REFUSED: %s" % exc, file=sys.stderr)
+        return EXIT_UNAVAILABLE
     except Unavailable as exc:
         print("ADVERSARY_UNAVAILABLE: %s" % exc, file=sys.stderr)
         return EXIT_UNAVAILABLE

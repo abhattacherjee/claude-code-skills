@@ -488,7 +488,216 @@ class DeepReviewDocTests(unittest.TestCase):
             self.assertIn("never fall back", part.lower(), start)
 
 
-GEMINI_COMMAND = re.compile(r"`(gemini [^`]*)`|^\s*(gemini .*)$", re.M)
+# A direct gemini call is bounded by run_bounded.py, which kills Gemini's whole
+# process group (#53). perl's alarm killed only the first process, and the Gemini
+# CLI relaunches itself as a child node process that outlived it.
+RUN_BOUNDED_PREFIX = re.compile(
+    r'python3 "<SCRIPTS_DIR>/run_bounded\.py" 540 '
+    r'"<RUN_DIR>/r2-gemini-prompt\.txt" "[^"]+" "[^"]+" "\$MARK" ')
+PERL_ALARM = "perl -e 'alarm 540; exec @ARGV' "
+REVIEW_SCRIPT_CALL = re.compile(r'"\$\{CLAUDE_(?:SKILL_DIR|PLUGIN_ROOT)\}[^"]*/(?:codex|gemini)-review\.sh"')
+
+
+def review_commands(text):
+    """Every codex-review.sh / gemini-review.sh command the text tells the reader to
+    run: from the quoted script path to the end of its code span or shell line, with
+    backslash continuations joined."""
+    joined = text.replace("\\\n", " ")
+    cmds = []
+    for m in REVIEW_SCRIPT_CALL.finditer(joined):
+        rest = joined[m.start():]
+        cmds.append(re.split(r"[`\n]", rest, 1)[0])
+    return cmds
+
+
+class RefusalFallbackDocTests(unittest.TestCase):
+    """#171: a Codex content refusal at a Step 2.6 re-check falls back to a Gemini
+    sweep in auto mode. Codex threads stay open; any other exit 3 still stops."""
+
+    def setUp(self):
+        self.step = section((DEEP / "SKILL.md").read_text(encoding="utf-8"), "### Step 2.6", "\n---\n")
+        self.n = norm(self.step)
+
+    def refused(self):
+        return norm(section(self.step, "ADVERSARY_REFUSED:", "**Any other exit 3**"))
+
+    def test_exit_3_is_split_on_the_refused_prefix(self):
+        self.assertIn("ADVERSARY_REFUSED:", self.step)
+        self.assertIn("Any other exit 3", self.n)
+        other = norm(section(self.step, "**Any other exit 3**", "**Exit 1**"))
+        self.assertIn("Stop the re-check loop", other)
+        self.assertIn("do not fall back to Gemini or Claude-only", other)
+
+    def test_the_refused_bullet_comes_before_any_other_exit_3(self):
+        # comments I3(c): "any other" must follow the case it is other than.
+        self.assertLess(self.step.index("ADVERSARY_REFUSED:"), self.step.index("Any other exit 3"))
+
+    def test_refusal_is_a_stderr_line_not_the_start_of_stderr(self):
+        # code I2: codex_review.py can print a notice or a retry warning first.
+        for name, text in (("deep", self.n), ("adversarial", norm(SKILL.read_text(encoding="utf-8")))):
+            with self.subTest(doc=name):
+                self.assertIn("a stderr line that starts with `ADVERSARY_REFUSED:`", text)
+                self.assertNotIn("stderr starting", text)
+                self.assertNotIn("start of stderr", text)
+
+    def test_the_sweep_record_command_is_given_in_full(self):
+        # comments I3(a): appending flags to step 3's command keeps its --rechecks.
+        want = ('python3 "${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/pr-audit.py" recheck '
+                '--gemini-sweep --prior "<RUN_DIR>/round-<FIX_K>.json" --rechecks '
+                '"<RUN_DIR>/recheck-<K>-gemini.json" --round "<K>" --head-sha "<FIX_SHA>" '
+                '--out "<RUN_DIR>/round-<K>.json"')
+        self.assertIn(want, self.refused())
+        self.assertNotIn("Run step 3 with", self.n)
+
+    def test_a_sweep_ends_the_loop(self):
+        # comments I3(b), code I4: no second Codex call and no second sweep.
+        part = self.refused()
+        self.assertIn("end Step 2.6", part)
+        self.assertIn("no second Codex call and no second sweep", part)
+        step4 = norm(self.step.split("\n4. ", 1)[1])
+        self.assertIn("After a Gemini sweep", step4)
+        self.assertRegex(step4, r"After a Gemini sweep[^.]*never repeat from 1")
+
+    def test_both_id_starts_use_one_placeholder(self):
+        # comments S10.
+        ids = re.findall(r"--id-start (<[^>]*>)", self.step)
+        self.assertEqual(ids, ["<ID_START>", "<ID_START>"])
+        self.assertIn("`ID_START`", self.step)
+        self.assertNotIn("highest X number", self.step)
+
+    def test_the_sweep_command(self):
+        cmds = [c for c in review_commands(self.step) if "gemini-review.sh" in c]
+        self.assertEqual(len(cmds), 1, cmds)
+        cmd = cmds[0]
+        for part in ('--diff "<RUN_DIR>/fix-range-<FIX_K>.diff"', "--mode find", "--id-start",
+                     "--timeout 540", '--out "<RUN_DIR>/recheck-<K>-gemini.json"'):
+            self.assertIn(part, cmd)
+
+    def test_the_sweep_needs_auto_mode_and_gemini(self):
+        part = self.refused()
+        self.assertIn("GEMINI_AUTHED=yes", part)
+        self.assertIn("ADVERSARY_FLAG", part)
+        self.assertIn("name the refusal", part)
+
+    def test_codex_threads_stay_open(self):
+        part = self.refused()
+        self.assertIn("Codex refused the re-check; not closed", part)
+        self.assertIn("never closes a Codex thread", part)
+        self.assertIn("--gemini-sweep", part)
+        self.assertIn("round summary", part)
+        self.assertIn("no Codex re-check", part)
+
+    def test_adversarial_lists_refused_as_a_kind_of_exit_3(self):
+        text = norm(SKILL.read_text(encoding="utf-8"))
+        self.assertIn("ADVERSARY_REFUSED:", text)
+        deg = norm(section(SKILL.read_text(encoding="utf-8"), "## Degradation Behavior", "## Same-Diff"))
+        self.assertIn("ADVERSARY_REFUSED:", deg)
+        self.assertIn("a kind of exit 3", deg)
+
+
+class ShowTheExitLineDocTests(unittest.TestCase):
+    def test_a_forced_adversary_stop_shows_either_prefix(self):
+        # comments S7: after a review script ran, the exit 3 line may be
+        # ADVERSARY_REFUSED:, so "show the ADVERSARY_UNAVAILABLE line" alone is wrong.
+        for name, path in (("adversarial", SKILL), ("deep", DEEP / "SKILL.md")):
+            text = norm(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertNotIn("show the `ADVERSARY_UNAVAILABLE` line", text)
+                self.assertIn("show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line", text)
+
+
+class GeminiIdsDocTests(unittest.TestCase):
+    def test_no_doc_says_to_renumber_gemini_ids(self):
+        # comments I1: gemini-review.sh numbers its findings from --id-start.
+        for name, path in (("adversarial", SKILL), ("deep", DEEP / "SKILL.md")):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(doc=name):
+                # Claude's own C- merge still renumbers; Gemini's G- ids never are.
+                self.assertNotRegex(text, r"(?i)renumber[^.\n]*G-0|gemini[^.\n]*renumber")
+                self.assertIn("G-001", text)
+
+
+class StaleCliDocTests(unittest.TestCase):
+    def test_degradation_says_to_check_the_cli_version_first(self):
+        # #185: "not supported" reads like a model or login problem; it is a stale CLI.
+        part = norm(section(SKILL.read_text(encoding="utf-8"), "## Degradation Behavior", "## Same-Diff"))
+        self.assertIn("not supported when using Codex with a ChatGPT account", part)
+        self.assertIn("ensure-codex.sh", part)
+        self.assertIn("CODEX_STALE", part)
+        self.assertIn("before changing the model or logging in again", part)
+
+    def test_the_new_ensure_codex_lines_are_listed(self):
+        for text in (SKILL.read_text(encoding="utf-8"), PLUGIN_README.read_text(encoding="utf-8")):
+            self.assertIn("CODEX_STALE", text)
+
+
+class TimeoutFlagDocTests(unittest.TestCase):
+    """#207: every review command in both skills passes --timeout, because callers
+    reach for `timeout`, which macOS does not have (exit 127 before the review)."""
+
+    # Exact counts (tests I5): a command that drops out of the extractor's view fails.
+    DOCS = (("adversarial", SKILL, 4), ("deep", DEEP / "SKILL.md", 5))
+    REFS = sorted(list((DEEP / "references").glob("*.md")) + list((SKILL.parent / "references").glob("*.md")))
+
+    def all_docs(self):
+        return [(n, p, c) for n, p, c in self.DOCS] + [(p.name, p, 0) for p in self.REFS]
+
+    def test_every_review_command_passes_timeout(self):
+        self.assertGreaterEqual(len(self.REFS), 4)
+        for name, path, count in self.all_docs():
+            cmds = review_commands(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertEqual(len(cmds), count, cmds)
+            for cmd in cmds:
+                if "--self-test" in cmd:
+                    continue
+                with self.subTest(doc=name, cmd=cmd[:120]):
+                    self.assertRegex(cmd, r"--timeout 540\b")
+
+    LOOSE = re.compile(r"-review\.sh\S*\s+--")
+
+    def loose_commands(self, text):
+        """Any line in a fence, or code span, that names a -review.sh script and then
+        an option: catches forms the strict extractor misses (no quotes, bash x.sh)."""
+        spans = fenced_code(text).splitlines() + re.findall(r"`([^`\n]+)`", text)
+        return [s for s in spans if self.LOOSE.search(s)]
+
+    def test_every_loose_review_command_passes_timeout(self):
+        for name, path, _ in self.all_docs():
+            for cmd in self.loose_commands(path.read_text(encoding="utf-8").replace("\\\n", " ")):
+                # --self-test is not a review; a line with an arrow is the overview
+                # diagram (`codex-review.sh|gemini-review.sh --mode find → ...`).
+                if "--self-test" in cmd or "\u2192" in cmd:
+                    continue
+                with self.subTest(doc=name, cmd=cmd[:120]):
+                    self.assertRegex(cmd, r"--timeout 540\b")
+
+    def test_the_loose_scan_sees_unquoted_forms(self):
+        text = ("x `scripts/codex-review.sh --mode find` y\n```bash\nbash ${CLAUDE_SKILL_DIR}/scripts/"
+                "gemini-review.sh --diff d\n```\nprose about codex-review.sh only\n")
+        self.assertEqual(len(self.loose_commands(text)), 2)
+
+    def test_the_extractor_sees_fenced_and_inline_commands(self):
+        text = ('x `"${CLAUDE_PLUGIN_ROOT}/s/codex-review.sh" --mode find --timeout 540` y\n'
+                '```bash\n"${CLAUDE_SKILL_DIR}/scripts/gemini-review.sh" \\\n  --mode judge \\\n'
+                '  --out f\n```\n')
+        cmds = review_commands(text)
+        self.assertEqual(len(cmds), 2, cmds)
+        self.assertIn("--timeout 540", cmds[0])
+        self.assertIn("--out f", cmds[1])
+        self.assertNotIn("--timeout", cmds[1])
+
+    def test_both_skills_say_not_to_wrap_the_scripts_in_timeout(self):
+        for name, path, _ in self.DOCS:
+            text = norm(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertIn("Do not wrap", text)
+                self.assertRegex(text, r"Do not wrap[^.]*in `timeout`[^.]*macOS has none")
+                self.assertIn("127", text)
+
+
+GEMINI_COMMAND = re.compile(r"`((?:%s)?gemini [^`]*)`|^\s*((?:%s)?gemini .*)$"
+                            % (re.escape(PERL_ALARM), re.escape(PERL_ALARM)), re.M)
 
 
 class UntrustedInputDocTests(unittest.TestCase):
@@ -514,8 +723,31 @@ class UntrustedInputDocTests(unittest.TestCase):
                     self.assertNotRegex(cmd, r'-p\s+"<')
                     if " -p " in cmd:
                         self.assertRegex(cmd, r"\s<\s*\S")
-        shown = self.gemini_commands(self.deep) + self.gemini_commands(self.ref)
-        self.assertTrue(any(re.search(r"\s<\s*\S", c) for c in shown), shown)
+        # The one direct call takes its prompt file as run_bounded.py's stdin file.
+        runs = [line for line in self.ref.splitlines() if RUN_BOUNDED_PREFIX.search(line)]
+        self.assertEqual(len(runs), 1, runs)
+        self.assertNotIn("-p \"<", runs[0])
+
+    def test_every_direct_gemini_call_is_bounded(self):
+        # #53: a direct gemini call has no wrapper script to time it out, and macOS
+        # has no `timeout`. It runs through run_bounded.py, which kills the group.
+        for name, text in (("deep", self.deep), ("untrusted-input.md", self.ref)):
+            with self.subTest(doc=name):
+                self.assertNotIn("perl -e", text)
+                self.assertNotIn("alarm 540", text)
+                self.assertNotRegex(text, r"\b142\b")
+        # Every line that runs gemini with a model (not a mention like `gemini -p`).
+        runs = [line for line in (self.deep + "\n" + self.ref).splitlines()
+                if re.search(r"\bgemini -m ", line)]
+        self.assertEqual(len(runs), 1, runs)
+        for cmd in runs:
+            with self.subTest(cmd=cmd):
+                self.assertRegex(cmd, RUN_BOUNDED_PREFIX)
+                self.assertIn('MARK="$(mktemp ', cmd)
+                self.assertIn('rm -f "$MARK"', cmd)
+        ref = norm(self.ref)
+        self.assertRegex(ref, r"124[^.]*marker[^.]*timed out")
+        self.assertIn("process group", ref)
 
     def test_the_old_argument_forms_are_gone(self):
         for text in (self.deep, self.ref, self.adv):
