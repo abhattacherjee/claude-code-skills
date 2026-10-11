@@ -2,6 +2,13 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [1.3.0] - 2026-10-11
+
+### Changed
+
+- Step 2.6 splits exit 3 (#171). On `ADVERSARY_REFUSED:` in auto mode with `GEMINI_AUTHED=yes`, Gemini sweeps the fix-range diff (`gemini-review.sh --mode find --id-start`), the round is recorded with `pr-audit.py recheck --gemini-sweep`, every Codex thread stays open marked "Codex refused the re-check; not closed", and the re-check loop stops. Any other exit 3 stops the loop as before.
+- Every `codex-review.sh` and `gemini-review.sh` command passes `--timeout 540`, and Step 2.0 says not to wrap the scripts in `timeout` (#207). The direct `gemini` fallback in Step 2.2 and `references/untrusted-input.md` runs under `perl -e 'alarm 540; exec @ARGV'`; exit 142 means the limit fired (#53).
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed

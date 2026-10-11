@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+### Fixed
+
+- **`review` 1.3.0: bounded Gemini calls, a stale Codex CLI named, and a Gemini sweep when Codex refuses a re-check (#53, #207, #185, #171).** `gemini-review.sh` takes `--timeout` (default 540 s) and kills a hung call's process group, exiting 3. Every review command in both skills passes `--timeout 540`. `ensure-codex.sh` prints `CODEX_STALE`, and `codex-review.sh` says the CLI looks stale on a "not supported when using Codex with a ChatGPT account" error. A Codex content refusal exits 3 as `ADVERSARY_REFUSED:`; `deep` (1.3.0) then has Gemini sweep the fix range and leaves the Codex threads open. `adversarial` 1.3.0. See `plugins/review/CHANGELOG.md`.
+
 ## [4.1.0] - 2026-10-11
 
 ### Fixed

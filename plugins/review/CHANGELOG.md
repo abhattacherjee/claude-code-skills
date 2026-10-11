@@ -2,6 +2,20 @@
 
 All notable changes to the **review** plugin are documented here.
 
+## [1.3.0] - 2026-10-11
+
+### Added
+
+- `gemini-review.sh --timeout <secs>` (else `GEMINI_REVIEW_TIMEOUT`, else 540) (#53). Each `gemini` call runs through the new `run_bounded.py` in its own process group. A call past the limit is killed with its whole group, and the script exits 3 with `ADVERSARY_UNAVAILABLE: gemini timed out after <N>s; killed its process group`, without a retry. A timeout is exit 124 from the runner and a non-empty private `mktemp` marker; the runner writes the marker with `O_NOFOLLOW` and never creates it. The direct `gemini` fallback in `deep` is bounded with `perl -e 'alarm 540; exec @ARGV'` (exit 142 means the limit fired).
+- `ensure-codex.sh` prints `CODEX_STALE=yes|no|unknown`, `CODEX_NEWER_BIN` and `CODEX_STALE_HINT` (#185). It compares `codex --version` with `client_version` in `${CODEX_HOME:-~/.codex}/models_cache.json` and with the codex bundled in the ChatGPT app (`CODEX_APP_BIN` overrides the path), run with stdin closed and a 10 s limit. A source that cannot be read never gives `no`. It still always exits 0.
+- `gemini-review.sh --id-start <n>` (find mode only): the script numbers Gemini's findings `G-<n>`, `G-<n+1>`, ... itself, and keeps a finding the model gave no id (#171).
+- `pr-audit.py recheck --gemini-sweep` records a Gemini sweep of a fix range after Codex refused the re-check: every Codex finding is carried over with no events, so no Codex thread closes, and Gemini's findings are added with origin `gemini` (#171).
+
+### Changed
+
+- `codex-review.sh` names the cause of two `codex exec` failures, matched only on Codex's own `ERROR:` line of a non-zero exit, so text in the diff cannot trigger either. A content refusal ("flagged for possible cybersecurity risk") prints `ADVERSARY_REFUSED:` in place of `ADVERSARY_UNAVAILABLE:` (#171). A model "not supported when using Codex with a ChatGPT account" says the CLI looks stale and points at `ensure-codex.sh --check`, at the review and at the isolation canary (#185). Both still exit 3.
+- Every `codex-review.sh` and `gemini-review.sh` review command in both skills passes `--timeout 540`, and both skills say not to wrap the scripts in `timeout` (#207). `adversarial` 1.3.0 and `deep` 1.3.0.
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed
