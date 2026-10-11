@@ -119,7 +119,9 @@ if [ "$CODEX_INSTALLED" = "yes" ] && [ "$CODEX_VERSION" != "-" ]; then
   # with a string client_version counts as unread.
   cache_file="${CODEX_HOME:-$HOME/.codex}/models_cache.json"
   cache_ver=""
+  cache_unread=0
   if [ -f "$cache_file" ]; then
+    cache_unread=1
     cache_raw="$(python3 -c 'import json,sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 v = d.get("client_version") if isinstance(d, dict) else None
@@ -127,6 +129,7 @@ print(v if isinstance(v, str) else "")' "$cache_file" 2>/dev/null </dev/null || 
     cache_ver="$(semver "$cache_raw")"
   fi
   if [ -n "$cache_ver" ]; then
+    cache_unread=0
     sources_read=1
     if ver_lt "$CODEX_VERSION" "$cache_ver"; then newest="$cache_ver"; fi
   fi
@@ -183,14 +186,19 @@ else:
     print("ours" if ok else "managed")' "$codex_path" "${CODEX_HOME:-$HOME/.codex}" "$CODEX_NEWER_BIN" \
         2>/dev/null </dev/null || true)"
       if [ "$link_kind" = "ours" ]; then
-        CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than the ChatGPT app's $app_ver. Point codex at it: ln -sfn '$CODEX_NEWER_BIN' '$codex_path'"
+        # Single-quote each path; a ' inside it becomes '\'' (built from
+        # variables, as in emit(), so bash 3.2 gets it right).
+        q="'" bs='\'
+        q_new="${CODEX_NEWER_BIN//$q/$q$bs$q$q}"
+        q_cur="${codex_path//$q/$q$bs$q$q}"
+        CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than the ChatGPT app's $app_ver. Point codex at it: ln -sfn '$q_new' '$q_cur'"
       else
         CODEX_STALE_HINT="Codex CLI $CODEX_VERSION ($codex_path) is older than the ChatGPT app's $app_ver at '$CODEX_NEWER_BIN'. Update that install, or put '$(dirname "$CODEX_NEWER_BIN")' before '$(dirname "$codex_path")' in PATH"
       fi
     else
       CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than $newest (client_version in $cache_file); update the Codex CLI to $newest or later"
     fi
-  elif [ "$app_unread" -eq 1 ]; then
+  elif [ "$app_unread" -eq 1 ] || [ "$cache_unread" -eq 1 ]; then
     CODEX_STALE="unknown"
   elif [ "$sources_read" -eq 1 ]; then
     CODEX_STALE="no"

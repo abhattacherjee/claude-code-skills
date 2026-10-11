@@ -295,6 +295,35 @@ class StaleCliTests(unittest.TestCase):
                 self.assertNotIn("Traceback", res.stderr)
                 self.assertEqual(parse_lines(res.stdout)["CODEX_STALE"], "unknown")
 
+    def test_an_unread_cache_with_a_current_app_gives_unknown(self):
+        # X-001: a cache that exists but cannot be parsed was not checked, so a
+        # readable app that is not newer must not turn the result into "no".
+        for text in ("{not json", "[]", '{"client_version": 159}', '{"models": []}', ""):
+            with self.subTest(cache=text):
+                env = StubEnv(self)
+                env.cache(text)
+                env.app('echo "codex-cli 0.155.1"')
+                out = self.check(env)
+                self.assertEqual(out["CODEX_STALE"], "unknown")
+                self.assertEqual(out["CODEX_NEWER_BIN"], "-")
+
+    def test_an_absent_cache_with_a_current_app_gives_no(self):
+        env = StubEnv(self)
+        env.app('echo "codex-cli 0.155.1"')
+        self.assertEqual(self.check(env)["CODEX_STALE"], "no")
+
+    def test_the_ln_hint_shell_escapes_an_apostrophe_path(self):
+        # X-002: the hint's command must parse and name the exact paths.
+        env = StubEnv(self)
+        base = env.home / ".codex"
+        app = env.app('echo "codex-cli 0.159.0"', dirname="O'Brien app")
+        self.link_codex(env, base / "packages" / "standalone" / "0.155.1" / "codex")
+        hint = self.check(env)["CODEX_STALE_HINT"]
+        cmd = hint.split("Point codex at it: ", 1)[1]
+        self.assertEqual(subprocess.run(["/bin/bash", "-n", "-c", cmd]).returncode, 0, cmd)
+        words = shlex.split(cmd)
+        self.assertEqual(words, ["ln", "-sfn", str(app), str(env.bin / "codex")])
+
     def test_a_failing_bundled_binary_gives_unknown(self):
         for body in ("exit 3", "echo garbage", "echo 0.200.0; exit 1"):
             with self.subTest(body=body):
