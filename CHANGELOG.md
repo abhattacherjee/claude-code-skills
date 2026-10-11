@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-10-11
+
 ### Fixed
 
 - **`review` 1.2.0: `synthesize.py` stops on an unrecognized verdict, and dispatched agents deliver to a file (#189, #121).** `synthesize.py` exits 5, names the key it expected and what it found, and writes no report, instead of reporting fewer survivors as if the run were valid. `deep` 1.2.0 and `adversarial` 1.2.0 give the exact `r2-claude-verdicts.json` shape. Every review dispatch writes its results to a named run-directory file before replying and the orchestrator reads that file; silence is `NO REPORT` in the final report, with a chase cap of two. New `deep` reference `references/dispatch-contract.md`. See `plugins/review/CHANGELOG.md`.
