@@ -476,6 +476,61 @@ class TimeoutTests(unittest.TestCase):
         self.assertIn("timed out", res.stdout)
 
 
+class IdStartTests(unittest.TestCase):
+    """#171: find mode numbers Gemini's findings itself, G-NNN from --id-start
+    (default 1). The model's own ids are never trusted."""
+
+    MODEL = {"findings": [
+        dict(FOUND["findings"][0], id="C-001", title="reuses a Claude id"),
+        dict(FOUND["findings"][0], id="G-001", title="dup 1"),
+        dict(FOUND["findings"][0], id="G-001", title="dup 2"),
+        {k: v for k, v in FOUND["findings"][0].items() if k != "id"},
+        dict(FOUND["findings"][0], id=7, title="numeric id"),
+        "not a finding",
+    ]}
+
+    def test_ids_come_from_id_start(self):
+        h = GeminiHarness(self, [self.MODEL])
+        res = h.run("--diff", h.diff, "--mode", "find", "--id-start", "12")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        found = json.loads(res.stdout)["findings"]
+        self.assertEqual([f["id"] for f in found], ["G-012", "G-013", "G-014", "G-015", "G-016"])
+        self.assertEqual([f["origin"] for f in found], ["gemini"] * 5)
+
+    def test_the_default_starts_at_1(self):
+        h = GeminiHarness(self, [self.MODEL])
+        res = h.run("--diff", h.diff, "--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual([f["id"] for f in json.loads(res.stdout)["findings"]][:2], ["G-001", "G-002"])
+
+    def test_a_finding_without_an_id_is_kept(self):
+        h = GeminiHarness(self, [{"findings": [{"path": "a", "title": "no id", "rationale": "r"}]}])
+        res = h.run("--diff", h.diff, "--mode", "find", "--id-start", "3")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["findings"][0]["id"], "G-003")
+
+    def test_bad_id_start_is_a_usage_error(self):
+        for raw in ("0", "-1", "abc", "", "1.5"):
+            with self.subTest(raw=raw):
+                h = GeminiHarness(self, [FOUND])
+                res = h.run("--diff", h.diff, "--mode", "find", "--id-start", raw)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("--id-start must be", res.stderr)
+                self.assertEqual(h.calls(), [])
+
+    def test_id_start_is_find_mode_only(self):
+        h = GeminiHarness(self, [VERDICTS])
+        res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge", "--id-start", "4")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("--id-start works only with --mode find", res.stderr)
+        self.assertEqual(h.calls(), [])
+
+    def test_judge_mode_ids_are_unchanged(self):
+        h = GeminiHarness(self, [VERDICTS])
+        res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge")
+        self.assertEqual(json.loads(res.stdout)["verdicts"][0]["id"], "C-001")
+
+
 RUN_BOUNDED = HERE / "run_bounded.py"
 
 

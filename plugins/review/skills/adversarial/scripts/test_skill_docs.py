@@ -505,6 +505,54 @@ def review_commands(text):
     return cmds
 
 
+class RefusalFallbackDocTests(unittest.TestCase):
+    """#171: a Codex content refusal at a Step 2.6 re-check falls back to a Gemini
+    sweep in auto mode. Codex threads stay open; any other exit 3 still stops."""
+
+    def setUp(self):
+        self.step = section((DEEP / "SKILL.md").read_text(encoding="utf-8"), "### Step 2.6", "\n---\n")
+        self.n = norm(self.step)
+
+    def refused(self):
+        return norm(section(self.step, "ADVERSARY_REFUSED:", "**Exit 1**"))
+
+    def test_exit_3_is_split_on_the_refused_prefix(self):
+        self.assertIn("ADVERSARY_REFUSED:", self.step)
+        self.assertIn("Any other exit 3", self.n)
+        other = norm(section(self.step, "Any other exit 3", "ADVERSARY_REFUSED:"))
+        self.assertIn("Stop the re-check loop", other)
+        self.assertIn("do not fall back to Gemini or Claude-only", other)
+
+    def test_the_sweep_command(self):
+        cmds = [c for c in review_commands(self.step) if "gemini-review.sh" in c]
+        self.assertEqual(len(cmds), 1, cmds)
+        cmd = cmds[0]
+        for part in ('--diff "<RUN_DIR>/fix-range-<FIX_K>.diff"', "--mode find", "--id-start",
+                     "--timeout 540", '--out "<RUN_DIR>/recheck-<K>-gemini.json"'):
+            self.assertIn(part, cmd)
+
+    def test_the_sweep_needs_auto_mode_and_gemini(self):
+        part = self.refused()
+        self.assertIn("GEMINI_AUTHED=yes", part)
+        self.assertIn("ADVERSARY_FLAG", part)
+        self.assertIn("name the refusal", part)
+
+    def test_codex_threads_stay_open(self):
+        part = self.refused()
+        self.assertIn("Codex refused the re-check; not closed", part)
+        self.assertIn("never closes a Codex thread", part)
+        self.assertIn("--gemini-sweep", part)
+        self.assertIn("round summary", part)
+        self.assertIn("no Codex re-check", part)
+
+    def test_adversarial_lists_refused_as_a_kind_of_exit_3(self):
+        text = norm(SKILL.read_text(encoding="utf-8"))
+        self.assertIn("ADVERSARY_REFUSED:", text)
+        deg = norm(section(SKILL.read_text(encoding="utf-8"), "## Degradation Behavior", "## Same-Diff"))
+        self.assertIn("ADVERSARY_REFUSED:", deg)
+        self.assertIn("a kind of exit 3", deg)
+
+
 class StaleCliDocTests(unittest.TestCase):
     def test_degradation_says_to_check_the_cli_version_first(self):
         # #185: "not supported" reads like a model or login problem; it is a stale CLI.

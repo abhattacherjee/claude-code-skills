@@ -509,6 +509,58 @@ class StaleCliTests(unittest.TestCase):
         self.assertEqual(h.result()["findings"][0]["id"], "X-001")
 
 
+# Codex's real content refusal, from a 2026-10-03 run (#171).
+REFUSAL = ("This content was flagged for possible cybersecurity risk. If this seems wrong, "
+           "try rephrasing your request.")
+
+
+class RefusalTests(unittest.TestCase):
+    """#171: a content refusal is its own kind of exit 3, ADVERSARY_REFUSED:, so
+    deep can fall back to Gemini. It is never "no findings"."""
+
+    def test_the_real_refusal_exits_3_with_adversary_refused(self):
+        h = Harness(self, exec_actions=[{"exit": 1, "stderr": "ERROR: " + REFUSAL + " ..."}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertTrue(res.stderr.startswith("ADVERSARY_REFUSED: "), res.stderr)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+        self.assertFalse(h.out.exists())
+        self.assertEqual(len(h.exec_calls()), 1)
+
+    def test_a_refused_recheck_is_refused_too(self):
+        h = Harness(self, exec_actions=[{"exit": 1, "stderr": "ERROR: " + REFUSAL}])
+        prior = h.write("prior.json", {"findings": [{"id": "X-001", "title": "t"}]})
+        res = h.run("--mode", "find", "--prior", prior, "--id-start", "5")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertTrue(res.stderr.startswith("ADVERSARY_REFUSED: "), res.stderr)
+
+    def test_the_sentence_off_an_error_line_is_not_a_refusal(self):
+        for stderr in (REFUSAL, "warning: " + REFUSAL, "+ ERROR: " + REFUSAL, " ERROR: " + REFUSAL):
+            with self.subTest(stderr=stderr[:20]):
+                h = Harness(self, exec_actions=[{"exit": 1, "stderr": stderr}])
+                res = h.run("--mode", "find")
+                self.assertEqual(res.returncode, 3, res.stderr)
+                self.assertTrue(res.stderr.startswith("ADVERSARY_UNAVAILABLE: "), res.stderr)
+                self.assertNotIn("ADVERSARY_REFUSED", res.stderr)
+
+    def test_the_sentence_in_the_diff_does_not_make_another_failure_a_refusal(self):
+        h = Harness(self, exec_actions=[{"exit": 1, "stderr": "+msg = '%s'\nERROR: stream disconnected"
+                                         % REFUSAL}])
+        h.diff.write_text("diff --git a/a.py b/a.py\n+msg = '%s'\n" % REFUSAL)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertTrue(res.stderr.startswith("ADVERSARY_UNAVAILABLE: "), res.stderr)
+
+    def test_the_sentence_on_a_successful_exec_is_ignored(self):
+        h = Harness(self, exec_actions=[{"exit": 0, "stderr": "ERROR: " + REFUSAL, "out": ONE_FINDING}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_refused_is_a_kind_of_unavailable(self):
+        self.assertTrue(issubclass(cr.Refused, cr.Unavailable))
+        self.assertIn("ADVERSARY_REFUSED", cr.__doc__)
+
+
 class CanaryAnswerTests(unittest.TestCase):
     def test_a_canary_with_no_answer_is_not_stamped(self):
         h = Harness(self, stamp=False, canary_answer="none")

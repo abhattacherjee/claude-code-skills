@@ -32,6 +32,9 @@ Exit codes:
      or a leaked isolation canary). A codex exec whose stderr has an
      "ERROR: ... is not supported when using Codex with a ChatGPT account"
      line gets a stale-CLI message: check ensure-codex.sh --check's CODEX_STALE.
+     A content refusal (an "ERROR: ... flagged for possible cybersecurity risk"
+     line from a codex exec that exited non-zero) is also exit 3, but its stderr
+     line starts with ADVERSARY_REFUSED: instead of ADVERSARY_UNAVAILABLE:.
   4  secret suspected: secret_scan.py found a secret format or a secret-looking
      file name in --diff, --findings or --prior, so nothing was sent. The hits
      go to stderr as <path>:<line> <pattern-name>, never the value.
@@ -87,6 +90,12 @@ class BadOutput(ValueError):
 
 class Unavailable(RuntimeError):
     """Codex cannot be used for this run."""
+
+
+class Refused(Unavailable):
+    """Codex refused the content (its own "flagged for possible cybersecurity
+    risk" error). Still exit 3, printed as ADVERSARY_REFUSED: so a caller can
+    tell it from a login, network or timeout failure."""
 
 
 class InputError(RuntimeError):
@@ -611,6 +620,7 @@ def _tail(text, n=400):
 # echoed to stderr, but a diff line starts with " ", "+", "-", "@" or a header,
 # never "ERROR:".
 STALE_CLI_RE = re.compile(r"(?m)^ERROR: [^\n]*is not supported when using Codex with a ChatGPT account")
+REFUSED_RE = re.compile(r"(?m)^ERROR: [^\n]*flagged for possible cybersecurity risk")
 
 
 def exec_failure(rc, err, version=None, generic="codex exec exited %d"):
@@ -618,6 +628,8 @@ def exec_failure(rc, err, version=None, generic="codex exec exited %d"):
     A known cause gets its own message; anything else gets `generic % rc` and the
     stderr tail."""
     detail = "%s: %s" % (generic % rc, _tail(err))
+    if REFUSED_RE.search(err):
+        return Refused("Codex refused the content as a possible cybersecurity risk (%s)" % detail)
     if STALE_CLI_RE.search(err):
         return Unavailable(
             "codex CLI %slooks stale: the server refused the model for this client. Check for a "
@@ -926,7 +938,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="codex-review.sh",
         description="Run Codex as the adversary in a locked-down codex exec. "
-                    "Exit codes: 0 ok, 1 input error, 2 usage, 3 adversary unavailable, "
+                    "Exit codes: 0 ok, 1 input error, 2 usage, 3 adversary unavailable "
+                    "(ADVERSARY_UNAVAILABLE:) or refused the content (ADVERSARY_REFUSED:), "
                     "4 secret suspected (nothing sent).")
     p.add_argument("--diff", help="the shared diff file (required unless --self-test)")
     p.add_argument("--mode", choices=("find", "judge", "counter"),
@@ -1090,6 +1103,9 @@ def main(argv=None):
             print("codex-review: isolation self-test passed on Codex %s" % self_test(args))
             return EXIT_OK
         result = review(args)
+    except Refused as exc:
+        print("ADVERSARY_REFUSED: %s" % exc, file=sys.stderr)
+        return EXIT_UNAVAILABLE
     except Unavailable as exc:
         print("ADVERSARY_UNAVAILABLE: %s" % exc, file=sys.stderr)
         return EXIT_UNAVAILABLE

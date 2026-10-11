@@ -2,7 +2,8 @@
 # gemini-review.sh — Gemini adversarial review (find mode or judge mode)
 # Usage: gemini-review.sh --diff <file> [--findings <r1.json>] [--mode find|judge]
 #                         [--model <m>] [--out <file>] [--strict]
-#                         [--timeout <secs>] [--allow-secret-match] [--help]
+#                         [--timeout <secs>] [--id-start <n>] [--allow-secret-match]
+#                         [--help]
 # Exit codes: 0=ok, 1=error, 2=usage, 3=adversary-unavailable, 4=secret-suspected
 #
 # Each gemini call runs through run_bounded.py in its own process group, with a
@@ -32,6 +33,7 @@ ALLOW_SECRET_MATCH=false
 # default codex-review.sh uses.
 DEFAULT_TIMEOUT=540
 TIMEOUT=""
+ID_START=""
 
 # A whole number of 1 or more, leading zeros dropped; prints nothing otherwise.
 positive_int() {
@@ -46,14 +48,16 @@ usage() {
   cat <<EOF
 Usage: $SCRIPT_NAME --diff <file> [--findings <r1.json>] [--mode find|judge]
                     [--model <m>] [--out <file>] [--strict]
-                    [--timeout <secs>] [--allow-secret-match] [--help]
+                    [--timeout <secs>] [--id-start <n>] [--allow-secret-match]
+                    [--help]
 
 Run Gemini in one of two modes:
 
   find (independent review):
     Gemini independently reviews the diff and reports its own findings.
     Requires --diff only; --findings is ignored if provided.
-    Output: {"findings":[...]}
+    Output: {"findings":[...]}. The script numbers the findings itself,
+    G-001, G-002, ... (from --id-start); the model's own ids are dropped.
 
   judge (default — verdict on peer findings):
     Gemini verdicts each provided finding as confirm or refute.
@@ -76,6 +80,9 @@ Options:
                       it is killed with its whole process group and the script
                       exits 3; a timed-out call is not retried. Do not wrap
                       this script in \`timeout\`: macOS has none.
+  --id-start <n>      find mode only: number the findings G-<n>, G-<n+1>, ...
+                      (a whole number, 1 or more; default 1). Use it so new
+                      findings never reuse an id already used in the run.
   --allow-secret-match
                       Send the inputs even when secret_scan.py finds a
                       suspected secret in them (exit 4 otherwise). Pass it
@@ -91,7 +98,7 @@ Output JSON schema:
     {
       "findings": [
         {
-          "id": "<unique-id>",
+          "id": "G-001",
           "path": "<file>",
           "line": <n|null>,
           "severity": "critical|important|minor",
@@ -156,6 +163,11 @@ while [[ $# -gt 0 ]]; do
       TIMEOUT="$(positive_int "$2")"
       [[ -n "$TIMEOUT" ]] || { echo "Error: --timeout must be a whole number of seconds, 1 or more, got: '$2'" >&2; exit 2; }
       shift 2 ;;
+    --id-start)
+      [[ $# -lt 2 ]] && { echo "Error: --id-start requires an argument" >&2; exit 2; }
+      ID_START="$(positive_int "$2")"
+      [[ -n "$ID_START" ]] || { echo "Error: --id-start must be a whole number, 1 or more, got: '$2'" >&2; exit 2; }
+      shift 2 ;;
     --allow-secret-match)
       ALLOW_SECRET_MATCH=true; shift ;;
     --help) usage; exit 0 ;;
@@ -179,6 +191,12 @@ if [[ "$MODE" != "find" && "$MODE" != "judge" ]]; then
   usage >&2
   exit 2
 fi
+
+if [[ -n "$ID_START" && "$MODE" != "find" ]]; then
+  echo "Error: --id-start works only with --mode find" >&2
+  exit 2
+fi
+[[ -n "$ID_START" ]] || ID_START=1
 
 # ---- input validation ----
 if [[ -z "$DIFF_FILE" ]]; then
@@ -654,22 +672,25 @@ with open('$EXTRACTED_JSON_FILE', 'w') as fh:
     exit 3
   fi
 else
-  # find mode
+  # find mode: the ids are ours, G-<ID_START> up, never the model's (#171). A
+  # finding the model gave no id, or a repeated one, is kept and numbered too.
   if ! python3 -c "
 import json, sys
-data = json.load(open('$EXTRACTED_JSON_FILE'))
+path, start = sys.argv[1], int(sys.argv[2])
+data = json.load(open(path))
 assert 'findings' in data, 'missing findings key'
 assert isinstance(data['findings'], list), 'findings must be a list'
-# Drop entries without a string id so downstream never sees id-less entries
-data['findings'] = [f for f in data['findings'] if isinstance(f.get('id'), str) and f['id']]
-for f in data['findings']:
+data['findings'] = [f for f in data['findings'] if isinstance(f, dict)]
+for n, f in enumerate(data['findings']):
+    f['id'] = 'G-%03d' % (start + n)
+    f['origin'] = 'gemini'
     if 'gemini_verdict' in f:
         old = f.pop('gemini_verdict')
         if f.get('adversary_verdict') is None:
             f['adversary_verdict'] = old
-with open('$EXTRACTED_JSON_FILE', 'w') as fh:
+with open(path, 'w') as fh:
     json.dump(data, fh)
-" 2>"$VALIDATE_ERR_FILE"; then
+" "$EXTRACTED_JSON_FILE" "$ID_START" 2>"$VALIDATE_ERR_FILE"; then
     err="$(cat "$VALIDATE_ERR_FILE" 2>/dev/null || echo 'unknown')"
     echo "ADVERSARY_UNAVAILABLE: Gemini output missing required fields: $err" >&2
     exit 3

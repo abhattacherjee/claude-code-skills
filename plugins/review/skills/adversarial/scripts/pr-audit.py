@@ -8,7 +8,7 @@ Usage:
                      --round K --adversary ADV --head-sha SHA [--prev-head-sha SHA]
                      --out ROUND.json
   pr-audit.py recheck --prior ROUND.json --rechecks CODEX_OUT.json --round K
-                      --head-sha SHA [--phase PHASE] --out ROUND.json
+                      --head-sha SHA [--phase PHASE] [--gemini-sweep] --out ROUND.json
 
 Each finding with a path gets one thread. It is inline when GitHub accepts the
 line, file-level when GitHub rejects the line (HTTP 422) or there is no line,
@@ -27,7 +27,10 @@ record is valid, so the caller must read that count. A "resolved" re-check by th
 closes the thread when the record is posted. `recheck` is Codex-only: only
 `codex-review.sh --mode find --prior` re-checks earlier findings against
 current source, so a prior round whose adversary is not `codex` (Gemini or
-Claude-only) is refused (exit 2).
+Claude-only) is refused (exit 2). With --gemini-sweep, Codex refused the
+re-check (ADVERSARY_REFUSED) and --rechecks is `gemini-review.sh --mode find`
+output for the fix range: every earlier finding is carried over with no events,
+so no Codex thread closes, and Gemini's findings are added with origin gemini.
 
 When gh is missing, not logged in, or cannot read the PR, `post` says why,
 writes the same content to the local markdown file instead, and exits 1. A gh
@@ -570,6 +573,21 @@ def cmd_recheck(args):
     except (OSError, json.JSONDecodeError) as exc:
         print(f"pr-audit: cannot read {args.rechecks}: {exc}", file=sys.stderr)
         return 2
+    if args.gemini_sweep:
+        # Codex refused the re-check (ADVERSARY_REFUSED), so --rechecks is the
+        # output of gemini-review.sh --mode find on the fix range (#171). It holds
+        # new findings only: nothing in it can close a Codex thread.
+        if not isinstance(out, dict) or not isinstance(out.get("findings"), list) \
+                or "rechecks" in out or "adversary" in out:
+            print(f"pr-audit: --gemini-sweep needs {args.rechecks} to be gemini-review.sh --mode find "
+                  "output: a findings list, no rechecks and no adversary key", file=sys.stderr)
+            return 2
+        for nf in out["findings"]:
+            if not isinstance(nf, dict) or nf.get("origin") != "gemini":
+                print(f"pr-audit: --gemini-sweep: every new finding needs origin 'gemini'; got "
+                      f"{nf.get('origin') if isinstance(nf, dict) else nf!r}", file=sys.stderr)
+                return 2
+        out = dict(out, rechecks=[], adversary=prior["adversary"])
     if not isinstance(out, dict) or not isinstance(out.get("rechecks"), list):
         print(f"pr-audit: {args.rechecks} has no rechecks list; "
               "run codex-review.sh --mode find with --prior", file=sys.stderr)
@@ -602,8 +620,12 @@ def cmd_recheck(args):
         f["events"] = events.get(fid, [])
         if fid not in events:
             unchecked.append(fid)
-            print(f"pr-audit: warning: no re-check for {fid}; carried over with no events, "
-                  "so its thread stays open", file=sys.stderr)
+            if args.gemini_sweep:
+                print(f"pr-audit: warning: Codex refused the re-check; {fid} not closed "
+                      "(carried over with no events, so its thread stays open)", file=sys.stderr)
+            else:
+                print(f"pr-audit: warning: no re-check for {fid}; carried over with no events, "
+                      "so its thread stays open", file=sys.stderr)
         findings.append(f)
     print(f"pr-audit: unchecked={len(unchecked)}" + (f" ({', '.join(unchecked)})" if unchecked else ""),
           file=sys.stderr)
@@ -612,7 +634,8 @@ def cmd_recheck(args):
             continue
         if isinstance(nf.get("id"), str) and nf["id"] in earlier:
             print(f"pr-audit: new finding id {nf.get('id')} is already used in {args.prior}; "
-                  "rerun codex-review.sh with a higher --id-start", file=sys.stderr)
+                  f"rerun {'gemini' if args.gemini_sweep else 'codex'}-review.sh with a higher --id-start",
+                  file=sys.stderr)
             return 2
         findings.append({
             "id": nf.get("id"), "origin": nf.get("origin") or by, "path": nf.get("path") or None,
@@ -662,6 +685,10 @@ def build_parser():
     rc.add_argument("--round", type=int, required=True)
     rc.add_argument("--head-sha", required=True)
     rc.add_argument("--phase", default="phase2-recheck")
+    rc.add_argument("--gemini-sweep", action="store_true",
+                    help="Codex refused the re-check: --rechecks is gemini-review.sh --mode find "
+                         "output; every earlier finding is carried over open, and its findings "
+                         "are added with origin gemini")
     rc.add_argument("--out", required=True)
     return p
 
