@@ -563,6 +563,24 @@ class RunBoundedMarkerTests(unittest.TestCase):
         self.assertEqual(self.run_sleep(marker).returncode, 124)
         self.assertEqual(target.read_text(), "keep\n")
 
+    def run_cmd(self, secs, *cmd):
+        marker = self.dir / "m"
+        marker.write_text("")
+        res = subprocess.run([sys.executable, str(RUN_BOUNDED), secs, str(self.inp), str(self.dir / "out"),
+                              str(self.dir / "err"), str(marker)] + list(cmd),
+                             capture_output=True, text=True, timeout=30)
+        return res.returncode, marker.read_text()
+
+    def test_exit_codes(self):
+        # The command's own code passes through (124 included, with no marker),
+        # a signal death is 128+N, a missing command 127, a bad limit 125.
+        self.assertEqual(self.run_cmd("10", "sh", "-c", "exit 7"), (7, ""))
+        self.assertEqual(self.run_cmd("10", "sh", "-c", "exit 124"), (124, ""))
+        self.assertEqual(self.run_cmd("10", "sh", "-c", "kill -TERM $$"), (128 + signal.SIGTERM, ""))
+        self.assertEqual(self.run_cmd("10", str(self.dir / "no-such-cmd")), (127, ""))
+        for secs in ("0", "-1", "x"):
+            self.assertEqual(self.run_cmd(secs, "true")[0], 125)
+
     def test_a_missing_marker_is_not_created(self):
         marker = self.dir / "marker"
         self.assertEqual(self.run_sleep(marker).returncode, 124)
