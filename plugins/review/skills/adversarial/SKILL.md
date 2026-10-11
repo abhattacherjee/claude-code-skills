@@ -400,7 +400,7 @@ If the adversary's script (`codex-review.sh` or `gemini-review.sh`) exits 3 (not
 - **Auto mode, at R1** (after the one Codex-to-Gemini switch allowed in Step 2): degrade to Claude-only, below.
 - **Auto mode, at R2**: degrade, but keep what R1 and Claude's R2 already produced, below.
 - **`ADVERSARY_REFUSED:`** is a kind of exit 3: Codex refused the diff as a possible cybersecurity risk (its own `ERROR:` line, never text inside the diff). It is handled like any other exit 3 here; at R1 the auto switch to Gemini in Step 2(b) already covers it. `review:deep` uses the prefix to fall back to a Gemini sweep at a re-check.
-- **Codex says a model "is not supported when using Codex with a ChatGPT account"** (the `ADVERSARY_UNAVAILABLE` line then says the CLI `looks stale`): run `"${CLAUDE_SKILL_DIR}/scripts/ensure-codex.sh" --check` and read `CODEX_STALE` and `CODEX_STALE_HINT` before changing the model or logging in again. An old Codex CLI gets this error for new models; `CODEX_STALE_HINT` gives the `ln -sfn` command or the version to update to.
+- **Codex says a model "is not supported when using Codex with a ChatGPT account"** (the `ADVERSARY_UNAVAILABLE` line then says the CLI `looks stale`): run `"${CLAUDE_SKILL_DIR}/scripts/ensure-codex.sh" --check` and read `CODEX_STALE` and `CODEX_STALE_HINT` before changing the model or logging in again. An old Codex CLI gets this error for new models; `CODEX_STALE_HINT` gives the fix: an `ln -sfn` command when `codex` is a symlink, else what to update.
 
 In auto mode, print this banner:
 
