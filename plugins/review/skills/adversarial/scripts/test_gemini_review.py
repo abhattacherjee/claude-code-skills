@@ -587,5 +587,59 @@ class RunBoundedMarkerTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
 
+class RunBoundedPendingSignalTests(unittest.TestCase):
+    """A stop signal that lands while Popen is still running kills the new group."""
+
+    def test_a_signal_during_popen_kills_the_child_group(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("run_bounded_under_test", str(RUN_BOUNDED))
+        rb = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rb)
+        tmp = Path(tempfile.mkdtemp(prefix="run-bounded-pending-"))
+        self.addCleanup(shutil.rmtree, str(tmp), True)
+        (tmp / "in").write_text("")
+        marker = tmp / "marker"
+        marker.write_text("")
+        saved = {sig: signal.getsignal(sig) for sig in rb.STOP_SIGNALS}
+
+        def restore():
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
+        self.addCleanup(restore)
+
+        class FakeProc(object):
+            pid = 424242
+
+            def wait(self, timeout=None):
+                return 0
+
+            def poll(self):
+                return None
+
+        def fake_popen(*args, **kwargs):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            return FakeProc()
+
+        killed = []
+        reaped = []
+
+        def fake_exit(code):
+            raise SystemExit(code)
+
+        orig = (rb.subprocess.Popen, rb.kill_group, rb.reap, rb.os._exit)
+        self.addCleanup(lambda: (setattr(rb.subprocess, "Popen", orig[0]), setattr(rb, "kill_group", orig[1]),
+                                 setattr(rb, "reap", orig[2]), setattr(rb.os, "_exit", orig[3])))
+        rb.subprocess.Popen = fake_popen
+        rb.kill_group = lambda pid: killed.append(pid)
+        rb.reap = lambda proc: reaped.append(proc)
+        rb.os._exit = fake_exit
+        with self.assertRaises(SystemExit) as ctx:
+            rb.main(["run_bounded.py", "5", str(tmp / "in"), str(tmp / "out"), str(tmp / "err"),
+                     str(marker), "true"])
+        self.assertEqual(ctx.exception.code, 128 + signal.SIGTERM)
+        self.assertEqual(killed, [FakeProc.pid])
+        self.assertEqual(len(reaped), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

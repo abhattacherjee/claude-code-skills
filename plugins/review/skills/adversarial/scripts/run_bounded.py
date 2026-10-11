@@ -66,22 +66,38 @@ def main(argv):
     secs = int(argv[1])
     in_path, out_path, err_path, marker = argv[2:6]
     cmd = argv[6:]
+    started = {}
+    pending = []
+
+    def stop(signum, _frame):
+        proc = started.get("proc")
+        if proc is None:
+            # The signal came before Popen returned. Note it; the group is killed
+            # as soon as the pid is known, so the child cannot outlive us.
+            pending.append(signum)
+            return
+        for sig in STOP_SIGNALS:
+            signal.signal(sig, signal.SIG_IGN)
+        kill_group(proc.pid)
+        reap(proc)
+        os._exit(128 + signum)
+
+    # Handlers go in before the child starts, so no signal can land in a window
+    # where the child runs but nothing would kill it.
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, stop)
     with open(in_path, "rb") as fin, open(out_path, "wb") as fout, open(err_path, "wb") as ferr:
         try:
-            proc = subprocess.Popen(cmd, stdin=fin, stdout=fout, stderr=ferr, start_new_session=True)
+            started["proc"] = subprocess.Popen(cmd, stdin=fin, stdout=fout, stderr=ferr,
+                                               start_new_session=True)
         except OSError as exc:
             ferr.write(("run_bounded: cannot run %s: %s\n" % (cmd[0], exc)).encode("utf-8", "replace"))
+            if pending:
+                return 128 + pending[0]
             return EXIT_NOEXEC
-
-        def stop(signum, _frame):
-            for sig in STOP_SIGNALS:
-                signal.signal(sig, signal.SIG_IGN)
-            kill_group(proc.pid)
-            reap(proc)
-            os._exit(128 + signum)
-
-        for sig in STOP_SIGNALS:
-            signal.signal(sig, stop)
+        proc = started["proc"]
+        if pending:
+            stop(pending[0], None)
         try:
             rc = proc.wait(timeout=secs)
         except subprocess.TimeoutExpired:

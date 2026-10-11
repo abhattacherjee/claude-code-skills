@@ -152,7 +152,14 @@ print(v if isinstance(v, str) else "")' "$cache_file" 2>/dev/null </dev/null || 
   if [ -n "$newest" ]; then
     CODEX_STALE="yes"
     if [ "$CODEX_NEWER_BIN" != "-" ]; then
-      CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than the ChatGPT app's $app_ver. Point codex at it: ln -sfn '$CODEX_NEWER_BIN' '$(command -v codex)'"
+      codex_path="$(command -v codex)"
+      # Only re-point a symlink. ln -sfn over a real file would replace an install
+      # (npm, Homebrew) that another tool manages.
+      if [ -L "$codex_path" ]; then
+        CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than the ChatGPT app's $app_ver. Point codex at it: ln -sfn '$CODEX_NEWER_BIN' '$codex_path'"
+      else
+        CODEX_STALE_HINT="Codex CLI $CODEX_VERSION ($codex_path) is older than the ChatGPT app's $app_ver at '$CODEX_NEWER_BIN'. Update that install, or put '$(dirname "$CODEX_NEWER_BIN")' before '$(dirname "$codex_path")' in PATH"
+      fi
     else
       CODEX_STALE_HINT="Codex CLI $CODEX_VERSION is older than $newest (client_version in $cache_file); update the Codex CLI to $newest or later"
     fi

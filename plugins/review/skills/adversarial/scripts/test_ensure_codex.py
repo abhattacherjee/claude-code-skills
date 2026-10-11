@@ -164,9 +164,19 @@ class StaleCliTests(unittest.TestCase):
         self.assertEqual(out["CODEX_STALE"], "yes")
         self.assertEqual(out["CODEX_NEWER_BIN"], str(app))
         hint = out["CODEX_STALE_HINT"]
-        self.assertIn("ln -sfn", hint)
+        # The stub codex is a real file, so the hint must not ln -sfn over it.
+        self.assertNotIn("ln -sfn", hint)
         self.assertIn(str(app), hint)
-        self.assertIn(str(env.bin / "codex"), hint)
+        self.assertIn("in PATH", hint)
+
+    def test_a_symlinked_codex_gets_the_ln_hint(self):
+        env = StubEnv(self)
+        app = env.app('echo "codex-cli 0.159.0-alpha.12.1"')
+        real = env.bin / "codex-real"
+        (env.bin / "codex").rename(real)
+        (env.bin / "codex").symlink_to(real)
+        hint = self.check(env)["CODEX_STALE_HINT"]
+        self.assertIn("ln -sfn '%s' '%s'" % (app, env.bin / "codex"), hint)
 
     def test_current(self):
         env = StubEnv(self)
