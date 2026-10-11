@@ -195,12 +195,16 @@ Never call `codex` directly. `codex-review.sh` is what keeps your config, hooks 
 connectors out of the run (the `adversarial` skill's SKILL.md, "Codex sandbox", says what it does and
 does not stop).
 
+Every `codex-review.sh` and `gemini-review.sh` command below passes `--timeout 540`. Do not wrap
+either script in `timeout`: macOS has none, so the wrapper fails with exit 127 before the review
+starts. The scripts bound themselves and kill the model's whole process group at the limit.
+
 ### Step 2.1 — R1: blind parallel discovery
 
 In one message, launch (none seeing the others):
 - `review:bug-hunter` agent (opus) — bugs/security/perf/correctness, grounded in source.
 - `review:convention-reviewer` agent (sonnet) — convention/maintainability/doc-drift.
-- Adversary finder — `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --mode find --out "<RUN_DIR>/r1-<ADVERSARY>.json"` (`gemini-review.sh` with Gemini).
+- Adversary finder — `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --mode find --timeout 540 --out "<RUN_DIR>/r1-<ADVERSARY>.json"` (`gemini-review.sh` with Gemini).
   It emits `{"findings":[...]}` with `origin` set to the adversary. **If exit code is 3**
   (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user forced this adversary): show
   the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3, the same as exit code 3 in Step
@@ -236,7 +240,7 @@ In one message:
   Start the dispatch with the contract block (`./references/dispatch-contract.md`), this file as
   its results file. Silent past the chase cap: follow the R2 line there.
 - The adversary judges every Claude finding:
-  `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --findings <claude-r1.json> --mode judge --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"` (`gemini-review.sh` with Gemini).
+  `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --findings <claude-r1.json> --mode judge --timeout 540 --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"` (`gemini-review.sh` with Gemini).
   Both scripts write the verdict under the key `adversary_verdict`, whichever model gave it.
   - **If exit code is 3** (`ADVERSARY_UNAVAILABLE`) **and `ADVERSARY_FLAG` is set** (the user
     forced this adversary): show the `ADVERSARY_UNAVAILABLE` line and stop the run with exit 3.
@@ -278,7 +282,7 @@ This is what makes it >=3 rounds and forces genuine convergence rather than a st
 - For each finding the opponent **refuted**, send it back to the originator to **concede or
   defend**, grounded in source. Feed the refuter's reason and the relevant current file facts.
   - With Codex as the originator, use the script:
-    `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --mode counter --findings <refuted-X.json> --out "<RUN_DIR>/r3-codex-counters.json"`.
+    `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --mode counter --findings <refuted-X.json> --timeout 540 --out "<RUN_DIR>/r3-codex-counters.json"`.
     Each finding in `<refuted-X.json>` carries Claude's refutation in `kill_reason`. It returns
     `{"counters":[{"id","position":"concede|defend","reason"}]}`.
   - For Claude findings that Codex refuted, write Claude's defence into each finding's `rationale`
@@ -373,7 +377,7 @@ after writing the `phase2-fix` record, note four values and write them into the 
    — only the changes made since the reviewed head. The flags keep the user's git config (color,
    prefixes, an external diff tool, a textconv filter) out of what is scanned and sent.
 2. Add 1 to `K`, then
-   `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff "<RUN_DIR>/fix-range-<FIX_K>.diff" --mode find --prior "<RUN_DIR>/round-<FIX_K>.json" --id-start <highest X number so far + 1> --out "<RUN_DIR>/recheck-<K>.json"`.
+   `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff "<RUN_DIR>/fix-range-<FIX_K>.diff" --mode find --prior "<RUN_DIR>/round-<FIX_K>.json" --id-start <highest X number so far + 1> --timeout 540 --out "<RUN_DIR>/recheck-<K>.json"`.
    The prior record holds each fixed finding and the author's reply, so Codex sees both. `--id-start`
    must be above every finding id used anywhere in this run so far — Codex's and Claude's alike —
    so a new finding never reuses a dropped finding's id. Never reuse a `--round` value, here or

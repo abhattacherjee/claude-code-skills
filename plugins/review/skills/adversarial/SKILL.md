@@ -24,7 +24,7 @@ Step 0 picks the adversary: **Codex** when the Codex CLI is installed and logged
 - `-c project_doc_max_bytes=0` and `-c project_doc_fallback_filenames=[]`, so the reviewed repo's `AGENTS.md` cannot instruct Codex; `-c skills.include_instructions=false`, so its `.agents/skills` cannot either — that setting defaults to true, so a repo's own skill instructions would otherwise land in the prompt. A repo's `.codex/config.toml` applies only to trusted repos, and trust lives in the `config.toml` that is ignored;
 - `-s read-only`, the diff and findings on a stdin pipe that is closed after writing, and a timeout per Codex call (default 540 s, `CODEX_REVIEW_TIMEOUT`) that kills Codex's whole process group. A SIGTERM or SIGINT sent to `codex-review.sh` kills that group too, removes its temp dirs, and exits 128+N.
 
-One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. That can pass the Bash tool's 600 s cap, so run the adversary script (`codex-review.sh` or `gemini-review.sh`) with the Bash tool's `run_in_background`. When you do, do not go idle waiting on it: check its output or process within about 10 minutes (`ps -axo pid,etime,command | grep codex` or `grep gemini`, or the run directory's output file), and ping or re-check it if it looks stuck. Never tell the user you're "waiting on" the adversary script without having looked at it. Unlike a reviewer that goes quiet on its own background job, your background Bash call here does notify you when it finishes — but a turn that ends without acting on that notification, or without checking in the meantime, leaves the same gap, so still check within about 10 minutes.
+One `codex-review.sh` call can run Codex up to three times: the canary on a new Codex version, the review, and one retry after an answer that fails the output schema. Each Codex call is bounded by `--timeout` (540 s in every command below); `gemini-review.sh` takes the same flag (`GEMINI_REVIEW_TIMEOUT`) and kills Gemini's process group the same way. Do not wrap either script in `timeout`: macOS has none, so the wrapper fails with exit 127 before the review starts. The scripts bound themselves. A whole script run (up to three Codex runs, or two Gemini calls) can still pass the Bash tool's 600 s cap, so run the adversary script (`codex-review.sh` or `gemini-review.sh`) with the Bash tool's `run_in_background`. When you do, do not go idle waiting on it: check its output or process within about 10 minutes (`ps -axo pid,etime,command | grep codex` or `grep gemini`, or the run directory's output file), and ping or re-check it if it looks stuck. Never tell the user you're "waiting on" the adversary script without having looked at it. Unlike a reviewer that goes quiet on its own background job, your background Bash call here does notify you when it finishes — but a turn that ends without acting on that notification, or without checking in the meantime, leaves the same gap, so still check within about 10 minutes.
 
 Two checks enforce this, and both stop the run with exit 3. Every argv is checked for all of the flags above just before Codex starts. And the first review on each Codex version runs an isolation canary: a throwaway repo whose `AGENTS.md`, `.codex/config.toml`, `.agents/skills` and `.mcp.json` each carry a canary instruction or marker. If any of the four reaches Codex, the review does not run. `"${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" --self-test` reruns the canary on demand.
 
@@ -181,6 +181,7 @@ Read both files from disk. Merge both arrays. Renumber with unified prefix: `C-0
 "${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" \
   --diff "<DIFF_FILE>" \
   --mode find \
+  --timeout 540 \
   --out "<RUN_DIR>/r1-<ADVERSARY>.json"
 ```
 
@@ -268,6 +269,7 @@ Write its verdicts to `<RUN_DIR>/r2-claude-verdicts.json` in exactly this shape,
   --diff "<DIFF_FILE>" \
   --findings "<RUN_DIR>/r1-claude.json" \
   --mode judge \
+  --timeout 540 \
   --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"
 ```
 
@@ -310,7 +312,7 @@ The `LOW SIGNAL` banner line is printed only when `synthesize.py` reports `low_s
 
 **Low-signal escalation:** A `low_signal=true` direction means the judge confirmed (or refuted) nearly everything it judged over a meaningful sample, producing little discriminating signal. Before trusting the Survivors list, re-run that direction's judge with maximum skepticism and re-synthesize:
 
-- The adversary rubber-stamping Claude's findings: `"${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" --diff "<DIFF_FILE>" --findings "<RUN_DIR>/r1-claude.json" --mode judge --strict --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"` (`gemini-review.sh` with Gemini; `--strict`, judge mode only, adds the hardened judge prompt: confirm only when the finding's defect is visible in the diff or source, quoting the offending line verbatim in the reason; otherwise refute)
+- The adversary rubber-stamping Claude's findings: `"${CLAUDE_SKILL_DIR}/scripts/codex-review.sh" --diff "<DIFF_FILE>" --findings "<RUN_DIR>/r1-claude.json" --mode judge --strict --timeout 540 --out "<RUN_DIR>/r2-<ADVERSARY>-verdicts.json"` (`gemini-review.sh` with Gemini; `--strict`, judge mode only, adds the hardened judge prompt: confirm only when the finding's defect is visible in the diff or source, quoting the offending line verbatim in the reason; otherwise refute)
 - Claude rubber-stamping the adversary's findings: first move `<RUN_DIR>/r2-claude-verdicts.json` to `<RUN_DIR>/r2-claude-verdicts.prev.json`, so the old file cannot pass for the new delivery. Then re-spawn the `review:cross-examiner` agent, under the delivery contract, with an explicit instruction for a maximum-skepticism re-judge — refute unless the evidence is unambiguous and cite the proving line
 
 Re-run `synthesize.py` after the escalation pass and relay the updated digest. The `low_signal` flag is informational only — it does not change survivor classification; surviving findings are still those confirmed by the opposing model (see Survivor Rule).

@@ -490,6 +490,57 @@ class DeepReviewDocTests(unittest.TestCase):
 
 # A direct gemini command, with or without the perl alarm prefix that bounds it (#53).
 PERL_ALARM = "perl -e 'alarm 540; exec @ARGV' "
+REVIEW_SCRIPT_CALL = re.compile(r'"\$\{CLAUDE_(?:SKILL_DIR|PLUGIN_ROOT)\}[^"]*/(?:codex|gemini)-review\.sh"')
+
+
+def review_commands(text):
+    """Every codex-review.sh / gemini-review.sh command the text tells the reader to
+    run: from the quoted script path to the end of its code span or shell line, with
+    backslash continuations joined."""
+    joined = text.replace("\\\n", " ")
+    cmds = []
+    for m in REVIEW_SCRIPT_CALL.finditer(joined):
+        rest = joined[m.start():]
+        cmds.append(re.split(r"[`\n]", rest, 1)[0])
+    return cmds
+
+
+class TimeoutFlagDocTests(unittest.TestCase):
+    """#207: every review command in both skills passes --timeout, because callers
+    reach for `timeout`, which macOS does not have (exit 127 before the review)."""
+
+    DOCS = (("adversarial", SKILL, 3), ("deep", DEEP / "SKILL.md", 4))
+
+    def test_every_review_command_passes_timeout(self):
+        for name, path, at_least in self.DOCS:
+            cmds = review_commands(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertGreaterEqual(len(cmds), at_least, cmds)
+            for cmd in cmds:
+                if "--self-test" in cmd:
+                    continue
+                with self.subTest(doc=name, cmd=cmd[:120]):
+                    self.assertRegex(cmd, r"--timeout 540\b")
+
+    def test_the_extractor_sees_fenced_and_inline_commands(self):
+        text = ('x `"${CLAUDE_PLUGIN_ROOT}/s/codex-review.sh" --mode find --timeout 540` y\n'
+                '```bash\n"${CLAUDE_SKILL_DIR}/scripts/gemini-review.sh" \\\n  --mode judge \\\n'
+                '  --out f\n```\n')
+        cmds = review_commands(text)
+        self.assertEqual(len(cmds), 2, cmds)
+        self.assertIn("--timeout 540", cmds[0])
+        self.assertIn("--out f", cmds[1])
+        self.assertNotIn("--timeout", cmds[1])
+
+    def test_both_skills_say_not_to_wrap_the_scripts_in_timeout(self):
+        for name, path, _ in self.DOCS:
+            text = norm(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertIn("Do not wrap", text)
+                self.assertRegex(text, r"Do not wrap[^.]*in `timeout`[^.]*macOS has none")
+                self.assertIn("127", text)
+
+
 GEMINI_COMMAND = re.compile(r"`((?:%s)?gemini [^`]*)`|^\s*((?:%s)?gemini .*)$"
                             % (re.escape(PERL_ALARM), re.escape(PERL_ALARM)), re.M)
 
