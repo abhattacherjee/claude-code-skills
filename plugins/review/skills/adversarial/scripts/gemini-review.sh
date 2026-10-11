@@ -9,6 +9,8 @@
 # Each gemini call runs through run_bounded.py in its own process group, with a
 # time limit: --timeout, else GEMINI_REVIEW_TIMEOUT, else 540 s. A call that runs
 # past it is killed with its whole group, and the script exits 3 without a retry.
+# SIGTERM, SIGINT or SIGHUP to this script stops the runner, which kills gemini's
+# group, and exits 128+N.
 #
 # The diff and findings are untrusted. They reach Gemini only on stdin, inside
 # blocks whose tag names carry a per-call nonce, and every @ in them is written
@@ -125,7 +127,8 @@ Output JSON schema:
 Exit codes:
   0  Success
   1  Error (file not found, --findings not strict JSON, an input over the
-     Gemini CLI's 8 MiB stdin cap, etc.). The findings are
+     Gemini CLI's 8 MiB stdin cap, run_bounded.py missing or unable to run
+     the call, etc.). The findings are
      parsed strictly (no duplicate keys, NaN or Infinity) and Gemini gets the
      re-serialized copy, the same text the secret scan checked.
   2  Usage error
@@ -178,6 +181,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# ---- the time-limit runner must be here before anything runs ----
+# Without it every call would fail and read as "Gemini is down" (exit 3); this
+# is an install problem, so it is exit 1.
+if [[ ! -f "$SCRIPT_DIR/run_bounded.py" ]]; then
+  echo "gemini-review: internal error: $SCRIPT_DIR/run_bounded.py is missing; reinstall the review plugin. Nothing was sent." >&2
+  exit 1
+fi
 
 # ---- time limit: --timeout, else GEMINI_REVIEW_TIMEOUT, else the default ----
 if [[ -z "$TIMEOUT" ]]; then
@@ -561,6 +572,30 @@ TIMEOUT_MARKER_FILE="$(mktemp /tmp/adversarial-gemini-timeout.XXXXXX)"
 
 trap 'rm -f "$SENT_FINDINGS_FILE" "$BRIEF_FILE" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE" "$GEMINI_STDERR_FILE" "$VALIDATE_ERR_FILE" "$TIMEOUT_MARKER_FILE"' EXIT
 
+# A signal to this script alone (a harness kill sends SIGTERM to one pid) must
+# not leave the runner and gemini running until the time limit. The runner runs
+# in the background so `wait` returns at once on a trapped signal; the trap
+# sends it SIGTERM, which kills gemini's whole group, and waits for it.
+RUNNER_PID=""
+RUNNER_STARTING=0
+PREV_RUNNER_PID=""
+on_signal() {
+  local code="$1" pid="$RUNNER_PID"
+  trap '' TERM INT HUP
+  # A signal between the fork and RUNNER_PID=$! still finds the new runner in $!.
+  if [[ -z "$pid" && "$RUNNER_STARTING" == 1 && "${!:-}" != "$PREV_RUNNER_PID" ]]; then
+    pid="${!:-}"
+  fi
+  if [[ -n "$pid" ]]; then
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+  exit "$code"
+}
+trap 'on_signal 143' TERM
+trap 'on_signal 130' INT
+trap 'on_signal 129' HUP
+
 # build_stdin sends the re-serialized copy that was scanned, never the raw file.
 if [[ "$MODE" == "judge" ]]; then FINDINGS_FILE="$SENT_FINDINGS_FILE"; else FINDINGS_FILE=""; fi
 
@@ -609,10 +644,25 @@ call_gemini() {
   # -o json for output format, -m for model. run_bounded.py runs gemini in its own
   # process group and kills the group after TIMEOUT seconds.
   local gemini_rc=0
+  # Empty the marker, stderr and output files, so a retry never reports what the
+  # first call left in them.
   : > "$TIMEOUT_MARKER_FILE"
+  : > "$GEMINI_STDERR_FILE"
+  : > "$RAW_OUTPUT_FILE"
+  RUNNER_STARTING=1
   python3 "$SCRIPT_DIR/run_bounded.py" "$TIMEOUT" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" \
     "$GEMINI_STDERR_FILE" "$TIMEOUT_MARKER_FILE" \
-    gemini -p "$GEMINI_P_CONSTANT" -o json -m "$MODEL" || gemini_rc=$?
+    gemini -p "$GEMINI_P_CONSTANT" -o json -m "$MODEL" &
+  RUNNER_PID=$!
+  wait "$RUNNER_PID" || gemini_rc=$?
+  PREV_RUNNER_PID="$RUNNER_PID"
+  RUNNER_PID=""
+  RUNNER_STARTING=0
+  # 125 is the runner's own usage error: an install bug, not Gemini being down.
+  if [[ "$gemini_rc" -eq 125 ]]; then
+    echo "gemini-review: internal error: run_bounded.py could not run the call (exit 125); nothing was reviewed" >&2
+    exit 1
+  fi
   # A timeout is exit 124 AND a marker the runner wrote. Either alone is not:
   # gemini can exit 124 itself.
   if [[ "$gemini_rc" -eq 124 && -s "$TIMEOUT_MARKER_FILE" ]]; then
@@ -650,7 +700,8 @@ if ! call_gemini "$FORCE_STRICT"; then
   fi
 fi
 
-# Validate the extracted JSON and drop any id-less entries
+# Validate the extracted JSON. Judge mode drops verdicts with no id; find mode
+# numbers every finding.
 if [[ "$MODE" == "judge" ]]; then
   if ! python3 -c "
 import json, sys

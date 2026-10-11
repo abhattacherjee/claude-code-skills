@@ -29,12 +29,15 @@ Exit codes:
   2  usage error
   3  adversary unavailable (codex missing or logged out, a non-zero exit,
      a timeout, no valid output after one retry, a missing isolation flag,
-     or a leaked isolation canary). A codex exec whose stderr has an
-     "ERROR: ... is not supported when using Codex with a ChatGPT account"
-     line gets a stale-CLI message: check ensure-codex.sh --check's CODEX_STALE.
+     or a leaked isolation canary). A codex exec that exited non-zero and
+     whose stderr has an "ERROR: ... is not supported when using Codex with a
+     ChatGPT account" line gets a stale-CLI message: check ensure-codex.sh
+     --check's CODEX_STALE.
      A content refusal (an "ERROR: ... flagged for possible cybersecurity risk"
-     line from a codex exec that exited non-zero) is also exit 3, but its stderr
-     line starts with ADVERSARY_REFUSED: instead of ADVERSARY_UNAVAILABLE:.
+     line from a codex exec that exited non-zero) is also exit 3, but its last
+     stderr line starts with ADVERSARY_REFUSED: instead of ADVERSARY_UNAVAILABLE:.
+     Other lines (a --allow-secret-match notice, a retry warning) can come
+     before it, so look for a line that starts with the prefix.
   4  secret suspected: secret_scan.py found a secret format or a secret-looking
      file name in --diff, --findings or --prior, so nothing was sent. The hits
      go to stderr as <path>:<line> <pattern-name>, never the value.
@@ -616,9 +619,12 @@ def _tail(text, n=400):
 
 
 # Matched only on stderr of a codex exec that exited non-zero, and only on a line
-# that starts with Codex's own "ERROR:". The diff goes in on stdin and may be
-# echoed to stderr, but a diff line starts with " ", "+", "-", "@" or a header,
-# never "ERROR:".
+# that starts with "ERROR:". stdin is the diff and JSON findings, and may be
+# echoed to stderr: a diff line starts with " ", "+", "-", "@" or a header, never
+# "ERROR:", and JSON escapes newlines inside strings. codex exec also streams the
+# model's messages and the output of commands it runs to stderr, so a line from
+# there can match too; the worst case is a refusal or stale message where a
+# generic exit 3 was due, and neither closes a thread.
 STALE_CLI_RE = re.compile(r"(?m)^ERROR: [^\n]*is not supported when using Codex with a ChatGPT account")
 REFUSED_RE = re.compile(r"(?m)^ERROR: [^\n]*flagged for possible cybersecurity risk")
 

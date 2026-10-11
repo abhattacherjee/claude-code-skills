@@ -16,8 +16,10 @@ started is left running. SIGINT, SIGTERM or SIGHUP kills
 the group and exits 128+N. A child that calls setsid() leaves the group and
 escapes every kill.
 
-Exit codes: the command's own code; 124 on a timeout (marker written); 125 on a
-usage error; 127 when the command cannot start; 128+N when stopped by signal N.
+Exit codes: the command's own code; 124 on a timeout (the marker is written when
+it exists as a regular file); 125 on a usage error; 127 when the command cannot
+start; 128+N when stopped by signal N; 1 (a traceback) when the stdin, stdout or
+stderr file cannot be opened.
 """
 import os
 import signal

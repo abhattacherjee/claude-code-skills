@@ -556,6 +556,32 @@ class RefusalTests(unittest.TestCase):
         res = h.run("--mode", "find")
         self.assertEqual(res.returncode, 0, res.stderr)
 
+    def test_a_refusal_after_a_warning_line_is_refused(self):
+        # tests I1: Codex often prints a warning: line first, as in STALE_STDERR.
+        warn = STALE_STDERR.splitlines()[0]
+        h = Harness(self, exec_actions=[{"exit": 1, "stderr": warn + "\nERROR: " + REFUSAL}])
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertTrue(res.stderr.startswith("ADVERSARY_REFUSED: "), res.stderr)
+
+    def test_a_refusal_at_the_canary_is_refused_and_not_stamped(self):
+        h = Harness(self, stamp=False, canary_exit=1, canary_stderr="ERROR: " + REFUSAL)
+        res = h.run("--mode", "find")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("ADVERSARY_REFUSED: ", res.stderr)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+        self.assertEqual(h.exec_calls(), [])
+        self.assertFalse(h.stamp.exists())
+
+    def test_refusal_wins_over_stale_when_both_lines_appear(self):
+        for stderr in (STALE_STDERR + "\nERROR: " + REFUSAL, "ERROR: " + REFUSAL + "\n" + STALE_STDERR):
+            with self.subTest(refusal_first=stderr.startswith("ERROR: This")):
+                h = Harness(self, exec_actions=[{"exit": 1, "stderr": stderr}])
+                res = h.run("--mode", "find")
+                self.assertEqual(res.returncode, 3, res.stderr)
+                self.assertTrue(res.stderr.startswith("ADVERSARY_REFUSED: "), res.stderr)
+                self.assertNotIn("looks stale", res.stderr)
+
     def test_refused_is_a_kind_of_unavailable(self):
         self.assertTrue(issubclass(cr.Refused, cr.Unavailable))
         self.assertIn("ADVERSARY_REFUSED", cr.__doc__)

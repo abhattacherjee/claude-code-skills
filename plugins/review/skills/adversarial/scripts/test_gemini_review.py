@@ -464,9 +464,62 @@ class TimeoutTests(unittest.TestCase):
         time.sleep(0.3)
         os.killpg(proc.pid, signal.SIGINT)
         proc.communicate(timeout=20)
-        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(proc.returncode, 128 + signal.SIGINT)
         for pid in self.stub_pids(pids):
             self.assertTrue(wait_dead(pid), "pid %d survived Ctrl-C" % pid)
+
+    def test_a_signal_to_the_script_alone_kills_the_runner_and_gemini(self):
+        # errors/code S1: a harness kill reaches only bash's pid. The runner and
+        # gemini must not be left running until the time limit.
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(sig=sig):
+                h, pids = self.hung()
+                proc = subprocess.Popen(["bash", str(SCRIPT), "--diff", str(h.diff), "--mode", "find",
+                                         "--timeout", "60"], env=h.env, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        start_new_session=True)
+                self.addCleanup(kill_quietly, proc.pid)
+                end = time.time() + 15
+                while time.time() < end and not (pids.exists() and pids.read_text().strip()):
+                    time.sleep(0.1)
+                stub, child = self.stub_pids(pids)
+                runner = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(stub)], capture_output=True,
+                                            text=True).stdout.strip())
+                self.addCleanup(kill_quietly, runner)
+                self.assertNotEqual(runner, proc.pid)
+                os.kill(proc.pid, sig)
+                try:
+                    proc.communicate(timeout=20)
+                except subprocess.TimeoutExpired:
+                    self.fail("the script's output stayed open: the runner outlived %s" % sig)
+                self.assertEqual(proc.returncode, 128 + sig)
+                for pid in (runner, stub, child):
+                    self.assertTrue(wait_dead(pid), "pid %d survived %s" % (pid, sig))
+
+    def test_the_default_limit_is_540(self):
+        # tests I4: the runner gets 540 when no flag is given and the env var is
+        # unset or bad. A python3 shim logs the runner's argv.
+        for env_value in (None, "abc", "0"):
+            with self.subTest(env=env_value):
+                h = GeminiHarness(self, [FOUND])
+                shim_dir = h.dir / "shim"
+                shim_dir.mkdir()
+                log = h.dir / "py-argv.log"
+                shim = shim_dir / "python3"
+                shim.write_text('#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexec "%s" "$@"\n'
+                                % (log, sys.executable))
+                shim.chmod(0o755)
+                h.env["PATH"] = str(shim_dir) + os.pathsep + h.env["PATH"]
+                h.env.pop("GEMINI_REVIEW_TIMEOUT", None)
+                if env_value is not None:
+                    h.env["GEMINI_REVIEW_TIMEOUT"] = env_value
+                res = h.run("--diff", h.diff, "--mode", "find")
+                self.assertEqual(res.returncode, 0, res.stderr)
+                runs = [line.split() for line in log.read_text().splitlines() if "run_bounded.py" in line]
+                self.assertEqual(len(runs), 1, log.read_text())
+                argv = runs[0]
+                at = [i for i, a in enumerate(argv) if a.endswith("run_bounded.py")][0]
+                self.assertEqual(argv[at + 1], "540")
 
     def test_help_documents_the_flag_and_the_env_var(self):
         res = subprocess.run(["bash", str(SCRIPT), "--help"], capture_output=True, text=True, timeout=30)
@@ -474,6 +527,64 @@ class TimeoutTests(unittest.TestCase):
         self.assertIn("--timeout <secs>", res.stdout)
         self.assertIn("GEMINI_REVIEW_TIMEOUT", res.stdout)
         self.assertIn("timed out", res.stdout)
+
+
+def copy_with_runner(test, h, runner_source):
+    """gemini-review.sh and its helpers copied to a new dir; run_bounded.py is
+    replaced by runner_source, or left out when it is None."""
+    d = h.dir / "copy"
+    d.mkdir()
+    for name in ("secret_scan.py", "audit_record.py", "gemini-review.sh"):
+        shutil.copy(str(HERE / name), str(d / name))
+    if runner_source is not None:
+        (d / "run_bounded.py").write_text(runner_source)
+    return d / "gemini-review.sh"
+
+
+class RunnerFailureTests(unittest.TestCase):
+    """errors I3: an install problem with run_bounded.py is exit 1, never exit 3
+    ("Gemini is down"), and each call's stderr is its own."""
+
+    def run_copy(self, h, script):
+        return subprocess.run(["bash", str(script), "--diff", str(h.diff), "--mode", "find"],
+                              capture_output=True, text=True, env=h.env, timeout=60,
+                              stdin=subprocess.DEVNULL)
+
+    def test_a_missing_runner_is_exit_1_before_any_call(self):
+        h = GeminiHarness(self, [FOUND])
+        res = self.run_copy(h, copy_with_runner(self, h, None))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("run_bounded.py", res.stderr)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+        self.assertEqual(h.calls(), [])
+
+    def test_runner_exit_125_is_exit_1(self):
+        h = GeminiHarness(self, [FOUND])
+        res = self.run_copy(h, copy_with_runner(self, h, "import sys\nsys.exit(125)\n"))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("run_bounded.py", res.stderr)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+
+    def test_a_retry_never_shows_the_first_calls_stderr(self):
+        # Call 1 writes stderr and an answer that does not parse; call 2 fails
+        # before it writes any stderr. Call 2's report must not quote call 1.
+        h = GeminiHarness(self, [FOUND])
+        count = h.dir / "runner-calls"
+        runner = (
+            "import sys, os\n"
+            "count = %r\n"
+            "n = int(open(count).read()) + 1 if os.path.exists(count) else 1\n"
+            "open(count, 'w').write(str(n))\n"
+            "if n == 1:\n"
+            "    open(sys.argv[3], 'w').write('not json')\n"
+            "    open(sys.argv[4], 'w').write('FIRST-CALL-STDERR 401 unauthorized')\n"
+            "    sys.exit(0)\n"
+            "sys.exit(1)\n" % str(count))
+        res = self.run_copy(h, copy_with_runner(self, h, runner))
+        self.assertEqual(count.read_text(), "2")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertNotIn("FIRST-CALL-STDERR", res.stderr)
+        self.assertNotIn("authentication", res.stderr)
 
 
 class IdStartTests(unittest.TestCase):
@@ -580,6 +691,15 @@ class RunBoundedMarkerTests(unittest.TestCase):
         self.assertEqual(self.run_cmd("10", str(self.dir / "no-such-cmd")), (127, ""))
         for secs in ("0", "-1", "x"):
             self.assertEqual(self.run_cmd(secs, "true")[0], 125)
+
+    def test_a_child_left_after_a_normal_exit_is_killed(self):
+        # tests I2: the group is killed after a normal exit too.
+        pidfile = self.dir / "bg.pid"
+        rc, marker = self.run_cmd("10", "sh", "-c", "sleep 60 & echo $! > '%s'; exit 0" % pidfile)
+        self.assertEqual((rc, marker), (0, ""))
+        pid = int(pidfile.read_text())
+        self.addCleanup(kill_quietly, pid)
+        self.assertTrue(wait_dead(pid), "the background child survived")
 
     def test_a_missing_marker_is_not_created(self):
         marker = self.dir / "marker"
