@@ -27,10 +27,12 @@ record is valid, so the caller must read that count. A "resolved" re-check by th
 closes the thread when the record is posted. `recheck` is Codex-only: only
 `codex-review.sh --mode find --prior` re-checks earlier findings against
 current source, so a prior round whose adversary is not `codex` (Gemini or
-Claude-only) is refused (exit 2). With --gemini-sweep, Codex refused the
-re-check (ADVERSARY_REFUSED) and --rechecks is `gemini-review.sh --mode find`
-output for the fix range: every earlier finding is carried over with no events,
-so no Codex thread closes, and Gemini's findings are added with origin gemini.
+Claude-only) is refused (exit 2). Pass --gemini-sweep when Codex refused the
+re-check (ADVERSARY_REFUSED). --rechecks is then `gemini-review.sh --mode find`
+output for the fix range: every earlier finding (Codex's and Claude's) is
+carried over unchanged with no events, so no thread closes, and Gemini's
+findings are added with origin gemini. Their severity is mapped as in `record`
+(an unknown spelling becomes important and is noted in the rationale).
 
 When gh is missing, not logged in, or cannot read the PR, `post` says why,
 writes the same content to the local markdown file instead, and exits 1. A gh
@@ -473,6 +475,15 @@ def _as_line(value):
     return None
 
 
+def _as_text(value, default):
+    """A non-empty string as is; None or blank gives default; anything else as JSON text."""
+    if isinstance(value, str):
+        return value if value.strip() else default
+    if value is None:
+        return default
+    return json.dumps(value)
+
+
 SEVERITY_ALIASES = {
     "critical": "critical", "important": "important", "minor": "minor",
     "high": "important", "low": "minor", "medium": "important",
@@ -637,11 +648,22 @@ def cmd_recheck(args):
                   f"rerun {'gemini' if args.gemini_sweep else 'codex'}-review.sh with a higher --id-start",
                   file=sys.stderr)
             return 2
+        # Gemini has no output schema, so its fields are free-form: map the
+        # severity as cmd_record does, and turn a non-string text field into a
+        # string, so one odd value never fails the whole round.
+        rationale = _as_text(nf.get("rationale"), "")
+        path = nf.get("path")
+        if path not in (None, "") and not isinstance(path, str):
+            rationale = f"(path {path!r} was not a string) " + rationale
+        severity, rationale = normalize_severity(nf.get("severity"), rationale)
         findings.append({
-            "id": nf.get("id"), "origin": nf.get("origin") or by, "path": nf.get("path") or None,
-            "line": _as_line(nf.get("line")), "severity": nf.get("severity"),
-            "category": nf.get("category") or "other", "title": nf.get("title") or "(no title)",
-            "rationale": nf.get("rationale") or "", "status": "unconfirmed", "events": [],
+            "id": nf.get("id"), "origin": nf.get("origin") or by,
+            "path": path if isinstance(path, str) and path else None,
+            "line": _as_line(nf.get("line")), "severity": severity,
+            "category": nf["category"] if isinstance(nf.get("category"), str)
+            and nf["category"].strip() else "other",
+            "title": _as_text(nf.get("title"), "(no title)"),
+            "rationale": rationale, "status": "unconfirmed", "events": [],
         })
     rec = {"schema": ar.SCHEMA, "run_id": prior["run_id"], "skill": prior["skill"],
            "phase": args.phase, "round": args.round, "adversary": prior["adversary"],
@@ -687,8 +709,8 @@ def build_parser():
     rc.add_argument("--phase", default="phase2-recheck")
     rc.add_argument("--gemini-sweep", action="store_true",
                     help="Codex refused the re-check: --rechecks is gemini-review.sh --mode find "
-                         "output; every earlier finding is carried over open, and its findings "
-                         "are added with origin gemini")
+                         "output; every earlier finding is carried over unchanged with no events, "
+                         "so none is closed, and its findings are added with origin gemini")
     rc.add_argument("--out", required=True)
     return p
 
