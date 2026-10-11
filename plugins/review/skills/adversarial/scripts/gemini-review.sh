@@ -2,8 +2,12 @@
 # gemini-review.sh — Gemini adversarial review (find mode or judge mode)
 # Usage: gemini-review.sh --diff <file> [--findings <r1.json>] [--mode find|judge]
 #                         [--model <m>] [--out <file>] [--strict]
-#                         [--allow-secret-match] [--help]
+#                         [--timeout <secs>] [--allow-secret-match] [--help]
 # Exit codes: 0=ok, 1=error, 2=usage, 3=adversary-unavailable, 4=secret-suspected
+#
+# Each gemini call runs through run_bounded.py in its own process group, with a
+# time limit: --timeout, else GEMINI_REVIEW_TIMEOUT, else 540 s. A call that runs
+# past it is killed with its whole group, and the script exits 3 without a retry.
 #
 # The diff and findings are untrusted. They reach Gemini only on stdin, inside
 # blocks whose tag names carry a per-call nonce, and every @ in them is written
@@ -24,12 +28,25 @@ MODEL="${GEMINI_MODEL:-gemini-2.5-pro}"
 OUT_FILE=""
 FORCE_STRICT=false
 ALLOW_SECRET_MATCH=false
+# Seconds per gemini call. Below the Claude Code Bash tool's 600 s cap, the same
+# default codex-review.sh uses.
+DEFAULT_TIMEOUT=540
+TIMEOUT=""
+
+# A whole number of 1 or more, leading zeros dropped; prints nothing otherwise.
+positive_int() {
+  local v="$1"
+  [[ "$v" =~ ^[0-9]+$ ]] || return 0
+  v="${v#"${v%%[!0]*}"}"
+  [[ -n "$v" ]] && printf '%s' "$v"
+  return 0
+}
 
 usage() {
   cat <<EOF
 Usage: $SCRIPT_NAME --diff <file> [--findings <r1.json>] [--mode find|judge]
                     [--model <m>] [--out <file>] [--strict]
-                    [--allow-secret-match] [--help]
+                    [--timeout <secs>] [--allow-secret-match] [--help]
 
 Run Gemini in one of two modes:
 
@@ -53,6 +70,12 @@ Options:
   --strict            Force the hardened/strict prompt variant on the first call
                       instead of the standard prompt, regardless of --mode.
                       Use for low-signal escalation re-runs.
+  --timeout <secs>    Seconds each gemini call may run (a whole number, 1 or
+                      more). Default: \$GEMINI_REVIEW_TIMEOUT when it is a
+                      positive whole number, else 540. A call that runs past
+                      it is killed with its whole process group and the script
+                      exits 3; a timed-out call is not retried. Do not wrap
+                      this script in \`timeout\`: macOS has none.
   --allow-secret-match
                       Send the inputs even when secret_scan.py finds a
                       suspected secret in them (exit 4 otherwise). Pass it
@@ -99,7 +122,9 @@ Exit codes:
      parsed strictly (no duplicate keys, NaN or Infinity) and Gemini gets the
      re-serialized copy, the same text the secret scan checked.
   2  Usage error
-  3  Adversary unavailable (gemini not installed, auth error, parse failure)
+  3  Adversary unavailable (gemini not installed, auth error, parse failure,
+     or the call timed out: "gemini timed out after <N>s; killed its process
+     group")
   4  Secret suspected: secret_scan.py found a secret format or a secret-looking
      file name in --diff or --findings, so nothing was sent. The hits go to
      stderr as <path>:<line> <pattern-name>, never the value.
@@ -126,6 +151,11 @@ while [[ $# -gt 0 ]]; do
       OUT_FILE="$2"; shift 2 ;;
     --strict)
       FORCE_STRICT=true; shift ;;
+    --timeout)
+      [[ $# -lt 2 ]] && { echo "Error: --timeout requires an argument" >&2; exit 2; }
+      TIMEOUT="$(positive_int "$2")"
+      [[ -n "$TIMEOUT" ]] || { echo "Error: --timeout must be a whole number of seconds, 1 or more, got: '$2'" >&2; exit 2; }
+      shift 2 ;;
     --allow-secret-match)
       ALLOW_SECRET_MATCH=true; shift ;;
     --help) usage; exit 0 ;;
@@ -136,6 +166,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# ---- time limit: --timeout, else GEMINI_REVIEW_TIMEOUT, else the default ----
+if [[ -z "$TIMEOUT" ]]; then
+  TIMEOUT="$(positive_int "${GEMINI_REVIEW_TIMEOUT:-}")"
+  [[ -n "$TIMEOUT" ]] || TIMEOUT="$DEFAULT_TIMEOUT"
+fi
 
 # ---- validate mode ----
 if [[ "$MODE" != "find" && "$MODE" != "judge" ]]; then
@@ -500,8 +536,10 @@ RAW_OUTPUT_FILE="$(mktemp /tmp/adversarial-gemini-raw.XXXXXX)"
 EXTRACTED_JSON_FILE="$(mktemp /tmp/adversarial-gemini-json.XXXXXX)"
 GEMINI_STDERR_FILE="$(mktemp /tmp/adversarial-gemini-stderr.XXXXXX)"
 VALIDATE_ERR_FILE="$(mktemp /tmp/adversarial-validate-err.XXXXXX)"
+# run_bounded.py creates this file only when it kills a call for running too long.
+TIMEOUT_MARKER_FILE="$RAW_OUTPUT_FILE.timed-out"
 
-trap 'rm -f "$SENT_FINDINGS_FILE" "$BRIEF_FILE" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE" "$GEMINI_STDERR_FILE" "$VALIDATE_ERR_FILE"' EXIT
+trap 'rm -f "$SENT_FINDINGS_FILE" "$BRIEF_FILE" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" "$EXTRACTED_JSON_FILE" "$GEMINI_STDERR_FILE" "$VALIDATE_ERR_FILE" "$TIMEOUT_MARKER_FILE"' EXIT
 
 # build_stdin sends the re-serialized copy that was scanned, never the raw file.
 if [[ "$MODE" == "judge" ]]; then FINDINGS_FILE="$SENT_FINDINGS_FILE"; else FINDINGS_FILE=""; fi
@@ -548,8 +586,19 @@ call_gemini() {
   fi
 
   # Everything from the diff and the findings is on stdin; -p is a fixed sentence.
-  # -o json for output format, -m for model.
-  if ! gemini -p "$GEMINI_P_CONSTANT" -o json -m "$MODEL" <"$COMBINED_INPUT_FILE" >"$RAW_OUTPUT_FILE" 2>"$GEMINI_STDERR_FILE"; then
+  # -o json for output format, -m for model. run_bounded.py runs gemini in its own
+  # process group and kills the group after TIMEOUT seconds.
+  local gemini_rc=0
+  rm -f "$TIMEOUT_MARKER_FILE"
+  python3 "$SCRIPT_DIR/run_bounded.py" "$TIMEOUT" "$COMBINED_INPUT_FILE" "$RAW_OUTPUT_FILE" \
+    "$GEMINI_STDERR_FILE" "$TIMEOUT_MARKER_FILE" \
+    gemini -p "$GEMINI_P_CONSTANT" -o json -m "$MODEL" || gemini_rc=$?
+  if [[ -e "$TIMEOUT_MARKER_FILE" ]]; then
+    # Never retried: a second call would most likely hang the same way.
+    echo "ADVERSARY_UNAVAILABLE: gemini timed out after ${TIMEOUT}s; killed its process group" >&2
+    exit 3
+  fi
+  if [[ "$gemini_rc" -ne 0 ]]; then
     local stderr_content
     stderr_content="$(cat "$GEMINI_STDERR_FILE" 2>/dev/null || true)"
     # Check for auth-related errors

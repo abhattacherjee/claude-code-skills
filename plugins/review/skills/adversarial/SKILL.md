@@ -449,7 +449,8 @@ Both Claude agents (R1) and the adversary (R1 find + R2 judge) receive the **byt
 - `scripts/pick-adversary.sh` — Step 0: picks Codex, then Gemini, then Claude-only; `--adversary` forces one, with no fallback
 - `scripts/codex-review.sh` — Codex's R1 find and R2 judge, plus `counter` and `find --prior` re-checks for `review:deep`, through a locked-down `codex exec` (see Codex sandbox); `--self-test` reruns the isolation canary
 - `scripts/detect-mode.sh` — diff extraction and mode detection
-- `scripts/gemini-review.sh` — R1 find + R2 judge Gemini calls, with all input on stdin
+- `scripts/gemini-review.sh` — R1 find + R2 judge Gemini calls, with all input on stdin; `--timeout` bounds each call (default 540 s)
+- `scripts/run_bounded.py` — runs `gemini` in its own process group and kills the group at the time limit (macOS has no `timeout`)
 - `scripts/secret_scan.py` — the secret scan both adversary scripts run before sending; exit 4 on a hit
 - `scripts/check-cites.py` — checks each finding's `file:line` against the diff and the repo before `review:deep` hands it to an implementer
 - `scripts/synthesize.py` — survivor rule application (4-file symmetric input)

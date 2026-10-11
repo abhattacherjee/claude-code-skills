@@ -4,9 +4,11 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -37,6 +39,17 @@ log = os.environ["GEMINI_STUB_LOG"]
 calls = json.load(open(log)) if os.path.exists(log) else []
 calls.append({"argv": sys.argv[1:], "stdin": sys.stdin.read()})
 json.dump(calls, open(log, "w"))
+if os.environ.get("GEMINI_STUB_PIDS"):
+    import subprocess
+    child = subprocess.Popen(["sleep", "60"])
+    with open(os.environ["GEMINI_STUB_PIDS"], "w") as fh:
+        fh.write("%%d %%d" %% (os.getpid(), child.pid))
+if os.environ.get("GEMINI_STUB_SLEEP"):
+    import time
+    time.sleep(float(os.environ["GEMINI_STUB_SLEEP"]))
+if os.environ.get("GEMINI_STUB_EXIT"):
+    print("stub failure", file=sys.stderr)
+    sys.exit(int(os.environ["GEMINI_STUB_EXIT"]))
 replies = json.loads(os.environ["GEMINI_STUB_REPLIES"])
 print(replies[min(len(calls), len(replies)) - 1])
 '''
@@ -161,7 +174,7 @@ def patched_copy(test, h, edits):
     to reach one code path on its own."""
     d = h.dir / "patched"
     d.mkdir()
-    for name in ("secret_scan.py", "audit_record.py"):
+    for name in ("secret_scan.py", "audit_record.py", "run_bounded.py"):
         shutil.copy(str(HERE / name), str(d / name))
     text = SCRIPT.read_text()
     for old, new in edits:
@@ -305,6 +318,143 @@ class SecretGateTests(unittest.TestCase):
         res = h.run("--diff", h.diff, "--mode", "find")
         self.assertEqual(res.returncode, 1, res.stderr)
         self.assertEqual(h.calls(), [])
+
+
+def wait_dead(pid, seconds=5.0):
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def kill_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+class TimeoutTests(unittest.TestCase):
+    """#53: a Gemini call that hangs is killed with its whole process group, and the
+    run ends as exit 3, never as a success and never as the runner's own code."""
+
+    def hung(self, sleep="30"):
+        h = GeminiHarness(self, [FOUND])
+        pids = h.dir / "pids"
+        h.env.update(GEMINI_STUB_PIDS=str(pids), GEMINI_STUB_SLEEP=sleep)
+        return h, pids
+
+    def stub_pids(self, pids):
+        found = [int(p) for p in pids.read_text().split()] if pids.exists() else []
+        for pid in found:
+            self.addCleanup(kill_quietly, pid)
+        return found
+
+    def assert_killed(self, res, h, pids, secs, started):
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("ADVERSARY_UNAVAILABLE: gemini timed out after %ss; killed its process group" % secs,
+                      res.stderr)
+        self.assertLess(time.time() - started, 20)
+        found = self.stub_pids(pids)
+        self.assertEqual(len(found), 2, "the stub did not start its child")
+        for pid in found:
+            self.assertTrue(wait_dead(pid), "pid %d survived the timeout" % pid)
+        self.assertEqual(len(h.calls()), 1, "a timed-out call must not be retried")
+        self.assertEqual(res.stdout, "")
+
+    def test_a_hung_call_is_killed_with_its_group_and_exits_3(self):
+        h, pids = self.hung()
+        started = time.time()
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "2")
+        self.assert_killed(res, h, pids, 2, started)
+
+    def test_a_timed_out_judge_call_writes_no_out_file(self):
+        h, pids = self.hung()
+        out = h.dir / "verdicts.json"
+        started = time.time()
+        res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge", "--timeout", "2",
+                    "--out", out)
+        self.assert_killed(res, h, pids, 2, started)
+        self.assertFalse(out.exists())
+
+    def test_the_env_var_sets_the_limit(self):
+        h, pids = self.hung()
+        h.env["GEMINI_REVIEW_TIMEOUT"] = "2"
+        started = time.time()
+        res = h.run("--diff", h.diff, "--mode", "find")
+        self.assert_killed(res, h, pids, 2, started)
+
+    def test_the_flag_wins_over_the_env_var(self):
+        h, pids = self.hung(sleep="3")
+        h.env["GEMINI_REVIEW_TIMEOUT"] = "1"
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "30")
+        self.stub_pids(pids)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["findings"][0]["title"], "t")
+
+    def test_a_bad_env_var_falls_back_to_the_default(self):
+        for raw in ("0", "-5", "abc", "", "2s"):
+            with self.subTest(raw=raw):
+                h = GeminiHarness(self, [FOUND])
+                h.env["GEMINI_REVIEW_TIMEOUT"] = raw
+                res = h.run("--diff", h.diff, "--mode", "find")
+                self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_a_bad_timeout_flag_is_a_usage_error(self):
+        for raw in ("0", "-1", "abc", "", "1.5", "00"):
+            with self.subTest(raw=raw):
+                h = GeminiHarness(self, [FOUND])
+                res = h.run("--diff", h.diff, "--mode", "find", "--timeout", raw)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("--timeout must be", res.stderr)
+                self.assertEqual(h.calls(), [])
+        h = GeminiHarness(self, [FOUND])
+        self.assertEqual(h.run("--diff", h.diff, "--mode", "find", "--timeout").returncode, 2)
+
+    def test_a_gemini_exit_124_is_not_reported_as_a_timeout(self):
+        # The timeout is told apart by the runner's marker file, not by an exit
+        # code Gemini itself could return.
+        h = GeminiHarness(self, [FOUND])
+        h.env["GEMINI_STUB_EXIT"] = "124"
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "30")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertNotIn("timed out", res.stderr)
+        self.assertIn("non-zero exit", res.stderr)
+
+    def test_a_call_that_finishes_in_time_is_unchanged(self):
+        h = GeminiHarness(self, [FOUND])
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "30")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.calls()), 1)
+
+    def test_ctrl_c_kills_the_gemini_group(self):
+        # Gemini runs in its own session, so a terminal SIGINT never reaches it;
+        # the runner must pass it on.
+        h, pids = self.hung()
+        proc = subprocess.Popen(["bash", str(SCRIPT), "--diff", str(h.diff), "--mode", "find",
+                                 "--timeout", "60"], env=h.env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        self.addCleanup(kill_quietly, proc.pid)
+        end = time.time() + 15
+        while time.time() < end and not pids.exists():
+            time.sleep(0.1)
+        time.sleep(0.3)
+        os.killpg(proc.pid, signal.SIGINT)
+        proc.communicate(timeout=20)
+        self.assertNotEqual(proc.returncode, 0)
+        for pid in self.stub_pids(pids):
+            self.assertTrue(wait_dead(pid), "pid %d survived Ctrl-C" % pid)
+
+    def test_help_documents_the_flag_and_the_env_var(self):
+        res = subprocess.run(["bash", str(SCRIPT), "--help"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("--timeout <secs>", res.stdout)
+        self.assertIn("GEMINI_REVIEW_TIMEOUT", res.stdout)
+        self.assertIn("timed out", res.stdout)
 
 
 if __name__ == "__main__":

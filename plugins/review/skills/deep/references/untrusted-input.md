@@ -83,8 +83,10 @@ When `gemini-review.sh` fails and Step 2.2 says to call Gemini directly, use thi
 3. Run:
 
 ```bash
-gemini -m gemini-2.5-pro -o json -p "Follow the instructions block at the start of this input." < "<RUN_DIR>/r2-gemini-prompt.txt"
+perl -e 'alarm 540; exec @ARGV' gemini -m gemini-2.5-pro -o json -p "Follow the instructions block at the start of this input." < "<RUN_DIR>/r2-gemini-prompt.txt"
 ```
+
+The `perl` alarm survives the `exec`, so Gemini is killed after 540 s; macOS has no `timeout`. Exit 142 (SIGALRM) means that time limit fired: treat it as a failed call. The alarm kills only the `gemini` process, not any child it started; `gemini-review.sh` kills the whole process group.
 
 Never pass the prompt or any part of it as an argument.
 

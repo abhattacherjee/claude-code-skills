@@ -488,7 +488,10 @@ class DeepReviewDocTests(unittest.TestCase):
             self.assertIn("never fall back", part.lower(), start)
 
 
-GEMINI_COMMAND = re.compile(r"`(gemini [^`]*)`|^\s*(gemini .*)$", re.M)
+# A direct gemini command, with or without the perl alarm prefix that bounds it (#53).
+PERL_ALARM = "perl -e 'alarm 540; exec @ARGV' "
+GEMINI_COMMAND = re.compile(r"`((?:%s)?gemini [^`]*)`|^\s*((?:%s)?gemini .*)$"
+                            % (re.escape(PERL_ALARM), re.escape(PERL_ALARM)), re.M)
 
 
 class UntrustedInputDocTests(unittest.TestCase):
@@ -516,6 +519,20 @@ class UntrustedInputDocTests(unittest.TestCase):
                         self.assertRegex(cmd, r"\s<\s*\S")
         shown = self.gemini_commands(self.deep) + self.gemini_commands(self.ref)
         self.assertTrue(any(re.search(r"\s<\s*\S", c) for c in shown), shown)
+
+    def test_every_direct_gemini_call_is_bounded(self):
+        # #53: a direct gemini call has no wrapper script to time it out, and macOS
+        # has no `timeout`. perl's alarm survives exec, so the call dies at 540 s.
+        shown = self.gemini_commands(self.deep) + self.gemini_commands(self.ref)
+        runs = [c for c in shown if " -o json" in c]   # not a mention like `gemini -p`
+        self.assertGreaterEqual(len(runs), 2, shown)
+        for cmd in runs:
+            with self.subTest(cmd=cmd):
+                self.assertTrue(cmd.startswith(PERL_ALARM), cmd)
+        for name, text in (("deep", self.deep), ("untrusted-input.md", self.ref)):
+            with self.subTest(doc=name):
+                self.assertIn("142", norm(text))
+                self.assertRegex(norm(text), r"142[^.]*time limit")
 
     def test_the_old_argument_forms_are_gone(self):
         for text in (self.deep, self.ref, self.adv):
