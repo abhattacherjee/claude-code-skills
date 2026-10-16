@@ -11,7 +11,7 @@ like "what do I work on next") is the normal way to use this.
                                   issue in each active repo's current milestone, plus
                                   P1/security issues from any milestone. Work already in
                                   progress (a Status of In progress / In review on any of your
-                                  boards, or an open PR that closes the issue) is pulled in as
+                                  boards, or an open non-draft PR that closes the issue) is pulled in as
                                   Focus=This week with Status=In Progress, and reported as
                                   unplanned when it is outside the plan. Reports what started,
                                   what is new since Monday and what closed since Monday.
@@ -119,7 +119,7 @@ def board_readme():
         "",
         "- Work already in progress (Status In progress / In review on any of your boards, or an open PR",
         "  that closes the issue) is pulled in automatically. It is marked unplanned when it is outside",
-        "  the plan, and never hidden or demoted.",
+        "  the plan, and never hidden or demoted. A draft PR does not count: it is parked work.",
         "",
         f"Weekly rhythm ({lo}-{hi}h):",
         sync_line,
@@ -540,7 +540,7 @@ PROJECT_ITEMS_Q = (
     "repository{name owner{login}}}}}}}}}")
 _PR_LINKED_Q = (
     "query($endCursor:String){search(query:\"is:pr is:open author:%s\",type:ISSUE,first:100,"
-    "after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{body "
+    "after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{body isDraft "
     "repository{name owner{login}} "
     "closingIssuesReferences(first:20){nodes{number state repository{name owner{login}}}}}}}}")
 # GitHub fills closingIssuesReferences only for PRs into the default branch. Feature PRs
@@ -588,7 +588,7 @@ def board_in_progress(pr_keys=None, now=None):
     """Scan OWNER's other boards for cards at In progress / In review.
 
     Returns (keys, stale, failed). A card counts only if its issue was updated within
-    STALE_DAYS or an open PR closes it (pr_keys); older ones go to `stale` as
+    STALE_DAYS or an open, non-draft PR closes it (pr_keys); older ones go to `stale` as
     [{key, board, updated}]. `failed` names boards that could not be read.
     """
     pr_keys = pr_linked() if pr_keys is None else pr_keys
@@ -633,14 +633,17 @@ def body_closing_keys(pr):
 
 
 def pr_linked(open_keys=None):
-    """Open issues that one of OWNER's open PRs closes.
+    """Open issues that one of OWNER's open, non-draft PRs closes.
 
     Uses GitHub's closing references and the closing keywords in the PR body. Body
     matches carry no state, so they count only when they are in open_keys (all of
-    OWNER's open issues); with open_keys None they are skipped.
+    OWNER's open issues); with open_keys None they are skipped. A draft PR is parked
+    work, so it does not count (#234): otherwise it pins its issue to This week.
     """
     keys = set()
     for pr in gql(PR_LINKED_Q, ".data.search.nodes[]"):
+        if pr.get("isDraft"):
+            continue
         for c in ((pr.get("closingIssuesReferences") or {}).get("nodes") or []):
             key = _issue_key(c)
             if key:

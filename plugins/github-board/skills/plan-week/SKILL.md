@@ -2,7 +2,7 @@
 name: plan-week
 description: "Answers what to work on next from the cross-repo Weekly Focus board, plans the week, and sets the board up. Use when: (1) 'what do I work on next' or 'what should I work on', (2) 'what's my focus this week', (3) 'plan my next week' or 'weekly plan', (4) 'weekly focus' or /weekly-focus (the old name of this skill), (5) 'set up plan-week' or 'plan-week init', or a command exits 4 (no config yet)."
 metadata:
-  version: 2.0.0
+  version: 2.0.1
 ---
 
 # Plan Week
