@@ -2,6 +2,12 @@
 
 All notable changes to the **review** plugin are documented here.
 
+## [1.3.1] - 2026-10-16
+
+### Changed
+
+- `deep` dispatches its implementer sub-agents (Phase 1 step 3 and Step 2.5) with `model: "sonnet"`, and Opus only for a fix that touches a security gate, a data migration or a destructive path (#237). cc-token-router telemetry showed Opus implementer and fix-wave sub-agents as the largest sub-agent over-tier leak: about $45 of $48.57 over the 14 days to 2026-10-16. `deep` 1.3.1.
+
 ## [1.3.0] - 2026-10-11
 
 ### Added

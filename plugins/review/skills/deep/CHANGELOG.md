@@ -2,6 +2,12 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [1.3.1] - 2026-10-16
+
+### Changed
+
+- Phase 1 step 3 and Step 2.5 dispatch the implementer with `model: "sonnet"`; Opus only when a fix touches a security gate, a data migration or a destructive path, with the reason in the dispatch (#237). Reviewer dispatches keep their models.
+
 ## [1.3.0] - 2026-10-11
 
 ### Changed
