@@ -381,6 +381,17 @@ def test_owner_is_compared_case_insensitively(wf):
     assert wf.body_closing_keys(_pr("Closes Octo-user/app#4", repo="x")) == {"app#4"}
 
 
+def test_draft_pr_links_no_issue_by_reference_or_body(wf, monkeypatch):
+    # Live repro (#234): two draft PRs said "Closes #N", and each sync put the
+    # issue back at This week after it was moved to Later.
+    ref = {"number": 1, "state": "OPEN", "repository": {"name": "tool-a", "owner": {"login": "octo-user"}}}
+    draft_ref = dict(_pr("", refs=[ref]), isDraft=True)
+    draft_body = dict(_pr("Closes #2\n"), isDraft=True)
+    ready = dict(_pr("Closes #3\n"), isDraft=False)
+    _fake_gh(monkeypatch, wf, projects=[], prs=[draft_ref, draft_body, ready])
+    assert wf.pr_linked(open_keys={"tool-a#1", "tool-a#2", "tool-a#3"}) == {"tool-a#3"}
+
+
 def test_pr_linked_returns_the_open_issues_own_repo_spelling(wf, monkeypatch):
     _fake_gh(monkeypatch, wf, projects=[], prs=[_pr("Closes octo-user/App#4")])
     assert wf.pr_linked(open_keys={"app#4"}) == {"app#4"}
@@ -667,6 +678,21 @@ def test_in_progress_keys_treats_pr_link_as_fresh(wf, monkeypatch):
                   "repository": {"name": "app", "owner": {"login": "octo-user"}}}]}}])
     keys, stale, _ = wf.in_progress_keys()
     assert keys == {"app#1"} and stale == []
+
+
+def test_in_progress_keys_does_not_treat_a_draft_pr_link_as_fresh(wf, monkeypatch):
+    # #234: a stale card whose only PR is a draft is reported, not promoted.
+    _fake_gh(monkeypatch, wf, projects=[_proj("P1", "App board")],
+             items_by_project={"P1": [_node("In Progress", 1, updated=_iso(90))]},
+             prs=[{"isDraft": True, "closingIssuesReferences": {"nodes": [
+                 {"number": 1, "state": "OPEN",
+                  "repository": {"name": "app", "owner": {"login": "octo-user"}}}]}}])
+    keys, stale, _ = wf.in_progress_keys()
+    assert keys == set() and [s["key"] for s in stale] == ["app#1"]
+
+
+def test_pr_linked_query_asks_for_is_draft(wf):
+    assert "isDraft" in wf.PR_LINKED_Q
 
 
 def test_stale_days_is_21(wf):

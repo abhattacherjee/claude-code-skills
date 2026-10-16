@@ -2,6 +2,12 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.2.3] - 2026-10-16
+
+### Fixed
+
+- `plan-week` 2.0.1: a draft PR no longer counts as work in progress (#234). `sync` used to treat any open PR that closes an issue, drafts included, as in progress, and set the issue to This week / In Progress on every run. So a parked draft pinned its issue to This week, and moving the card to Later never stuck. `pr_linked` now fetches `isDraft` and skips drafts, for both GitHub's closing references and closing keywords in the body. A stale board card whose only PR is a draft is reported as stale, not promoted. Marking the PR ready for review counts it again.
+
 ## [1.2.2] - 2026-10-09
 
 ### Changed
