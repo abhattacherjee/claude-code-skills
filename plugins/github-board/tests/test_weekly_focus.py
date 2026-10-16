@@ -382,8 +382,8 @@ def test_owner_is_compared_case_insensitively(wf):
 
 
 def test_draft_pr_links_no_issue_by_reference_or_body(wf, monkeypatch):
-    # Live repro (#234): draft PRs obsidian-brain#419 and codex-config#12 say
-    # "Closes #N", and each sync put the issue back at This week.
+    # Live repro (#234): two draft PRs said "Closes #N", and each sync put the
+    # issue back at This week after it was moved to Later.
     ref = {"number": 1, "state": "OPEN", "repository": {"name": "tool-a", "owner": {"login": "octo-user"}}}
     draft_ref = dict(_pr("", refs=[ref]), isDraft=True)
     draft_body = dict(_pr("Closes #2\n"), isDraft=True)
