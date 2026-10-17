@@ -125,7 +125,7 @@ dimension** AND the previous round's fixes introduced nothing new.
    Deduplicate convergent findings (multiple reviewers flagging the same thing -> higher
    confidence). Note which are factual vs judgment calls.
 3. **Fix** all Critical/Important via a single **implementer sub-agent** on `model: "sonnet"` (Opus only
-   for a fix to a security gate, data migration or destructive path; say why), given the exact, numbered fix spec (read-then-edit in its own context; this also sidesteps any parent-side
+   when any fix in the spec touches a security gate, data migration or destructive path; say why), given the exact, numbered fix spec (read-then-edit in its own context; this also sidesteps any parent-side
    router restrictions on Read/Edit). Address cheap Suggestions too when they reduce future review
    noise. The dispatch starts with the contract block (`./references/dispatch-contract.md`;
    results file `<RUN_DIR>/p1-r<N>-fix.md`). The implementer must **verify empirically** — run the tests, and for any new guard/check,
