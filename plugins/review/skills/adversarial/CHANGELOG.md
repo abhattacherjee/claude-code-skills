@@ -4,6 +4,8 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-20
+
 ### Added
 
 - `gemini-review.sh --prior <round.json>` (find mode only) re-checks an earlier round against a fix range and returns `prior_status`. `pr-audit.py recheck --adversary gemini` records it, closing resolved Gemini and Claude findings and never Codex's (abhattacherjee/cc-token-router#193).
@@ -13,6 +15,7 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 
 ### Changed
 
+- `bug-hunter` runs on Sonnet (its frontmatter changed). 1.4.0.
 - `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
 - The Codex and Gemini prompts say to judge whether the code is correct, with a plan, spec or issue as context only.
 - The Codex and Gemini prompts count a test that cannot fail as a correctness defect, judged by naming the code change that should turn it red.

@@ -4,14 +4,17 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-20
+
 ### Added
 
-- `--lane tiered|legacy`, default `legacy`. The tiered lane's steps T0–T6 are in `references/tiered-lane.md` (abhattacherjee/cc-token-router#193). `references/audit-trail.md` covers the Gemini re-check.
+- `--lane tiered|legacy` (default `tiered`; see Changed). The tiered lane's steps T0–T6 are in `references/tiered-lane.md` (abhattacherjee/cc-token-router#193). `references/audit-trail.md` covers the Gemini re-check.
 - Tiered T1 test-quality pass (`r1-tests.json`) with a vacuous-test brief; T3 makes one Opus call for all defended findings; T4 fixes on Sonnet, never on the adversary's model, never on Opus unless asked.
 - Step 2.4 and T3 write concede-or-defend outcomes to `r3-decisions.json` and apply them with `synthesize.py --decisions`.
 
 ### Changed
 
+- Tiered lane is the default; `--lane legacy` runs the old flow with `bug-hunter` on Opus. 1.4.0.
 - The four vacuous-test Red Flags moved to `references/vacuous-tests.md`.
 - The `cross-examiner` and the adversary prompts count a test that cannot fail as a defect, so tiered T2 and T3 no longer refute vacuous-test findings as "no current defect".
 

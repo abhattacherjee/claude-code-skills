@@ -51,6 +51,10 @@ class AdversarialReviewDocTests(unittest.TestCase):
             self.assertTrue(path.is_file(), name)
             self.assertTrue(os.access(str(path), os.X_OK), name + " is not executable")
 
+    def test_adversarial_registry_bug_hunter_sonnet(self):
+        self.assertRegex(self.text, r"(?m)^\| `review:bug-hunter` \| sonnet \|")
+        self.assertIn("bug-hunter (sonnet) + convention-reviewer (sonnet)", self.text)
+
     def test_step_0_picks_the_adversary(self):
         step0 = section(self.text, "### Step 0", "### Step 1")
         self.assertIn("${CLAUDE_SKILL_DIR}/scripts/pick-adversary.sh", step0)
@@ -348,6 +352,11 @@ class DeepReviewDocTests(unittest.TestCase):
         # exit code. Step 2.0 reads the printed lines and the exit code, never evals.
         self.assertIn("Exit code 3", phase2)
         self.assertNotRegex(fenced_code(section(phase2, "### Step 2.0", "### Step 2.1")), r"\beval\b")
+
+    def test_legacy_lane_passes_opus_to_bug_hunter(self):
+        step21 = norm(section(self.read("SKILL.md"), "### Step 2.1", "### Step 2.2"))
+        self.assertIn("review:bug-hunter", step21)
+        self.assertIn("model: \"opus\"", step21)
 
     def test_recheck_rounds_use_pr_audit_recheck(self):
         text = self.read("references/audit-trail.md")
@@ -1147,9 +1156,9 @@ class FoldedChecklistTests(unittest.TestCase):
                 with self.subTest(agent=name, heading=heading):
                     self.assertTrue(3 <= len(bullets) <= 6, len(bullets))
 
-    def test_bug_hunter_frontmatter_still_opus_before_flip(self):
+    def test_bug_hunter_frontmatter_sonnet(self):
         front = self.agent("bug-hunter.md").split("---", 2)[1]
-        self.assertRegex(front, r"(?m)^model: opus$")
+        self.assertRegex(front, r"(?m)^model: sonnet$")
 
     def test_folded_categories_in_output_format(self):
         bh = self.output_format("bug-hunter.md")
@@ -1179,8 +1188,8 @@ class FoldedChecklistTests(unittest.TestCase):
 
 class TieredLaneDocTests(unittest.TestCase):
     """`review:deep --lane tiered`: two Sonnet reviewers (and a test-quality pass) plus the adversary, a Sonnet
-    judge with Opus only to break ties, and an adversary re-check of the fix range as the sign-off. Opt-in, so the
-    default stays the legacy two-phase flow."""
+    judge with Opus only to break ties, and an adversary re-check of the fix range as the sign-off.
+    This is the default lane."""
 
     def setUp(self):
         self.text = (DEEP / "SKILL.md").read_text(encoding="utf-8")
@@ -1223,10 +1232,11 @@ class TieredLaneDocTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, self.lane)
 
-    def test_skill_points_at_the_reference_and_defaults_to_legacy(self):
+    def test_skill_points_at_the_reference_and_defaults_to_tiered(self):
         n = norm(self.stub)
         self.assertIn("./references/tiered-lane.md", n)
-        self.assertRegex(n, r"With no `--lane`, or `--lane legacy`, skip this section")
+        self.assertRegex(n, r"Otherwise, with or without `--lane tiered`, the tiered lane runs")
+        self.assertIn("With `--lane legacy`, `--phase1-only` or `--phase2-only`, skip this section", n)
         for step in ("T0", "T1", "T2", "T3", "T4", "T5", "T6"):
             with self.subTest(step=step):
                 self.assertIn(step, n)
@@ -1239,10 +1249,10 @@ class TieredLaneDocTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, ref)
 
-    def test_lane_flag_documented_default_legacy(self):
+    def test_lane_flag_documented_default_tiered(self):
         args = section(self.text, "## Arguments", "## Prerequisites")
         self.assertIn("--lane tiered|legacy", args)
-        self.assertRegex(norm(args), r"--lane tiered\|legacy[^\n]*default[^\n]*legacy")
+        self.assertRegex(norm(args), r"--lane tiered\|legacy[^\n]*default[^\n]*tiered")
 
     def test_lane_flag_rejects_bad_values_and_phase_flags(self):
         n = norm(self.stub)

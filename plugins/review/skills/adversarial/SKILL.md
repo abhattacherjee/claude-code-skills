@@ -2,7 +2,7 @@
 name: adversarial
 description: "Runs an adversarial code review of a PR diff or working-tree diff between Claude and an opposing model (Codex when installed and logged in, else Gemini), surfacing only findings both models independently confirm (high-precision, both-confirm rule). Use when: (1) reviewing a PR or working-tree diff with adversarial rigor and you want fewer false positives, (2) you want only findings two independent AI models agree on rather than a single-model opinion, (3) replacing a lost external PR reviewer (e.g. Copilot) with a second independent model cross-examining Claude's analysis, (4) running a high-precision pre-merge review before shipping to production. Supports automatic PR mode (saves the exchange as PR threads) and local mode (terminal report + gitignored markdown file). Degrades loudly to Claude-only review when no adversary is available. Was the adversarial-review skill, now review:adversarial."
 metadata:
-  version: 1.3.0
+  version: 1.4.0
 ---
 
 # Adversarial Review
@@ -72,7 +72,7 @@ detect-mode.sh
      └── MODE=local → diff from working tree vs base
 
 R1 (parallel, blind — neither side sees the other):
-  Claude:    bug-hunter (opus) + convention-reviewer (sonnet) → r1-claude.json [C-001, ...]
+  Claude:    bug-hunter (sonnet) + convention-reviewer (sonnet) → r1-claude.json [C-001, ...]
   Adversary: codex-review.sh|gemini-review.sh --mode find     → r1-<adversary>.json [X-001 Codex | G-001 Gemini]
      │
      │  emit R1 DIGEST
@@ -92,7 +92,7 @@ sink.sh → PR audit trail (MODE=pr) | terminal + .md (MODE=local)
 
 | Agent | Model | Round | Purpose | Scheduling |
 |---|---|---|---|---|
-| `review:bug-hunter` | opus | R1 | Find bugs, security, perf, correctness in actual source | Parallel with convention-reviewer and the adversary's find |
+| `review:bug-hunter` | sonnet | R1 | Find bugs, security, perf, correctness in actual source | Parallel with convention-reviewer and the adversary's find |
 | `review:convention-reviewer` | sonnet | R1 | Find convention, CLAUDE.md, maintainability issues | Parallel with bug-hunter and the adversary's find |
 | `review:cross-examiner` | opus | R2 | Judges the adversary's R1 findings against actual source; returns confirm/refute verdicts | Parallel with the adversary's judge |
 

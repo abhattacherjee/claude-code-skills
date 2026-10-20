@@ -4,10 +4,12 @@ All notable changes to the **review** plugin are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-20
+
 ### Added
 
-- `deep` takes `--lane tiered|legacy`, default `legacy` (abhattacherjee/cc-token-router#193). The tiered lane runs two Sonnet reviewers plus a Codex find pass in round 1, judges Codex's findings with the `cross-examiner` on Sonnet, calls Opus only to break a tie, and signs off with a Codex re-check of the fix range, or a Gemini one when Codex is unavailable. Steps T0–T6 are in `references/tiered-lane.md`. It is opt-in until a replay on past PRs passes.
-- `bug-hunter` carries the code, test-coverage and silent-failure checks; `convention-reviewer` carries the comment and type-design checks. `bug-hunter` stays on Opus until the flip.
+- `deep` takes `--lane tiered|legacy`, default `tiered` (abhattacherjee/cc-token-router#193). The tiered lane runs two Sonnet reviewers plus a Codex find pass in round 1, judges Codex's findings with the `cross-examiner` on Sonnet, calls Opus only to break a tie, and signs off with a Codex re-check of the fix range, or a Gemini one when Codex is unavailable. Steps T0–T6 are in `references/tiered-lane.md`.
+- `bug-hunter` carries the code, test-coverage and silent-failure checks; `convention-reviewer` carries the comment and type-design checks.
 - `gemini-review.sh --prior` and `pr-audit.py recheck --adversary gemini`: a Gemini re-check that closes resolved Gemini and Claude findings, never Codex's.
 - `synthesize.py --match` labels findings both sides raised (`raised_by_both`, `matched_with`) without changing their status, and `lane_scope.py` is a size gate for lockfile- and docs-only diffs.
 
@@ -16,6 +18,7 @@ All notable changes to the **review** plugin are documented here.
 
 ### Changed
 
+- `review:deep` runs the tiered lane by default (abhattacherjee/cc-token-router#193). `bug-hunter` is on Sonnet; `--lane legacy` dispatches it with `model: "opus"`. Review plugin 1.4.0.
 - `deep` Red Flags: the four vacuous-test bullets moved to `references/vacuous-tests.md`, to keep the `SKILL.md` body under `validate-plugin.sh`'s 500-line limit (the frontmatter is not counted).
 - `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
 - The Codex and Gemini prompts say to judge whether the code is correct, with any plan, spec or issue as context, not the standard.

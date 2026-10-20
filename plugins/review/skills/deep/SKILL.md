@@ -2,7 +2,7 @@
 name: deep
 description: "Use when the user wants a thorough, high-assurance review of code changes — phrases like \"review this until it's clean\", \"converge to zero issues\", \"adversarial review\", \"have Codex or Gemini and Claude review\", \"deep review this PR\", or \"make this change ironclad\". Runs TWO phases on a PR or working-tree diff: (1) iterative multi-reviewer review that loops fix->re-review until a round finds zero actionable issues, then (2) a multi-round adversarial cross-examination with Codex, else Gemini, as the opposing model (it finds -> Claude judges -> it counters), fixing every confirmed finding. Repeatable across any project/PR. Use when: (1) the user wants a thorough, high-assurance review that converges to zero actionable issues, (2) the user asks for an adversarial or Gemini-and-Claude cross-examination review of a code diff, (3) deep-reviewing a PR or working-tree diff before merge, (4) the user wants to make a change ironclad. Was the deep-review skill, now review:deep."
 metadata:
-  version: 1.3.1
+  version: 1.4.0
 ---
 
 # Deep Review
@@ -52,7 +52,7 @@ Not for: a quick one-shot look (use `/pr-review-toolkit:review-pr` alone) or a t
 /review:deep --max-rounds N  # cap Phase-1 rounds (default 4)
 /review:deep --no-post       # keep the audit trail local; post nothing to the PR
 /review:deep --adversary codex|gemini  # force the Phase 2 adversary; stops if it is not usable
-/review:deep --lane tiered|legacy      # tiered: two Sonnet reviewers + the adversary, with an adversary sign-off (see Tiered lane); default legacy
+/review:deep --lane tiered|legacy      # tiered: two Sonnet reviewers + the adversary, with an adversary sign-off (see Tiered lane); default tiered
 ```
 
 ## Prerequisites & composition
@@ -199,7 +199,7 @@ the run (see the `adversarial` skill's "Codex sandbox"). Every adversary command
 ### Step 2.1 — R1: blind parallel discovery
 
 In one message, launch (none seeing the others):
-- `review:bug-hunter` agent (opus) — bugs/security/perf/correctness, grounded in source.
+- `review:bug-hunter` agent, dispatched with `model: "opus"` (legacy lane; its frontmatter is Sonnet) — bugs/security/perf/correctness, grounded in source.
 - `review:convention-reviewer` agent (sonnet) — convention/maintainability/doc-drift.
 - Adversary finder — `"${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/codex-review.sh" --diff <DIFF> --mode find --timeout 540 --out "<RUN_DIR>/r1-<ADVERSARY>.json"` (`gemini-review.sh` with Gemini).
   It emits `{"findings":[...]}` with `origin` set to the adversary. **If exit code is 3**
@@ -429,16 +429,17 @@ after writing the `phase2-fix` record, note these values and write them into the
    on re-check rounds, separate from Phase 1's `--max-rounds`; surface whatever is left to the
    user, and name each finding still unchecked as one Codex never re-checked.
 
-With Gemini or Claude-only there is no re-check round (the opt-in tiered lane adds a Gemini one;
+With Gemini or Claude-only there is no re-check round (the tiered lane adds a Gemini one;
 see T5 and T6), and fixed Phase 2 threads stay open for a person to resolve.
 
 ---
 
 ## Tiered lane
 
-Runs only with `--lane tiered`. With no `--lane`, or `--lane legacy`, skip this section and run
-Phase 1 and Phase 2 as written. Check the flags before Phase 0. A `--lane` value other than `tiered`
-or `legacy` is a usage error. `--lane` together with `--phase1-only` or `--phase2-only` is a usage
+This is the default lane. With `--lane legacy`, `--phase1-only` or `--phase2-only`, skip this
+section and run Phase 1 and Phase 2 as written. Otherwise, with or without `--lane tiered`, the
+tiered lane runs. Check the flags before Phase 0. A `--lane` value other than `tiered` or `legacy`
+is a usage error. `--lane` together with `--phase1-only` or `--phase2-only` is a usage
 error. On either, stop, print the Arguments block, and run nothing.
 
 Otherwise run Phase 0, then follow `./references/tiered-lane.md` in place of Phase 1 and Phase 2's

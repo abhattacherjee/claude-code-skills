@@ -1,7 +1,7 @@
 # review
 
 <!-- plugin-meta:start -->
-**Version:** 1.3.1 · **2** skills · **3** agents · **0** commands
+**Version:** 1.4.0 · **2** skills · **3** agents · **0** commands
 <!-- plugin-meta:end -->
 
 Two review skills in one install. `deep` converges a changeset to zero actionable issues in two phases. `adversarial` is the single-pass version: Claude and an opposing model (Codex, else Gemini) find issues independently, cross-examine each other, and only findings the other side confirms are reported.
@@ -66,7 +66,7 @@ If the adversary is not logged in, errors, times out, or returns unparseable JSO
 - **Targets:** the open PR's diff if the branch has one, else the working tree.
 - **Phase 2** runs the `adversarial` engine with extra rounds. R3 sends each refuted finding back to its originator to concede or defend, and direct source evidence settles factual disputes. With Codex, step 2.6 has Codex re-check each fix, so fixed threads close. Genuine judgment calls go to you.
 - **No usable adversary:** `deep` asks you to set one up or go on Claude-only. In Claude-only mode a second independent Claude agent judges the first's findings, with a loud banner that cross-model confirmation was skipped.
-- **Tiered lane (opt-in, `--lane tiered`).** A cheaper flow for the same job. Round 1 runs two Claude reviewers on Sonnet (`bug-hunter` and `convention-reviewer`, which now carry the code, test, silent-failure, comment and type checks) next to a Codex find pass. When the change adds or edits a test or a guard, a second `bug-hunter` on Sonnet runs a test-quality pass. The `cross-examiner` judges Codex's findings on Sonnet, and runs on Opus once per pass, only to break ties. One Sonnet fix wave follows, then Codex re-checks the fix range, and a clean re-check is the sign-off. When Codex is unavailable, Gemini does those jobs, sign-off included. A Claude-only run says "Not signed off" on its first line. A diff of only lockfiles or docs takes a light path: green CI plus one adversary pass. Manifests such as `package.json` can carry scripts, so they take the full path. Steps T0–T6 are in `skills/deep/references/tiered-lane.md`. The default stays `--lane legacy` (today's flow) until a replay on past PRs passes.
+- **Tiered lane (the default).** A cheaper flow for the same job. Round 1 runs two Claude reviewers on Sonnet (`bug-hunter` and `convention-reviewer`, which now carry the code, test, silent-failure, comment and type checks) next to a Codex find pass. When the change adds or edits a test or a guard, a second `bug-hunter` on Sonnet runs a test-quality pass. The `cross-examiner` judges Codex's findings on Sonnet, and runs on Opus once per pass, only to break ties. One Sonnet fix wave follows, then Codex re-checks the fix range, and a clean re-check is the sign-off. When Codex is unavailable, Gemini does those jobs, sign-off included. A Claude-only run says "Not signed off" on its first line. A diff of only lockfiles or docs takes a light path: green CI plus one adversary pass. Manifests such as `package.json` can carry scripts, so they take the full path. Steps T0–T6 are in `skills/deep/references/tiered-lane.md`. It is the default since 1.4.0, after a replay on past PRs passed. `--lane legacy` runs the old two-phase flow, with `bug-hunter` on Opus.
 - Flags: `--phase1-only`, `--phase2-only`, `--max-rounds N`, `--no-post`, `--adversary codex|gemini`, `--lane tiered|legacy`, and a PR number or `local`.
 - Every round of both phases is saved on the PR with `pr-audit.py`. See `skills/deep/references/audit-trail.md`.
 
