@@ -444,7 +444,7 @@ error. On either, stop, print the Arguments block, and run nothing.
 
 Otherwise run Phase 0, then follow `./references/tiered-lane.md` in place of Phase 1 and Phase 2's
 R1 to R3. Its steps are T0 size gate, T1 round 1, T2 judge, T3 tiebreak, T4 fix, T5 re-check and
-sign-off, and T6 fallbacks. Two Sonnet reviewers and the adversary look once, Opus only judges, and
+sign-off, and T6 fallbacks. Two Sonnet reviewers and the adversary look once, a Sonnet judge rules, Opus only breaks ties, and
 an adversary re-check of the fix range is the sign-off.
 
 ---

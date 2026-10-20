@@ -1177,8 +1177,8 @@ class FoldedChecklistTests(unittest.TestCase):
 
 
 class TieredLaneDocTests(unittest.TestCase):
-    """`review:deep --lane tiered`: two Sonnet reviewers plus the adversary, Opus only to
-    judge, and an adversary re-check of the fix range as the sign-off. Opt-in, so the
+    """`review:deep --lane tiered`: two Sonnet reviewers plus the adversary, a Sonnet
+    judge with Opus only to break ties, and an adversary re-check of the fix range as the sign-off. Opt-in, so the
     default stays the legacy two-phase flow."""
 
     def setUp(self):
@@ -1258,10 +1258,17 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertNotIn("pr-review-toolkit", n)
         self.assertIn("./references/dispatch-contract.md", n)
 
-    def test_tiered_only_cross_examiner_runs_on_opus(self):
-        self.assertNotIn('model: "opus"', self.lane)
-        self.assertNotIn('model: "opus"', self.stub)
+    def test_tiered_opus_only_breaks_ties(self):
+        # Two dogfood runs priced the Opus judge as the largest Claude cost, so T2 judges on
+        # Sonnet and Opus runs only when the originator defends a refuted finding.
         self.assertIn("review:cross-examiner", self.t2)
+        self.assertIn('model: "sonnet"', self.t2)
+        self.assertNotIn('model: "opus"', self.t2)
+        t3 = self.step("### T3", "### T4")
+        self.assertEqual(self.lane.count('model: "opus"'), 1)
+        self.assertIn('model: "opus"', t3)
+        self.assertNotIn('model: "opus"', self.stub)
+        self.assertNotIn("Opus only judges", norm(self.stub))
         self.assertIn("security gate, data migration or destructive path", self.t4)
         self.assertIn('model: "sonnet"', self.t4)
 

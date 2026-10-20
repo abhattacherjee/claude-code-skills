@@ -6,7 +6,7 @@ All notable changes to the **review** plugin are documented here.
 
 ### Added
 
-- `deep` takes `--lane tiered|legacy`, default `legacy` (abhattacherjee/cc-token-router#193). The tiered lane runs two Sonnet reviewers plus a Codex find pass in round 1, uses the Opus `cross-examiner` only to judge and break ties, and signs off with a Codex re-check of the fix range, or a Gemini one when Codex is unavailable. Steps T0–T6 are in `references/tiered-lane.md`. It is opt-in until a replay on past PRs passes.
+- `deep` takes `--lane tiered|legacy`, default `legacy` (abhattacherjee/cc-token-router#193). The tiered lane runs two Sonnet reviewers plus a Codex find pass in round 1, judges Codex's findings with the `cross-examiner` on Sonnet, calls Opus only to break a tie, and signs off with a Codex re-check of the fix range, or a Gemini one when Codex is unavailable. Steps T0–T6 are in `references/tiered-lane.md`. It is opt-in until a replay on past PRs passes.
 - `bug-hunter` carries the code, test-coverage and silent-failure checks; `convention-reviewer` carries the comment and type-design checks. `bug-hunter` stays on Opus until the flip.
 - `gemini-review.sh --prior` and `pr-audit.py recheck --adversary gemini`: a Gemini re-check that closes resolved Gemini and Claude findings, never Codex's.
 - `synthesize.py --match` labels findings both sides raised (`raised_by_both`, `matched_with`) without changing their status, and `lane_scope.py` is a size gate for lockfile- and docs-only diffs.

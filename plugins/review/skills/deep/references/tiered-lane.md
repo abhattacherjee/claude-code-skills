@@ -83,7 +83,8 @@ can match. Every finding is judged. The label is only a hint in the report: fix 
 confirmed finding on its own, even when one change looks like it fixes both.
 
 - The adversary judges every Claude finding: Step 2.2's `--mode judge` call.
-- `review:cross-examiner` judges every adversary finding. Its prompt holds only those
+- `review:cross-examiner`, dispatched with `model: "sonnet"`, judges every adversary finding.
+  Opus runs only in T3, to break a tie. Its prompt holds only those
   findings, each with its cited line range, and nothing else from the run. It keeps its read-only
   repo tools, so it still reads the current source. Dispatch it as Step 2.2 says (results file
   `<RUN_DIR>/r2-claude-verdicts.json`, with the exact verdict shape given there).
@@ -94,9 +95,9 @@ T3. On the light path there are no Claude findings, so only the cross-examiner r
 ### T3 Tiebreak
 
 Findings that the other side refuted get Step 2.3's concede or defend turn. If the originator
-defends, `review:cross-examiner` decides from three things only: the finding, the defence and the
-cited lines. Opus is never asked to judge an Opus finding: no Claude reviewer runs on Opus in this
-lane. Record the round as Step 2.3 says. Then apply the concessions and the cross-examiner's
+defends, `review:cross-examiner`, dispatched with `model: "opus"`, decides from three things
+only: the finding, the defence and the cited lines. This is the only Opus call in the lane, and
+Opus is never asked to judge an Opus finding: no Claude reviewer runs on Opus in this lane. Record the round as Step 2.3 says. Then apply the concessions and the cross-examiner's
 decisions to the report by hand, as Step 2.4 says, before T4 picks the survivors.
 
 ### T4 Fix
