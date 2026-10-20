@@ -13,7 +13,7 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 
 ### Changed
 
-- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) by its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Their contents are still scanned, and every other `*credentials*` name is still flagged.
+- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
 - The Codex and Gemini prompts say to judge whether the code is correct, with a plan, spec or issue as context only.
 
 ## [1.3.0] - 2026-10-11

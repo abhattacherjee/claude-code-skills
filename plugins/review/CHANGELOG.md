@@ -17,7 +17,7 @@ All notable changes to the **review** plugin are documented here.
 ### Changed
 
 - `deep` Red Flags: the four vacuous-test bullets moved to `references/vacuous-tests.md`, to keep the `SKILL.md` body under `validate-plugin.sh`'s 500-line limit (the frontmatter is not counted).
-- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) by its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Their contents are still scanned, and every other `*credentials*` name is still flagged.
+- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
 - The Codex and Gemini prompts say to judge whether the code is correct, with any plan, spec or issue as context, not the standard.
 
 ## [1.3.1] - 2026-10-16

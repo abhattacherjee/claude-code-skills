@@ -183,7 +183,8 @@ class SecretFileNameTests(Base):
                      "id_ed25519.pub", "credentials", "aws/credentials", "my-credentials.json",
                      "aws-credentials.json", "my credentials.txt", "credentials.db",
                      "gcp-credentials.yaml", "service.credentials", "prod-credentials.properties",
-                     "credentials_test.go", "store.p12",
+                     "credentials_test.go", "golden/.env.stdout", "id_rsa.stderr",
+                     ".env.exit", "store.p12",
                      "store.pfx", "App/.ENV", "prod.env", ".envrc", ".ssh/id_ecdsa", "id_dsa",
                      ".netrc", ".npmrc", ".pypirc", ".pgpass"):
             with self.subTest(path=path):
@@ -194,7 +195,7 @@ class SecretFileNameTests(Base):
     def test_ordinary_names_are_not_flagged(self):
         for path in ("src/env.py", "keys.md", "docs/environment.md", "monkey.py",
                      "fixtures/extra-no-credentials.exit", "extra-no-credentials.stderr",
-                     "extra-no-credentials.stdout", "golden/.env.stdout"):
+                     "extra-no-credentials.stdout", "aws-credentials.json.stdout"):
             with self.subTest(path=path):
                 self.assertEqual(self.run_scan(self.put("o.diff", diff(path, "x"))).returncode, 0)
 
