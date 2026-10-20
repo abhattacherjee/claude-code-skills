@@ -52,6 +52,7 @@ Not for: a quick one-shot look (use `/pr-review-toolkit:review-pr` alone) or a t
 /review:deep --max-rounds N  # cap Phase-1 rounds (default 4)
 /review:deep --no-post       # keep the audit trail local; post nothing to the PR
 /review:deep --adversary codex|gemini  # force the Phase 2 adversary; stops if it is not usable
+/review:deep --lane tiered|legacy      # tiered: two Sonnet reviewers + the adversary, with an adversary sign-off (see Tiered lane); default legacy
 ```
 
 ## Prerequisites & composition
@@ -429,8 +430,22 @@ after writing the `phase2-fix` record, note these values and write them into the
    on re-check rounds, separate from Phase 1's `--max-rounds`; surface whatever is left to the
    user, and name each finding still unchecked as one Codex never re-checked.
 
-With Gemini or Claude-only there is no re-check round, and fixed Phase 2 threads stay open for a
-person to resolve.
+With Gemini or Claude-only there is no re-check round (the opt-in tiered lane adds a Gemini one;
+see T5 and T6), and fixed Phase 2 threads stay open for a person to resolve.
+
+---
+
+## Tiered lane
+
+Runs only with `--lane tiered`. With no `--lane`, or `--lane legacy`, skip this section and run
+Phase 1 and Phase 2 as written. Check the flags before Phase 0. A `--lane` value other than `tiered`
+or `legacy` is a usage error. `--lane` together with `--phase1-only` or `--phase2-only` is a usage
+error. On either, stop, print the Arguments block, and run nothing.
+
+Otherwise run Phase 0, then follow `./references/tiered-lane.md` in place of Phase 1 and Phase 2's
+R1 to R3. Its steps are T0 size gate, T1 round 1, T2 judge, T3 tiebreak, T4 fix, T5 re-check and
+sign-off, and T6 fallbacks. Two Sonnet reviewers and the adversary look once, Opus only judges, and
+an adversary re-check of the fix range is the sign-off.
 
 ---
 
@@ -455,24 +470,7 @@ Summarize for the user:
   current tree, in a round that ran *after* the fixes.
 - **Trust a finding-resolved claim without checking the diff.** Re-review verifies against source,
   not memory. Likewise, a reviewer judging stale findings must read the *current* file.
-- **Accept a planted-regression test that can pass vacuously.** Every new guard/check needs a
-  fail-first negative: confirm the assertion FAILS when the code is broken. A test asserting on a
-  static string that's always present is the classic vacuous trap.
-- **Accept a negative control that re-implements the assertion instead of invoking it.** A control
-  built from the guard's own logic tests the copy, not the guard: gut the real assertion and the
-  control still passes. Measured on openclaw #336 — a doc-contract test added specifically to
-  prevent vacuous assertions had three controls of this shape, and three mutations each gutting a
-  real assertion all SURVIVED at `5 passed`. The control must call the same function the suite
-  calls, or parametrize over the same table it does.
-- **Accept an "expect nothing" assertion with no positive control.** An absent-pattern fixture
-  catches a guard stuck ON; only a present-pattern fixture catches one stuck OFF, where "correctly
-  reports nothing" and "hardcoded empty" produce the same green. (Downstream side effects can
-  sometimes tell them apart — assert on what the code was supposed to *write*, not only on what it
-  reported.) Require both directions for any detector or guard, and prefer proving it by mutation —
-  patch the guard to `false &&`, confirm the suite goes red — over inspection. **Fixture
-  reachability is a third axis, independent of both:** a fixture that cannot reach the failing half
-  yields a green assertion over an uncovered path, so check that each assertion's fixture can
-  actually express the failure, not merely that the assertion exists.
+- **Accept a vacuous guard test.** A test that cannot fail, a control that re-implements the assertion, an "expect nothing" check with no positive control, or a fixture that cannot reach the failing branch: see `./references/vacuous-tests.md`. Prove each new guard fails first.
 - **Let the adversarial pass rubber-stamp.** The point is the *opposing* model. If running
   Claude-only, use a genuinely independent second agent and say cross-model confirmation was
   skipped.
@@ -496,6 +494,7 @@ Summarize for the user:
 - **Treat agent silence as a clean verdict.** No results file is `NO REPORT`, a coverage gap you
   list in the final report. Chase at most twice, then switch mechanism
   (`./references/dispatch-contract.md`).
+- **Call a tiered run signed off without an adversary re-check of the fix range.** Only a clean Codex or Gemini re-check signs off. Claude-only, a stopped re-check and a hit cap do not, and Gemini never closes a Codex thread.
 - **Report "waiting on a reviewer" without checking whether it is idle.** An idle teammate is not woken when its own background job ends; check its process or output before telling the user you're waiting on it.
 
 ## Integration
