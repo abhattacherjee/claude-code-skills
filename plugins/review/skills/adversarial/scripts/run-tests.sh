@@ -616,6 +616,48 @@ print(f'ok findings={n}' if 'findings' in d else 'missing-findings-key')
 " 2>/dev/null || echo "parse-error")"
 assert_eq "find mode output has findings key with 1 finding" "ok findings=1" "$FIND_KEY_CHECK"
 
+# ---- Test: --prior is find-only and reaches Gemini in its own data block ----
+GEMINI_PRIOR_FILE="$TMP_DIR/gemini-prior.json"
+cat >"$GEMINI_PRIOR_FILE" <<'JSON'
+{"findings":[{"id":"G-001","origin":"gemini","title":"Prior Gemini issue","events":[]}]}
+JSON
+GEMINI_PRIOR_OUT=""
+GEMINI_PRIOR_EXIT=0
+run_capture GEMINI_PRIOR_OUT GEMINI_PRIOR_EXIT \
+  bash "$GEMINI_REVIEW" --mode judge --prior "$GEMINI_PRIOR_FILE" \
+  --diff "$FIXTURES_DIR/r1_claude_findings.json" \
+  --findings "$FIXTURES_DIR/r1_claude_findings.json"
+assert_exit_code "--prior with judge mode -> exit 2" "2" "$GEMINI_PRIOR_EXIT"
+
+cat >"$STUB_BIN_DIR/gemini" <<'STUB'
+#!/usr/bin/env bash
+cat >"$GEMINI_PRIOR_CAPTURE"
+printf '{"findings":[],"prior_status":{"G-001":"resolved"}}\n'
+STUB
+chmod +x "$STUB_BIN_DIR/gemini"
+run_capture GEMINI_PRIOR_OUT GEMINI_PRIOR_EXIT \
+  env PATH="$STUB_BIN_DIR:$PATH" GEMINI_PRIOR_CAPTURE="$TMP_DIR/gemini-prior-prompt" \
+  bash "$GEMINI_REVIEW" --mode find --prior "$GEMINI_PRIOR_FILE" \
+  --diff "$FIXTURES_DIR/r1_claude_findings.json"
+assert_exit_code "--prior with find mode -> exit 0" "0" "$GEMINI_PRIOR_EXIT"
+GEMINI_PRIOR_CHECK="$(python3 - "$TMP_DIR/gemini-prior-prompt" <<'PYEOF'
+import json, re, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+match = re.search(r"<earlier_findings-([0-9a-f]+)>\n(.*?)\n</earlier_findings-\1>", text, re.S)
+if match:
+    findings = json.loads(match.group(2))
+    print("ok" if findings[0]["id"] == "G-001" and findings[0]["origin"] == "gemini"
+          and findings[0]["events"] == [] and "prior_status" in text
+          and "untrusted" in text else "bad-data")
+else:
+    print("missing-prior-block")
+PYEOF
+)"
+assert_eq "find prior findings use a nonce-tagged untrusted block" "ok" "$GEMINI_PRIOR_CHECK"
+assert_contains "find output keeps prior_status" '"prior_status"' "$GEMINI_PRIOR_OUT"
+
 # ---- Test: wrapped judge-mode JSON -> success ----
 cat >"$STUB_BIN_DIR/gemini" <<'STUB'
 #!/usr/bin/env bash

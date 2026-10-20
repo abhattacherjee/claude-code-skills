@@ -6,6 +6,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import audit_record as ar  # noqa: E402
 from test_pr_audit import SHA2, SHA3, Harness, ev, finding, record  # noqa: E402
 
 
@@ -136,6 +137,52 @@ class GeminiSweepTests(unittest.TestCase):
         self.assertEqual(res.returncode, 2, res.stderr)
 
 
+class GeminiRecheckTests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness(self)
+        self.out = self.h.dir / "round-5.json"
+
+    def recheck(self, origin, *extra):
+        fid = {"gemini": "G-001", "claude": "C-001"}.get(origin, "X-001")
+        prior = record([finding(fid, origin=origin)], rnd=4, head=SHA2,
+                       phase="phase2-fix", adversary="gemini")
+        path = self.h.write(prior, "round-4.json")
+        checks = self.h.write({"findings": [], "prior_status": {fid: "resolved"}},
+                              "recheck-gemini.json")
+        res = self.h.run("recheck", "--adversary", "gemini", "--prior", path,
+                         "--rechecks", checks, "--round", 5, "--head-sha", SHA3,
+                         "--out", self.out, *extra)
+        rec = json.loads(self.out.read_text()) if res.returncode == 0 else None
+        return res, rec
+
+    def test_recheck_gemini_closes_resolved_gemini_threads(self):
+        res, rec = self.recheck("gemini")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(ar.should_resolve(rec["findings"][0], rec))
+        self.assertEqual(rec["findings"][0]["events"][0]["by"], "gemini")
+
+    def test_recheck_gemini_closes_resolved_claude_threads(self):
+        # Gemini sign-off needs Claude's fixed findings closed too.
+        res, rec = self.recheck("claude")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(ar.should_resolve(rec["findings"][0], rec))
+        self.assertEqual(rec["findings"][0]["events"][0]["by"], "gemini")
+
+    def test_recheck_gemini_never_closes_codex_threads(self):
+        res, rec = self.recheck("codex")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertFalse(ar.should_resolve(rec["findings"][0], rec))
+        self.assertEqual(rec["findings"][0]["events"], [])
+        self.assertIn("X-001", res.stderr)
+
+    def test_recheck_gemini_sweep_and_adversary_gemini_conflict(self):
+        res, _ = self.recheck("gemini", "--gemini-sweep")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("--gemini-sweep", res.stderr)
+        self.assertIn("--adversary gemini", res.stderr)
+        self.assertFalse(self.out.exists())
+
+
 class RecheckTests(unittest.TestCase):
     def setUp(self):
         self.h = Harness(self)
@@ -156,6 +203,18 @@ class RecheckTests(unittest.TestCase):
             else path_or_dict
         return self.h.run("recheck", "--prior", prior or self.prior, "--rechecks", path,
                           "--round", rnd, "--head-sha", SHA3, "--out", self.out)
+
+    def test_recheck_default_adversary_unchanged(self):
+        data = {"adversary": "codex", "findings": [NEW], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]}
+        default, rec = self.recheck(data)
+        self.assertEqual(default.returncode, 0, default.stderr)
+        explicit = self.h.run("recheck", "--prior", self.prior, "--rechecks",
+                              self.h.dir / "recheck.json", "--round", 5,
+                              "--head-sha", SHA3, "--out", self.out, "--adversary", "codex")
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertEqual(json.loads(self.out.read_text()), rec)
+        self.assertEqual((explicit.stdout, explicit.stderr), (default.stdout, default.stderr))
 
     def test_rechecks_become_adversary_events_on_the_earlier_findings(self):
         res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [
