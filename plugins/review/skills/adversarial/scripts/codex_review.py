@@ -300,7 +300,13 @@ BASE_PROMPT = (
     "matches the output schema. "
     "Judge the code by whether it is correct. A plan, spec or issue in the repository is "
     "context, not the standard: code that matches it can still be wrong, and code that "
-    "departs from it is not wrong for that alone."
+    "departs from it is not wrong for that alone. "
+    "A test that cannot fail is a correctness defect, not a style point or a wish for more "
+    "coverage: an assertion that a broken version of the code would still pass, a file walk "
+    "or scan with no check that it found anything, or a guard pattern that misses a form the "
+    "tool accepts. To judge one, name the code change that should turn the test red; if the "
+    "test would still pass after that change, the finding is real, even though the code under "
+    "test works today."
 )
 MODE_PROMPTS = {
     "find": (
