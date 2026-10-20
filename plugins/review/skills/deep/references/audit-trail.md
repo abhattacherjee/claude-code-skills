@@ -99,7 +99,7 @@ A posting failure never stops the review.
 | Phase 2 R2 | every judged finding; confirmed findings get `status: survivor`, refuted ones keep `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
 | Phase 2 R3 | every R2-refuted finding | For contested findings, record `counter` then `verdict`: `survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted finding gets `rejected`. |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
-| Phase 2 re-check (Codex; Gemini in the tiered lane) | every finding from the last `phase2-fix` record, plus the re-checking model's new findings | Built by the `recheck` mode of `pr-audit.py`, never by hand: one `recheck` event by the re-checking model (`codex`, or `gemini` with `--adversary gemini`) on each re-checked finding; a finding Codex did not re-check is carried over unchanged with no events (its thread stays open); new findings get `status: unconfirmed` and no events |
+| Phase 2 re-check (Codex; Gemini in the tiered lane) | every finding from the last `phase2-fix` record, plus the re-checking model's new findings | Built by the `recheck` mode of `pr-audit.py`, never by hand: one `recheck` event by the re-checking model (`codex`, or `gemini` with `--adversary gemini`) on each re-checked finding; a finding the re-checking model did not re-check is carried over unchanged with no events (its thread stays open); new findings get `status: unconfirmed` and no events |
 
 A `rejected` finding's thread is resolved at once. So a finding refuted in R2 keeps
 `status: unconfirmed` in the phase2-r2 record, even though its refute `verdict` is recorded there.

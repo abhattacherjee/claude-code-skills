@@ -34,12 +34,21 @@ class LaneScopeTests(unittest.TestCase):
     def test_agent_md_is_full(self):
         self.assertEqual(lane_scope.classify(["plugins/review/agents/bug-hunter.md"]), "full")
 
-    def test_requirements_glob_is_light(self):
-        self.assertEqual(lane_scope.classify(["requirements-dev.txt"]), "light")
+    def test_requirements_files_are_full(self):
+        # A requirements file can install from a URL or a git repo.
+        for name in ("requirements.txt", "requirements-dev.txt"):
+            with self.subTest(name=name):
+                self.assertEqual(lane_scope.classify([name]), "full")
+
+    def test_agent_instruction_dirs_are_full(self):
+        for path in (".github/copilot-instructions.md", ".claude/rules/style.md",
+                     ".cursor/rules/a.mdc", "prompts/review.md", "docs/rules/a.md"):
+            with self.subTest(path=path):
+                self.assertEqual(lane_scope.classify(["README.md", path]), "full")
 
     def test_each_manifest_and_lockfile_is_light(self):
         for name in ("package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
-                     "yarn.lock", "bun.lockb", "requirements.txt", "poetry.lock", "uv.lock",
+                     "yarn.lock", "bun.lockb", "poetry.lock", "uv.lock",
                      "Pipfile.lock", "Cargo.lock", "go.sum", "Gemfile.lock"):
             with self.subTest(name=name):
                 self.assertEqual(lane_scope.classify(["nested/" + name]), "light")

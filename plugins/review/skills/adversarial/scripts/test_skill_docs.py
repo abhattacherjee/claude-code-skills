@@ -1287,6 +1287,9 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertIn("Every finding is judged", n)
         self.assertIn("raised_by_both", n)
         self.assertNotIn("survivor already", n)
+        # Fixing a pair "once" can leave the second, different defect unfixed (X-005).
+        self.assertIn("fix and check each confirmed finding on its own", n)
+        self.assertNotIn("fix a confirmed pair once", n)
 
     def test_tiebreak_reuses_concede_or_defend_then_cross_examiner(self):
         n = self.step("### T3", "### T4")

@@ -6,7 +6,10 @@ Usage: lane_scope.py --files <file>
 Reads one path per line, ignoring blank lines. Prints light only when every
 path is eligible; empty input and code paths require full review.
 Only documentation and images under docs/, documentation extensions anywhere,
-lockfiles, and requirements*.txt are light (agent code rules still win).
+and lockfiles are light (agent code rules still win). requirements*.txt is full:
+it can install from a URL or a git repo (-e git+..., --index-url).
+Anything in a dot directory (.github, .claude, .cursor) or a prompts/ or rules/
+directory is full: those hold agent instructions and CI config.
 Manifests require full review because they can carry executable content.
 Exit codes: 0 on success; 2 on a usage error or unreadable input.
 """
@@ -17,12 +20,12 @@ from pathlib import Path
 
 LIGHT_BASENAME_GLOBS = (
     "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
-    "yarn.lock", "bun.lockb", "requirements*.txt", "poetry.lock", "uv.lock",
+    "yarn.lock", "bun.lockb", "poetry.lock", "uv.lock",
     "Pipfile.lock", "Cargo.lock", "go.sum", "Gemfile.lock", "*.md", "*.mdx", "*.rst",
 )
 DOC_EXTENSIONS = {".md", ".mdx", ".rst", ".txt", ".png", ".jpg", ".jpeg",
                   ".gif", ".svg", ".webp"}
-CODE_COMPONENTS = {"agents", "skills", "commands"}
+CODE_COMPONENTS = {"agents", "skills", "commands", "prompts", "rules"}
 # Agent instruction files steer models, so they are code too.
 CODE_BASENAMES = {"SKILL.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md"}
 
@@ -35,7 +38,8 @@ def classify(paths) -> str:
         parts = path.split("/")
         name = parts[-1]
         # These Markdown files are code, even when they live under docs.
-        if name in CODE_BASENAMES or CODE_COMPONENTS.intersection(parts):
+        if (name in CODE_BASENAMES or CODE_COMPONENTS.intersection(parts)
+                or any(part.startswith(".") for part in parts[:-1])):
             return "full"
         docs_content = parts[0] == "docs" and Path(name).suffix in DOC_EXTENSIONS
         if not docs_content and not any(fnmatch.fnmatchcase(name, glob)

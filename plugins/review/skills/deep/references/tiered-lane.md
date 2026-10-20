@@ -79,7 +79,8 @@ First label the findings both sides raised. This run takes no verdict files:
 
 A matched pair gets `raised_by_both` and `matched_with` in `match.json`. A match is only a label:
 it never makes a survivor and never skips a judge, because two different defects on nearby lines
-can match. Every finding is judged. Use the label to fix a confirmed pair once, not twice.
+can match. Every finding is judged. The label is only a hint in the report: fix and check each
+confirmed finding on its own, even when one change looks like it fixes both.
 
 - The adversary judges every Claude finding: Step 2.2's `--mode judge` call.
 - `review:cross-examiner` judges every adversary finding. Its prompt holds only those
