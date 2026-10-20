@@ -5,13 +5,18 @@ synthesize.py — symmetric convergence of Claude↔Gemini adversarial review ro
 Usage:
   synthesize.py --claude-findings FILE --gemini-findings FILE
                 --gemini-verdicts FILE --claude-verdicts FILE
-                [--adversary gemini|codex|claude-only] [--md FILE] [--json FILE] [--help]
+                [--adversary gemini|codex|claude-only] [--match] [--md FILE] [--json FILE] [--help]
 
   --adversary-findings and --adversary-verdicts are the same flags as
   --gemini-findings and --gemini-verdicts. The adversary's verdict on a Claude
   finding is adversary_verdict; files that still say gemini_verdict are read
   too. --adversary sets killed_by, the default origin of the adversary's
   findings, and the labels in the report and the direction lines.
+
+  --match first pairs findings at the same path and lowercase category within
+  three lines. Both members survive with status_reason="raised by both",
+  overriding verdicts. In this mode the verdict flags may be left out (the
+  first pass runs before any judge), but a verdict path that is given must exist.
 
   --adversary claude-only is for the degraded no-adversary path: pass
   {"findings":[]} for --adversary-findings and {"verdicts":[]} for
@@ -145,7 +150,7 @@ def clear_outputs(args: argparse.Namespace) -> None:
     """Delete any file at the --md / --json paths, so a run that fails leaves no
     report behind that looks like its own. A path that is also an input is kept."""
     inputs = {os.path.realpath(p) for p in (args.claude_findings, args.gemini_findings,
-                                            args.gemini_verdicts, args.claude_verdicts)}
+                                            args.gemini_verdicts, args.claude_verdicts) if p}
     for path in (args.md, args.json_out):
         if path and os.path.realpath(path) not in inputs and os.path.lexists(path):
             os.remove(path)
@@ -228,19 +233,29 @@ Exit codes:
                         required=True, metavar="FILE",
                         help="Adversary (Gemini or Codex) R1 findings JSON ({\"findings\":[...]} OR bare list)")
     parser.add_argument("--gemini-verdicts", "--adversary-verdicts", dest="gemini_verdicts",
-                        required=True, metavar="FILE",
+                        metavar="FILE",
                         help="Adversary judging Claude: {\"verdicts\":[{\"id\",\"adversary_verdict\",\"reason\",\"confidence\"}]}")
     parser.add_argument("--adversary", choices=("gemini", "codex", "claude-only"), default="gemini",
                         help="the adversary model: sets killed_by, the default origin of its "
                              "findings, and the report labels (default: gemini). claude-only "
                              "is the degraded no-adversary path: pass empty findings/verdicts")
-    parser.add_argument("--claude-verdicts", required=True, metavar="FILE",
+    parser.add_argument("--claude-verdicts", metavar="FILE",
                         help="Claude judging the adversary: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
+    parser.add_argument("--match", action="store_true",
+                        help="Make nearby findings raised by both sides survivors, overriding verdicts")
     parser.add_argument("--md", metavar="FILE",
                         help="Write human-readable markdown report to this file")
     parser.add_argument("--json", metavar="FILE", dest="json_out",
                         help="Write full structured JSON to this file")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.match:
+        missing = [flag for flag, path in (
+            ("--gemini-verdicts/--adversary-verdicts", args.gemini_verdicts),
+            ("--claude-verdicts", args.claude_verdicts),
+        ) if path is None]
+        if missing:
+            parser.error("the following arguments are required: " + ", ".join(missing))
+    return args
 
 
 def load_json(path: str, label: str) -> Any:
@@ -379,6 +394,30 @@ def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_fi
     return resolved
 
 
+def match_cross_findings(claude, adversary, window=3):
+    """Pair nearby findings greedily in Claude id order, breaking ties by adversary id."""
+    pairs = []
+    used = set()
+    for finding in sorted(claude, key=lambda f: f["id"]):
+        fid = finding["id"]
+        line = finding.get("line")
+        category = finding.get("category")
+        if (fid in used or type(line) is not int or not isinstance(category, str)
+                or category != category.lower()):
+            continue
+        candidates = [f for f in adversary
+                      if f["id"] not in used and f["id"] != fid
+                      and f.get("path") == finding.get("path")
+                      and type(f.get("line")) is int
+                      and abs(line - f["line"]) <= window
+                      and f.get("category") == category]
+        if candidates:
+            nearest = min(candidates, key=lambda f: (abs(line - f["line"]), f["id"]))
+            pairs.append((fid, nearest["id"]))
+            used.update((fid, nearest["id"]))
+    return pairs
+
+
 def classify_findings(
     claude_findings: list[dict],
     gemini_findings: list[dict],
@@ -387,12 +426,16 @@ def classify_findings(
     adversary="gemini",
     lost_adversary: Optional[list] = None,
     lost_claude: Optional[list] = None,
+    match=False,
 ) -> tuple[list[dict], dict[str, dict], dict[str, dict]]:
     """Apply symmetric convergence and return (findings, gemini_verdict_map, claude_verdict_map).
 
     The verdict maps are returned alongside the classified findings so callers can
     reuse them for the confirm-rate guard without a second reconcile call.
     """
+
+    pairs = match_cross_findings(claude_findings, gemini_findings) if match else []
+    matched_ids = {fid for pair in pairs for fid in pair}
 
     # Build verdict lookup maps with slug/location fallback matching (bug #30).
     # gemini_verdict_map: Gemini's verdicts on Claude findings, keyed by the
@@ -476,6 +519,13 @@ def classify_findings(
             f["verdict_reason"] = c_verdict.get("reason", "") or ""
 
         classified.append(f)
+
+    for f in classified:
+        if f["id"] in matched_ids:
+            f["status"] = "survivor"
+            f["status_reason"] = "raised by both"
+            f["killed_by"] = None
+            f["kill_reason"] = None
 
     return classified, gemini_verdict_map, claude_verdict_map
 
@@ -637,8 +687,14 @@ def main() -> None:
 
     claude_findings_raw = load_json(args.claude_findings, "claude-findings")
     gemini_findings_raw = load_json(args.gemini_findings, "gemini-findings")
-    gemini_verdicts_raw = load_json(args.gemini_verdicts, "gemini-verdicts")
-    claude_verdicts_raw = load_json(args.claude_verdicts, "claude-verdicts")
+    verdicts = []
+    for path, label in ((args.gemini_verdicts, "gemini-verdicts"),
+                        (args.claude_verdicts, "claude-verdicts")):
+        if args.match and path is None:
+            verdicts.append({"verdicts": []})
+        else:
+            verdicts.append(load_json(path, label))
+    gemini_verdicts_raw, claude_verdicts_raw = verdicts
 
     # Unwrap / validate findings inputs (accept bare list or {"findings":[...]})
     claude_findings = unwrap_findings(claude_findings_raw, "claude-findings")
@@ -670,7 +726,7 @@ def main() -> None:
     lost_claude: list = []
     classified, gemini_verdict_map, claude_verdict_map = classify_findings(
         claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw, adv,
-        lost_adversary, lost_claude,
+        lost_adversary, lost_claude, match=args.match,
     )
 
     # Warn on id collisions across origins (both are preserved in the list)
