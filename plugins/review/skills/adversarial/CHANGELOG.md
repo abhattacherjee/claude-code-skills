@@ -13,7 +13,7 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 
 ### Changed
 
-- The secret file-name glob `*credentials*` is now `*credentials`, `credentials.*` and `*credentials.<ext>` for json, txt, yml, yaml, toml, ini, xml and csv, so fixtures such as `extra-no-credentials.stderr` are not flagged.
+- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) by its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Their contents are still scanned, and every other `*credentials*` name is still flagged.
 - The Codex and Gemini prompts say to judge whether the code is correct, with a plan, spec or issue as context only.
 
 ## [1.3.0] - 2026-10-11

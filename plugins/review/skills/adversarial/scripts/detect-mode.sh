@@ -25,7 +25,7 @@ BASE_ARG=""
 INCLUDE_UNTRACKED=false
 # Untracked files with these names are never put in the diff, even with
 # --include-untracked. Matched against the lower-cased file name (not the directory).
-SECRET_NAME_GLOBS=('.env' '.env.*' '*.env' '.envrc' '*.pem' '*.key' 'id_rsa*' 'id_ed25519*' 'id_ecdsa*' 'id_dsa*' '*credentials' 'credentials.*' '*credentials.json' '*credentials.txt' '*credentials.yml' '*credentials.yaml' '*credentials.toml' '*credentials.ini' '*credentials.xml' '*credentials.csv' '*.p12' '*.pfx' '.netrc' '.npmrc' '.pypirc' '.pgpass')
+SECRET_NAME_GLOBS=('.env' '.env.*' '*.env' '.envrc' '*.pem' '*.key' 'id_rsa*' 'id_ed25519*' 'id_ecdsa*' 'id_dsa*' '*credentials*' '*.p12' '*.pfx' '.netrc' '.npmrc' '.pypirc' '.pgpass')
 MAX_LISTED=20
 SCRIPT_NAME="$(basename "$0")"
 
@@ -44,10 +44,7 @@ Options:
   --include-untracked
                    Local mode: also put untracked (not ignored) files in the diff.
                    Names that look like secrets (.env, .env.*, *.env, .envrc, *.pem,
-                   *.key, id_rsa*, id_ed25519*, id_ecdsa*, id_dsa*, *credentials,
-                   credentials.*, *credentials.json, *credentials.txt, *credentials.yml,
-                   *credentials.yaml, *credentials.toml, *credentials.ini, *credentials.xml,
-                   *credentials.csv,
+                   *.key, id_rsa*, id_ed25519*, id_ecdsa*, id_dsa*, *credentials*,
                    *.p12, *.pfx, .netrc, .npmrc, .pypirc, .pgpass) are still left out.
   --help           Show this help and exit
 

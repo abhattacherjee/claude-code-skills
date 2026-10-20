@@ -660,6 +660,9 @@ def format_markdown(
                 if c_v == "confirm":
                     lines.append("")
                     lines.append("> Confirmed by Claude.")
+            if f.get("decided_by") == "r3":
+                lines.append("")
+                lines.append(f"> Upheld in R3: {f.get('decision_reason') or '(no reason given)'}")
             lines.append("")
     else:
         lines.append("_No findings confirmed by both models._")
@@ -724,7 +727,10 @@ def format_markdown(
             if loc:
                 lines.append(f"**Location:** `{loc}`")
             lines.append(f"**Killed by:** {killed_by}")
-            if kill_reason:
+            # A tiebreak decision replaces the R2 reason; the R2 one stays in report.json.
+            if f.get("decided_by") == "r3":
+                lines.append(f"**Decided in R3:** {f.get('decision_reason') or '(no reason given)'}")
+            elif kill_reason:
                 lines.append(f"**Reason:** {kill_reason}")
             lines.append("")
             lines.append(f.get("rationale", ""))

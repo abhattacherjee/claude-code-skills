@@ -263,7 +263,7 @@ class PluginReadmeDocTests(unittest.TestCase):
         self.assertIn("--include-untracked", local)
         self.assertIn("never sent", local)
         self.assertIn("sent to the adversary model", local)
-        for name in (".env", "*.pem", "id_rsa*", "*credentials.json"):
+        for name in (".env", "*.pem", "id_rsa*", "*credentials*"):
             self.assertIn(name, local)
 
     def test_no_script_install_advice_for_this_plugin(self):
@@ -1277,8 +1277,10 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertNotIn("Opus only judges", norm(self.stub))
         self.assertIn("**one** `review:cross-examiner` dispatch", t3)
         self.assertIn('model: "sonnet"', self.t4)
-        self.assertIn("`cx`", self.t4)
         self.assertIn("never puts the implementer on Opus unless the user asks", self.t4)
+        # A replay run declined cx for its fixes because Codex signs them off.
+        self.assertIn("Never give the fixes to the adversary's model", self.t4)
+        self.assertIn("must not sign off its own fixes", self.t4)
 
     def test_tiebreak_outcomes_reach_the_report(self):
         # On a replay, two findings the Opus tiebreak upheld still read "rejected" in

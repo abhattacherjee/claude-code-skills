@@ -27,6 +27,7 @@ class SynthesizeDecisionsTests(unittest.TestCase):
         md = (run.dir / "report.md").read_text()
         survivors = md.split("## Confirmed Findings (Survivors)")[1].split("## Unconfirmed")[0]
         self.assertIn("Useless copy", survivors)
+        self.assertIn("> Upheld in R3: copy is unnecessary", survivors)
         self.assertIn("Survivors: 3 | Unconfirmed: 0 | Rejected: 1", md)
 
     def test_confirmed_finding_rejected(self):
@@ -42,6 +43,10 @@ class SynthesizeDecisionsTests(unittest.TestCase):
         self.assertEqual(findings["X-001"]["decision_reason"], "")
         self.assertEqual(findings["X-002"]["killed_by"], "claude")
         self.assertEqual(report["summary"]["decided"], 2)
+        rejected = (run.dir / "report.md").read_text().split("## Rejected Findings")[1]
+        self.assertIn("**Decided in R3:** still rejected", rejected)
+        self.assertIn("**Decided in R3:** (no reason given)", rejected)
+        self.assertNotIn("the copy is needed", rejected)
 
     def test_invalid_decisions_clear_reports(self):
         decision = {"id": "X-001", "status": "survivor", "reason": "ok"}

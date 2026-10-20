@@ -131,12 +131,13 @@ hand: Step 2.5, the re-check and any replay scoring read it.
 
 ### T4 Fix
 
-One fix wave for all survivors, as Step 2.5 says: check cites first. Then, when the session has
-a Codex code-change tool (cc-token-router's `cx`, for example), give the whole wave to it first.
-Otherwise, or when it fails, use one implementer sub-agent on `model: "sonnet"`. This lane never
-puts the implementer on Opus unless the user asks for it; Step 2.5's security-gate exception does
-not apply here, because the Codex re-check in T5 checks every fix. Verify the fixes in your own
-context, as Step 2.5 says, and record `phase2-fix`.
+One fix wave for all survivors, as Step 2.5 says: check cites first, then one implementer sub-agent
+on `model: "sonnet"`. Never give the fixes to the adversary's model (Codex, or Gemini on the
+fallback path), even through a code-change tool such as `cx`: its re-check in T5 is the sign-off,
+and it must not sign off its own fixes. This lane never puts the implementer on Opus unless the
+user asks for it; Step 2.5's security-gate exception does not apply here, because the adversary
+re-checks every fix in T5. Verify the fixes in your own context, as Step 2.5 says, and record
+`phase2-fix`.
 
 ### T5 Re-check and sign-off
 

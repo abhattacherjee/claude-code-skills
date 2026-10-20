@@ -182,7 +182,8 @@ class SecretFileNameTests(Base):
         for path in (".env", "app/.env.production", "certs/server.pem", "tls.key", ".ssh/id_rsa",
                      "id_ed25519.pub", "credentials", "aws/credentials", "my-credentials.json",
                      "aws-credentials.json", "my credentials.txt", "credentials.db",
-                     "gcp-credentials.yaml", "service.credentials", "store.p12",
+                     "gcp-credentials.yaml", "service.credentials", "prod-credentials.properties",
+                     "credentials_test.go", "store.p12",
                      "store.pfx", "App/.ENV", "prod.env", ".envrc", ".ssh/id_ecdsa", "id_dsa",
                      ".netrc", ".npmrc", ".pypirc", ".pgpass"):
             with self.subTest(path=path):
@@ -192,10 +193,18 @@ class SecretFileNameTests(Base):
 
     def test_ordinary_names_are_not_flagged(self):
         for path in ("src/env.py", "keys.md", "docs/environment.md", "monkey.py",
-                     "extra-no-credentials.exit", "extra-no-credentials.stderr",
-                     "extra-no-credentials.stdout", "test_credentials.py", "credentials_test.go"):
+                     "fixtures/extra-no-credentials.exit", "extra-no-credentials.stderr",
+                     "extra-no-credentials.stdout", "golden/.env.stdout"):
             with self.subTest(path=path):
                 self.assertEqual(self.run_scan(self.put("o.diff", diff(path, "x"))).returncode, 0)
+
+    def test_a_fixture_output_file_is_still_scanned_by_content(self):
+        # The fixture-output exemption covers the name only: a key inside is still found.
+        res = self.run_scan(self.put("fx.diff", diff("extra-no-credentials.stderr",
+                                                     "k = '%s'" % FAKE_AWS)))
+        self.assertEqual(res.returncode, 4)
+        self.assertEqual(res.stdout.strip().splitlines(),
+                         ["extra-no-credentials.stderr:1 aws-key-id"])
 
     def test_a_deleted_secret_file_is_flagged(self):
         text = ("diff --git a/.env b/.env\ndeleted file mode 100644\nindex 1..0\n--- a/.env\n"
