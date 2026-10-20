@@ -443,6 +443,10 @@ extract_json_object() {
 # ---- build prompt ----
 build_prompt() {
   local strict="$1"
+  cat <<PROMPT
+Judge the code by whether it is correct. A plan, spec or issue in the repository is context, not the standard: code that matches it can still be wrong, and code that departs from it is not wrong for that alone.
+
+PROMPT
   if [[ -n "$PRIOR_FILE" ]]; then
     cat <<PROMPT
 The <{DIFF}> block holds the fix range: changes since the last review.

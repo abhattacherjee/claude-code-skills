@@ -40,8 +40,10 @@ EXIT_CLEAN, EXIT_USAGE, EXIT_HIT = 0, 2, 4
 # Must match SECRET_NAME_GLOBS in detect-mode.sh; test_secret_scan.py checks that.
 # Matched against the lower-cased last part of the path.
 SECRET_NAME_GLOBS = ('.env', '.env.*', '*.env', '.envrc', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*',
-                     'id_ecdsa*', 'id_dsa*', '*credentials*', '*.p12', '*.pfx', '.netrc', '.npmrc',
-                     '.pypirc', '.pgpass')
+                     'id_ecdsa*', 'id_dsa*', '*credentials', 'credentials.*', '*credentials.json',
+                     '*credentials.txt', '*credentials.yml', '*credentials.yaml', '*credentials.toml',
+                     '*credentials.ini', '*credentials.xml', '*credentials.csv', '*.p12', '*.pfx',
+                     '.netrc', '.npmrc', '.pypirc', '.pgpass')
 # Scan only, never redact: a value assigned to a secret-sounding name. A quoted
 # literal after password/secret/api_key/token, or an upper-case env line such as
 # DB_PASSWORD=... . Values with placeholder words are skipped. Measured on this

@@ -180,7 +180,9 @@ class LineMappingTests(Base):
 class SecretFileNameTests(Base):
     def test_each_secret_looking_name_is_flagged(self):
         for path in (".env", "app/.env.production", "certs/server.pem", "tls.key", ".ssh/id_rsa",
-                     "id_ed25519.pub", "aws/credentials", "my-credentials.json", "store.p12",
+                     "id_ed25519.pub", "credentials", "aws/credentials", "my-credentials.json",
+                     "aws-credentials.json", "my credentials.txt", "credentials.db",
+                     "gcp-credentials.yaml", "service.credentials", "store.p12",
                      "store.pfx", "App/.ENV", "prod.env", ".envrc", ".ssh/id_ecdsa", "id_dsa",
                      ".netrc", ".npmrc", ".pypirc", ".pgpass"):
             with self.subTest(path=path):
@@ -189,7 +191,9 @@ class SecretFileNameTests(Base):
                 self.assertIn("%s:0 secret-file-name" % path, res.stdout)
 
     def test_ordinary_names_are_not_flagged(self):
-        for path in ("src/env.py", "keys.md", "docs/environment.md", "monkey.py"):
+        for path in ("src/env.py", "keys.md", "docs/environment.md", "monkey.py",
+                     "extra-no-credentials.exit", "extra-no-credentials.stderr",
+                     "extra-no-credentials.stdout", "test_credentials.py", "credentials_test.go"):
             with self.subTest(path=path):
                 self.assertEqual(self.run_scan(self.put("o.diff", diff(path, "x"))).returncode, 0)
 

@@ -263,7 +263,7 @@ class PluginReadmeDocTests(unittest.TestCase):
         self.assertIn("--include-untracked", local)
         self.assertIn("never sent", local)
         self.assertIn("sent to the adversary model", local)
-        for name in (".env", "*.pem", "id_rsa*", "*credentials*"):
+        for name in (".env", "*.pem", "id_rsa*", "*credentials.json"):
             self.assertIn(name, local)
 
     def test_no_script_install_advice_for_this_plugin(self):
@@ -959,7 +959,8 @@ class DispatchContractTests(unittest.TestCase):
     def test_results_file_names_do_not_collide_with_script_outputs(self):
         table = section(self.text, "| Dispatch | Results file | Shape |", "\n\n")
         names = re.findall(r"^\|[^|]*\| `([^`]+)` \|", table, re.M)
-        self.assertEqual(len(names), 8, names)
+        self.assertEqual(len(names), 9, names)
+        self.assertIn("r1-tests.json", names)
         # PR #218 review I4: the Step 2.6 re-check judge has its own name per round.
         self.assertIn("r2-claude-verdicts-recheck-<K>.json", names)
         script_outputs = re.compile(
@@ -1177,7 +1178,7 @@ class FoldedChecklistTests(unittest.TestCase):
 
 
 class TieredLaneDocTests(unittest.TestCase):
-    """`review:deep --lane tiered`: two Sonnet reviewers plus the adversary, a Sonnet
+    """`review:deep --lane tiered`: two Sonnet reviewers (and a test-quality pass) plus the adversary, a Sonnet
     judge with Opus only to break ties, and an adversary re-check of the fix range as the sign-off. Opt-in, so the
     default stays the legacy two-phase flow."""
 
@@ -1249,11 +1250,16 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertRegex(n, r"`--phase1-only` or `--phase2-only`[^.]*usage error")
         self.assertIn("run nothing", n)
 
-    def test_tiered_round1_dispatches_two_sonnet_reviewers_and_codex(self):
+    def test_tiered_round1_dispatches_sonnet_reviewers_test_pass_and_codex(self):
+        # A replay found the general bug-hunter missed all six vacuous-test defects on one PR,
+        # so a second bug-hunter with a test brief runs when tests or guards change.
         n = self.t1
         self.assertIn("review:bug-hunter", n)
         self.assertIn("review:convention-reviewer", n)
-        self.assertEqual(n.count('model: "sonnet"'), 2)
+        self.assertEqual(n.count('model: "sonnet"'), 3)
+        self.assertIn("<RUN_DIR>/r1-tests.json", n)
+        self.assertIn("./references/vacuous-tests.md", n)
+        self.assertIn("positive control", n)
         self.assertRegex(n, r'codex-review\.sh"? --mode find')
         self.assertNotIn("pr-review-toolkit", n)
         self.assertIn("./references/dispatch-contract.md", n)
@@ -1269,8 +1275,20 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertIn('model: "opus"', t3)
         self.assertNotIn('model: "opus"', self.stub)
         self.assertNotIn("Opus only judges", norm(self.stub))
-        self.assertIn("security gate, data migration or destructive path", self.t4)
+        self.assertIn("**one** `review:cross-examiner` dispatch", t3)
         self.assertIn('model: "sonnet"', self.t4)
+        self.assertIn("`cx`", self.t4)
+        self.assertIn("never puts the implementer on Opus unless the user asks", self.t4)
+
+    def test_tiebreak_outcomes_reach_the_report(self):
+        # On a replay, two findings the Opus tiebreak upheld still read "rejected" in
+        # report.json, because the outcome was applied by hand.
+        t3 = self.step("### T3", "### T4")
+        self.assertIn('--decisions "<RUN_DIR>/r3-decisions.json"', t3)
+        self.assertIn("Never edit `report.json` by hand", t3)
+        step24 = norm(section(self.text, "### Step 2.4", "### Step 2.5"))
+        self.assertIn('--decisions "<RUN_DIR>/r3-decisions.json"', step24)
+        self.assertNotIn("Apply those by hand", step24)
 
     def test_cross_examiner_prompt_scoped_to_judged_findings(self):
         n = self.t2

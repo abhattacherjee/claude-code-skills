@@ -52,6 +52,7 @@ Gemini fallback writes `r2-gemini-prompt.txt`; `review:adversarial` also writes
 | Phase 1 implementer, round `N` | `p1-r<N>-fix.md` | each numbered fix: what changed, the commands run and their exit codes |
 | R1 `review:bug-hunter` | `r1-bug-hunter.json` | `{"findings":[...]}`, the agent's own format |
 | R1 `review:convention-reviewer` | `r1-convention.json` | `{"findings":[...]}`, the agent's own format |
+| Tiered T1 test-quality `review:bug-hunter` | `r1-tests.json` | `{"findings":[...]}`, the agent's own format |
 | R2 `review:cross-examiner` | `r2-claude-verdicts.json` | `{"verdicts":[{"id","claude_verdict":"confirm\|refute","reason"}]}` |
 | R3 Claude agent that concedes or defends | `r3-claude-counters.json` | `{"counters":[{"id","position":"concede\|defend","reason"}]}` |
 | Step 2.6 re-check cross-examiner, re-check round `K` | `r2-claude-verdicts-recheck-<K>.json` | as R2; never reuse `r2-claude-verdicts.json` |

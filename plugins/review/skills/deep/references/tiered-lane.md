@@ -50,6 +50,9 @@ In one message, launch these three, none seeing the others:
 
 - `review:bug-hunter`, dispatched with `model: "sonnet"`.
 - `review:convention-reviewer`, dispatched with `model: "sonnet"`.
+- A test-quality pass, when the change adds or edits a test, or adds a check, guard or
+  validation: a second `review:bug-hunter`, dispatched with `model: "sonnet"`, given the test
+  brief below in place of its usual focus.
 - The adversary finder:
 
 ```bash
@@ -60,10 +63,29 @@ With Gemini, use `gemini-review.sh` in its place. Handle exit 3 and exit 4 as St
 including the forced-adversary stop. If Codex was picked automatically and is unavailable, T6
 applies.
 
-Both Claude dispatches use the delivery contract in `./references/dispatch-contract.md`, with its
-tool-call budget (results files `<RUN_DIR>/r1-bug-hunter.json` and `<RUN_DIR>/r1-convention.json`).
-Give them the byte-identical diff and the untrusted-input text from Step 2.1. Merge the two Claude
-files into `<RUN_DIR>/r1-claude.json` (`C-001..`) and record the round, as Step 2.1 says.
+Every Claude dispatch uses the delivery contract in `./references/dispatch-contract.md`, with its
+tool-call budget (results files `<RUN_DIR>/r1-bug-hunter.json`, `<RUN_DIR>/r1-convention.json`
+and, when it runs, `<RUN_DIR>/r1-tests.json`). Give them the byte-identical diff and the
+untrusted-input text from Step 2.1. Merge the Claude files into `<RUN_DIR>/r1-claude.json`
+(`C-001..`) and record the round, as Step 2.1 says.
+
+**The test brief.** The general bug-hunter misses tests that cannot fail: on one replay it found
+none of six vacuous-test defects. Give the test-quality pass this brief, and tell it to report
+only test and guard defects:
+
+> For each test the change adds or edits, and each check, guard or validation it adds:
+> 1. Name the code change that should turn the test red. Read the assertion and decide whether a
+>    broken version of the code would still pass it (a prefix or substring check that a wrong
+>    value also satisfies, an assertion on a string that is always present).
+> 2. For a test that walks files or scans for matches: is there a positive control that the walk
+>    found at least one file and the scan at least one match? Without one, an empty walk passes.
+> 3. For a regex or pattern guard: list the forms it must catch, including every syntax variant
+>    the tool accepts (shorthands, quoting, whitespace), and check each against the pattern.
+> 4. Exported or public values the change edits: is each one asserted somewhere?
+> 5. Claims in docs or comments about behavior the change adds: is each one true, and tested?
+>
+> See `./references/vacuous-tests.md` for the patterns. Give each defect `file:line` and the
+> concrete test that would catch the regression.
 
 ### T2 Judge
 
@@ -94,18 +116,27 @@ T3. On the light path there are no Claude findings, so only the cross-examiner r
 
 ### T3 Tiebreak
 
-Findings that the other side refuted get Step 2.3's concede or defend turn. If the originator
-defends, `review:cross-examiner`, dispatched with `model: "opus"`, decides from three things
-only: the finding, the defence and the cited lines. This is the only Opus call in the lane, and
-Opus is never asked to judge an Opus finding: no Claude reviewer runs on Opus in this lane. Record the round as Step 2.3 says. Then apply the concessions and the cross-examiner's
-decisions to the report by hand, as Step 2.4 says, before T4 picks the survivors.
+Findings that the other side refuted get Step 2.3's concede or defend turn. Collect every
+defended finding first, then make **one** `review:cross-examiner` dispatch with `model: "opus"`
+for all of them. It decides each from three things only: the finding, the defence and the cited
+lines. This is the only Opus call in the lane, at most once per T2 pass, and Opus is never asked
+to judge an Opus finding: no Claude reviewer runs on Opus in this lane. Record the round as
+Step 2.3 says.
+
+Then write every outcome to `<RUN_DIR>/r3-decisions.json`: concessions and the cross-examiner's
+decisions, as `{"decisions":[{"id","status":"survivor|rejected","reason"}]}`. Re-run the T2
+`synthesize.py` command with `--decisions "<RUN_DIR>/r3-decisions.json"` added, so `report.json`
+and `report.md` carry the outcome before T4 picks the survivors. Never edit `report.json` by
+hand: Step 2.5, the re-check and any replay scoring read it.
 
 ### T4 Fix
 
-One fix wave for all survivors, as Step 2.5 says: check cites first, then one implementer sub-agent
-on `model: "sonnet"`. Use Opus for the implementer only when a fix touches a security gate, data
-migration or destructive path, and say why. Verify the fixes in your own context, as Step 2.5
-says, and record `phase2-fix`.
+One fix wave for all survivors, as Step 2.5 says: check cites first. Then, when the session has
+a Codex code-change tool (cc-token-router's `cx`, for example), give the whole wave to it first.
+Otherwise, or when it fails, use one implementer sub-agent on `model: "sonnet"`. This lane never
+puts the implementer on Opus unless the user asks for it; Step 2.5's security-gate exception does
+not apply here, because the Codex re-check in T5 checks every fix. Verify the fixes in your own
+context, as Step 2.5 says, and record `phase2-fix`.
 
 ### T5 Re-check and sign-off
 

@@ -5,7 +5,7 @@ synthesize.py — symmetric convergence of Claude↔Gemini adversarial review ro
 Usage:
   synthesize.py --claude-findings FILE --gemini-findings FILE
                 --gemini-verdicts FILE --claude-verdicts FILE
-                [--adversary gemini|codex|claude-only] [--match] [--md FILE] [--json FILE] [--help]
+                [--adversary gemini|codex|claude-only] [--match] [--decisions FILE] [--md FILE] [--json FILE] [--help]
 
   --adversary-findings and --adversary-verdicts are the same flags as
   --gemini-findings and --gemini-verdicts. The adversary's verdict on a Claude
@@ -39,6 +39,10 @@ Convergence rule (mechanical):
     claude_verdict=confirm   -> status=survivor
     claude_verdict=refute    -> status=rejected, killed_by=claude
     missing/none             -> status=unconfirmed
+
+  --decisions FILE applies R3 tiebreak decisions after classification. Each id
+  must match exactly one finding; survivor or rejected overrides its status,
+  records decided_by=r3 and decision_reason, and preserves kill_reason as history.
 
 Exit codes:
   0  Success
@@ -151,7 +155,8 @@ def clear_outputs(args: argparse.Namespace) -> None:
     """Delete any file at the --md / --json paths, so a run that fails leaves no
     report behind that looks like its own. A path that is also an input is kept."""
     inputs = {os.path.realpath(p) for p in (args.claude_findings, args.gemini_findings,
-                                            args.gemini_verdicts, args.claude_verdicts) if p}
+                                            args.gemini_verdicts, args.claude_verdicts,
+                                            args.decisions) if p}
     for path in (args.md, args.json_out):
         if path and os.path.realpath(path) not in inputs and os.path.lexists(path):
             os.remove(path)
@@ -204,6 +209,46 @@ def stop_on_bad_verdicts(errors: list[str]) -> None:
     sys.exit(UNRECOGNIZED_EXIT)
 
 
+def apply_decisions(raw: Any, findings: list[dict]) -> int:
+    """Validate and apply R3 tiebreak decisions, stopping on bad input."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("decisions"), list):
+        stop_on_bad_verdicts(["decisions id '<unknown>': expected an object with a 'decisions' list"])
+    errors = []
+    seen = set()
+    pending = []
+    for i, decision in enumerate(raw["decisions"]):
+        if not isinstance(decision, dict):
+            errors.append(f"decisions id '<unknown>' at entry {i}: expected an object")
+            continue
+        fid = decision.get("id")
+        where = f"decisions id {fid!r}"
+        if not isinstance(fid, str) or not fid.strip():
+            errors.append(f"{where}: expected a non-empty string id")
+            continue
+        if fid in seen:
+            errors.append(f"{where}: decided more than once")
+        seen.add(fid)
+        matches = [f for f in findings if f.get("id") == fid]
+        if len(matches) != 1:
+            errors.append(f"{where}: matches {len(matches)} findings; expected exactly one")
+        if decision.get("status") not in ("survivor", "rejected"):
+            errors.append(f"{where}: expected status survivor or rejected")
+        if not isinstance(decision.get("reason"), str):
+            errors.append(f"{where}: expected a string reason")
+        if len(matches) == 1:
+            pending.append((matches[0], decision))
+    stop_on_bad_verdicts(errors)
+    for finding, decision in pending:
+        finding["status"] = decision["status"]
+        finding["decided_by"] = "r3"
+        finding["decision_reason"] = decision["reason"]
+        if decision["status"] == "survivor":
+            finding["killed_by"] = None
+        elif not finding.get("killed_by"):
+            finding["killed_by"] = "r3"
+    return len(pending)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -242,6 +287,8 @@ Exit codes:
                              "is the degraded no-adversary path: pass empty findings/verdicts")
     parser.add_argument("--claude-verdicts", metavar="FILE",
                         help="Claude judging the adversary: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
+    parser.add_argument("--decisions", metavar="FILE",
+                        help="R3 tiebreak decisions JSON")
     parser.add_argument("--match", action="store_true",
                         help="Only label nearby pairs as raised by both; never skip or override a judge")
     parser.add_argument("--md", metavar="FILE",
@@ -770,6 +817,9 @@ def main() -> None:
                           f"the expected key '{field}' ({detail})")
     stop_on_bad_verdicts(errors)
 
+    decided = (apply_decisions(load_json(args.decisions, "decisions"), classified)
+               if args.decisions else 0)
+
     survivors = [f for f in classified if f.get("status") == "survivor"]
     unconfirmed = [f for f in classified if f.get("status") == "unconfirmed"]
     rejected = [f for f in classified if f.get("status") == "rejected"]
@@ -824,6 +874,7 @@ def main() -> None:
                 "unconfirmed": len(unconfirmed),
                 "rejected": len(rejected),
                 "total": len(classified),
+                "decided": decided,
                 "adversary": adv,
                 "unjudged": {f"{adv}_on_claude": gem_unjudged, f"claude_on_{adv}": cla_unjudged},
             },
