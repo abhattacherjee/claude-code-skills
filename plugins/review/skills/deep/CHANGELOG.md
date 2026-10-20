@@ -2,6 +2,16 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [Unreleased]
+
+### Added
+
+- `--lane tiered|legacy`, default `legacy`. The tiered lane's steps T0–T6 are in `references/tiered-lane.md` (abhattacherjee/cc-token-router#193). `references/audit-trail.md` covers the Gemini re-check.
+
+### Changed
+
+- The four vacuous-test Red Flags moved to `references/vacuous-tests.md`.
+
 ## [1.3.1] - 2026-10-16
 
 ### Changed
