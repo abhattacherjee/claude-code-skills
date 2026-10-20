@@ -5,6 +5,9 @@ Usage: lane_scope.py --files <file>
 
 Reads one path per line, ignoring blank lines. Prints light only when every
 path is eligible; empty input and code paths require full review.
+Only documentation and images under docs/, documentation extensions anywhere,
+lockfiles, and requirements*.txt are light (agent code rules still win).
+Manifests require full review because they can carry executable content.
 Exit codes: 0 on success; 2 on a usage error or unreadable input.
 """
 import argparse
@@ -13,11 +16,12 @@ import sys
 from pathlib import Path
 
 LIGHT_BASENAME_GLOBS = (
-    "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
+    "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
     "yarn.lock", "bun.lockb", "requirements*.txt", "poetry.lock", "uv.lock",
-    "Pipfile", "Pipfile.lock", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
-    "Gemfile", "Gemfile.lock", "*.md", "*.mdx", "*.rst",
+    "Pipfile.lock", "Cargo.lock", "go.sum", "Gemfile.lock", "*.md", "*.mdx", "*.rst",
 )
+DOC_EXTENSIONS = {".md", ".mdx", ".rst", ".txt", ".png", ".jpg", ".jpeg",
+                  ".gif", ".svg", ".webp"}
 CODE_COMPONENTS = {"agents", "skills", "commands"}
 # Agent instruction files steer models, so they are code too.
 CODE_BASENAMES = {"SKILL.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md"}
@@ -33,8 +37,9 @@ def classify(paths) -> str:
         # These Markdown files are code, even when they live under docs.
         if name in CODE_BASENAMES or CODE_COMPONENTS.intersection(parts):
             return "full"
-        if parts[0] != "docs" and not any(fnmatch.fnmatchcase(name, glob)
-                                          for glob in LIGHT_BASENAME_GLOBS):
+        docs_content = parts[0] == "docs" and Path(name).suffix in DOC_EXTENSIONS
+        if not docs_content and not any(fnmatch.fnmatchcase(name, glob)
+                                        for glob in LIGHT_BASENAME_GLOBS):
             return "full"
     return "light"
 

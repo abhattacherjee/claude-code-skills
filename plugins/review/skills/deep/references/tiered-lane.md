@@ -21,8 +21,9 @@ because T0 needs to know whether a cross-model reviewer exists.
 ### T0 Size gate
 
 Write every changed file path to `<RUN_DIR>/files.txt`, one per line. Take the list from
-`git diff --name-only` on the whole change, before Phase 0 leaves out lockfiles and generated files.
-A lockfile hidden from this list would turn a mixed diff into a `light` one. Then run:
+`git diff --name-only --no-renames` on the whole change, before Phase 0 leaves out lockfiles and
+generated files. A lockfile hidden from this list would turn a mixed diff into a `light` one, and
+without `--no-renames` a code file renamed into `docs/` shows only its new path. Then run:
 
 ```bash
 python3 "<SCRIPTS_DIR>/lane_scope.py" --files "<RUN_DIR>/files.txt"
@@ -33,12 +34,15 @@ output, or an empty file list means `full`. If `ADVERSARY` is `claude-only` ther
 reviewer, so the answer is `full` whatever the script says.
 
 - `full`: go to T1.
-- `light` (only dependency manifests, lockfiles or docs changed): first wait for CI. With a PR,
+- `light` (only lockfiles or docs changed; manifests such as `package.json` can carry scripts, so
+  they are `full`): first wait for CI. With a PR,
   poll `gh pr checks <PR>` until nothing is pending. Any failing check: stop and tell the user. With
   no PR, run `./scripts/commit-preflight.sh` (or the repo's equivalent) and stop if it fails. Then
   run only the adversary find command from T1, with no Claude reviewers. Give it the whole diff,
-  lockfiles included; Phase 0 would leave them out, and the diff would be empty. Its findings go through
-  T2 to T4 as usual, and T5 signs off.
+  lockfiles included; Phase 0 would leave them out, and the diff would be empty. There are no
+  Claude findings, so write `{"findings":[]}` to `<RUN_DIR>/r1-claude.json` and `{"verdicts":[]}` to
+  `<RUN_DIR>/r2-<ADVERSARY>-verdicts.json` before T2: `synthesize.py` stops on a missing file. The
+  adversary's findings go through T2 to T4 as usual, and T5 signs off.
 
 ### T1 Round 1
 
@@ -63,7 +67,7 @@ files into `<RUN_DIR>/r1-claude.json` (`C-001..`) and record the round, as Step 
 
 ### T2 Judge
 
-A finding both sides raised needs no judge. Find those first. This run takes no verdict files:
+First label the findings both sides raised. This run takes no verdict files:
 
 ```bash
 "<SCRIPTS_DIR>/synthesize.py" --match \
@@ -73,27 +77,26 @@ A finding both sides raised needs no judge. Find those first. This run takes no 
   --json "<RUN_DIR>/match.json"
 ```
 
-Every finding in `match.json` with `status_reason` "raised by both" is a survivor already. Every
-other finding is unmatched. When unsure whether two findings match, treat both as unmatched: the
-judge sees them. A wrong match must never skip a judge.
+A matched pair gets `raised_by_both` and `matched_with` in `match.json`. A match is only a label:
+it never makes a survivor and never skips a judge, because two different defects on nearby lines
+can match. Every finding is judged. Use the label to fix a confirmed pair once, not twice.
 
-- The adversary judges the unmatched Claude findings: Step 2.2's `--mode judge` call, with a
-  findings file that holds only those.
-- `review:cross-examiner` judges the unmatched adversary findings. Its prompt holds only those
+- The adversary judges every Claude finding: Step 2.2's `--mode judge` call.
+- `review:cross-examiner` judges every adversary finding. Its prompt holds only those
   findings, each with its cited line range, and nothing else from the run. It keeps its read-only
   repo tools, so it still reads the current source. Dispatch it as Step 2.2 says (results file
   `<RUN_DIR>/r2-claude-verdicts.json`, with the exact verdict shape given there).
 
-When both judges are done, run Step 2.4's `synthesize.py` command with `--match` added. Then
-apply R3 concessions by hand, as Step 2.4 says. On the light path there are no Claude findings, so
-only the cross-examiner runs.
+When both judges are done, run Step 2.4's `synthesize.py` command with `--match` added, then go to
+T3. On the light path there are no Claude findings, so only the cross-examiner runs.
 
 ### T3 Tiebreak
 
 Findings that the other side refuted get Step 2.3's concede or defend turn. If the originator
 defends, `review:cross-examiner` decides from three things only: the finding, the defence and the
 cited lines. Opus is never asked to judge an Opus finding: no Claude reviewer runs on Opus in this
-lane. Record the round as Step 2.3 says.
+lane. Record the round as Step 2.3 says. Then apply the concessions and the cross-examiner's
+decisions to the report by hand, as Step 2.4 says, before T4 picks the survivors.
 
 ### T4 Fix
 

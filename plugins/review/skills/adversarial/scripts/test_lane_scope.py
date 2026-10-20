@@ -38,10 +38,9 @@ class LaneScopeTests(unittest.TestCase):
         self.assertEqual(lane_scope.classify(["requirements-dev.txt"]), "light")
 
     def test_each_manifest_and_lockfile_is_light(self):
-        for name in ("package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
+        for name in ("package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
                      "yarn.lock", "bun.lockb", "requirements.txt", "poetry.lock", "uv.lock",
-                     "Pipfile", "Pipfile.lock", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
-                     "Gemfile", "Gemfile.lock"):
+                     "Pipfile.lock", "Cargo.lock", "go.sum", "Gemfile.lock"):
             with self.subTest(name=name):
                 self.assertEqual(lane_scope.classify(["nested/" + name]), "light")
 
@@ -49,6 +48,19 @@ class LaneScopeTests(unittest.TestCase):
         for path in ("guide.mdx", "nested/guide.rst", "docs/image.png"):
             with self.subTest(path=path):
                 self.assertEqual(lane_scope.classify([path]), "light")
+
+    def test_executable_under_docs_is_full(self):
+        for path in ("docs/conf.py", "docs/build.sh", "docs/app.js"):
+            with self.subTest(path=path):
+                self.assertEqual(lane_scope.classify([path]), "full")
+
+    def test_image_under_docs_is_light(self):
+        self.assertEqual(lane_scope.classify(["docs/diagram.png"]), "light")
+
+    def test_manifests_are_full(self):
+        for name in ("package.json", "Cargo.toml", "go.mod", "Gemfile", "Pipfile"):
+            with self.subTest(name=name):
+                self.assertEqual(lane_scope.classify([name]), "full")
 
     def test_code_overrides_light_eligibility(self):
         for path in ("SKILL.md", "docs/SKILL.md", "docs/agents/a.md",

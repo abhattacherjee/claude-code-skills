@@ -105,12 +105,18 @@ class CrossFindingTests(unittest.TestCase):
                 synthesize.main()
             return json.loads(output.read_text())
 
-    def test_match_flag_makes_pair_survivors_without_verdicts(self):
-        report = self.run_main(match=True)
-        self.assertEqual({f["id"] for f in report["findings"]}, {"C-001", "X-001"})
+    def assert_pair_labels(self, report):
+        partners = {"C-001": "X-001", "X-001": "C-001"}
+        self.assertEqual({f["id"] for f in report["findings"]}, set(partners))
         for f in report["findings"]:
-            self.assertEqual(f["status"], "survivor")
-            self.assertEqual(f["status_reason"], "raised by both")
+            self.assertIs(f["raised_by_both"], True)
+            self.assertEqual(f["matched_with"], partners[f["id"]])
+
+    def test_match_labels_pair_without_changing_status(self):
+        report = self.run_main(match=True)
+        self.assert_pair_labels(report)
+        for f in report["findings"]:
+            self.assertEqual(f["status"], "unconfirmed")
 
     def test_without_match_flag_behaviour_is_unchanged(self):
         report = self.run_main(verdicts="")
@@ -124,13 +130,31 @@ class CrossFindingTests(unittest.TestCase):
             self.run_main(match=True, missing_files=True)
         self.assertNotEqual(cm.exception.code, 0)
 
-    def test_match_overrides_refuting_verdicts(self):
+    def test_match_never_overrides_refuting_verdicts(self):
         report = self.run_main(match=True, verdicts="refute")
+        self.assert_pair_labels(report)
+        baseline = self.run_main(verdicts="refute")
+        for f, original in zip(report["findings"], baseline["findings"]):
+            self.assertEqual(f["status"], "rejected")
+            self.assertEqual(f["killed_by"], original["killed_by"])
+            self.assertEqual(f["kill_reason"], original["kill_reason"])
+            self.assertNotIn("status_reason", f)
+
+    def test_match_with_confirming_verdicts_survive(self):
+        report = self.run_main(match=True, verdicts="confirm")
+        self.assert_pair_labels(report)
         for f in report["findings"]:
             self.assertEqual(f["status"], "survivor")
-            self.assertEqual(f["status_reason"], "raised by both")
-            self.assertIsNone(f["killed_by"])
-            self.assertIsNone(f["kill_reason"])
+
+    def test_markdown_labels_pairs_in_each_status(self):
+        for verdict in (None, "refute", "confirm"):
+            with self.subTest(verdict=verdict):
+                findings = self.run_main(match=True, verdicts=verdict)["findings"]
+                groups = [[f for f in findings if f["status"] == status]
+                          for status in ("survivor", "unconfirmed", "rejected")]
+                markdown = synthesize.format_markdown(*groups)
+                self.assertIn("(no title) (raised by both, with X-001)", markdown)
+                self.assertIn("(no title) (raised by both, with C-001)", markdown)
 
 
 if __name__ == "__main__":

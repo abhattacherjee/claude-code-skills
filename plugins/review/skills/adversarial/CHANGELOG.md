@@ -7,7 +7,7 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 ### Added
 
 - `gemini-review.sh --prior <round.json>` (find mode only) re-checks an earlier round against a fix range and returns `prior_status`. `pr-audit.py recheck --adversary gemini` records it, closing resolved Gemini and Claude findings and never Codex's (abhattacherjee/cc-token-router#193).
-- `synthesize.py --match` pairs findings both sides raised; both survive as "raised by both". Without the flag, output is unchanged.
+- `synthesize.py --match` labels findings both sides raised with `raised_by_both` and `matched_with`. The label never changes a status. Without the flag, output is unchanged.
 - `lane_scope.py --files <list>` prints `light` or `full` for the `deep` tiered lane's size gate.
 
 ## [1.3.0] - 2026-10-11

@@ -1275,15 +1275,18 @@ class TieredLaneDocTests(unittest.TestCase):
         n = self.t2
         self.assertIn("synthesize.py", n)
         self.assertGreaterEqual(n.count("--match"), 2)
-        self.assertIn("raised by both", n)
+        self.assertIn("matched_with", n)
         # The first run happens before any judging, so it carries no verdict files.
         first = section(self.lane, "### T2", "### T3").split("```bash", 1)[1].split("```", 1)[0]
         self.assertNotIn("--adversary-verdicts", first)
 
-    def test_a_matched_pair_skips_the_judge_but_an_unmatched_finding_never_does(self):
+    def test_a_match_is_only_a_label_and_every_finding_is_judged(self):
+        # A live run paired two different defects on nearby lines, so a match must never skip a judge.
         n = self.t2
-        self.assertIn("unmatched", n)
-        self.assertRegex(n, r"[Ww]hen unsure[^.]*judge|no match[^.]*judge")
+        self.assertIn("never skips a judge", n)
+        self.assertIn("Every finding is judged", n)
+        self.assertIn("raised_by_both", n)
+        self.assertNotIn("survivor already", n)
 
     def test_tiebreak_reuses_concede_or_defend_then_cross_examiner(self):
         n = self.step("### T3", "### T4")
@@ -1337,6 +1340,18 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertIn("commit-preflight.sh", n)
         self.assertRegex(n, r"(exit 2|any other output)[^.]*full")
         self.assertRegex(n, r"no cross-model[^.]*full")
+
+    def test_t0_file_list_has_no_renames_and_light_path_writes_empty_inputs(self):
+        # A rename into docs/ must show its source path, and synthesize.py stops on a missing file.
+        n = self.t0
+        self.assertIn("git diff --name-only --no-renames", n)
+        self.assertIn('{"findings":[]}', n)
+        self.assertIn('{"verdicts":[]}', n)
+
+    def test_t3_applies_decisions_before_the_fix_wave(self):
+        n = norm(section(self.lane, "### T3", "### T4"))
+        self.assertIn("before T4 picks the survivors", n)
+        self.assertNotIn("apply R3 concessions by hand", self.t2)
 
     def test_claude_reviewers_do_not_rerun_in_later_rounds(self):
         n = norm(self.lane)

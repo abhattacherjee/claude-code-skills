@@ -14,9 +14,10 @@ Usage:
   findings, and the labels in the report and the direction lines.
 
   --match first pairs findings at the same path and lowercase category within
-  three lines. Both members survive with status_reason="raised by both",
-  overriding verdicts. In this mode the verdict flags may be left out (the
-  first pass runs before any judge), but a verdict path that is given must exist.
+  three lines. A match only labels the pair with raised_by_both=true and
+  matched_with=<other id>; it never skips or overrides a judge. In this mode
+  the verdict flags may be left out (both findings then stay unconfirmed),
+  but a verdict path that is given must exist.
 
   --adversary claude-only is for the degraded no-adversary path: pass
   {"findings":[]} for --adversary-findings and {"verdicts":[]} for
@@ -242,7 +243,7 @@ Exit codes:
     parser.add_argument("--claude-verdicts", metavar="FILE",
                         help="Claude judging the adversary: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
     parser.add_argument("--match", action="store_true",
-                        help="Make nearby findings raised by both sides survivors, overriding verdicts")
+                        help="Only label nearby pairs as raised by both; never skip or override a judge")
     parser.add_argument("--md", metavar="FILE",
                         help="Write human-readable markdown report to this file")
     parser.add_argument("--json", metavar="FILE", dest="json_out",
@@ -435,7 +436,10 @@ def classify_findings(
     """
 
     pairs = match_cross_findings(claude_findings, gemini_findings) if match else []
-    matched_ids = {fid for pair in pairs for fid in pair}
+    matched_with = {}
+    for claude_id, adversary_id in pairs:
+        matched_with[claude_id] = adversary_id
+        matched_with[adversary_id] = claude_id
 
     # Build verdict lookup maps with slug/location fallback matching (bug #30).
     # gemini_verdict_map: Gemini's verdicts on Claude findings, keyed by the
@@ -521,11 +525,9 @@ def classify_findings(
         classified.append(f)
 
     for f in classified:
-        if f["id"] in matched_ids:
-            f["status"] = "survivor"
-            f["status_reason"] = "raised by both"
-            f["killed_by"] = None
-            f["kill_reason"] = None
+        if f["id"] in matched_with:
+            f["raised_by_both"] = True
+            f["matched_with"] = matched_with[f["id"]]
 
     return classified, gemini_verdict_map, claude_verdict_map
 
@@ -590,8 +592,10 @@ def format_markdown(
             path = f.get("path", "")
             line = f.get("line")
             loc = f"{path}:{line}" if line is not None else path
+            match_label = (f"(raised by both, with {f['matched_with']}) "
+                           if f.get("raised_by_both") else "")
             lines.append(
-                f"### [{severity.upper()}] {f.get('title', '(no title)')} "
+                f"### [{severity.upper()}] {f.get('title', '(no title)')} {match_label}"
                 f"`{category}` *(origin: {origin})*"
             )
             if loc:
@@ -632,8 +636,10 @@ def format_markdown(
             path = f.get("path", "")
             line = f.get("line")
             loc = f"{path}:{line}" if line is not None else path
+            match_label = (f"(raised by both, with {f['matched_with']}) "
+                           if f.get("raised_by_both") else "")
             lines.append(
-                f"### [{severity.upper()}] {f.get('title', '(no title)')} "
+                f"### [{severity.upper()}] {f.get('title', '(no title)')} {match_label}"
                 f"`{category}` *(origin: {origin})*"
             )
             if loc:
@@ -662,8 +668,10 @@ def format_markdown(
             path = f.get("path", "")
             line = f.get("line")
             loc = f"{path}:{line}" if line is not None else path
+            match_label = (f"(raised by both, with {f['matched_with']}) "
+                           if f.get("raised_by_both") else "")
             lines.append(
-                f"### [{severity.upper()}] {f.get('title', '(no title)')} "
+                f"### [{severity.upper()}] {f.get('title', '(no title)')} {match_label}"
                 f"`{category}` *(origin: {origin})*"
             )
             if loc:
