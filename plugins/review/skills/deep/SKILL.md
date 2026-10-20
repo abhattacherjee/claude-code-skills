@@ -326,9 +326,8 @@ finding gets `rejected`.
 X-002`). No report is written. You may rename a wrong key or delete an entry, which leaves its
 finding unjudged. Otherwise ask the judge that wrote the file again; never set a verdict value yourself.
 
-It does not know about the R3 concessions. Apply those by hand from the `phase2-r3` record: a
-finding the refuter backed down on becomes a survivor, and one the origin gave up on stays
-rejected. Then print the final `survivors / unconfirmed / rejected` counts. If no adversary model
+For the R3 outcomes, write `<RUN_DIR>/r3-decisions.json` from the `phase2-r3` record as `{"decisions":[{"id","status":"survivor|rejected","reason"}]}` (refuter backed down: `survivor`; origin gave up: `rejected`)
+and re-run the command with `--decisions "<RUN_DIR>/r3-decisions.json"`. It prints the final counts. On exit 5, fix that file, never `report.json`. If no adversary model
 is usable and you are doing the Claude-only self-cross-examination by hand, apply the whole rule
 yourself and print the same counts.
 
@@ -444,7 +443,7 @@ error. On either, stop, print the Arguments block, and run nothing.
 
 Otherwise run Phase 0, then follow `./references/tiered-lane.md` in place of Phase 1 and Phase 2's
 R1 to R3. Its steps are T0 size gate, T1 round 1, T2 judge, T3 tiebreak, T4 fix, T5 re-check and
-sign-off, and T6 fallbacks. Two Sonnet reviewers and the adversary look once, a Sonnet judge rules, Opus only breaks ties, and
+sign-off, and T6 fallbacks. Two Sonnet reviewers (plus a test-quality pass when tests or guards change) and the adversary look once, a Sonnet judge rules, Opus only breaks ties, and
 an adversary re-check of the fix range is the sign-off.
 
 ---

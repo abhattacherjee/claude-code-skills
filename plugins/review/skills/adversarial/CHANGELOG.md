@@ -9,6 +9,12 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 - `gemini-review.sh --prior <round.json>` (find mode only) re-checks an earlier round against a fix range and returns `prior_status`. `pr-audit.py recheck --adversary gemini` records it, closing resolved Gemini and Claude findings and never Codex's (abhattacherjee/cc-token-router#193).
 - `synthesize.py --match` labels findings both sides raised with `raised_by_both` and `matched_with`. The label never changes a status. Without the flag, output is unchanged.
 - `lane_scope.py --files <list>` prints `light` or `full` for the `deep` tiered lane's size gate.
+- `synthesize.py --decisions <file>` applies concede-or-defend outcomes to `report.json` and `report.md` (`decided_by: "r3"`); a bad file exits 5 with no report.
+
+### Changed
+
+- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
+- The Codex and Gemini prompts say to judge whether the code is correct, with a plan, spec or issue as context only.
 
 ## [1.3.0] - 2026-10-11
 

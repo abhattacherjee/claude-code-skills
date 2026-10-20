@@ -11,9 +11,14 @@ All notable changes to the **review** plugin are documented here.
 - `gemini-review.sh --prior` and `pr-audit.py recheck --adversary gemini`: a Gemini re-check that closes resolved Gemini and Claude findings, never Codex's.
 - `synthesize.py --match` labels findings both sides raised (`raised_by_both`, `matched_with`) without changing their status, and `lane_scope.py` is a size gate for lockfile- and docs-only diffs.
 
+- Tiered lane gate fixes, after a replay on past PRs failed (abhattacherjee/cc-token-router#193). T1 adds a test-quality pass (a second `bug-hunter` on Sonnet with a vacuous-test brief, results in `r1-tests.json`) when the change adds or edits a test, check, guard or validation; on the replay the general bug-hunter found none of six vacuous-test defects. T3 sends every defended finding to one Opus `cross-examiner` call. T4 keeps the fix wave on Sonnet, never on the adversary's model (it signs the fixes off), and never on Opus unless the user asks.
+- `synthesize.py --decisions <file>` applies concede-or-defend outcomes (`{"decisions":[{"id","status":"survivor|rejected","reason"}]}`) to `report.json` and `report.md`, marking each `decided_by: "r3"`. A bad file exits 5 with no report written. `deep` Step 2.4 and tiered T3 use it in place of editing the report by hand.
+
 ### Changed
 
 - `deep` Red Flags: the four vacuous-test bullets moved to `references/vacuous-tests.md`, to keep the `SKILL.md` body under `validate-plugin.sh`'s 500-line limit (the frontmatter is not counted).
+- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
+- The Codex and Gemini prompts say to judge whether the code is correct, with any plan, spec or issue as context, not the standard.
 
 ## [1.3.1] - 2026-10-16
 

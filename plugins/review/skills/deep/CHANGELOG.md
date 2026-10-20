@@ -7,6 +7,8 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 ### Added
 
 - `--lane tiered|legacy`, default `legacy`. The tiered lane's steps T0–T6 are in `references/tiered-lane.md` (abhattacherjee/cc-token-router#193). `references/audit-trail.md` covers the Gemini re-check.
+- Tiered T1 test-quality pass (`r1-tests.json`) with a vacuous-test brief; T3 makes one Opus call for all defended findings; T4 fixes on Sonnet, never on the adversary's model, never on Opus unless asked.
+- Step 2.4 and T3 write concede-or-defend outcomes to `r3-decisions.json` and apply them with `synthesize.py --decisions`.
 
 ### Changed
 
