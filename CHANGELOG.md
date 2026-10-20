@@ -9,7 +9,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ### Added
 
-- **`review`: opt-in tiered lane for `deep` (`--lane tiered`; abhattacherjee/cc-token-router#193).** Two Sonnet reviewers plus Codex in round 1, Opus only to judge and break ties, and a Codex re-check as the sign-off (Gemini when Codex is unavailable). The default is unchanged. See `plugins/review/CHANGELOG.md`.
+- **`review`: opt-in tiered lane for `deep` (`--lane tiered`; abhattacherjee/cc-token-router#193).** Two Sonnet reviewers plus Codex in round 1, a Sonnet judge, Opus only to break ties, and a Codex re-check as the sign-off (Gemini when Codex is unavailable). The default is unchanged. See `plugins/review/CHANGELOG.md`.
 
 ### Fixed
 
