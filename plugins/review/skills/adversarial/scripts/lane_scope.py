@@ -39,7 +39,8 @@ def classify(paths) -> str:
         name = parts[-1]
         # These Markdown files are code, even when they live under docs.
         if (name in CODE_BASENAMES or CODE_COMPONENTS.intersection(parts)
-                or any(part.startswith(".") for part in parts[:-1])):
+                or any(part.startswith(".") for part in parts[:-1])
+                or fnmatch.fnmatchcase(name, "requirements*.txt")):
             return "full"
         docs_content = parts[0] == "docs" and Path(name).suffix in DOC_EXTENSIONS
         if not docs_content and not any(fnmatch.fnmatchcase(name, glob)

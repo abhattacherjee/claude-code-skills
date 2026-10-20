@@ -36,7 +36,7 @@ class LaneScopeTests(unittest.TestCase):
 
     def test_requirements_files_are_full(self):
         # A requirements file can install from a URL or a git repo.
-        for name in ("requirements.txt", "requirements-dev.txt"):
+        for name in ("requirements.txt", "requirements-dev.txt", "docs/requirements.txt"):
             with self.subTest(name=name):
                 self.assertEqual(lane_scope.classify([name]), "full")
 
