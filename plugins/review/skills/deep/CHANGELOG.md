@@ -13,6 +13,7 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 ### Changed
 
 - The four vacuous-test Red Flags moved to `references/vacuous-tests.md`.
+- The `cross-examiner` and the adversary prompts count a test that cannot fail as a defect, so tiered T2 and T3 no longer refute vacuous-test findings as "no current defect".
 
 ## [1.3.1] - 2026-10-16
 

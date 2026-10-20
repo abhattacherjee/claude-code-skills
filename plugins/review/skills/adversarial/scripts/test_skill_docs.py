@@ -1406,5 +1406,20 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertRegex(n, r"With Gemini or Claude-only there is no re-check round[^.]*tiered")
 
 
+VACUOUS_RULE = ("A test that cannot fail is a correctness defect, not a style point or a wish "
+                "for more coverage")
+
+
+class VacuousTestJudgeRuleTests(unittest.TestCase):
+    # On a replay, every judge refuted vacuous-test findings as "no current defect".
+    def test_every_judge_counts_a_test_that_cannot_fail(self):
+        self.assertIn(VACUOUS_RULE, cr.BASE_PROMPT)
+        for path in (HERE / "gemini-review.sh", PLUGIN / "agents" / "cross-examiner.md"):
+            with self.subTest(path=path.name):
+                text = norm(path.read_text())
+                self.assertIn(VACUOUS_RULE, text)
+                self.assertIn("name the code change that should turn the test red", text)
+
+
 if __name__ == "__main__":
     unittest.main()
