@@ -7,6 +7,8 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-21
+
 ### Added
 
 - **`review`: tiered lane for `deep` (`--lane tiered`; abhattacherjee/cc-token-router#193).** Two Sonnet reviewers plus Codex in round 1, and a Sonnet test-quality pass when tests or guards change. A Sonnet judge, one Opus call per pass to break ties, fixes on Sonnet, and a Codex re-check as the sign-off (Gemini when Codex is unavailable). It became the default in 1.4.0 (see Changed). See `plugins/review/CHANGELOG.md`.
@@ -20,6 +22,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ### Changed
 
+- **`review` 1.3.1: `deep` dispatches its implementer sub-agents on Sonnet (#237).** Phase 1 step 3 and Step 2.5 say `model: "sonnet"`, with Opus only when any fix in the spec touches a security gate, a data migration or a destructive path. Reviewer dispatches keep their models. See `plugins/review/CHANGELOG.md`.
 - **`review` 1.4.0: `deep` runs the tiered lane by default (abhattacherjee/cc-token-router#193).** A replay on five past PRs passed its gate. `bug-hunter` is on Sonnet; `--lane legacy`, `--phase1-only` and `--phase2-only` run the old two-phase flow, which dispatches `bug-hunter` with `model: "opus"`. `adversarial` 1.4.0 runs `bug-hunter` on Sonnet. See `plugins/review/CHANGELOG.md`.
 
 ## [4.1.0] - 2026-10-11
