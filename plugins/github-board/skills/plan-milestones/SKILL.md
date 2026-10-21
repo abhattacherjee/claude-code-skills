@@ -2,7 +2,7 @@
 name: plan-milestones
 description: "Re-organises open GitHub issues across milestones so each milestone stays small, themed, and shippable, deferring the rest to a themed backlog rather than letting one milestone absorb everything. Use when: (1) a milestone keeps growing and never ships, (2) new issues land in the open milestone by default, (3) open issues have no milestone at all, (4) planning what a release actually contains, (5) the user asks to re-arrange, re-scope, or focus milestones, (6) a roadmap pivots and leaves version-numbered milestones that never shipped, (7) 'milestone planning' or /github-milestone-planning (the old name of this skill). Covers: milestone themes, accretion detection, keep/defer/backlog triage, what to do with emptied and never-shipped milestones, gh milestone mechanics."
 metadata:
-  version: 2.2.1
+  version: 2.2.2
 ---
 
 # GitHub Milestone Planning
@@ -55,9 +55,9 @@ Run this first, every time, from a full (not shallow) checkout of the repo:
 "${CLAUDE_SKILL_DIR}/scripts/release-reconcile.sh" --repo O/R --json release-moves.json
 ```
 
-It refuses (exit 2) when the checkout's `origin` is another repo, or a host other than
+It refuses (exit 2) when not in a git checkout, when the checkout's `origin` is another repo, or a host other than
 github.com (`$GH_HOST` when set), or when the clone is shallow (`shallow clone: run git
-fetch --unshallow origin, then re-run`). Then it runs `git fetch --tags origin`. For each closed issue (done, not "not planned") that a merged PR
+fetch --unshallow origin, then re-run`). Then it runs `git fetch --tags origin` (skip with `--no-fetch`). For each closed issue (done, not "not planned") that a merged PR
 names with a closing keyword, it finds the first release tag containing the PR's merge
 commit. Inside a tag, the issue belongs to that release's milestone (`vX.Y.Z`, else
 `vX.Y`), even when that milestone is closed. After the last tag, it belongs to the
@@ -92,7 +92,8 @@ line says so.
   the NOTE. It fails safe (nothing moves); check it by hand.
 - Exit 1 means the result is incomplete, and no JSON is written (an old `--json` file is
   deleted at the start of every run). It happens when git, gh or jq is missing, the fetch
-  fails, a merged-PR list fails, is empty or hits the 1000-PR limit, a merged PR has no
+  fails, the default branch cannot be read, a merged-PR list fails, returns no output,
+  is not a list or hits the 1000-PR limit, a merged PR has no
   merge commit, the milestone list fails, an issue cannot be read, or a merge commit is
   not in the clone.
 

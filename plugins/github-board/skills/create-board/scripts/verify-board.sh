@@ -161,7 +161,12 @@ fi
 umask 077
 NEW_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/gh-board-new.XXXXXX")"
 trap 'rm -f "$NEW_SNAPSHOT"' EXIT
-"$(dirname "$0")/inspect-template.sh" --owner "$NEW_OWNER" --number "$NEW_NUMBER" --out "$NEW_SNAPSHOT" >/dev/null
+"$(dirname "$0")/inspect-template.sh" --owner "$NEW_OWNER" --number "$NEW_NUMBER" --out "$NEW_SNAPSHOT" >/dev/null || {
+  # Exit 2 = unreadable (see Exit codes). Exit 1 means structural drift, which a failed
+  # snapshot has not shown.
+  echo "Could not snapshot the new project $NEW_OWNER/$NEW_NUMBER; nothing was compared." >&2
+  exit 2
+}
 
 # `gh api graphql` exits 0 on a data:null + errors envelope, which would
 # otherwise diff two nulls and report a meaningless pass.

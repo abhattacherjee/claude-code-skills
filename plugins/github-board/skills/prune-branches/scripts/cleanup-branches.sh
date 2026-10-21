@@ -40,15 +40,14 @@ Examples:
 
 Requires: git, gh (GitHub CLI, authenticated), jq
 EOF
-  exit 0
 }
 
 # --- Parse args ---
 for arg in "$@"; do
   case "$arg" in
     --delete) DRY_RUN=false ;;
-    --help|-h) usage ;;
-    *) echo "Unknown argument: $arg"; usage ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "Unknown argument: $arg" >&2; usage >&2; exit 2 ;;
   esac
 done
 
@@ -349,10 +348,18 @@ for branch in ${DELETE_LOCAL[@]+"${DELETE_LOCAL[@]}"}; do
     echo "  Deleted local: $branch"
   else
     # Check if it was squash-merged via a PR
-    pr_state=$(gh pr list --state all --head "$branch" --json state --jq '.[0].state' 2>/dev/null || echo "")
-    if [[ "$pr_state" == "MERGED" ]]; then
+    # -D drops unmerged commits, so the local tip must be the head commit the PR merged.
+    # Commits added after the merge, or a lookup failure, keep the branch.
+    if ! merged_oids=$(gh pr list --state all --head "$branch" --json state,headRefOid \
+        --jq '.[] | select(.state == "MERGED") | .headRefOid' 2>/dev/null); then
+      echo "  SKIPPED local (could not look up the PR): $branch" >&2
+    elif ! tip=$(git rev-parse --verify -q "refs/heads/$branch"); then
+      echo "  SKIPPED local (could not read the branch tip): $branch" >&2
+    elif printf '%s\n' "$merged_oids" | grep -qxF "$tip"; then
       git branch -D "$branch"
       echo "  Deleted local (squash-merged): $branch"
+    elif [[ -n "$merged_oids" ]]; then
+      echo "  SKIPPED local (has commits the merged PR did not): $branch" >&2
     else
       echo "  SKIPPED local (not verified merged): $branch"
     fi

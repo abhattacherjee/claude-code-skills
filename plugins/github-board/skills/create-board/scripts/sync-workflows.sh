@@ -63,6 +63,7 @@ done
 [ -n "$NEW_OWNER" ] || { echo "Missing --new-owner" >&2; exit 2; }
 [ -n "$NEW_NUMBER" ] || { echo "Missing --new-number" >&2; exit 2; }
 [ -n "$TGT_REPO" ] || { echo "Missing --tgt-repo" >&2; exit 2; }
+[[ "$NEW_OWNER" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || { echo "Invalid --new-owner: $NEW_OWNER" >&2; exit 2; }
 
 # Fetch new project's current workflows — check for .errors before trusting the
 # response (gh api graphql exits 0 even on GraphQL field-level errors).
@@ -74,10 +75,22 @@ query($login: String!, $number: Int!) {
     }
   }
 }'
-WF_RESP=$(gh api graphql -f query="$WF_QUERY" -F login="$NEW_OWNER" -F number="$NEW_NUMBER" 2>&1) || {
-  echo "GraphQL request failed for user/$NEW_OWNER: $WF_RESP" >&2
-  exit 1
-}
+# gh exits 1 on a NOT_FOUND error (JSON body on stdout), so stdout and the exit code are
+# captured separately: a NOT_FOUND user lookup must still reach the org fallback. login goes
+# in with -f (a string: no type inference, no @file); number is a real Int, so -F.
+ERRFILE=$(mktemp "${TMPDIR:-/tmp}/gh-board-sync-err.XXXXXX")
+RC=0
+WF_RESP=$(gh api graphql -f query="$WF_QUERY" -f login="$NEW_OWNER" -F number="$NEW_NUMBER" 2>"$ERRFILE") || RC=$?
+if [ "$RC" -ne 0 ] && ! echo "$WF_RESP" | jq -e '.errors' >/dev/null 2>&1; then
+  if grep -q 'NOT_FOUND\|Could not resolve to a' "$ERRFILE"; then
+    WF_RESP=""   # no JSON body, but stderr says NOT_FOUND: try the org fallback
+  else
+    echo "GraphQL request failed for user/$NEW_OWNER: $WF_RESP $(cat "$ERRFILE")" >&2
+    rm -f "$ERRFILE"
+    exit 1
+  fi
+fi
+rm -f "$ERRFILE"
 
 if echo "$WF_RESP" | jq -e '.errors' >/dev/null 2>&1; then
   ERR_TYPE=$(echo "$WF_RESP" | jq -r '.errors[0].type // "UNKNOWN"')
@@ -98,7 +111,7 @@ query($login: String!, $number: Int!) {
     }
   }
 }'
-  WF_RESP=$(gh api graphql -f query="$ORG_WF_QUERY" -F login="$NEW_OWNER" -F number="$NEW_NUMBER" 2>&1) || {
+  WF_RESP=$(gh api graphql -f query="$ORG_WF_QUERY" -f login="$NEW_OWNER" -F number="$NEW_NUMBER" 2>&1) || {
     echo "GraphQL request failed for orgs/$NEW_OWNER: $WF_RESP" >&2
     exit 1
   }

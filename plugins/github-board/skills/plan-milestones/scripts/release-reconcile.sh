@@ -155,7 +155,7 @@ BASES="develop"
 # capture group (captures[-1]). The issue URL uses the host this checkout was validated against (github.com, or $GH_HOST).
 REPO_RE=$(printf '%s' "$REPO" | sed 's/[.]/\\./g')
 HOST_RE=$(printf '%s' "$WANT_HOST" | sed 's/[.]/\\./g')
-CLOSE_RE='(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+(('"$REPO_RE"')?#|https?://'"$HOST_RE"'/'"$REPO_RE"'/issues/)([0-9]+)\b'
+CLOSE_RE='(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?)(:\s*|\s+)(('"$REPO_RE"')?#|https?://'"$HOST_RE"'/'"$REPO_RE"'/issues/)([0-9]+)\b'
 
 : > "$TMP/refs"           # issue <TAB> pr <TAB> sha, one per merged PR naming the issue
 for base in $BASES; do

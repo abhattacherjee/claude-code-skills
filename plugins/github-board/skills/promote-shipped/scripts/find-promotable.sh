@@ -275,7 +275,7 @@ discover_prs_for_issue() {
     | {t:.__typename, pr:(.closer // .subject // .source)}
     | select(.pr != null and (.pr|type)=="object" and .pr.__typename=="PullRequest")
     | select( (.t=="ClosedEvent" or .t=="ConnectedEvent")
-              or ( (.pr.body // "") | test("(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?\\s+(('"${repo_re}"')?#|https?://'"${host_re}"'/'"${repo_re}"'/issues/)'"${num}"'\\b") ) )
+              or ( (.pr.body // "") | test("(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?)(:\\s*|\\s+)(('"${repo_re}"')?#|https?://'"${host_re}"'/'"${repo_re}"'/issues/)'"${num}"'\\b") ) )
     | ((.pr.repository.nameWithOwner // "") | ascii_downcase) as $prRepo
     | {number:.pr.number, baseRefName:.pr.baseRefName, mergedAt:.pr.mergedAt, mergeCommitOid:.pr.mergeCommit.oid,
        repo:"'"${repo}"'", foreign:($prRepo != "'"${repo_lc}"'"), prRepo:.pr.repository.nameWithOwner,

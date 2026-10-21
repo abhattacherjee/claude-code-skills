@@ -2,6 +2,12 @@
 
 All notable changes to the **move-card** skill (was `github-board-move`) are documented here.
 
+## [2.1.1] - 2026-10-21
+
+### Fixed
+- `board-move.sh` warns and goes on when it cannot read the token's OAuth scopes (`GH_TOKEN`, fine-grained PATs) instead of exiting 3. The API call then reports a real permission problem. (#249)
+- The SKILL.md refresh hint is `gh auth refresh -s read:project,project`, as the script prints. (#249)
+
 ## [2.1.0] - 2026-10-07
 
 ### Added

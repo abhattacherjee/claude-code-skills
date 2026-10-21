@@ -2,7 +2,7 @@
 name: promote-shipped
 description: "Moves GitHub Projects (v2) board items to Done after a release or hotfix merges to main. Use when: (1) a release branch finished via Git Flow and the GitHub Release is published, (2) a hotfix shipped to main + back-merged to develop, (3) /finish just completed a release or hotfix, (4) the board has closed issues sitting in non-Done columns ('Dev Complete', 'In Review', 'Done in develop') whose linked PRs merged, (5) 'release board promote' or /github-release-board-promote (the old name of this skill). Previews before writing. No-op when the repo has no boards."
 metadata:
-  version: 2.1.3
+  version: 2.1.4
 ---
 
 # GitHub Release Board Promote
@@ -116,7 +116,9 @@ nothing below reads a shell variable set by an earlier command.
 - `COUNT > 1` → call `AskUserQuestion` with one option per board (label = title,
   description = `#<number> · <url>`). The user picks.
 
-The board list is cached for 7 days (`--no-cache` skips it). A board linked to the repo while a
+The board list is cached for 7 days (`discover-boards.sh --no-cache` skips it).
+Only `discover-boards.sh` accepts `--no-cache`; the other promote scripts reject it.
+A board linked to the repo while a
 list is cached shows up only when the entry ages out, so pass `--no-cache` right after linking a
 board. If Phase 2 exits 4 saying the board id did not resolve, `inventory-board.sh` has dropped
 the cached list: re-run Phase 1 once.
@@ -131,8 +133,11 @@ and write it literally in place of `<board-id>`:
 "${CLAUDE_SKILL_DIR}/scripts/inventory-board.sh" --board-id <board-id> --human   # also show summary
 ```
 
-The script auto-detects the Status field (single-select with a `done|released|shipped`
-option). If it can't find one, it bails with exit 5 — surface the error and stop.
+The script prefers a single-select field named `Status` (case-insensitive), then
+falls back to one with a `done|released|shipped` option. If no Status single-select
+field is found, `inventory-board.sh` exits 5 — surface the error and stop.
+With a Status field but no Done-like option, it exits 0 with `doneOptionId: null`;
+`find-promotable.sh` then exits 5 because there is no target option.
 
 ### Phase 3 — Find promotable
 
@@ -250,7 +255,7 @@ cannot be checked in a `milestone: UNAVAILABLE — …` or `milestone: FAILED �
 line. No milestone line at all means the milestone already matches, or the item is
 `nopr`/`wontfix`.
 
-The preview header names the **target column** (`Target column: <name> [<option id>]`), not just the
+The preview header names the **target column** (`Target column: <name>  (option <option id>)`), not just the
 opaque option id — the resolver's last tier is a substring match on
 `done|released|shipped`, and boards in this workflow legitimately contain columns
 like "Done in develop". Check that line before approving.
@@ -261,7 +266,7 @@ to proceed:
 - **`(no release contains <sha>)`** — the release list WAS read and checked, and
   nothing published contains that commit yet. Usually it means the skill ran before
   the release shipped. Wait for the release, then re-run; the answer will change.
-- **`(release listing UNAVAILABLE for <repo> — see WARN above)`** — the release list
+- **`(release UNAVAILABLE for <repo> — see WARN above)`** — the release list
   could not be read at all (expired auth, rate limit, network), so nothing was
   checked and nothing is known about where this item shipped. Waiting will not help.
   Fix the `gh` auth or wait out the rate limit, then re-run — the answer is
@@ -361,8 +366,9 @@ markdown table.
 ## Edge cases the scripts handle
 
 - **No board on repo** — `discover-boards.sh` returns `{boards: []}`, skill no-ops.
-- **No Status field on board** — `inventory-board.sh` exits 5 with a clear error.
-- **No "Done"-like option** — same error path.
+- **No Status single-select field on board** — `inventory-board.sh` exits 5 with a clear error.
+- **Status field but no "Done"-like option** — `inventory-board.sh` exits 0 with
+  `doneOptionId: null`; `find-promotable.sh` then exits 5 because there is no target option.
 - **Item is a DraftIssue** — filtered out by `find-promotable.sh` (only Issue or PR).
 - **Issue closed but no linked PR at all** — promoted, with an explanatory comment.
   `stateReason=NOT_PLANNED` → `wontfix`; anything else with zero linked PRs → `nopr`

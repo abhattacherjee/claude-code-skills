@@ -2,7 +2,7 @@
 name: plan-week
 description: "Answers what to work on next from the cross-repo Weekly Focus board, plans the week, and sets the board up. Use when: (1) 'what do I work on next' or 'what should I work on', (2) 'what's my focus this week', (3) 'plan my next week' or 'weekly plan', (4) 'weekly focus' or /weekly-focus (the old name of this skill), (5) 'set up plan-week' or 'plan-week init', or a command exits 4 (no config yet)."
 metadata:
-  version: 2.0.1
+  version: 2.0.2
 ---
 
 # Plan Week
@@ -11,7 +11,7 @@ Board: the config owner's user project titled `plan_week.board_title`. All logic
 
 Each Bash call starts a fresh shell, so no variable survives from one command to the next. Run every command exactly as written here, with the full `"${CLAUDE_SKILL_DIR}/scripts/..."` path; never put a path or file name in a shell variable for a later command.
 
-Exit 4 from any command means plan-week is not set up yet (no config file, or a config without a `plan_week` section, e.g. one written by `create-board init`): offer **Mode: init**, run it, then carry on with what the user asked. Exit 2 that names a config key means the config is invalid: show the message and stop. Exit 1 that says the board has no Lane (or Focus) option: tell the user to add that option on the board, or to remove the lane from the config.
+Exit 4 from `weekly-focus.py` commands that read the config (`sync`, `set`, `pick`, `show`, `config`) or the launchd scripts means plan-week is not set up yet (no config file, or a config without a `plan_week` section, e.g. one written by `create-board init`): offer **Mode: init**, run it, then carry on with what the user asked. Exit 2 that names a config key means the config is invalid: show the message and stop. Exit 1 that says the board has no Lane (or Focus) option: tell the user to add that option on the board, or to remove the lane from the config.
 
 ## Every mode except init
 
@@ -96,7 +96,7 @@ JSON
 
 Exit 3: a different `plan_week` (or owner) is already there and `--force` was not passed. Exit 2 names the bad key: fix that answer and ask again.
 
-When `launchd.enabled` is true, offer to run `"${CLAUDE_SKILL_DIR}/scripts/install-launchd.sh"`. Exit 3 means another copy owns the jobs, usually the bare skill this one was (`/weekly-focus`): say so and point at the plugin README's hand-over steps; never pass `--takeover` unasked.
+When `launchd.enabled` is true, offer to run `"${CLAUDE_SKILL_DIR}/scripts/install-launchd.sh"`. Exit 3 means another copy owns a plist, a plist cannot be read, or the link path exists and is not a symlink (move that path away before re-running): say so and point at the plugin README's hand-over steps; never pass `--takeover` unasked.
 
 ## Rules
 
@@ -107,4 +107,4 @@ When `launchd.enabled` is true, offer to run `"${CLAUDE_SKILL_DIR}/scripts/insta
 
 ## Scheduling
 
-launchd runs `sync` at `plan_week.launchd.times`; an hourly watchdog alerts if it goes stale. `"${CLAUDE_SKILL_DIR}/scripts/install-launchd.sh" --check` verifies the link, the copy the jobs run from (`STALE COPY` after a plugin update: re-run `install-launchd.sh`), the plists and that both jobs are loaded. Logs: `~/Library/Logs/weekly-focus/`. See README.md.
+launchd runs `sync` at `plan_week.launchd.times`; an hourly watchdog alerts if it goes stale. `"${CLAUDE_SKILL_DIR}/scripts/install-launchd.sh" --check` verifies the link, the copy the jobs run from (`STALE COPY` after a plugin update: re-run `install-launchd.sh`), the plists and that both jobs are loaded. It exits 1 if a check fails; before those checks, it can exit 2 for bad arguments, invalid config or disabled launchd, or 4 for missing config or a missing `plan_week` section. Logs: `~/Library/Logs/weekly-focus/`. See README.md.

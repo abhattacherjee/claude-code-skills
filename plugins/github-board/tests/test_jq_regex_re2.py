@@ -43,7 +43,10 @@ def has_possessive(line):
                for lit in STRING.findall(line))
 
 
-KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?"
+KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?)"
+# The whole separator, pinned: a bare "(:" prefix let `:?\s+` pass. find-promotable writes it
+# inside a jq string, so its backslashes are doubled.
+SEPARATOR = r"(:\s*|\s+)"
 
 
 def jq_scripts():
@@ -177,8 +180,8 @@ def test_no_script_that_uses_gh_jq_has_regex_gh_cannot_run(script):
 
 def test_find_promotable_and_release_reconcile_share_the_keyword_rule():
     # Same rule in both places: find-promotable tests one number, reconcile captures it.
-    assert KEYWORD in FIND.read_text()
-    assert KEYWORD in RECONCILE.read_text()
+    assert KEYWORD + SEPARATOR.replace("\\", "\\\\") in FIND.read_text()
+    assert KEYWORD + SEPARATOR in RECONCILE.read_text()
 
 
 # The real filter, captured from a run, compiled with Go's regexp: what gh actually does.

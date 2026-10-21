@@ -4,6 +4,14 @@ All notable changes to the `promote-shipped` skill (named `github-release-board-
 before 2.0.0) are documented here.
 This skill follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.4] - 2026-10-21
+
+### Fixed
+
+- `find-promotable.sh` counts `Fixes:#N` with no space after the colon, the same rule as `release-reconcile.sh` (#249).
+- `inventory-board.sh` passes large node lists to `jq` on stdin, not argv, so a big board cannot fail with E2BIG (#249).
+- SKILL.md: exit 5 comes from `inventory-board.sh` when the board has no Status field, and from `find-promotable.sh` when the Status field has no Done-like option. The preview lines quote what `apply-promotions.sh` prints, and only `discover-boards.sh` takes `--no-cache` (#249).
+
 ## [2.1.3] - 2026-10-09
 
 ### Changed
