@@ -32,12 +32,14 @@ def test_board_items_keeps_a_card_whose_owner_differs_only_in_case(wf, monkeypat
 
 
 def _search_gh(wf, monkeypatch, total, nodes):
-    """gh() answers a search query the way `--paginate --jq` would: one JSON value per line."""
+    """gh() answers a search query the way `--paginate --jq` would: one JSON value per line.
+    The count row is supplied only when the query= text selects issueCount, as GitHub would."""
     seen = []
 
     def fake(*args, parse=True, **kw):
         seen.append(args)
-        rows = [{"__issueCount": total}] + nodes
+        asks = any(a.startswith("query=") and "issueCount" in a for a in args)
+        rows = ([{"__issueCount": total}] if asks else []) + nodes
         return "\n".join(json.dumps(r) for r in rows)
     monkeypatch.setattr(wf, "gh", fake)
     return seen
@@ -53,7 +55,7 @@ def test_a_truncated_closed_issue_search_warns(wf, monkeypatch, capsys):
     assert wf.closed_since(datetime.date(2026, 9, 28)) == {"app#1", "app#2"}
     err = capsys.readouterr().err
     assert "1500" in err and "only 2" in err
-    assert "issueCount" in " ".join(seen[0])      # the query asks for the total
+    assert any(a.startswith("query=") and "issueCount" in a for a in seen[0])  # the query asks for the total
 
 
 def test_a_complete_search_does_not_warn(wf, monkeypatch, capsys):

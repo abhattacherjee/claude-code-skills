@@ -398,6 +398,28 @@ def test_rerun_does_not_post_the_same_rationale_again(tmp_path):
     assert "already posted" in r.stdout
 
 
+def test_a_comment_that_only_contains_the_rationale_does_not_suppress_it(tmp_path):
+    rationale = "belongs with the v0.6 theme"
+    r, calls, bodies = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.6", "rationale": rationale}]}, "--apply",
+        COMMENTS=json.dumps({"comments": [{"body": "see also: " + rationale + " (maybe)"}]}))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert [c for c in calls if c.startswith("issue comment")]
+    assert rationale in bodies
+    assert "already posted" not in r.stdout
+
+
+def test_an_existing_comment_differing_only_in_edge_whitespace_counts_as_posted(tmp_path):
+    rationale = "belongs with the v0.6 theme"
+    r, calls, bodies = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.6", "rationale": rationale}]}, "--apply",
+        COMMENTS=json.dumps({"comments": [{"body": "\n  " + rationale + " \r\n\n"}]}))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not [c for c in calls if c.startswith("issue comment")]
+    assert bodies == ""
+    assert "already posted" in r.stdout
+
+
 def test_a_different_existing_comment_does_not_suppress_the_rationale(tmp_path):
     r, calls, bodies = _run(tmp_path, {"moves": [
         {"issue": 11, "to": "v0.6", "rationale": "belongs with the v0.6 theme"}]}, "--apply",

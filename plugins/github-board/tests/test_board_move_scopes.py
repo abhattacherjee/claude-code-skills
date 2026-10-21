@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from gbtest import install_fake_gh
+from gbtest import gh_calls, install_fake_gh
 
 MOVE = (Path(__file__).resolve().parent.parent / "skills" / "move-card" / "scripts"
         / "board-move.sh")
@@ -22,15 +22,21 @@ def _run(tmp_path, auth_out, *args):
                           capture_output=True, text=True, env=env, timeout=60)
 
 
+def _reached_the_api(tmp_path):
+    return any("graphql" in c for c in gh_calls(tmp_path / "gh.log"))
+
+
 def test_no_scopes_line_warns_and_continues(tmp_path):
     done = _run(tmp_path, "github.com\n  - Logged in to github.com account x (GH_TOKEN)\n")
     assert done.returncode != 3, done.stderr
+    assert _reached_the_api(tmp_path), "the script stopped at the warning"
     assert "could not read OAuth scopes" in done.stderr
 
 
 def test_scopes_none_warns_and_continues(tmp_path):
     done = _run(tmp_path, "  - Token scopes: none\n")
     assert done.returncode != 3, done.stderr
+    assert _reached_the_api(tmp_path), "the script stopped at the warning"
 
 
 def test_listed_scopes_without_project_still_exit_3(tmp_path):
