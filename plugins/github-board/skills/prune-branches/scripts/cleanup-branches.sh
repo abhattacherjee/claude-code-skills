@@ -40,15 +40,14 @@ Examples:
 
 Requires: git, gh (GitHub CLI, authenticated), jq
 EOF
-  exit 0
 }
 
 # --- Parse args ---
 for arg in "$@"; do
   case "$arg" in
     --delete) DRY_RUN=false ;;
-    --help|-h) usage ;;
-    *) echo "Unknown argument: $arg"; usage ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "Unknown argument: $arg" >&2; usage >&2; exit 2 ;;
   esac
 done
 

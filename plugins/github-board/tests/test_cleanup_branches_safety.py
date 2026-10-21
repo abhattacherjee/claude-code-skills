@@ -87,6 +87,24 @@ def _branches(repo):
     return _git("branch", "--format=%(refname:short)", cwd=repo).split()
 
 
+def test_unknown_argument_exits_with_usage_error():
+    done = subprocess.run(["bash", str(SCRIPT), "--delet"], capture_output=True, text=True,
+                          timeout=60)
+    assert done.returncode == 2
+    assert "Unknown argument: --delet" in done.stderr
+    assert "Usage: cleanup-branches.sh" in done.stderr
+    assert not done.stdout
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_help_exits_successfully(flag):
+    done = subprocess.run(["bash", str(SCRIPT), flag], capture_output=True, text=True,
+                          timeout=60)
+    assert done.returncode == 0
+    assert "Usage: cleanup-branches.sh" in done.stdout
+    assert not done.stderr
+
+
 def test_failed_open_pr_lookup_does_not_queue_a_temp_branch_for_deletion(tmp_path):
     repo = _setup(tmp_path)
     _git("push", "-q", "origin", "main:temp-x", cwd=repo)

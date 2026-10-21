@@ -2,7 +2,7 @@
 name: prune-branches
 description: "Audits and cleans stale git branches across local and remote. Use when: (1) repository has accumulated stale feature/hotfix/release branches after merges, (2) Dependabot PRs pile up with superseded older versions, (3) temp branches from git-flow-finish scripts linger as orphans, (4) git branch -d fails with 'not fully merged' on squash-merged branches, (5) periodic repo hygiene after multiple releases or hotfix cycles, (6) Dependabot PRs have been triaged into GitHub issues and the original PRs are stale, (7) 'branch cleanup' or /git-branch-cleanup (the old name of this skill)."
 metadata:
-  version: 2.0.1
+  version: 2.0.2
 ---
 
 # Git Branch Cleanup
@@ -28,7 +28,7 @@ Git Flow workflows and Dependabot generate many branches. After squash-merges, h
 
 | Category | Detection Method | Deletion Strategy |
 |----------|-----------------|-------------------|
-| Local branches with remote `[gone]` | `git branch -vv \| grep gone` | `git branch -d`, falls back to `-D` after verifying PR merged via `gh pr list` |
+| Local branches with remote `[gone]` | `git branch -vv \| grep gone` | `git branch -d`, falls back to `-D` only if `gh pr list` confirms a merged PR whose head commit equals the local tip; otherwise skipped |
 | Finished hotfix/release branches | `git merge-base --is-ancestor` against main | `gh api` DELETE on remote ref |
 | Orphan temp branches | Pattern `temp-*` or `feature/temp-*` with no open PR. If the PR lookup fails, the branch is reported as `UNKNOWN`, left alone, and the script exits 3 | `gh api` DELETE on remote ref |
 | Superseded Dependabot PRs | Same dep_key with older PR number | Close PR with comment + delete branch |
@@ -45,7 +45,7 @@ When a PR is squash-merged, the original commits don't appear in the target bran
 error: the branch 'feature/xyz' is not fully merged
 ```
 
-The script handles this by checking `gh pr list --state all --head <branch>` — if the PR state is `MERGED`, it uses `git branch -D` (force delete).
+The script handles this by checking `gh pr list --state all --head <branch>` — it uses `git branch -D` (force delete) only if a PR state is `MERGED` and the local tip equals that PR's head commit. Otherwise, or if the lookup fails, the branch is skipped.
 
 ### Remote-only merged branches are NOT detected by the script
 

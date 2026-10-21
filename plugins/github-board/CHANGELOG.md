@@ -2,6 +2,20 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.2.4] - 2026-10-21
+
+### Fixed
+
+Fixes from the 2026-10-20 deep review, ported onto develop (#249).
+
+- `create-board` 3.0.2: `inspect-template.sh` and `sync-workflows.sh` reach the organization lookup when the user lookup returns NOT_FOUND, which `gh` reports with exit 1. Both pass the login as a string (`-f`). `sync-workflows.sh` refuses a malformed `--new-owner`. `verify-board.sh` exits 2, not 1, when it cannot snapshot the new board. A failed `backfill-issues.sh` retry no longer ends the run under `set -e`.
+- `move-card` 2.1.1: `board-move.sh` warns and goes on when it cannot read the token's OAuth scopes (`GH_TOKEN`, fine-grained PATs) instead of exiting 3.
+- `plan-milestones` 2.2.2: `apply-plan.sh` does not post a rationale the issue already has when a plan is applied again. `release-reconcile.sh` counts `Fixes:#N` with no space after the colon.
+- `plan-week` 2.0.2: `weekly-focus.py` warns when a search was cut short (more matches than nodes read, or GitHub's 1000-result cap) and when an issue has more than 20 labels. Owner logins are compared without case.
+- `promote-shipped` 2.1.4: `find-promotable.sh` counts `Fixes:#N` with no space after the colon, the same rule as `release-reconcile.sh`. `inventory-board.sh` passes large node lists to `jq` on stdin, not argv, so a big board cannot fail with E2BIG.
+- `prune-branches` 2.0.2: `cleanup-branches.sh` deletes a local branch only when its tip is the merged PR's head commit. A branch with commits added after the merge, or whose PR lookup fails, is kept. An unknown argument exits 2 (it exited 0).
+- Docs: the flags and exit codes in five SKILL.md files and the README now match the scripts. `promote-shipped` exit 5 (no Status field, or no Done option), its preview lines and `--no-cache`; `create-board` inputs and audit exit codes; `move-card`'s refresh hint; `plan-milestones` exit codes and `--no-fetch`; `plan-week` exit 3 and 4. The `prune-branches` table says a local `-D` needs the tip to match the merged PR.
+
 ## [1.2.3] - 2026-10-16
 
 ### Fixed
