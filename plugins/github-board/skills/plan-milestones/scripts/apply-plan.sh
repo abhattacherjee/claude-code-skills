@@ -318,6 +318,13 @@ while IFS= read -r row; do
     continue
   fi
   rationale=$(printf '%s' "$row" | jq -r '.rationale')
+  # A re-run must not post the same rationale twice.
+  if gh issue view "$num" --repo "$REPO" --json comments 2>/dev/null \
+      | jq -e --arg r "$rationale" 'def trim: gsub("^\\s+|\\s+$"; "");
+                                    any(.comments[]?; (.body | trim) == ($r | trim))' >/dev/null 2>&1; then
+    echo "  #$num -> $target (rationale already posted)"
+    continue
+  fi
   # Comment failure must not read as success: the move without its reason is the
   # exact half-state this script exists to prevent.
   if ! ERR=$(printf '%s' "$rationale" | gh issue comment "$num" --repo "$REPO" --body-file - 2>&1 >/dev/null); then

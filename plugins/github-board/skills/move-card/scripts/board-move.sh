@@ -84,17 +84,25 @@ command -v jq >/dev/null || die "jq not found."
 # Auth scope. Every path hits the Projects API, so require at least read:project;
 # applying a move (not --list-status / --dry-run) additionally needs write 'project'.
 SCOPES=$(gh auth status 2>&1 | grep -i "Token scopes" || true)
-case "$SCOPES" in
-  *"read:project"*|*"'project'"*) ;;
-  *) echo "Error: gh token lacks a GitHub Projects scope (need at least read:project)." >&2
-     echo "Run: gh auth refresh -s read:project,project" >&2; exit 3;;
-esac
-if ! $LIST && ! $DRY_RUN; then
+if [ -z "$SCOPES" ] || echo "$SCOPES" | grep -Eqi "scopes:[[:space:]]*('?none'?)?[[:space:]]*$"; then
+  # Unreadable is not absent: GH_TOKEN and fine-grained PATs print no scopes (or "none") yet can
+  # use Projects, and `gh auth refresh` cannot fix either. Warn and let the API call report a
+  # real permission problem, as apply-promotions.sh does.
+  echo "WARN: could not read OAuth scopes for the active account (fine-grained PAT or GH_TOKEN?)." >&2
+  echo "      Projects access is UNVERIFIED; if the token cannot use it, the call below fails and says so." >&2
+else
   case "$SCOPES" in
-    *"'project'"*) ;;
-    *) echo "Error: gh token has read:project but not write 'project' (needed to modify a board)." >&2
+    *"read:project"*|*"'project'"*) ;;
+    *) echo "Error: gh token lacks a GitHub Projects scope (need at least read:project)." >&2
        echo "Run: gh auth refresh -s read:project,project" >&2; exit 3;;
   esac
+  if ! $LIST && ! $DRY_RUN; then
+    case "$SCOPES" in
+      *"'project'"*) ;;
+      *) echo "Error: gh token has read:project but not write 'project' (needed to modify a board)." >&2
+         echo "Run: gh auth refresh -s read:project,project" >&2; exit 3;;
+    esac
+  fi
 fi
 
 # resolve repo

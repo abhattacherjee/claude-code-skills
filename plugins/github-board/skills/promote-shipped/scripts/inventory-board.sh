@@ -249,7 +249,8 @@ while : ; do
     echo "       Response: $(echo "$PAGE_RESP" | tr '\n' ' ' | cut -c1-300)" >&2
     exit 4
   fi
-  ALL_NODES=$(jq -n --argjson a "$ALL_NODES" --argjson b "$PAGE_NODES" '$a + $b')
+  # Both arrays go in on stdin, never argv: a big board overflows ARG_MAX (E2BIG).
+  ALL_NODES=$({ printf '%s\n' "$ALL_NODES"; printf '%s\n' "$PAGE_NODES"; } | jq -s '.[0] + .[1]')
   HAS_NEXT=$(echo "$PAGE_RESP" | jq -r '.data.node.items.pageInfo.hasNextPage')
   CURSOR=$(echo "$PAGE_RESP" | jq -r '.data.node.items.pageInfo.endCursor')
   [ "$HAS_NEXT" != "true" ] && break
@@ -307,11 +308,11 @@ ITEMS=$(echo "$ALL_NODES" | jq --arg sfid "$STATUS_FIELD_ID" '
   )
 ')
 
-OUT=$(jq -n \
+# The items array is read from stdin (-s), not passed as --argjson: argv has a size limit.
+OUT=$(printf '%s\n' "$ITEMS" | jq -s \
   --argjson project "$PROJECT" \
   --argjson statusField "$STATUS_FIELD_ENRICHED" \
-  --argjson items "$ITEMS" \
-  '{project: $project, statusField: $statusField, items: $items}')
+  '{project: $project, statusField: $statusField, items: .[0]}')
 
 # Of the three unpaginated `first:` caps in this query, only this one can change a
 # CLASSIFICATION: linkedPRs feeds .linkedPRCount, which is what separates a

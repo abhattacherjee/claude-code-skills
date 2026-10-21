@@ -128,7 +128,9 @@ if [[ -n "$MISSING" ]]; then
   echo "  $(wc -l <<<"$MISSING" | tr -d ' ') item(s) not on the board after add; retrying once..." >&2
   sleep "${BACKFILL_RETRY_SLEEP:-5}"
   while IFS= read -r url; do
-    gh project item-add "$PROJECT_NUM" --owner "$TARGET_OWNER" --url "$url" > /dev/null 2>&1
+    # A failed retry must not end the script under set -e: the read-back below counts it.
+    gh project item-add "$PROJECT_NUM" --owner "$TARGET_OWNER" --url "$url" > /dev/null 2>&1 \
+      || echo "  WARN: retry failed for ${url}" >&2
   done <<<"$MISSING"
   MISSING=$(missing_urls)
 fi

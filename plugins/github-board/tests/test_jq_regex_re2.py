@@ -43,7 +43,7 @@ def has_possessive(line):
                for lit in STRING.findall(line))
 
 
-KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?"
+KEYWORD = "(?i)(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?)(:"
 
 
 def jq_scripts():

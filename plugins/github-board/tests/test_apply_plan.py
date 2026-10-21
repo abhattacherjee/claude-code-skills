@@ -28,7 +28,7 @@ MILESTONES = [{"title": "v0.5", "number": 5, "state": "closed"},
 # for an issue in $PATCH_FAIL. An issue state read prints open for an issue in $OPEN_ISSUES,
 # fails for one in $STATE_FAIL, else closed. POST prints $POST_NUMBER (a warning on stderr
 # first when $POST_WARN is set), or fails when it is empty. `issue comment` appends its
-# stdin body to $BODY_LOG.
+# stdin body to $BODY_LOG. `issue view` prints $COMMENTS (default: no comments).
 _STUB = r"""#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 case "$*" in
@@ -57,6 +57,8 @@ case "$*" in
     case "$*" in *state=all*) ;; *) f='map(select(.state != "closed"))' ;; esac
     case "$*" in *--paginate*) ;; *) f="$f | .[0:1]" ;; esac
     jq -c "$f" "$MS_JSON"; exit 0 ;;
+  "issue view"*)
+    printf '%s' "${COMMENTS:-{\"comments\":[]\}}"; exit 0 ;;
   "issue comment"*)
     { cat; echo; echo "----"; } >> "$BODY_LOG"; exit 0 ;;
 esac
@@ -383,3 +385,22 @@ def test_final_line_lists_the_failed_issues(tmp_path):
                    patch_fail="11 13")
     assert r.returncode == 1
     assert "completed with 2 failure(s): #11 #13" in r.stderr, r.stderr
+
+
+def test_rerun_does_not_post_the_same_rationale_again(tmp_path):
+    rationale = "line one\nline two"
+    r, calls, bodies = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.6", "rationale": rationale}]}, "--apply",
+        COMMENTS=json.dumps({"comments": [{"body": rationale}]}))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not [c for c in calls if c.startswith("issue comment")]
+    assert bodies == ""
+    assert "already posted" in r.stdout
+
+
+def test_a_different_existing_comment_does_not_suppress_the_rationale(tmp_path):
+    r, calls, bodies = _run(tmp_path, {"moves": [
+        {"issue": 11, "to": "v0.6", "rationale": "belongs with the v0.6 theme"}]}, "--apply",
+        COMMENTS=json.dumps({"comments": [{"body": "unrelated chatter"}]}))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "belongs with the v0.6 theme" in bodies
