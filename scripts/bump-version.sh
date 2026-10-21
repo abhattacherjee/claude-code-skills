@@ -43,8 +43,12 @@ fi
 # This repo tracks versions via annotated git tags, not a file.
 # ══════════════════════════════════════════════════════════════
 
-# Derive current version from the latest git tag (strips leading 'v')
-CURRENT_VERSION="$(git -C "$PROJECT_ROOT" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+# Derive current version from the highest vX.Y.Z tag (strips leading 'v').
+# Not `git describe`: it returns the nearest tag reachable from HEAD, and on
+# develop that is an older release whose tag sits on main's side of the merge
+# (after v4.2.0 shipped it read 3.20.0, so `patch` would have made 3.20.1).
+CURRENT_VERSION="$(git -C "$PROJECT_ROOT" tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null \
+  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//')"
 if [ -z "$CURRENT_VERSION" ]; then CURRENT_VERSION="0.0.0"; fi
 
 if [[ -z "$CURRENT_VERSION" ]]; then

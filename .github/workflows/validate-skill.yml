@@ -227,6 +227,15 @@ jobs:
       - name: Run sync-hygiene regression harness
         run: ./scripts/test-sync-hygiene.sh
 
+  bump-version-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unconditional: no changed-path filter covers scripts/**.
+      - name: Run bump-version tests
+        run: ./scripts/test-bump-version.sh
+
   review-tests:
     runs-on: ubuntu-latest
     steps:
