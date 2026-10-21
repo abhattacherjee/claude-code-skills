@@ -256,6 +256,22 @@ def test_a_clean_run_prints_the_summary_line(tmp_path):
     assert json.loads(out.read_text()) == {"repo": "o/r", "closed_moves": []}
 
 
+def test_a_colon_with_no_space_before_the_number_still_credits_the_issue(tmp_path):
+    # "Closes:#20" has no whitespace after the colon: only the (:\\s*|\\s+) separator matches it.
+    repo = Repo(tmp_path)
+    prs = [pr(110, "Closes #10", repo.squash(110))]
+    repo.release()
+    prs.append(pr(120, "Closes:#20", repo.squash(120)))
+    repo.publish()
+    fix = {"prs": prs, "milestones": MILESTONES,
+           "issues": {"10": issue(10, V05), "20": issue(20, V05)}}
+    r, _ = run(repo, fix, "--repo", "o/r")
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = lines(r, "MISMATCH")
+    assert [ln.split(":")[0] for ln in got] == ["MISMATCH #20"], r.stdout
+    assert got[0].endswith("after v0.5.0: v0.5 -> v0.6")
+
+
 def test_merged_prs_are_read_for_develop_and_the_default_branch(tmp_path):
     repo, fix = shape(tmp_path)
     r, calls = run(repo, fix, "--repo", "o/r")

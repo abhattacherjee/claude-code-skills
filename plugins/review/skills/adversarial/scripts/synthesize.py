@@ -5,13 +5,19 @@ synthesize.py — symmetric convergence of Claude↔Gemini adversarial review ro
 Usage:
   synthesize.py --claude-findings FILE --gemini-findings FILE
                 --gemini-verdicts FILE --claude-verdicts FILE
-                [--adversary gemini|codex|claude-only] [--md FILE] [--json FILE] [--help]
+                [--adversary gemini|codex|claude-only] [--match] [--decisions FILE] [--md FILE] [--json FILE] [--help]
 
   --adversary-findings and --adversary-verdicts are the same flags as
   --gemini-findings and --gemini-verdicts. The adversary's verdict on a Claude
   finding is adversary_verdict; files that still say gemini_verdict are read
   too. --adversary sets killed_by, the default origin of the adversary's
   findings, and the labels in the report and the direction lines.
+
+  --match first pairs findings at the same path and lowercase category within
+  three lines. A match only labels the pair with raised_by_both=true and
+  matched_with=<other id>; it never skips or overrides a judge. In this mode
+  the verdict flags may be left out (both findings then stay unconfirmed),
+  but a verdict path that is given must exist.
 
   --adversary claude-only is for the degraded no-adversary path: pass
   {"findings":[]} for --adversary-findings and {"verdicts":[]} for
@@ -33,6 +39,10 @@ Convergence rule (mechanical):
     claude_verdict=confirm   -> status=survivor
     claude_verdict=refute    -> status=rejected, killed_by=claude
     missing/none             -> status=unconfirmed
+
+  --decisions FILE applies R3 tiebreak decisions after classification. Each id
+  must match exactly one finding; survivor or rejected overrides its status,
+  records decided_by=r3 and decision_reason, and preserves kill_reason as history.
 
 Exit codes:
   0  Success
@@ -145,7 +155,8 @@ def clear_outputs(args: argparse.Namespace) -> None:
     """Delete any file at the --md / --json paths, so a run that fails leaves no
     report behind that looks like its own. A path that is also an input is kept."""
     inputs = {os.path.realpath(p) for p in (args.claude_findings, args.gemini_findings,
-                                            args.gemini_verdicts, args.claude_verdicts)}
+                                            args.gemini_verdicts, args.claude_verdicts,
+                                            args.decisions) if p}
     for path in (args.md, args.json_out):
         if path and os.path.realpath(path) not in inputs and os.path.lexists(path):
             os.remove(path)
@@ -198,6 +209,46 @@ def stop_on_bad_verdicts(errors: list[str]) -> None:
     sys.exit(UNRECOGNIZED_EXIT)
 
 
+def apply_decisions(raw: Any, findings: list[dict]) -> int:
+    """Validate and apply R3 tiebreak decisions, stopping on bad input."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("decisions"), list):
+        stop_on_bad_verdicts(["decisions id '<unknown>': expected an object with a 'decisions' list"])
+    errors = []
+    seen = set()
+    pending = []
+    for i, decision in enumerate(raw["decisions"]):
+        if not isinstance(decision, dict):
+            errors.append(f"decisions id '<unknown>' at entry {i}: expected an object")
+            continue
+        fid = decision.get("id")
+        where = f"decisions id {fid!r}"
+        if not isinstance(fid, str) or not fid.strip():
+            errors.append(f"{where}: expected a non-empty string id")
+            continue
+        if fid in seen:
+            errors.append(f"{where}: decided more than once")
+        seen.add(fid)
+        matches = [f for f in findings if f.get("id") == fid]
+        if len(matches) != 1:
+            errors.append(f"{where}: matches {len(matches)} findings; expected exactly one")
+        if decision.get("status") not in ("survivor", "rejected"):
+            errors.append(f"{where}: expected status survivor or rejected")
+        if not isinstance(decision.get("reason"), str):
+            errors.append(f"{where}: expected a string reason")
+        if len(matches) == 1:
+            pending.append((matches[0], decision))
+    stop_on_bad_verdicts(errors)
+    for finding, decision in pending:
+        finding["status"] = decision["status"]
+        finding["decided_by"] = "r3"
+        finding["decision_reason"] = decision["reason"]
+        if decision["status"] == "survivor":
+            finding["killed_by"] = None
+        elif not finding.get("killed_by"):
+            finding["killed_by"] = "r3"
+    return len(pending)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -228,19 +279,31 @@ Exit codes:
                         required=True, metavar="FILE",
                         help="Adversary (Gemini or Codex) R1 findings JSON ({\"findings\":[...]} OR bare list)")
     parser.add_argument("--gemini-verdicts", "--adversary-verdicts", dest="gemini_verdicts",
-                        required=True, metavar="FILE",
+                        metavar="FILE",
                         help="Adversary judging Claude: {\"verdicts\":[{\"id\",\"adversary_verdict\",\"reason\",\"confidence\"}]}")
     parser.add_argument("--adversary", choices=("gemini", "codex", "claude-only"), default="gemini",
                         help="the adversary model: sets killed_by, the default origin of its "
                              "findings, and the report labels (default: gemini). claude-only "
                              "is the degraded no-adversary path: pass empty findings/verdicts")
-    parser.add_argument("--claude-verdicts", required=True, metavar="FILE",
+    parser.add_argument("--claude-verdicts", metavar="FILE",
                         help="Claude judging the adversary: {\"verdicts\":[{\"id\",\"claude_verdict\",\"reason\"}]}")
+    parser.add_argument("--decisions", metavar="FILE",
+                        help="R3 tiebreak decisions JSON")
+    parser.add_argument("--match", action="store_true",
+                        help="Only label nearby pairs as raised by both; never skip or override a judge")
     parser.add_argument("--md", metavar="FILE",
                         help="Write human-readable markdown report to this file")
     parser.add_argument("--json", metavar="FILE", dest="json_out",
                         help="Write full structured JSON to this file")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.match:
+        missing = [flag for flag, path in (
+            ("--gemini-verdicts/--adversary-verdicts", args.gemini_verdicts),
+            ("--claude-verdicts", args.claude_verdicts),
+        ) if path is None]
+        if missing:
+            parser.error("the following arguments are required: " + ", ".join(missing))
+    return args
 
 
 def load_json(path: str, label: str) -> Any:
@@ -379,6 +442,30 @@ def reconcile_verdict_map(verdicts: list[dict], findings: list[dict], verdict_fi
     return resolved
 
 
+def match_cross_findings(claude, adversary, window=3):
+    """Pair nearby findings greedily in Claude id order, breaking ties by adversary id."""
+    pairs = []
+    used = set()
+    for finding in sorted(claude, key=lambda f: f["id"]):
+        fid = finding["id"]
+        line = finding.get("line")
+        category = finding.get("category")
+        if (fid in used or type(line) is not int or not isinstance(category, str)
+                or category != category.lower()):
+            continue
+        candidates = [f for f in adversary
+                      if f["id"] not in used and f["id"] != fid
+                      and f.get("path") == finding.get("path")
+                      and type(f.get("line")) is int
+                      and abs(line - f["line"]) <= window
+                      and f.get("category") == category]
+        if candidates:
+            nearest = min(candidates, key=lambda f: (abs(line - f["line"]), f["id"]))
+            pairs.append((fid, nearest["id"]))
+            used.update((fid, nearest["id"]))
+    return pairs
+
+
 def classify_findings(
     claude_findings: list[dict],
     gemini_findings: list[dict],
@@ -387,12 +474,19 @@ def classify_findings(
     adversary="gemini",
     lost_adversary: Optional[list] = None,
     lost_claude: Optional[list] = None,
+    match=False,
 ) -> tuple[list[dict], dict[str, dict], dict[str, dict]]:
     """Apply symmetric convergence and return (findings, gemini_verdict_map, claude_verdict_map).
 
     The verdict maps are returned alongside the classified findings so callers can
     reuse them for the confirm-rate guard without a second reconcile call.
     """
+
+    pairs = match_cross_findings(claude_findings, gemini_findings) if match else []
+    matched_with = {}
+    for claude_id, adversary_id in pairs:
+        matched_with[claude_id] = adversary_id
+        matched_with[adversary_id] = claude_id
 
     # Build verdict lookup maps with slug/location fallback matching (bug #30).
     # gemini_verdict_map: Gemini's verdicts on Claude findings, keyed by the
@@ -477,6 +571,11 @@ def classify_findings(
 
         classified.append(f)
 
+    for f in classified:
+        if f["id"] in matched_with:
+            f["raised_by_both"] = True
+            f["matched_with"] = matched_with[f["id"]]
+
     return classified, gemini_verdict_map, claude_verdict_map
 
 
@@ -540,8 +639,10 @@ def format_markdown(
             path = f.get("path", "")
             line = f.get("line")
             loc = f"{path}:{line}" if line is not None else path
+            match_label = (f"(raised by both, with {f['matched_with']}) "
+                           if f.get("raised_by_both") else "")
             lines.append(
-                f"### [{severity.upper()}] {f.get('title', '(no title)')} "
+                f"### [{severity.upper()}] {f.get('title', '(no title)')} {match_label}"
                 f"`{category}` *(origin: {origin})*"
             )
             if loc:
@@ -559,6 +660,9 @@ def format_markdown(
                 if c_v == "confirm":
                     lines.append("")
                     lines.append("> Confirmed by Claude.")
+            if f.get("decided_by") == "r3":
+                lines.append("")
+                lines.append(f"> Upheld in R3: {f.get('decision_reason') or '(no reason given)'}")
             lines.append("")
     else:
         lines.append("_No findings confirmed by both models._")
@@ -582,8 +686,10 @@ def format_markdown(
             path = f.get("path", "")
             line = f.get("line")
             loc = f"{path}:{line}" if line is not None else path
+            match_label = (f"(raised by both, with {f['matched_with']}) "
+                           if f.get("raised_by_both") else "")
             lines.append(
-                f"### [{severity.upper()}] {f.get('title', '(no title)')} "
+                f"### [{severity.upper()}] {f.get('title', '(no title)')} {match_label}"
                 f"`{category}` *(origin: {origin})*"
             )
             if loc:
@@ -612,14 +718,19 @@ def format_markdown(
             path = f.get("path", "")
             line = f.get("line")
             loc = f"{path}:{line}" if line is not None else path
+            match_label = (f"(raised by both, with {f['matched_with']}) "
+                           if f.get("raised_by_both") else "")
             lines.append(
-                f"### [{severity.upper()}] {f.get('title', '(no title)')} "
+                f"### [{severity.upper()}] {f.get('title', '(no title)')} {match_label}"
                 f"`{category}` *(origin: {origin})*"
             )
             if loc:
                 lines.append(f"**Location:** `{loc}`")
             lines.append(f"**Killed by:** {killed_by}")
-            if kill_reason:
+            # A tiebreak decision replaces the R2 reason; the R2 one stays in report.json.
+            if f.get("decided_by") == "r3":
+                lines.append(f"**Decided in R3:** {f.get('decision_reason') or '(no reason given)'}")
+            elif kill_reason:
                 lines.append(f"**Reason:** {kill_reason}")
             lines.append("")
             lines.append(f.get("rationale", ""))
@@ -637,8 +748,14 @@ def main() -> None:
 
     claude_findings_raw = load_json(args.claude_findings, "claude-findings")
     gemini_findings_raw = load_json(args.gemini_findings, "gemini-findings")
-    gemini_verdicts_raw = load_json(args.gemini_verdicts, "gemini-verdicts")
-    claude_verdicts_raw = load_json(args.claude_verdicts, "claude-verdicts")
+    verdicts = []
+    for path, label in ((args.gemini_verdicts, "gemini-verdicts"),
+                        (args.claude_verdicts, "claude-verdicts")):
+        if args.match and path is None:
+            verdicts.append({"verdicts": []})
+        else:
+            verdicts.append(load_json(path, label))
+    gemini_verdicts_raw, claude_verdicts_raw = verdicts
 
     # Unwrap / validate findings inputs (accept bare list or {"findings":[...]})
     claude_findings = unwrap_findings(claude_findings_raw, "claude-findings")
@@ -670,7 +787,7 @@ def main() -> None:
     lost_claude: list = []
     classified, gemini_verdict_map, claude_verdict_map = classify_findings(
         claude_findings, gemini_findings, gemini_verdicts_raw, claude_verdicts_raw, adv,
-        lost_adversary, lost_claude,
+        lost_adversary, lost_claude, match=args.match,
     )
 
     # Warn on id collisions across origins (both are preserved in the list)
@@ -705,6 +822,9 @@ def main() -> None:
             errors.append(f"{direction}: {count} verdict(s) have no confirm or refute under "
                           f"the expected key '{field}' ({detail})")
     stop_on_bad_verdicts(errors)
+
+    decided = (apply_decisions(load_json(args.decisions, "decisions"), classified)
+               if args.decisions else 0)
 
     survivors = [f for f in classified if f.get("status") == "survivor"]
     unconfirmed = [f for f in classified if f.get("status") == "unconfirmed"]
@@ -760,6 +880,7 @@ def main() -> None:
                 "unconfirmed": len(unconfirmed),
                 "rejected": len(rejected),
                 "total": len(classified),
+                "decided": decided,
                 "adversary": adv,
                 "unjudged": {f"{adv}_on_claude": gem_unjudged, f"claude_on_{adv}": cla_unjudged},
             },

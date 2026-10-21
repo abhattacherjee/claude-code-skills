@@ -3,7 +3,7 @@ name: create-board
 description: "Replicates a GitHub ProjectV2 board (Kanban view, Status columns, Milestone swimlanes, custom fields) onto a target repository by copying a known-good template, then verifies the copy and reports the one workflow that must be enabled by hand. Also audits existing boards for drift, read-only. Use when: (1) the user runs `/github-board:create-board <owner/repo>` or /create-gh-board (the old name of this skill), (2) the user asks to create, clone, copy, or replicate a project board across repos, (3) a new repo needs the standard board layout (Status: Todo/Up Next/In Progress/Development Complete/Done) wired up, (4) the user asks which existing boards have drifted or are missing auto-add. The template board comes from the github-board config (`create-board init`)."
 disable-model-invocation: true
 metadata:
-  version: 3.0.1
+  version: 3.0.2
 ---
 
 # create-board
@@ -71,7 +71,12 @@ Three consequences that drive the whole design:
 
 ## Inputs
 
-| Arg | Required | Default | Notes |
+These are skill-level inputs, not script flags. For the template, `audit-board.sh`
+takes `--template`/`--template-owner`; `copy-template.sh` takes
+`--source-number`/`--source-owner`. No script takes `--dry-run`; the skill
+handles it by inspecting the template and showing the plan without creating anything.
+
+| Input | Required | Default | Notes |
 |---|---|---|---|
 | `<repo>` | yes | — | Target repo as `owner/name`. The new project links to it. |
 | `--template <num>` | no | `create_board.template_number` from the config | Source ProjectV2 number. |
@@ -193,7 +198,9 @@ For a tracking issue:
 
 Compares Status options, view shape and `Auto-add to project` against the
 template. **Writes nothing** — it prints drift and the remediation, and you
-decide. Exit `0` clean, `1` drift found, `2` usage.
+decide. Exit `0` clean; `1` drift, missing auto-add, or a board snapshot failed;
+`2` bad usage, no configured template, an unreadable template, or an unreadable
+title for the requested board.
 
 This is how boards that silently lost auto-add get found: a board created by
 copy has no auto-add until someone enables it, and nothing else surfaces that.

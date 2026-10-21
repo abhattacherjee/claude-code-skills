@@ -51,6 +51,10 @@ class AdversarialReviewDocTests(unittest.TestCase):
             self.assertTrue(path.is_file(), name)
             self.assertTrue(os.access(str(path), os.X_OK), name + " is not executable")
 
+    def test_adversarial_registry_bug_hunter_sonnet(self):
+        self.assertRegex(self.text, r"(?m)^\| `review:bug-hunter` \| sonnet \|")
+        self.assertIn("bug-hunter (sonnet) + convention-reviewer (sonnet)", self.text)
+
     def test_step_0_picks_the_adversary(self):
         step0 = section(self.text, "### Step 0", "### Step 1")
         self.assertIn("${CLAUDE_SKILL_DIR}/scripts/pick-adversary.sh", step0)
@@ -318,7 +322,7 @@ class AgentNeverIdleOnOwnBackgroundRunTests(unittest.TestCase):
 
 AR_SCRIPT_NAME = re.compile(
     r"\b((?:codex|gemini)-review\.sh|pick-adversary\.sh|ensure-(?:codex|gemini)\.sh|pr-audit\.py|synthesize\.py"
-    r"|check-cites\.py|secret_scan\.py)\b")
+    r"|check-cites\.py|secret_scan\.py|lane_scope\.py)\b")
 
 
 class DeepReviewDocTests(unittest.TestCase):
@@ -333,7 +337,7 @@ class DeepReviewDocTests(unittest.TestCase):
 
     def test_named_adversarial_review_scripts_exist(self):
         text = (self.read("SKILL.md") + self.read("references/audit-trail.md")
-                + self.read("references/untrusted-input.md"))
+                + self.read("references/untrusted-input.md") + self.read("references/tiered-lane.md"))
         for name in sorted(set(AR_SCRIPT_NAME.findall(text))):
             self.assertTrue((HERE / name).is_file(), name)
 
@@ -348,6 +352,11 @@ class DeepReviewDocTests(unittest.TestCase):
         # exit code. Step 2.0 reads the printed lines and the exit code, never evals.
         self.assertIn("Exit code 3", phase2)
         self.assertNotRegex(fenced_code(section(phase2, "### Step 2.0", "### Step 2.1")), r"\beval\b")
+
+    def test_legacy_lane_passes_opus_to_bug_hunter(self):
+        step21 = norm(section(self.read("SKILL.md"), "### Step 2.1", "### Step 2.2"))
+        self.assertIn("review:bug-hunter", step21)
+        self.assertIn("model: \"opus\"", step21)
 
     def test_recheck_rounds_use_pr_audit_recheck(self):
         text = self.read("references/audit-trail.md")
@@ -488,7 +497,216 @@ class DeepReviewDocTests(unittest.TestCase):
             self.assertIn("never fall back", part.lower(), start)
 
 
-GEMINI_COMMAND = re.compile(r"`(gemini [^`]*)`|^\s*(gemini .*)$", re.M)
+# A direct gemini call is bounded by run_bounded.py, which kills Gemini's whole
+# process group (#53). perl's alarm killed only the first process, and the Gemini
+# CLI relaunches itself as a child node process that outlived it.
+RUN_BOUNDED_PREFIX = re.compile(
+    r'python3 "<SCRIPTS_DIR>/run_bounded\.py" 540 '
+    r'"<RUN_DIR>/r2-gemini-prompt\.txt" "[^"]+" "[^"]+" "\$MARK" ')
+PERL_ALARM = "perl -e 'alarm 540; exec @ARGV' "
+REVIEW_SCRIPT_CALL = re.compile(r'"\$\{CLAUDE_(?:SKILL_DIR|PLUGIN_ROOT)\}[^"]*/(?:codex|gemini)-review\.sh"')
+
+
+def review_commands(text):
+    """Every codex-review.sh / gemini-review.sh command the text tells the reader to
+    run: from the quoted script path to the end of its code span or shell line, with
+    backslash continuations joined."""
+    joined = text.replace("\\\n", " ")
+    cmds = []
+    for m in REVIEW_SCRIPT_CALL.finditer(joined):
+        rest = joined[m.start():]
+        cmds.append(re.split(r"[`\n]", rest, 1)[0])
+    return cmds
+
+
+class RefusalFallbackDocTests(unittest.TestCase):
+    """#171: a Codex content refusal at a Step 2.6 re-check falls back to a Gemini
+    sweep in auto mode. Codex threads stay open; any other exit 3 still stops."""
+
+    def setUp(self):
+        self.step = section((DEEP / "SKILL.md").read_text(encoding="utf-8"), "### Step 2.6", "\n---\n")
+        self.n = norm(self.step)
+
+    def refused(self):
+        return norm(section(self.step, "ADVERSARY_REFUSED:", "**Any other exit 3**"))
+
+    def test_exit_3_is_split_on_the_refused_prefix(self):
+        self.assertIn("ADVERSARY_REFUSED:", self.step)
+        self.assertIn("Any other exit 3", self.n)
+        other = norm(section(self.step, "**Any other exit 3**", "**Exit 1**"))
+        self.assertIn("Stop the re-check loop", other)
+        self.assertIn("do not fall back to Gemini or Claude-only", other)
+
+    def test_the_refused_bullet_comes_before_any_other_exit_3(self):
+        # comments I3(c): "any other" must follow the case it is other than.
+        self.assertLess(self.step.index("ADVERSARY_REFUSED:"), self.step.index("Any other exit 3"))
+
+    def test_refusal_is_a_stderr_line_not_the_start_of_stderr(self):
+        # code I2: codex_review.py can print a notice or a retry warning first.
+        for name, text in (("deep", self.n), ("adversarial", norm(SKILL.read_text(encoding="utf-8")))):
+            with self.subTest(doc=name):
+                self.assertIn("a stderr line that starts with `ADVERSARY_REFUSED:`", text)
+                self.assertNotIn("stderr starting", text)
+                self.assertNotIn("start of stderr", text)
+
+    def test_the_sweep_record_command_is_given_in_full(self):
+        # comments I3(a): appending flags to step 3's command keeps its --rechecks.
+        want = ('python3 "${CLAUDE_PLUGIN_ROOT}/skills/adversarial/scripts/pr-audit.py" recheck '
+                '--gemini-sweep --prior "<RUN_DIR>/round-<FIX_K>.json" --rechecks '
+                '"<RUN_DIR>/recheck-<K>-gemini.json" --round "<K>" --head-sha "<FIX_SHA>" '
+                '--out "<RUN_DIR>/round-<K>.json"')
+        self.assertIn(want, self.refused())
+        self.assertNotIn("Run step 3 with", self.n)
+
+    def test_a_sweep_ends_the_loop(self):
+        # comments I3(b), code I4: no second Codex call and no second sweep.
+        part = self.refused()
+        self.assertIn("end Step 2.6", part)
+        self.assertIn("no second Codex call and no second sweep", part)
+        step4 = norm(self.step.split("\n4. ", 1)[1])
+        self.assertIn("After a Gemini sweep", step4)
+        self.assertRegex(step4, r"After a Gemini sweep[^.]*never repeat from 1")
+
+    def test_both_id_starts_use_one_placeholder(self):
+        # comments S10.
+        ids = re.findall(r"--id-start (<[^>]*>)", self.step)
+        self.assertEqual(ids, ["<ID_START>", "<ID_START>"])
+        self.assertIn("`ID_START`", self.step)
+        self.assertNotIn("highest X number", self.step)
+
+    def test_the_sweep_command(self):
+        cmds = [c for c in review_commands(self.step) if "gemini-review.sh" in c]
+        self.assertEqual(len(cmds), 1, cmds)
+        cmd = cmds[0]
+        for part in ('--diff "<RUN_DIR>/fix-range-<FIX_K>.diff"', "--mode find", "--id-start",
+                     "--timeout 540", '--out "<RUN_DIR>/recheck-<K>-gemini.json"'):
+            self.assertIn(part, cmd)
+
+    def test_the_sweep_needs_auto_mode_and_gemini(self):
+        part = self.refused()
+        self.assertIn("GEMINI_AUTHED=yes", part)
+        self.assertIn("ADVERSARY_FLAG", part)
+        self.assertIn("name the refusal", part)
+
+    def test_codex_threads_stay_open(self):
+        part = self.refused()
+        self.assertIn("Codex refused the re-check; not closed", part)
+        self.assertIn("never closes a Codex thread", part)
+        self.assertIn("--gemini-sweep", part)
+        self.assertIn("round summary", part)
+        self.assertIn("no Codex re-check", part)
+
+    def test_adversarial_lists_refused_as_a_kind_of_exit_3(self):
+        text = norm(SKILL.read_text(encoding="utf-8"))
+        self.assertIn("ADVERSARY_REFUSED:", text)
+        deg = norm(section(SKILL.read_text(encoding="utf-8"), "## Degradation Behavior", "## Same-Diff"))
+        self.assertIn("ADVERSARY_REFUSED:", deg)
+        self.assertIn("a kind of exit 3", deg)
+
+
+class ShowTheExitLineDocTests(unittest.TestCase):
+    def test_a_forced_adversary_stop_shows_either_prefix(self):
+        # comments S7: after a review script ran, the exit 3 line may be
+        # ADVERSARY_REFUSED:, so "show the ADVERSARY_UNAVAILABLE line" alone is wrong.
+        for name, path in (("adversarial", SKILL), ("deep", DEEP / "SKILL.md")):
+            text = norm(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertNotIn("show the `ADVERSARY_UNAVAILABLE` line", text)
+                self.assertIn("show the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line", text)
+
+
+class GeminiIdsDocTests(unittest.TestCase):
+    def test_no_doc_says_to_renumber_gemini_ids(self):
+        # comments I1: gemini-review.sh numbers its findings from --id-start.
+        for name, path in (("adversarial", SKILL), ("deep", DEEP / "SKILL.md")):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(doc=name):
+                # Claude's own C- merge still renumbers; Gemini's G- ids never are.
+                self.assertNotRegex(text, r"(?i)renumber[^.\n]*G-0|gemini[^.\n]*renumber")
+                self.assertIn("G-001", text)
+
+
+class StaleCliDocTests(unittest.TestCase):
+    def test_degradation_says_to_check_the_cli_version_first(self):
+        # #185: "not supported" reads like a model or login problem; it is a stale CLI.
+        part = norm(section(SKILL.read_text(encoding="utf-8"), "## Degradation Behavior", "## Same-Diff"))
+        self.assertIn("not supported when using Codex with a ChatGPT account", part)
+        self.assertIn("ensure-codex.sh", part)
+        self.assertIn("CODEX_STALE", part)
+        self.assertIn("before changing the model or logging in again", part)
+
+    def test_the_new_ensure_codex_lines_are_listed(self):
+        for text in (SKILL.read_text(encoding="utf-8"), PLUGIN_README.read_text(encoding="utf-8")):
+            self.assertIn("CODEX_STALE", text)
+
+
+class TimeoutFlagDocTests(unittest.TestCase):
+    """#207: every review command in both skills passes --timeout, because callers
+    reach for `timeout`, which macOS does not have (exit 127 before the review)."""
+
+    # Exact counts (tests I5): a command that drops out of the extractor's view fails.
+    DOCS = (("adversarial", SKILL, 4), ("deep", DEEP / "SKILL.md", 5))
+    REFS = sorted(list((DEEP / "references").glob("*.md")) + list((SKILL.parent / "references").glob("*.md")))
+
+    def all_docs(self):
+        return [(n, p, c) for n, p, c in self.DOCS] + [(p.name, p, 0) for p in self.REFS]
+
+    def test_every_review_command_passes_timeout(self):
+        self.assertGreaterEqual(len(self.REFS), 4)
+        for name, path, count in self.all_docs():
+            cmds = review_commands(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertEqual(len(cmds), count, cmds)
+            for cmd in cmds:
+                if "--self-test" in cmd:
+                    continue
+                with self.subTest(doc=name, cmd=cmd[:120]):
+                    self.assertRegex(cmd, r"--timeout 540\b")
+
+    LOOSE = re.compile(r"-review\.sh\S*\s+--")
+
+    def loose_commands(self, text):
+        """Any line in a fence, or code span, that names a -review.sh script and then
+        an option: catches forms the strict extractor misses (no quotes, bash x.sh)."""
+        spans = fenced_code(text).splitlines() + re.findall(r"`([^`\n]+)`", text)
+        return [s for s in spans if self.LOOSE.search(s)]
+
+    def test_every_loose_review_command_passes_timeout(self):
+        for name, path, _ in self.all_docs():
+            for cmd in self.loose_commands(path.read_text(encoding="utf-8").replace("\\\n", " ")):
+                # --self-test is not a review; a line with an arrow is the overview
+                # diagram (`codex-review.sh|gemini-review.sh --mode find → ...`).
+                if "--self-test" in cmd or "\u2192" in cmd:
+                    continue
+                with self.subTest(doc=name, cmd=cmd[:120]):
+                    self.assertRegex(cmd, r"--timeout 540\b")
+
+    def test_the_loose_scan_sees_unquoted_forms(self):
+        text = ("x `scripts/codex-review.sh --mode find` y\n```bash\nbash ${CLAUDE_SKILL_DIR}/scripts/"
+                "gemini-review.sh --diff d\n```\nprose about codex-review.sh only\n")
+        self.assertEqual(len(self.loose_commands(text)), 2)
+
+    def test_the_extractor_sees_fenced_and_inline_commands(self):
+        text = ('x `"${CLAUDE_PLUGIN_ROOT}/s/codex-review.sh" --mode find --timeout 540` y\n'
+                '```bash\n"${CLAUDE_SKILL_DIR}/scripts/gemini-review.sh" \\\n  --mode judge \\\n'
+                '  --out f\n```\n')
+        cmds = review_commands(text)
+        self.assertEqual(len(cmds), 2, cmds)
+        self.assertIn("--timeout 540", cmds[0])
+        self.assertIn("--out f", cmds[1])
+        self.assertNotIn("--timeout", cmds[1])
+
+    def test_both_skills_say_not_to_wrap_the_scripts_in_timeout(self):
+        for name, path, _ in self.DOCS:
+            text = norm(path.read_text(encoding="utf-8"))
+            with self.subTest(doc=name):
+                self.assertIn("Do not wrap", text)
+                self.assertRegex(text, r"Do not wrap[^.]*in `timeout`[^.]*macOS has none")
+                self.assertIn("127", text)
+
+
+GEMINI_COMMAND = re.compile(r"`((?:%s)?gemini [^`]*)`|^\s*((?:%s)?gemini .*)$"
+                            % (re.escape(PERL_ALARM), re.escape(PERL_ALARM)), re.M)
 
 
 class UntrustedInputDocTests(unittest.TestCase):
@@ -514,8 +732,31 @@ class UntrustedInputDocTests(unittest.TestCase):
                     self.assertNotRegex(cmd, r'-p\s+"<')
                     if " -p " in cmd:
                         self.assertRegex(cmd, r"\s<\s*\S")
-        shown = self.gemini_commands(self.deep) + self.gemini_commands(self.ref)
-        self.assertTrue(any(re.search(r"\s<\s*\S", c) for c in shown), shown)
+        # The one direct call takes its prompt file as run_bounded.py's stdin file.
+        runs = [line for line in self.ref.splitlines() if RUN_BOUNDED_PREFIX.search(line)]
+        self.assertEqual(len(runs), 1, runs)
+        self.assertNotIn("-p \"<", runs[0])
+
+    def test_every_direct_gemini_call_is_bounded(self):
+        # #53: a direct gemini call has no wrapper script to time it out, and macOS
+        # has no `timeout`. It runs through run_bounded.py, which kills the group.
+        for name, text in (("deep", self.deep), ("untrusted-input.md", self.ref)):
+            with self.subTest(doc=name):
+                self.assertNotIn("perl -e", text)
+                self.assertNotIn("alarm 540", text)
+                self.assertNotRegex(text, r"\b142\b")
+        # Every line that runs gemini with a model (not a mention like `gemini -p`).
+        runs = [line for line in (self.deep + "\n" + self.ref).splitlines()
+                if re.search(r"\bgemini -m ", line)]
+        self.assertEqual(len(runs), 1, runs)
+        for cmd in runs:
+            with self.subTest(cmd=cmd):
+                self.assertRegex(cmd, RUN_BOUNDED_PREFIX)
+                self.assertIn('MARK="$(mktemp ', cmd)
+                self.assertIn('rm -f "$MARK"', cmd)
+        ref = norm(self.ref)
+        self.assertRegex(ref, r"124[^.]*marker[^.]*timed out")
+        self.assertIn("process group", ref)
 
     def test_the_old_argument_forms_are_gone(self):
         for text in (self.deep, self.ref, self.adv):
@@ -727,7 +968,8 @@ class DispatchContractTests(unittest.TestCase):
     def test_results_file_names_do_not_collide_with_script_outputs(self):
         table = section(self.text, "| Dispatch | Results file | Shape |", "\n\n")
         names = re.findall(r"^\|[^|]*\| `([^`]+)` \|", table, re.M)
-        self.assertEqual(len(names), 8, names)
+        self.assertEqual(len(names), 9, names)
+        self.assertIn("r1-tests.json", names)
         # PR #218 review I4: the Step 2.6 re-check judge has its own name per round.
         self.assertIn("r2-claude-verdicts-recheck-<K>.json", names)
         script_outputs = re.compile(
@@ -874,6 +1116,319 @@ class ClaudeVerdictShapeTests(unittest.TestCase):
         self.assertIn('"claude_verdict": "confirm"', agent)
         self.assertIn('"claude_verdict": "refute"', agent)
         self.assertNotRegex(agent, r'"verdict"\s*:')
+
+
+class FoldedChecklistTests(unittest.TestCase):
+    """The tiered lane runs two Sonnet reviewers instead of five toolkit agents, so the
+    toolkit's checks live in the two agent files. Each agent keeps its own lane."""
+
+    def agent(self, name):
+        return (AGENTS_DIR / name).read_text(encoding="utf-8")
+
+    def workflow(self, name):
+        return section(self.agent(name), "## Workflow", "## Output Format")
+
+    def output_format(self, name):
+        return section(self.agent(name), "## Output Format", "## Rules")
+
+    def test_bug_hunter_has_folded_checklists(self):
+        wf = self.workflow("bug-hunter.md")
+        for heading in ("#### Code and guidelines", "#### Test coverage", "#### Silent failures"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, wf)
+        self.assertNotIn("#### Comments", wf)
+        self.assertNotIn("#### Type design", wf)
+
+    def test_convention_reviewer_has_folded_checklists(self):
+        wf = self.workflow("convention-reviewer.md")
+        for heading in ("#### Comments", "#### Type design"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, wf)
+        self.assertNotIn("#### Silent failures", wf)
+
+    def test_each_checklist_has_three_to_six_bullets(self):
+        for name, headings in (("bug-hunter.md", ("Code and guidelines", "Test coverage", "Silent failures")),
+                               ("convention-reviewer.md", ("Comments", "Type design"))):
+            wf = self.workflow(name)
+            for heading in headings:
+                body = re.split(r"\n\s*####? |\n\d+\. ", wf.split("#### " + heading, 1)[1], maxsplit=1)[0]
+                bullets = [ln for ln in body.splitlines() if ln.lstrip().startswith("- ")]
+                with self.subTest(agent=name, heading=heading):
+                    self.assertTrue(3 <= len(bullets) <= 6, len(bullets))
+
+    def test_bug_hunter_frontmatter_sonnet(self):
+        front = self.agent("bug-hunter.md").split("---", 2)[1]
+        self.assertRegex(front, r"(?m)^model: sonnet$")
+
+    def test_folded_categories_in_output_format(self):
+        bh = self.output_format("bug-hunter.md")
+        for cat in ("test-gap", "silent-failure"):
+            with self.subTest(agent="bug-hunter", category=cat):
+                self.assertIn("`%s`" % cat, bh)
+        cr = self.output_format("convention-reviewer.md")
+        for cat in ("comment", "type-design"):
+            with self.subTest(agent="convention-reviewer", category=cat):
+                self.assertIn("`%s`" % cat, cr)
+
+    def test_the_two_reviewers_do_not_both_own_the_same_check(self):
+        # Test coverage and error handling moved to the bug-hunter; the convention-reviewer
+        # must not report them too, or the same gap is raised twice.
+        cr = norm(self.workflow("convention-reviewer.md"))
+        self.assertNotIn("missing test coverage for new logic", cr)
+        self.assertNotIn("missing or incomplete error handling", cr)
+        self.assertIn("test-gap", norm(self.agent("convention-reviewer.md")))
+        self.assertIn("comment", norm(self.agent("bug-hunter.md")).lower())
+
+    def test_exclusions_between_the_reviewers_stay(self):
+        bh = self.agent("bug-hunter.md")
+        cr = self.agent("convention-reviewer.md")
+        self.assertIn("Do NOT report convention or style issues", bh)
+        self.assertIn("Do NOT report bugs, security issues, or performance defects", cr)
+
+
+class TieredLaneDocTests(unittest.TestCase):
+    """`review:deep --lane tiered`: two Sonnet reviewers (and a test-quality pass) plus the adversary, a Sonnet
+    judge with Opus only to break ties, and an adversary re-check of the fix range as the sign-off.
+    This is the default lane."""
+
+    def setUp(self):
+        self.text = (DEEP / "SKILL.md").read_text(encoding="utf-8")
+        # SKILL.md must stay under 500 lines, so it holds the flag rules and a pointer;
+        # the T0-T6 steps live in the reference file.
+        self.stub = section(self.text, "## Tiered lane", "## Final report")
+        self.lane = (DEEP / "references" / "tiered-lane.md").read_text(encoding="utf-8")
+
+    def step(self, start, end):
+        return norm(section(self.lane, start, end))
+
+    @property
+    def t0(self):
+        return self.step("### T0", "### T1")
+
+    @property
+    def t1(self):
+        return self.step("### T1", "### T2")
+
+    @property
+    def t2(self):
+        return self.step("### T2", "### T3")
+
+    @property
+    def t4(self):
+        return self.step("### T4", "### T5")
+
+    @property
+    def t5(self):
+        return self.step("### T5", "### T6")
+
+    @property
+    def t6(self):
+        return norm(self.lane.split("### T6", 1)[1])
+
+    def test_sub_headings_are_in_order(self):
+        heads = re.findall(r"(?m)^### (T\d) ", self.lane)
+        self.assertEqual(heads, ["T0", "T1", "T2", "T3", "T4", "T5", "T6"])
+        for name in ("Size gate", "Round 1", "Judge", "Tiebreak", "Fix", "Re-check and sign-off", "Fallbacks"):
+            with self.subTest(name=name):
+                self.assertIn(name, self.lane)
+
+    def test_skill_points_at_the_reference_and_defaults_to_tiered(self):
+        n = norm(self.stub)
+        self.assertIn("./references/tiered-lane.md", n)
+        self.assertRegex(n, r"Otherwise, with or without `--lane tiered`, the tiered lane runs")
+        self.assertIn("With `--lane legacy`, `--phase1-only` or `--phase2-only`, skip this section", n)
+        for step in ("T0", "T1", "T2", "T3", "T4", "T5", "T6"):
+            with self.subTest(step=step):
+                self.assertIn(step, n)
+
+    def test_vacuous_test_red_flags_moved_to_a_reference(self):
+        ref = norm((DEEP / "references" / "vacuous-tests.md").read_text(encoding="utf-8"))
+        flags = norm(section(self.text, "## Red Flags", "## Integration"))
+        self.assertIn("./references/vacuous-tests.md", flags)
+        for phrase in ("planted-regression", "negative control", "expect nothing", "Fixture reachability"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, ref)
+
+    def test_lane_flag_documented_default_tiered(self):
+        args = section(self.text, "## Arguments", "## Prerequisites")
+        self.assertIn("--lane tiered|legacy", args)
+        self.assertRegex(norm(args), r"--lane tiered\|legacy[^\n]*default[^\n]*tiered")
+
+    def test_lane_flag_rejects_bad_values_and_phase_flags(self):
+        n = norm(self.stub)
+        self.assertRegex(n, r"other than `tiered` or `legacy`[^.]*usage error")
+        self.assertRegex(n, r"`--phase1-only` or `--phase2-only`[^.]*usage error")
+        self.assertIn("run nothing", n)
+
+    def test_tiered_round1_dispatches_sonnet_reviewers_test_pass_and_codex(self):
+        # A replay found the general bug-hunter missed all six vacuous-test defects on one PR,
+        # so a second bug-hunter with a test brief runs when tests or guards change.
+        n = self.t1
+        self.assertIn("review:bug-hunter", n)
+        self.assertIn("review:convention-reviewer", n)
+        self.assertEqual(n.count('model: "sonnet"'), 3)
+        self.assertIn("<RUN_DIR>/r1-tests.json", n)
+        self.assertIn("./references/vacuous-tests.md", n)
+        self.assertIn("positive control", n)
+        self.assertRegex(n, r'codex-review\.sh"? --mode find')
+        self.assertNotIn("pr-review-toolkit", n)
+        self.assertIn("./references/dispatch-contract.md", n)
+
+    def test_tiered_opus_only_breaks_ties(self):
+        # Two dogfood runs priced the Opus judge as the largest Claude cost, so T2 judges on
+        # Sonnet and Opus runs only when the originator defends a refuted finding.
+        self.assertIn("review:cross-examiner", self.t2)
+        self.assertIn('model: "sonnet"', self.t2)
+        self.assertNotIn('model: "opus"', self.t2)
+        t3 = self.step("### T3", "### T4")
+        self.assertEqual(self.lane.count('model: "opus"'), 1)
+        self.assertIn('model: "opus"', t3)
+        self.assertNotIn('model: "opus"', self.stub)
+        self.assertNotIn("Opus only judges", norm(self.stub))
+        self.assertIn("**one** `review:cross-examiner` dispatch", t3)
+        self.assertIn('model: "sonnet"', self.t4)
+        self.assertIn("never puts the implementer on Opus unless the user asks", self.t4)
+        # A replay run declined cx for its fixes because Codex signs them off.
+        self.assertIn("Never give the fixes to the adversary's model", self.t4)
+        self.assertIn("must not sign off its own fixes", self.t4)
+
+    def test_tiebreak_outcomes_reach_the_report(self):
+        # On a replay, two findings the Opus tiebreak upheld still read "rejected" in
+        # report.json, because the outcome was applied by hand.
+        t3 = self.step("### T3", "### T4")
+        self.assertIn('--decisions "<RUN_DIR>/r3-decisions.json"', t3)
+        self.assertIn("Never edit `report.json` by hand", t3)
+        step24 = norm(section(self.text, "### Step 2.4", "### Step 2.5"))
+        self.assertIn('--decisions "<RUN_DIR>/r3-decisions.json"', step24)
+        self.assertNotIn("Apply those by hand", step24)
+
+    def test_cross_examiner_prompt_scoped_to_judged_findings(self):
+        n = self.t2
+        self.assertIn("only those findings", n)
+        self.assertIn("cited line range", n)
+        self.assertIn("read-only", n)
+
+    def test_tiered_uses_match_flag(self):
+        n = self.t2
+        self.assertIn("synthesize.py", n)
+        self.assertGreaterEqual(n.count("--match"), 2)
+        self.assertIn("matched_with", n)
+        # The first run happens before any judging, so it carries no verdict files.
+        first = section(self.lane, "### T2", "### T3").split("```bash", 1)[1].split("```", 1)[0]
+        self.assertNotIn("--adversary-verdicts", first)
+
+    def test_a_match_is_only_a_label_and_every_finding_is_judged(self):
+        # A live run paired two different defects on nearby lines, so a match must never skip a judge.
+        n = self.t2
+        self.assertIn("never skips a judge", n)
+        self.assertIn("Every finding is judged", n)
+        self.assertIn("raised_by_both", n)
+        self.assertNotIn("survivor already", n)
+        # Fixing a pair "once" can leave the second, different defect unfixed (X-005).
+        self.assertIn("fix and check each confirmed finding on its own", n)
+        self.assertNotIn("fix a confirmed pair once", n)
+
+    def test_tiebreak_reuses_concede_or_defend_then_cross_examiner(self):
+        n = self.step("### T3", "### T4")
+        self.assertIn("concede or defend", n)
+        self.assertIn("Step 2.3", n)
+        self.assertIn("review:cross-examiner", n)
+        self.assertRegex(n, r"never[^.]*Opus finding|no Claude reviewer runs on Opus")
+
+    def test_tiered_recheck_is_signoff_and_names_model(self):
+        n = self.t5
+        self.assertIn("--prior", n)
+        self.assertIn("RECHECK_ROUND", n)
+        self.assertIn("signed off", n)
+        self.assertIn("names the sign-off model", n)
+        for name in ("FIX_K", "FIX_SHA", "REVIEWED_SHA", "ID_START"):
+            with self.subTest(name=name):
+                self.assertIn(name, n)
+
+    def test_tiered_state_variables_are_not_redefined(self):
+        for name in ("FIX_K", "FIX_SHA", "REVIEWED_SHA", "RECHECK_ROUND", "ID_START"):
+            with self.subTest(name=name):
+                self.assertNotRegex(self.lane, r"(?m)^- `%s`:" % name)
+
+    def test_tiered_gemini_signoff_when_codex_unavailable(self):
+        n = self.t6
+        self.assertRegex(n, r'gemini-review\.sh"? --mode find --prior')
+        self.assertIn("--adversary gemini", n)
+        self.assertIn("pr-audit.py", n)
+
+    def test_gemini_signoff_leaves_other_models_threads_open(self):
+        n = self.t6
+        self.assertIn("origin", n)
+        self.assertRegex(n, r"never closes a Codex finding[^.]*threads stay open")
+        self.assertIn("`gemini` or `claude`", n)
+
+    def test_claude_only_first_line(self):
+        self.assertIn("Not signed off: no cross-model pass", self.t6)
+        self.assertIn("first line", self.t6)
+
+    def test_tiered_recheck_stops_on_codex_unavailable(self):
+        n = self.t6
+        self.assertIn("Stop the re-check loop", n)
+        self.assertIn("leave the remaining threads open", n)
+        self.assertIn("Not signed off", n)
+        self.assertIn("do not switch to Gemini mid-loop", n)
+
+    def test_light_path_uses_lane_scope(self):
+        n = self.t0
+        self.assertIn("lane_scope.py", n)
+        self.assertIn("gh pr checks", n)
+        self.assertIn("commit-preflight.sh", n)
+        self.assertRegex(n, r"(exit 2|any other output)[^.]*full")
+        self.assertRegex(n, r"no cross-model[^.]*full")
+
+    def test_t0_file_list_has_no_renames_and_light_path_writes_empty_inputs(self):
+        # A rename into docs/ must show its source path, and synthesize.py stops on a missing file.
+        n = self.t0
+        self.assertIn("git diff --name-only --no-renames", n)
+        self.assertIn('{"findings":[]}', n)
+        self.assertIn('{"verdicts":[]}', n)
+
+    def test_t3_applies_decisions_before_the_fix_wave(self):
+        n = norm(section(self.lane, "### T3", "### T4"))
+        self.assertIn("before T4 picks the survivors", n)
+        self.assertNotIn("apply R3 concessions by hand", self.t2)
+
+    def test_claude_reviewers_do_not_rerun_in_later_rounds(self):
+        n = norm(self.lane)
+        self.assertRegex(n, r"do not run again in rounds 2\+")
+        self.assertIn("guard behind a Critical", n)
+
+    def test_existing_phase2_tests_still_slice(self):
+        i2 = self.text.index("### Step 2.6")
+        it = self.text.index("## Tiered lane")
+        ifr = self.text.index("## Final report")
+        self.assertLess(i2, it)
+        self.assertLess(it, ifr)
+        self.assertEqual(self.text.count("## Tiered lane"), 1)
+
+    def test_red_flag_names_the_tiered_lane(self):
+        flags = norm(self.text.split("## Red Flags", 1)[1])
+        self.assertIn("signed off", flags)
+        self.assertIn("tiered", flags)
+
+    def test_legacy_gemini_sentence_points_at_the_tiered_exception(self):
+        n = norm(section(self.text, "### Step 2.6", "\n---\n"))
+        self.assertRegex(n, r"With Gemini or Claude-only there is no re-check round[^.]*tiered")
+
+
+VACUOUS_RULE = ("A test that cannot fail is a correctness defect, not a style point or a wish "
+                "for more coverage")
+
+
+class VacuousTestJudgeRuleTests(unittest.TestCase):
+    # On a replay, every judge refuted vacuous-test findings as "no current defect".
+    def test_every_judge_counts_a_test_that_cannot_fail(self):
+        self.assertIn(VACUOUS_RULE, cr.BASE_PROMPT)
+        for path in (HERE / "gemini-review.sh", PLUGIN / "agents" / "cross-examiner.md"):
+            with self.subTest(path=path.name):
+                text = norm(path.read_text())
+                self.assertIn(VACUOUS_RULE, text)
+                self.assertIn("name the code change that should turn the test red", text)
 
 
 if __name__ == "__main__":

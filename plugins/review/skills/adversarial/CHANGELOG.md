@@ -2,6 +2,32 @@
 
 All notable changes to the **adversarial** skill (was `adversarial-review`) are documented here.
 
+## [Unreleased]
+
+## [1.4.0] - 2026-10-20
+
+### Added
+
+- `gemini-review.sh --prior <round.json>` (find mode only) re-checks an earlier round against a fix range and returns `prior_status`. `pr-audit.py recheck --adversary gemini` records it, closing resolved Gemini and Claude findings and never Codex's (abhattacherjee/cc-token-router#193).
+- `synthesize.py --match` labels findings both sides raised with `raised_by_both` and `matched_with`. The label never changes a status. Without the flag, output is unchanged.
+- `lane_scope.py --files <list>` prints `light` or `full` for the `deep` tiered lane's size gate.
+- `synthesize.py --decisions <file>` applies concede-or-defend outcomes to `report.json` and `report.md` (`decided_by: "r3"`); a bad file exits 5 with no report.
+
+### Changed
+
+- `bug-hunter` runs on Sonnet (its frontmatter changed). 1.4.0.
+- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
+- The Codex and Gemini prompts say to judge whether the code is correct, with a plan, spec or issue as context only.
+- The Codex and Gemini prompts count a test that cannot fail as a correctness defect, judged by naming the code change that should turn it red.
+
+## [1.3.0] - 2026-10-11
+
+### Changed
+
+- Every `codex-review.sh` and `gemini-review.sh` review command passes `--timeout 540`, and the Codex sandbox section says not to wrap the scripts in `timeout` (macOS has none: exit 127) (#207). `gemini-review.sh` now bounds each call itself (#53).
+- Degradation Behavior lists `ADVERSARY_REFUSED:` as a kind of exit 3, found as a stderr line that starts with that prefix (#171), and says to run `ensure-codex.sh --check` and read `CODEX_STALE` when Codex says a model "is not supported when using Codex with a ChatGPT account", before changing the model or logging in again (#185). It offers `ln -sfn` only for a link into the standalone installer's `packages/` or to the ChatGPT app's codex, never over an npm or Homebrew link.
+- A stop after a forced adversary shows the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line, and Step 2 no longer says to renumber Gemini's ids: `gemini-review.sh` numbers them itself.
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed

@@ -2,6 +2,36 @@
 
 All notable changes to the **deep** skill (was `deep-review`) are documented here.
 
+## [Unreleased]
+
+## [1.4.0] - 2026-10-20
+
+### Added
+
+- `--lane tiered|legacy` (default `tiered`; see Changed). The tiered lane's steps T0–T6 are in `references/tiered-lane.md` (abhattacherjee/cc-token-router#193). `references/audit-trail.md` covers the Gemini re-check.
+- Tiered T1 test-quality pass (`r1-tests.json`) with a vacuous-test brief; T3 makes one Opus call for all defended findings; T4 fixes on Sonnet, never on the adversary's model, never on Opus unless asked.
+- Step 2.4 and T3 write concede-or-defend outcomes to `r3-decisions.json` and apply them with `synthesize.py --decisions`.
+
+### Changed
+
+- Tiered lane is the default; `--lane legacy` runs the old flow with `bug-hunter` on Opus. 1.4.0.
+- The four vacuous-test Red Flags moved to `references/vacuous-tests.md`.
+- The `cross-examiner` and the adversary prompts count a test that cannot fail as a defect, so tiered T2 and T3 no longer refute vacuous-test findings as "no current defect".
+
+## [1.3.1] - 2026-10-16
+
+### Changed
+
+- Phase 1 step 3 and Step 2.5 dispatch the implementer with `model: "sonnet"`; Opus only when any fix in the spec touches a security gate, a data migration or a destructive path, with the reason in the dispatch (#237). Reviewer dispatches keep their models.
+
+## [1.3.0] - 2026-10-11
+
+### Changed
+
+- Step 2.6 splits exit 3 (#171). The refusal is a stderr line that starts with `ADVERSARY_REFUSED:` (other lines can come first), and its bullet now comes before "any other exit 3". In auto mode with `GEMINI_AUTHED=yes`, Gemini sweeps the fix-range diff once (`gemini-review.sh --mode find --id-start <ID_START>`), and the round is recorded with the full `pr-audit.py recheck --gemini-sweep ...` command given inline. Every earlier thread (Codex's and Claude's) stays open, marked "Codex refused the re-check; not closed". The new findings are judged and fixed, and then Step 2.6 ends: step 4's "repeat from 1" does not apply, so there is no second Codex call and no second sweep. Any other exit 3 stops the loop as before. Both `--id-start` values use one `ID_START` value: the highest finding number used in the run + 1.
+- Every `codex-review.sh` and `gemini-review.sh` command passes `--timeout 540`, and Step 2.0 says not to wrap the scripts in `timeout` (#207). The direct `gemini` fallback in Step 2.2 and `references/untrusted-input.md` runs through `run_bounded.py` with a `mktemp` marker, which kills Gemini's whole process group after 540 s; exit 124 with a "timed out" marker means the limit fired (#53). `perl`'s `alarm` is not used: the Gemini CLI relaunches itself as a child `node` process, and the alarm killed only the first one.
+- A stop after a forced adversary shows the `ADVERSARY_UNAVAILABLE:` or `ADVERSARY_REFUSED:` line, and Step 2.0 no longer says to renumber Gemini's ids: `gemini-review.sh` numbers them itself.
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed

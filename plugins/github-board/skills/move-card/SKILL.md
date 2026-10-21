@@ -2,7 +2,7 @@
 name: move-card
 description: "Moves a GitHub issue or PR's Project (v2) board card to a target Status column via a deterministic script (scripts/board-move.sh). Use when: (1) moving an issue to 'In Progress' when work starts, (2) moving a card to 'Development Complete'/'In Review'/'Done in develop' when its PR merges, (3) any mid-lifecycle Project v2 status change that promote-shipped (release->Done only) does not cover, (4) listing a board's available Status columns, (5) 'board move' or /github-board-move (the old name of this skill). Covers: projectsV2 board discovery, Status field/option lookup, updateProjectV2ItemFieldValue, fuzzy column matching, --add for items not yet on the board, project auth-scope checks."
 metadata:
-  version: 2.1.0
+  version: 2.1.1
 ---
 
 # GitHub Board Move
@@ -38,7 +38,7 @@ This is the tooling for steps 3 (-> In Progress) and 6 (-> post-merge column) of
 
 ## Key facts
 - **Status column names are board-specific** — there is no canonical set. Run `--list-status` first. `--to` matches case-insensitively (exact, then unique substring); ambiguous or no match errors and prints the options.
-- **Auth scope:** discovery / `--list-status` / `--dry-run` need `read:project`; applying a move needs `project`. The script exits `3` with a `gh auth refresh -s project` hint if the write scope is missing.
+- **Auth scope:** discovery / `--list-status` / `--dry-run` need `read:project`; applying a move needs `project`. The script exits `3` with a `gh auth refresh -s read:project,project` hint if the write scope is missing. When `gh auth status` lists no scopes (`GH_TOKEN`, fine-grained token), it warns and carries on.
 - **Projects v2 only** (GraphQL `projectsV2`). Classic (REST) projects are not supported.
 - **The option id is a plain string** — passed to the mutation via `gh api -f oid=` (not `-F`); a typed `-F` errors.
 - **The item must be on the board.** If the issue/PR is not a card yet, pass `--add` (runs `addProjectV2ItemById`); otherwise the script errors with that hint.

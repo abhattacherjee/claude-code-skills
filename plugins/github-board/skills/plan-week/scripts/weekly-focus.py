@@ -11,7 +11,7 @@ like "what do I work on next") is the normal way to use this.
                                   issue in each active repo's current milestone, plus
                                   P1/security issues from any milestone. Work already in
                                   progress (a Status of In progress / In review on any of your
-                                  boards, or an open PR that closes the issue) is pulled in as
+                                  boards, or an open non-draft PR that closes the issue) is pulled in as
                                   Focus=This week with Status=In Progress, and reported as
                                   unplanned when it is outside the plan. Reports what started,
                                   what is new since Monday and what closed since Monday.
@@ -119,7 +119,7 @@ def board_readme():
         "",
         "- Work already in progress (Status In progress / In review on any of your boards, or an open PR",
         "  that closes the issue) is pulled in automatically. It is marked unplanned when it is outside",
-        "  the plan, and never hidden or demoted.",
+        "  the plan, and never hidden or demoted. A draft PR does not count: it is parked work.",
         "",
         f"Weekly rhythm ({lo}-{hi}h):",
         sync_line,
@@ -433,7 +433,7 @@ def board_items(num):
             if not (repo and c.get("number")):
                 continue
             owner = (r.get("owner") or {}).get("login")
-            if owner != OWNER:
+            if (owner or "").lower() != OWNER.lower():   # logins are case-insensitive
                 print(f"weekly-focus: warning: skipping card {owner}/{repo}#{c['number']} "
                       f"(not owned by {OWNER})", file=sys.stderr)
                 continue
@@ -496,14 +496,16 @@ def add(num, pid, fields, key, labels, focus):
 
 def open_issues():
     q = ("query($endCursor:String){search(query:\"user:%s is:issue is:open\",type:ISSUE,first:100,"
-         "after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on Issue{number "
-         "createdAt url repository{name} milestone{title} labels(first:20){nodes{name}}}}}}") % OWNER
-    raw = gh("api", "graphql", "--paginate", "-f", f"query={q}", "--jq", ".data.search.nodes[]",
-             parse=False)
+         "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number "
+         "createdAt url repository{name} milestone{title} labels(first:20){totalCount nodes{name}}}}}}") % OWNER
     out = {}
-    for line in raw.splitlines():
-        i = json.loads(line)
+    for i in gql_search(q, "open issues"):
         repo = i["repository"]["name"]
+        lab = i["labels"]
+        if (lab.get("totalCount") or 0) > len(lab["nodes"]):
+            print(f"weekly-focus: warning: {repo}#{i['number']} has {lab['totalCount']} labels "
+                  f"but only {len(lab['nodes'])} were read; lane matching may miss the rest",
+                  file=sys.stderr)
         out[f'{repo}#{i["number"]}'] = {
             "repo": repo,
             "labels": [l["name"] for l in i["labels"]["nodes"]],
@@ -523,12 +525,36 @@ def gql(query, jq, **variables):
     return [json.loads(line) for line in raw.splitlines() if line.strip()]
 
 
+SEARCH_CAP = 1000   # GitHub search returns at most this many results, however many match
+
+
+def gql_search(query, what):
+    """gql() for a `search(...)` query that selects issueCount; returns the nodes.
+
+    Prints a warning on stderr when the result was cut short (issueCount above the nodes
+    returned, or the 1000-result search cap), so a truncated list is never silent.
+    """
+    rows = gql(query, ".data.search | ({__issueCount: .issueCount}, .nodes[])")
+    total, nodes = None, []
+    for r in rows:
+        if isinstance(r, dict) and list(r) == ["__issueCount"]:
+            total = max(total or 0, r["__issueCount"] or 0)
+        else:
+            nodes.append(r)
+    if (total is not None and total > len(nodes)) or len(nodes) >= SEARCH_CAP:
+        print(f"weekly-focus: warning: the search for {what} matched "
+              f"{total if total is not None else 'at least ' + str(len(nodes))} "
+              f"but only {len(nodes)} were read (GitHub search stops at {SEARCH_CAP}); "
+              f"the rest are missing from this run", file=sys.stderr)
+    return nodes
+
+
 def _issue_key(c):
     """repo#N for an OPEN issue owned by OWNER, else None."""
     repo = c.get("repository") or {}
     if not c.get("number") or c.get("state") != "OPEN":
         return None
-    if (repo.get("owner") or {}).get("login") != OWNER:
+    if ((repo.get("owner") or {}).get("login") or "").lower() != OWNER.lower():
         return None
     return f'{repo["name"]}#{c["number"]}'
 
@@ -540,7 +566,7 @@ PROJECT_ITEMS_Q = (
     "repository{name owner{login}}}}}}}}}")
 _PR_LINKED_Q = (
     "query($endCursor:String){search(query:\"is:pr is:open author:%s\",type:ISSUE,first:100,"
-    "after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{body "
+    "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on PullRequest{body isDraft "
     "repository{name owner{login}} "
     "closingIssuesReferences(first:20){nodes{number state repository{name owner{login}}}}}}}}")
 # GitHub fills closingIssuesReferences only for PRs into the default branch. Feature PRs
@@ -554,7 +580,7 @@ CLOSING_RE = re.compile(
 NON_TEXT_RE = re.compile(r"<!--.*?-->|```.*?```|~~~.*?~~~|`[^`\n]*`", re.S)
 CLOSED_Q = (
     "query($endCursor:String){search(query:\"user:%s is:issue is:closed closed:>=%s\",type:ISSUE,"
-    "first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on Issue{number closedAt "
+    "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number closedAt "
     "repository{name}}}}}")
 
 
@@ -588,7 +614,7 @@ def board_in_progress(pr_keys=None, now=None):
     """Scan OWNER's other boards for cards at In progress / In review.
 
     Returns (keys, stale, failed). A card counts only if its issue was updated within
-    STALE_DAYS or an open PR closes it (pr_keys); older ones go to `stale` as
+    STALE_DAYS or an open, non-draft PR closes it (pr_keys); older ones go to `stale` as
     [{key, board, updated}]. `failed` names boards that could not be read.
     """
     pr_keys = pr_linked() if pr_keys is None else pr_keys
@@ -633,14 +659,17 @@ def body_closing_keys(pr):
 
 
 def pr_linked(open_keys=None):
-    """Open issues that one of OWNER's open PRs closes.
+    """Open issues that one of OWNER's open, non-draft PRs closes.
 
     Uses GitHub's closing references and the closing keywords in the PR body. Body
     matches carry no state, so they count only when they are in open_keys (all of
-    OWNER's open issues); with open_keys None they are skipped.
+    OWNER's open issues); with open_keys None they are skipped. A draft PR is parked
+    work, so it does not count (#234): otherwise it pins its issue to This week.
     """
     keys = set()
-    for pr in gql(PR_LINKED_Q, ".data.search.nodes[]"):
+    for pr in gql_search(PR_LINKED_Q, "open pull requests"):
+        if pr.get("isDraft"):
+            continue
         for c in ((pr.get("closingIssuesReferences") or {}).get("nodes") or []):
             key = _issue_key(c)
             if key:
@@ -669,7 +698,7 @@ def closed_since(start):
     # `closed:` filters on the UTC date, so ask from a day earlier and filter on the local date.
     q = CLOSED_Q % (OWNER, (start - datetime.timedelta(days=1)).isoformat())
     out = set()
-    for n in gql(q, ".data.search.nodes[]"):
+    for n in gql_search(q, "closed issues"):
         day = local_date(n.get("closedAt"))
         if day is None or day >= start:
             out.add(f'{n["repository"]["name"]}#{n["number"]}')

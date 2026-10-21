@@ -99,7 +99,7 @@ A posting failure never stops the review.
 | Phase 2 R2 | every judged finding; confirmed findings get `status: survivor`, refuted ones keep `status: unconfirmed` — a refute's final status is decided in R3, not here | `verdict` by the judging model |
 | Phase 2 R3 | every R2-refuted finding | For contested findings, record `counter` then `verdict`: `survivor` if the refuter backed down, `rejected` if the origin gave up. Every other R2-refuted finding gets `rejected`. |
 | Phase 2 fix | survivors | `resolution` with the Phase 2 commit `sha` |
-| Phase 2 re-check (Codex only) | every finding from the last `phase2-fix` record, plus Codex's new findings | Built by the `recheck` mode of `pr-audit.py`, never by hand: one `recheck` event by `codex` on each re-checked finding; a finding Codex did not re-check is carried over unchanged with no events (its thread stays open); new findings get `status: unconfirmed` and no events |
+| Phase 2 re-check (Codex; Gemini in the tiered lane) | every finding from the last `phase2-fix` record, plus the re-checking model's new findings | Built by the `recheck` mode of `pr-audit.py`, never by hand: one `recheck` event by the re-checking model (`codex`, or `gemini` with `--adversary gemini`) on each re-checked finding; a finding the re-checking model did not re-check is carried over unchanged with no events (its thread stays open); new findings get `status: unconfirmed` and no events |
 
 A `rejected` finding's thread is resolved at once. So a finding refuted in R2 keeps
 `status: unconfirmed` in the phase2-r2 record, even though its refute `verdict` is recorded there.
@@ -129,6 +129,11 @@ that line: Step 2.6 counts those findings as not resolved. Exit 2 means the inpu
 `codex-review.sh` with a higher `--id-start`). Once `recheck` writes `<RUN_DIR>/round-<K>.json` (exit 0), you post it exactly as in
 "After each round" step 3 above, so a posting failure there (or a `pr-audit.py` crash) follows the
 generic Exit codes section above (0/1/3) — `recheck`'s own exit 2 covers only the record-building
-step itself. With Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay
-open. On repos that require conversation resolution before merge, resolve those threads by hand
+step itself. When Codex refused the re-check (`ADVERSARY_REFUSED:`) and Gemini swept the fix range
+(Step 2.6), pass `--gemini-sweep` and the Gemini output as `--rechecks`: every earlier finding
+(Codex's and Claude's) is carried over unchanged with no events, so no thread closes, and Gemini's
+findings are added with `origin` `gemini` and `status` `unconfirmed` (a severity outside
+critical/important/minor is mapped as in `record`). In the legacy lane, with Gemini or Claude-only there is no re-check round, so fixed Phase 2 threads stay
+open. The tiered lane adds a Gemini re-check (the `recheck` mode of `pr-audit.py` with `--adversary gemini`): it closes
+resolved Gemini and Claude findings, never Codex's, so a Codex thread stays open. On repos that require conversation resolution before merge, resolve those threads by hand
 after checking the fix.

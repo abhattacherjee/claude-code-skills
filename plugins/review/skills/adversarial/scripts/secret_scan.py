@@ -42,6 +42,11 @@ EXIT_CLEAN, EXIT_USAGE, EXIT_HIT = 0, 2, 4
 SECRET_NAME_GLOBS = ('.env', '.env.*', '*.env', '.envrc', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*',
                      'id_ecdsa*', 'id_dsa*', '*credentials*', '*.p12', '*.pfx', '.netrc', '.npmrc',
                      '.pypirc', '.pgpass')
+# Captured command output in test fixtures, such as extra-no-credentials.stderr. These
+# skip only the FIXTURE_EXEMPT_GLOBS name check: .env.stdout or id_rsa.stderr is still
+# flagged, and their contents are still scanned like any other file.
+FIXTURE_OUTPUT_GLOBS = ('*.stdout', '*.stderr', '*.exit')
+FIXTURE_EXEMPT_GLOBS = ('*credentials*',)
 # Scan only, never redact: a value assigned to a secret-sounding name. A quoted
 # literal after password/secret/api_key/token, or an upper-case env line such as
 # DB_PASSWORD=... . Values with placeholder words are skipped. Measured on this
@@ -121,7 +126,10 @@ def header_paths(rest):
 
 def is_secret_name(path):
     name = path.rsplit("/", 1)[-1].lower()
-    return any(fnmatch.fnmatchcase(name, glob) for glob in SECRET_NAME_GLOBS)
+    globs = SECRET_NAME_GLOBS
+    if any(fnmatch.fnmatchcase(name, glob) for glob in FIXTURE_OUTPUT_GLOBS):
+        globs = [glob for glob in globs if glob not in FIXTURE_EXEMPT_GLOBS]
+    return any(fnmatch.fnmatchcase(name, glob) for glob in globs)
 
 
 def map_lines(lines):

@@ -7,8 +7,9 @@ Usage:
   pr-audit.py record --report-json REPORT.json --run-id ID --skill SKILL --phase PHASE
                      --round K --adversary ADV --head-sha SHA [--prev-head-sha SHA]
                      --out ROUND.json
-  pr-audit.py recheck --prior ROUND.json --rechecks CODEX_OUT.json --round K
-                      --head-sha SHA [--phase PHASE] --out ROUND.json
+  pr-audit.py recheck --prior ROUND.json --rechecks MODEL_OUT.json --round K
+                      [--adversary codex|gemini]
+                      --head-sha SHA [--phase PHASE] [--gemini-sweep] --out ROUND.json
 
 Each finding with a path gets one thread. It is inline when GitHub accepts the
 line, file-level when GitHub rejects the line (HTTP 422) or there is no line,
@@ -24,10 +25,20 @@ its new findings are added unconfirmed. An earlier finding the adversary did
 not re-check is carried over unchanged with no events (its thread stays open),
 and stderr reports `unchecked=<N> (<ids>)`; the exit is still 0, since the
 record is valid, so the caller must read that count. A "resolved" re-check by the adversary
-closes the thread when the record is posted. `recheck` is Codex-only: only
+closes the thread when the record is posted. By default `recheck` is Codex-only: only
 `codex-review.sh --mode find --prior` re-checks earlier findings against
 current source, so a prior round whose adversary is not `codex` (Gemini or
-Claude-only) is refused (exit 2).
+Claude-only) is refused (exit 2). Pass --gemini-sweep when Codex refused the
+re-check (ADVERSARY_REFUSED). --rechecks is then `gemini-review.sh --mode find`
+output for the fix range: every earlier finding (Codex's and Claude's) is
+carried over unchanged with no events, so no thread closes, and Gemini's
+findings are added with origin gemini. Their severity is mapped as in `record`
+(an unknown spelling becomes important and is noted in the rationale).
+With --adversary gemini, --rechecks is Gemini find output with prior_status:
+resolved findings whose origin is gemini or claude get closing recheck events,
+as a Codex re-check closes Codex and Claude findings. Gemini never closes a
+Codex finding: those stay open and are named on stderr. This cannot be combined with
+--gemini-sweep.
 
 When gh is missing, not logged in, or cannot read the PR, `post` says why,
 writes the same content to the local markdown file instead, and exits 1. A gh
@@ -470,6 +481,15 @@ def _as_line(value):
     return None
 
 
+def _as_text(value, default):
+    """A non-empty string as is; None or blank gives default; anything else as JSON text."""
+    if isinstance(value, str):
+        return value if value.strip() else default
+    if value is None:
+        return default
+    return json.dumps(value)
+
+
 SEVERITY_ALIASES = {
     "critical": "critical", "important": "important", "minor": "minor",
     "high": "important", "low": "minor", "medium": "important",
@@ -558,9 +578,16 @@ def cmd_record(args):
 RECHECK_KEEP = ("id", "origin", "path", "line", "severity", "category", "title", "rationale", "status")
 
 
+# Origins a Gemini re-check may close: its own and Claude's, never Codex's.
+GEMINI_RECHECKS = ("gemini", "claude")
+
+
 def cmd_recheck(args):
+    if args.adversary == "gemini" and args.gemini_sweep:
+        print("pr-audit: --gemini-sweep cannot be combined with --adversary gemini", file=sys.stderr)
+        return 2
     prior = load_record(args.prior)
-    if prior["adversary"] != "codex":
+    if args.adversary == "codex" and prior["adversary"] != "codex":
         print(f"pr-audit: recheck rounds are Codex-only; {args.prior}'s adversary is "
               f"{prior['adversary']!r}", file=sys.stderr)
         return 2
@@ -570,11 +597,47 @@ def cmd_recheck(args):
     except (OSError, json.JSONDecodeError) as exc:
         print(f"pr-audit: cannot read {args.rechecks}: {exc}", file=sys.stderr)
         return 2
+    if args.adversary == "gemini":
+        if not isinstance(out, dict) or not isinstance(out.get("prior_status"), dict):
+            print(f"pr-audit: {args.rechecks} needs a prior_status object; "
+                  "run gemini-review.sh --mode find with --prior", file=sys.stderr)
+            return 2
+        earlier = {f["id"]: f for f in prior["findings"]}
+        rechecks = []
+        for fid, status in out["prior_status"].items():
+            if fid not in earlier:
+                print(f"pr-audit: warning: skipped a re-check for unknown id {fid!r}", file=sys.stderr)
+                continue
+            if earlier[fid]["origin"] not in GEMINI_RECHECKS:
+                print(f"pr-audit: warning: {fid} is {earlier[fid]['origin']}'s finding, which Gemini "
+                      "cannot close; its thread stays open",
+                      file=sys.stderr)
+                continue
+            if status not in ("resolved", "unresolved"):
+                print(f"pr-audit: invalid prior_status for {fid}: {status!r}", file=sys.stderr)
+                return 2
+            rechecks.append({"id": fid, "result": "resolved" if status == "resolved" else "missed"})
+        out = dict(out, rechecks=rechecks, adversary="gemini")
+    if args.gemini_sweep:
+        # Codex refused the re-check (ADVERSARY_REFUSED), so --rechecks is the
+        # output of gemini-review.sh --mode find on the fix range (#171). It holds
+        # new findings only: nothing in it can close a Codex thread.
+        if not isinstance(out, dict) or not isinstance(out.get("findings"), list) \
+                or "rechecks" in out or "adversary" in out:
+            print(f"pr-audit: --gemini-sweep needs {args.rechecks} to be gemini-review.sh --mode find "
+                  "output: a findings list, no rechecks and no adversary key", file=sys.stderr)
+            return 2
+        for nf in out["findings"]:
+            if not isinstance(nf, dict) or nf.get("origin") != "gemini":
+                print(f"pr-audit: --gemini-sweep: every new finding needs origin 'gemini'; got "
+                      f"{nf.get('origin') if isinstance(nf, dict) else nf!r}", file=sys.stderr)
+                return 2
+        out = dict(out, rechecks=[], adversary=prior["adversary"])
     if not isinstance(out, dict) or not isinstance(out.get("rechecks"), list):
         print(f"pr-audit: {args.rechecks} has no rechecks list; "
               "run codex-review.sh --mode find with --prior", file=sys.stderr)
         return 2
-    if out.get("adversary") != prior["adversary"]:
+    if args.adversary == "codex" and out.get("adversary") != prior["adversary"]:
         print(f"pr-audit: {args.rechecks}'s adversary {out.get('adversary')!r} does not match "
               f"{args.prior}'s adversary {prior['adversary']!r}", file=sys.stderr)
         return 2
@@ -582,7 +645,7 @@ def cmd_recheck(args):
         print(f"pr-audit: --round {args.round} must come after the prior round {prior['round']}",
               file=sys.stderr)
         return 2
-    by = prior["adversary"]
+    by = args.adversary
     earlier = {f["id"]: f for f in prior["findings"]}
     events = {}
     for item in out["rechecks"]:
@@ -602,8 +665,12 @@ def cmd_recheck(args):
         f["events"] = events.get(fid, [])
         if fid not in events:
             unchecked.append(fid)
-            print(f"pr-audit: warning: no re-check for {fid}; carried over with no events, "
-                  "so its thread stays open", file=sys.stderr)
+            if args.gemini_sweep:
+                print(f"pr-audit: warning: Codex refused the re-check; {fid} not closed "
+                      "(carried over with no events, so its thread stays open)", file=sys.stderr)
+            else:
+                print(f"pr-audit: warning: no re-check for {fid}; carried over with no events, "
+                      "so its thread stays open", file=sys.stderr)
         findings.append(f)
     print(f"pr-audit: unchecked={len(unchecked)}" + (f" ({', '.join(unchecked)})" if unchecked else ""),
           file=sys.stderr)
@@ -612,16 +679,28 @@ def cmd_recheck(args):
             continue
         if isinstance(nf.get("id"), str) and nf["id"] in earlier:
             print(f"pr-audit: new finding id {nf.get('id')} is already used in {args.prior}; "
-                  "rerun codex-review.sh with a higher --id-start", file=sys.stderr)
+                  f"rerun {'gemini' if args.gemini_sweep else by}-review.sh with a higher --id-start",
+                  file=sys.stderr)
             return 2
+        # Gemini has no output schema, so its fields are free-form: map the
+        # severity as cmd_record does, and turn a non-string text field into a
+        # string, so one odd value never fails the whole round.
+        rationale = _as_text(nf.get("rationale"), "")
+        path = nf.get("path")
+        if path not in (None, "") and not isinstance(path, str):
+            rationale = f"(path {path!r} was not a string) " + rationale
+        severity, rationale = normalize_severity(nf.get("severity"), rationale)
         findings.append({
-            "id": nf.get("id"), "origin": nf.get("origin") or by, "path": nf.get("path") or None,
-            "line": _as_line(nf.get("line")), "severity": nf.get("severity"),
-            "category": nf.get("category") or "other", "title": nf.get("title") or "(no title)",
-            "rationale": nf.get("rationale") or "", "status": "unconfirmed", "events": [],
+            "id": nf.get("id"), "origin": nf.get("origin") or by,
+            "path": path if isinstance(path, str) and path else None,
+            "line": _as_line(nf.get("line")), "severity": severity,
+            "category": nf["category"] if isinstance(nf.get("category"), str)
+            and nf["category"].strip() else "other",
+            "title": _as_text(nf.get("title"), "(no title)"),
+            "rationale": rationale, "status": "unconfirmed", "events": [],
         })
     rec = {"schema": ar.SCHEMA, "run_id": prior["run_id"], "skill": prior["skill"],
-           "phase": args.phase, "round": args.round, "adversary": prior["adversary"],
+           "phase": args.phase, "round": args.round, "adversary": by,
            "head_sha": args.head_sha, "prev_head_sha": prior["head_sha"], "findings": findings}
     try:
         ar.validate(rec)
@@ -662,6 +741,12 @@ def build_parser():
     rc.add_argument("--round", type=int, required=True)
     rc.add_argument("--head-sha", required=True)
     rc.add_argument("--phase", default="phase2-recheck")
+    rc.add_argument("--adversary", choices=("codex", "gemini"), default="codex",
+                    help="model re-checking its findings (default: codex)")
+    rc.add_argument("--gemini-sweep", action="store_true",
+                    help="Codex refused the re-check: --rechecks is gemini-review.sh --mode find "
+                         "output; every earlier finding is carried over unchanged with no events, "
+                         "so none is closed, and its findings are added with origin gemini")
     rc.add_argument("--out", required=True)
     return p
 

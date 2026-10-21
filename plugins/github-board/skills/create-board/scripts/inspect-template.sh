@@ -104,10 +104,21 @@ query($login: String!, $number: Int!) {
 # Try user namespace first. Capture both stdout and stderr; check the response
 # for a `.errors` envelope before trusting it (gh api graphql exits 0 even on
 # GraphQL field-level errors like NOT_FOUND/FORBIDDEN).
-RESP=$(gh api graphql -f query="$QUERY" -F login="$OWNER" -F number="$NUMBER" 2>&1) || {
-  echo "GraphQL request failed for user/$OWNER: $RESP" >&2
+# gh exits 1 on a NOT_FOUND error (printing the JSON body on stdout), so stdout and the exit
+# code are captured separately: a NOT_FOUND user lookup must still reach the org fallback.
+ERRFILE=$(mktemp "${TMPDIR:-/tmp}/gh-board-inspect-err.XXXXXX")
+trap 'rm -f "$ERRFILE"' EXIT
+# login goes in with -f (a string: no type inference, no @file); number is a real Int, so -F.
+RC=0
+RESP=$(gh api graphql -f query="$QUERY" -f login="$OWNER" -F number="$NUMBER" 2>"$ERRFILE") || RC=$?
+if [ "$RC" -ne 0 ] && ! echo "$RESP" | jq -e '.errors' >/dev/null 2>&1 \
+   && ! grep -q 'NOT_FOUND\|Could not resolve to a' "$ERRFILE"; then
+  echo "GraphQL request failed for user/$OWNER: $RESP $(cat "$ERRFILE")" >&2
   exit 1
-}
+fi
+if [ "$RC" -ne 0 ] && ! echo "$RESP" | jq -e '.errors' >/dev/null 2>&1; then
+  RESP=""   # no JSON body, but stderr says NOT_FOUND: try the org fallback
+fi
 
 # If the response has a `.errors` array, distinguish NOT_FOUND (try org fallback)
 # from other errors (surface immediately).
@@ -125,7 +136,7 @@ fi
 # when the user exists but the project does not), fall back to the org query.
 if [ -z "$RESP" ] || echo "$RESP" | jq -e '.data.user == null or .data.user.projectV2 == null' >/dev/null 2>&1; then
   ORG_QUERY="${QUERY/user(login: \$login)/organization(login: \$login)}"
-  RESP=$(gh api graphql -f query="$ORG_QUERY" -F login="$OWNER" -F number="$NUMBER" 2>&1) || {
+  RESP=$(gh api graphql -f query="$ORG_QUERY" -f login="$OWNER" -F number="$NUMBER" 2>&1) || {
     echo "GraphQL request failed for orgs/$OWNER: $RESP" >&2
     exit 1
   }
@@ -143,7 +154,7 @@ fi
 # Stage in the SAME directory so the mv stays atomic (a rename across
 # filesystems is a copy), but under a name nobody can predict either.
 STAGE="$(mktemp "$(dirname "$OUT")/.gh-board-snap.XXXXXX")"
-trap 'rm -f "$STAGE"' EXIT
+trap 'rm -f "$STAGE" "$ERRFILE"' EXIT
 echo "$RESP" > "$STAGE"
 mv "$STAGE" "$OUT"
 echo "$OUT"

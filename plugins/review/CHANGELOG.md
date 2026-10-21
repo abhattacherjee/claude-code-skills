@@ -2,6 +2,48 @@
 
 All notable changes to the **review** plugin are documented here.
 
+## [Unreleased]
+
+## [1.4.0] - 2026-10-20
+
+### Added
+
+- `deep` takes `--lane tiered|legacy`, default `tiered` (abhattacherjee/cc-token-router#193). The tiered lane runs two Sonnet reviewers plus a Codex find pass in round 1, judges Codex's findings with the `cross-examiner` on Sonnet, calls Opus only to break a tie, and signs off with a Codex re-check of the fix range, or a Gemini one when Codex is unavailable. Steps T0–T6 are in `references/tiered-lane.md`.
+- `bug-hunter` carries the code, test-coverage and silent-failure checks; `convention-reviewer` carries the comment and type-design checks.
+- `gemini-review.sh --prior` and `pr-audit.py recheck --adversary gemini`: a Gemini re-check that closes resolved Gemini and Claude findings, never Codex's.
+- `synthesize.py --match` labels findings both sides raised (`raised_by_both`, `matched_with`) without changing their status, and `lane_scope.py` is a size gate for lockfile- and docs-only diffs.
+
+- Tiered lane gate fixes, after a replay on past PRs failed (abhattacherjee/cc-token-router#193). T1 adds a test-quality pass (a second `bug-hunter` on Sonnet with a vacuous-test brief, results in `r1-tests.json`) when the change adds or edits a test, check, guard or validation; on the replay the general bug-hunter found none of six vacuous-test defects. T3 sends every defended finding to one Opus `cross-examiner` call. T4 keeps the fix wave on Sonnet, never on the adversary's model (it signs the fixes off), and never on Opus unless the user asks.
+- `synthesize.py --decisions <file>` applies concede-or-defend outcomes (`{"decisions":[{"id","status":"survivor|rejected","reason"}]}`) to `report.json` and `report.md`, marking each `decided_by: "r3"`. A bad file exits 5 with no report written. `deep` Step 2.4 and tiered T3 use it in place of editing the report by hand.
+
+### Changed
+
+- `review:deep` runs the tiered lane by default (abhattacherjee/cc-token-router#193). `bug-hunter` is on Sonnet; `--lane legacy` dispatches it with `model: "opus"`. Review plugin 1.4.0.
+- `deep` Red Flags: the four vacuous-test bullets moved to `references/vacuous-tests.md`, to keep the `SKILL.md` body under `validate-plugin.sh`'s 500-line limit (the frontmatter is not counted).
+- `secret_scan.py` no longer flags a captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) for `*credentials*` in its name, so files such as `extra-no-credentials.stderr` do not stop a run with `SECRET_SUSPECTED`. Other secret names such as `.env.stdout` or `id_rsa.stderr` are still flagged, every other `*credentials*` name is still flagged, and the contents are still scanned.
+- The Codex and Gemini prompts say to judge whether the code is correct, with any plan, spec or issue as context, not the standard.
+- The Codex and Gemini prompts and the `cross-examiner` (which also runs the tiered tiebreak) count a test that cannot fail as a correctness defect: on a replay, every judge refuted vacuous-test findings as "no current defect".
+
+## [1.3.1] - 2026-10-16
+
+### Changed
+
+- `deep` dispatches its implementer sub-agents (Phase 1 step 3 and Step 2.5) with `model: "sonnet"`, and Opus only when any fix in the spec touches a security gate, a data migration or a destructive path (#237). cc-token-router telemetry showed Opus implementer and fix-wave sub-agents as the largest sub-agent over-tier leak: about $45 of $48.57 over the 14 days to 2026-10-16. `deep` 1.3.1.
+
+## [1.3.0] - 2026-10-11
+
+### Added
+
+- `gemini-review.sh --timeout <secs>` (else `GEMINI_REVIEW_TIMEOUT`, else 540) (#53). Each `gemini` call runs through the new `run_bounded.py` in its own process group. A call past the limit is killed with its whole group, and the script exits 3 with `ADVERSARY_UNAVAILABLE: gemini timed out after <N>s; killed its process group`, without a retry. A timeout is exit 124 from the runner and a non-empty private `mktemp` marker; the runner writes the marker with `O_NOFOLLOW` and never creates it. A missing `run_bounded.py`, or a runner that cannot run the call (exit 125), is exit 1, not exit 3. Each call starts with empty stderr and output files, so a retry never reports the first call's stderr. A SIGTERM, SIGINT or SIGHUP to `gemini-review.sh` stops the runner, which kills gemini's group, and exits 128+N. The direct `gemini` fallback in `deep` runs through `run_bounded.py` too: the Gemini CLI relaunches itself as a child `node` process, so `perl`'s `alarm` would kill only the first one.
+- `ensure-codex.sh` prints `CODEX_STALE=yes|no|unknown`, `CODEX_NEWER_BIN` and `CODEX_STALE_HINT` (#185). It compares `codex --version` with `client_version` in `${CODEX_HOME:-~/.codex}/models_cache.json` and with the codex bundled in the ChatGPT app (`CODEX_APP_BIN` overrides the path), run with stdin closed and a 10 s limit. A source that cannot be read never gives `no`: a `models_cache.json` that exists but does not parse, or has no string `client_version`, makes it `unknown`; so does an app binary that exists but gives no version (a hang, a non-zero exit, no version in its output, or a missing `run_bounded.py`) makes it `unknown`. `CODEX_STALE_HINT` is an `ln -sfn` command only when `codex` is a symlink into the standalone installer's `${CODEX_HOME:-~/.codex}/packages/` or to the app binary, and the app is at least as new as the cache. npm and Homebrew install `codex` as a symlink too, so any other `codex` gets "update that install, or reorder `PATH`", and a cache newer than the app gets the version to update to. It still always exits 0.
+- `gemini-review.sh --id-start <n>` (find mode only): the script numbers Gemini's findings `G-<n>`, `G-<n+1>`, ... itself, and keeps a finding the model gave no id (#171).
+- `pr-audit.py recheck --gemini-sweep` records a Gemini sweep of a fix range after Codex refused the re-check: every earlier finding (Codex's and Claude's) is carried over unchanged with no events, so no thread closes, and Gemini's findings are added with origin `gemini` (#171). Their severity is mapped as in `record` ("high" and "medium" become important, "low" minor, any other spelling or a missing one important with a note), a non-string or blank category becomes "other", and other non-string fields become strings, so one odd value never fails the round.
+
+### Changed
+
+- `codex-review.sh` names the cause of two `codex exec` failures, matched only on a stderr line that starts with `ERROR:` after a non-zero exit, so a quoted line in the diff cannot trigger either. A content refusal ("flagged for possible cybersecurity risk") prints `ADVERSARY_REFUSED:` in place of `ADVERSARY_UNAVAILABLE:` (#171); look for a stderr line that starts with it, since a notice can come first. A model "not supported when using Codex with a ChatGPT account" says the CLI looks stale and points at `ensure-codex.sh --check`, at the review and at the isolation canary (#185). Both still exit 3.
+- Every `codex-review.sh` and `gemini-review.sh` review command in both skills passes `--timeout 540`, and both skills say not to wrap the scripts in `timeout` (#207). `adversarial` 1.3.0 and `deep` 1.3.0.
+
 ## [1.2.0] - 2026-10-09
 
 ### Changed

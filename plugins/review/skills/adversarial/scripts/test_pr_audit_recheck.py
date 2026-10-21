@@ -6,6 +6,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import audit_record as ar  # noqa: E402
 from test_pr_audit import SHA2, SHA3, Harness, ev, finding, record  # noqa: E402
 
 
@@ -19,6 +20,167 @@ def fix_round(adversary="codex"):
 
 NEW = {"id": "X-005", "origin": "codex", "path": "src/b.py", "line": 7, "severity": "minor",
        "category": "perf", "title": "Scan twice", "rationale": "Loop in a loop."}
+
+
+GEMINI_NEW = {"id": "G-006", "origin": "gemini", "path": "src/c.py", "line": 3, "severity": "important",
+              "category": "bug", "title": "Off by one", "rationale": "Range end."}
+
+
+class GeminiSweepTests(unittest.TestCase):
+    """#171: Codex refused the re-check, so Gemini swept the fix range. Its new
+    findings are recorded with origin gemini; no Codex thread is closed."""
+
+    def setUp(self):
+        self.h = Harness(self)
+        self.prior = self.h.write(fix_round(), "round-4.json")
+        self.out = self.h.dir / "round-5.json"
+
+    def sweep(self, data, *extra):
+        path = self.h.write(data, "recheck-gemini.json")
+        res = self.h.run("recheck", "--gemini-sweep", "--prior", self.prior, "--rechecks", path,
+                         "--round", 5, "--head-sha", SHA3, "--out", self.out, *extra)
+        rec = json.loads(self.out.read_text()) if res.returncode == 0 else None
+        return res, rec
+
+    def test_no_codex_thread_is_closed(self):
+        prior = json.loads(Path(self.prior).read_text())
+        res, rec = self.sweep({"findings": [GEMINI_NEW]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        old = rec["findings"][:2]
+        self.assertEqual([f["id"] for f in old], ["X-003", "X-004"])
+        self.assertEqual([f["events"] for f in old], [[], []])
+        self.assertEqual([f["status"] for f in old], [f["status"] for f in prior["findings"]])
+        self.assertIn("unchecked=2 (X-003, X-004)", res.stderr)
+        self.assertIn("Codex refused the re-check", res.stderr)
+        self.assertIn("not closed", res.stderr)
+        self.assertEqual(rec["adversary"], "codex")
+
+    def test_new_findings_are_gemini_origin_and_unconfirmed(self):
+        res, rec = self.sweep({"findings": [GEMINI_NEW]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        f = rec["findings"][-1]
+        self.assertEqual((f["id"], f["origin"], f["status"], f["events"]),
+                         ("G-006", "gemini", "unconfirmed", []))
+
+    def test_an_empty_sweep_still_writes_the_round(self):
+        res, rec = self.sweep({"findings": []})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(rec["findings"]), 2)
+
+    def test_a_codex_recheck_file_is_refused(self):
+        for data in ({"adversary": "codex", "findings": [], "rechecks": []},
+                     {"findings": [], "rechecks": [{"id": "X-003", "result": "resolved"}]}):
+            with self.subTest(data=data):
+                res, _ = self.sweep(data)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("gemini-review.sh", res.stderr)
+                self.assertFalse(self.out.exists())
+
+    def test_a_non_gemini_finding_is_refused(self):
+        res, _ = self.sweep({"findings": [dict(GEMINI_NEW, origin="codex")]})
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("origin", res.stderr)
+
+    def test_a_reused_id_exits_2(self):
+        res, _ = self.sweep({"findings": [dict(GEMINI_NEW, id="X-003")]})
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("--id-start", res.stderr)
+
+    def test_any_severity_spelling_is_normalized(self):
+        # Gemini runs with no output schema, so its severity is free text. One
+        # odd spelling must not fail the whole sweep round (code I1, errors I1).
+        cases = [("high", "important", False), ("major", "important", True),
+                 ("Important", "important", False), ("Critical", "critical", False),
+                 ("LOW", "minor", False), ("", "important", True), (None, "important", True),
+                 (3, "important", True), ("missing", "important", True)]
+        for raw, want, noted in cases:
+            with self.subTest(severity=raw):
+                nf = dict(GEMINI_NEW)
+                if raw == "missing":
+                    del nf["severity"]
+                else:
+                    nf["severity"] = raw
+                res, rec = self.sweep({"findings": [nf]})
+                self.assertEqual(res.returncode, 0, res.stderr)
+                f = rec["findings"][-1]
+                self.assertEqual(f["severity"], want)
+                self.assertEqual(f["rationale"].startswith("(severity was "), noted, f["rationale"])
+
+    def test_non_string_text_fields_do_not_fail_the_sweep(self):
+        nf = dict(GEMINI_NEW, category=["bug"], title={"t": 1}, rationale=7, path=12)
+        res, rec = self.sweep({"findings": [nf, dict(GEMINI_NEW, id="G-007", category=None,
+                                                     title="  ", path="")]})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        a, b = rec["findings"][-2:]
+        self.assertEqual((a["category"], a["path"]), ("other", None))
+        self.assertIsInstance(a["title"], str)
+        self.assertTrue(a["title"].strip())
+        self.assertIsInstance(a["rationale"], str)
+        self.assertEqual((b["category"], b["title"], b["path"]), ("other", "(no title)", None))
+
+    def test_an_adversary_key_alone_is_refused(self):
+        res, _ = self.sweep({"adversary": "codex", "findings": [GEMINI_NEW]})
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("gemini-review.sh", res.stderr)
+
+    def test_malformed_sweep_files_are_refused(self):
+        for data in ("[]", {"findings": "x"}, {"findings": ["str"]}):
+            with self.subTest(data=data):
+                res, _ = self.sweep(data)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertFalse(self.out.exists())
+
+    def test_without_the_flag_a_gemini_file_is_still_refused(self):
+        path = self.h.write({"findings": [GEMINI_NEW]}, "recheck-gemini.json")
+        res = self.h.run("recheck", "--prior", self.prior, "--rechecks", path, "--round", 5,
+                         "--head-sha", SHA3, "--out", self.out)
+        self.assertEqual(res.returncode, 2, res.stderr)
+
+
+class GeminiRecheckTests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness(self)
+        self.out = self.h.dir / "round-5.json"
+
+    def recheck(self, origin, *extra):
+        fid = {"gemini": "G-001", "claude": "C-001"}.get(origin, "X-001")
+        prior = record([finding(fid, origin=origin)], rnd=4, head=SHA2,
+                       phase="phase2-fix", adversary="gemini")
+        path = self.h.write(prior, "round-4.json")
+        checks = self.h.write({"findings": [], "prior_status": {fid: "resolved"}},
+                              "recheck-gemini.json")
+        res = self.h.run("recheck", "--adversary", "gemini", "--prior", path,
+                         "--rechecks", checks, "--round", 5, "--head-sha", SHA3,
+                         "--out", self.out, *extra)
+        rec = json.loads(self.out.read_text()) if res.returncode == 0 else None
+        return res, rec
+
+    def test_recheck_gemini_closes_resolved_gemini_threads(self):
+        res, rec = self.recheck("gemini")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(ar.should_resolve(rec["findings"][0], rec))
+        self.assertEqual(rec["findings"][0]["events"][0]["by"], "gemini")
+
+    def test_recheck_gemini_closes_resolved_claude_threads(self):
+        # Gemini sign-off needs Claude's fixed findings closed too.
+        res, rec = self.recheck("claude")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(ar.should_resolve(rec["findings"][0], rec))
+        self.assertEqual(rec["findings"][0]["events"][0]["by"], "gemini")
+
+    def test_recheck_gemini_never_closes_codex_threads(self):
+        res, rec = self.recheck("codex")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertFalse(ar.should_resolve(rec["findings"][0], rec))
+        self.assertEqual(rec["findings"][0]["events"], [])
+        self.assertIn("X-001", res.stderr)
+
+    def test_recheck_gemini_sweep_and_adversary_gemini_conflict(self):
+        res, _ = self.recheck("gemini", "--gemini-sweep")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("--gemini-sweep", res.stderr)
+        self.assertIn("--adversary gemini", res.stderr)
+        self.assertFalse(self.out.exists())
 
 
 class RecheckTests(unittest.TestCase):
@@ -41,6 +203,18 @@ class RecheckTests(unittest.TestCase):
             else path_or_dict
         return self.h.run("recheck", "--prior", prior or self.prior, "--rechecks", path,
                           "--round", rnd, "--head-sha", SHA3, "--out", self.out)
+
+    def test_recheck_default_adversary_unchanged(self):
+        data = {"adversary": "codex", "findings": [NEW], "rechecks": [
+            {"id": "X-003", "result": "resolved", "reason": "cap is there"}]}
+        default, rec = self.recheck(data)
+        self.assertEqual(default.returncode, 0, default.stderr)
+        explicit = self.h.run("recheck", "--prior", self.prior, "--rechecks",
+                              self.h.dir / "recheck.json", "--round", 5,
+                              "--head-sha", SHA3, "--out", self.out, "--adversary", "codex")
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertEqual(json.loads(self.out.read_text()), rec)
+        self.assertEqual((explicit.stdout, explicit.stderr), (default.stdout, default.stderr))
 
     def test_rechecks_become_adversary_events_on_the_earlier_findings(self):
         res, rec = self.recheck({"adversary": "codex", "findings": [], "rechecks": [

@@ -4,9 +4,11 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -37,6 +39,17 @@ log = os.environ["GEMINI_STUB_LOG"]
 calls = json.load(open(log)) if os.path.exists(log) else []
 calls.append({"argv": sys.argv[1:], "stdin": sys.stdin.read()})
 json.dump(calls, open(log, "w"))
+if os.environ.get("GEMINI_STUB_PIDS"):
+    import subprocess
+    child = subprocess.Popen(["sleep", "60"])
+    with open(os.environ["GEMINI_STUB_PIDS"], "w") as fh:
+        fh.write("%%d %%d" %% (os.getpid(), child.pid))
+if os.environ.get("GEMINI_STUB_SLEEP"):
+    import time
+    time.sleep(float(os.environ["GEMINI_STUB_SLEEP"]))
+if os.environ.get("GEMINI_STUB_EXIT"):
+    print("stub failure", file=sys.stderr)
+    sys.exit(int(os.environ["GEMINI_STUB_EXIT"]))
 replies = json.loads(os.environ["GEMINI_STUB_REPLIES"])
 print(replies[min(len(calls), len(replies)) - 1])
 '''
@@ -161,7 +174,7 @@ def patched_copy(test, h, edits):
     to reach one code path on its own."""
     d = h.dir / "patched"
     d.mkdir()
-    for name in ("secret_scan.py", "audit_record.py"):
+    for name in ("secret_scan.py", "audit_record.py", "run_bounded.py"):
         shutil.copy(str(HERE / name), str(d / name))
     text = SCRIPT.read_text()
     for old, new in edits:
@@ -305,6 +318,447 @@ class SecretGateTests(unittest.TestCase):
         res = h.run("--diff", h.diff, "--mode", "find")
         self.assertEqual(res.returncode, 1, res.stderr)
         self.assertEqual(h.calls(), [])
+
+
+def wait_dead(pid, seconds=5.0):
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def kill_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+class TimeoutTests(unittest.TestCase):
+    """#53: a Gemini call that hangs is killed with its whole process group, and the
+    run ends as exit 3, never as a success and never as the runner's own code."""
+
+    def hung(self, sleep="30"):
+        h = GeminiHarness(self, [FOUND])
+        pids = h.dir / "pids"
+        h.env.update(GEMINI_STUB_PIDS=str(pids), GEMINI_STUB_SLEEP=sleep)
+        return h, pids
+
+    def stub_pids(self, pids):
+        found = [int(p) for p in pids.read_text().split()] if pids.exists() else []
+        for pid in found:
+            self.addCleanup(kill_quietly, pid)
+        return found
+
+    def assert_killed(self, res, h, pids, secs, started):
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertIn("ADVERSARY_UNAVAILABLE: gemini timed out after %ss; killed its process group" % secs,
+                      res.stderr)
+        self.assertLess(time.time() - started, 20)
+        found = self.stub_pids(pids)
+        self.assertEqual(len(found), 2, "the stub did not start its child")
+        for pid in found:
+            self.assertTrue(wait_dead(pid), "pid %d survived the timeout" % pid)
+        self.assertEqual(len(h.calls()), 1, "a timed-out call must not be retried")
+        self.assertEqual(res.stdout, "")
+
+    def test_a_hung_call_is_killed_with_its_group_and_exits_3(self):
+        h, pids = self.hung()
+        started = time.time()
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "2")
+        self.assert_killed(res, h, pids, 2, started)
+
+    def test_a_timed_out_judge_call_writes_no_out_file(self):
+        h, pids = self.hung()
+        out = h.dir / "verdicts.json"
+        started = time.time()
+        res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge", "--timeout", "2",
+                    "--out", out)
+        self.assert_killed(res, h, pids, 2, started)
+        self.assertFalse(out.exists())
+
+    def test_the_env_var_sets_the_limit(self):
+        h, pids = self.hung()
+        h.env["GEMINI_REVIEW_TIMEOUT"] = "2"
+        started = time.time()
+        res = h.run("--diff", h.diff, "--mode", "find")
+        self.assert_killed(res, h, pids, 2, started)
+
+    def test_the_flag_wins_over_the_env_var(self):
+        h, pids = self.hung(sleep="3")
+        h.env["GEMINI_REVIEW_TIMEOUT"] = "1"
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "30")
+        self.stub_pids(pids)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["findings"][0]["title"], "t")
+
+    def test_a_bad_env_var_falls_back_to_the_default(self):
+        for raw in ("0", "-5", "abc", "", "2s"):
+            with self.subTest(raw=raw):
+                h = GeminiHarness(self, [FOUND])
+                h.env["GEMINI_REVIEW_TIMEOUT"] = raw
+                res = h.run("--diff", h.diff, "--mode", "find")
+                self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_a_bad_timeout_flag_is_a_usage_error(self):
+        for raw in ("0", "-1", "abc", "", "1.5", "00"):
+            with self.subTest(raw=raw):
+                h = GeminiHarness(self, [FOUND])
+                res = h.run("--diff", h.diff, "--mode", "find", "--timeout", raw)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("--timeout must be", res.stderr)
+                self.assertEqual(h.calls(), [])
+        h = GeminiHarness(self, [FOUND])
+        self.assertEqual(h.run("--diff", h.diff, "--mode", "find", "--timeout").returncode, 2)
+
+    def test_a_gemini_exit_124_is_not_reported_as_a_timeout(self):
+        # The timeout is told apart by the runner's marker file, not by an exit
+        # code Gemini itself could return.
+        h = GeminiHarness(self, [FOUND])
+        h.env["GEMINI_STUB_EXIT"] = "124"
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "30")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertNotIn("timed out", res.stderr)
+        self.assertIn("non-zero exit", res.stderr)
+
+    def test_stale_marker_content_is_not_a_timeout(self):
+        # Only exit 124 together with a non-empty marker is a timeout: content that
+        # someone else put in the marker before a call that failed for another
+        # reason must not turn that failure into a fake timeout.
+        h = GeminiHarness(self, [FOUND])
+        h.env["GEMINI_STUB_EXIT"] = "1"
+        script = patched_copy(self, h, [(': > "$TIMEOUT_MARKER_FILE"',
+                                         ': > "$TIMEOUT_MARKER_FILE"; echo stale > "$TIMEOUT_MARKER_FILE"')])
+        res = subprocess.run(["bash", str(script), "--diff", str(h.diff), "--mode", "find", "--timeout", "30"],
+                             capture_output=True, text=True, env=h.env, timeout=60, stdin=subprocess.DEVNULL)
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertNotIn("timed out", res.stderr)
+        self.assertIn("non-zero exit", res.stderr)
+
+    def test_the_marker_is_a_private_mktemp_file(self):
+        text = SCRIPT.read_text()
+        self.assertIn('TIMEOUT_MARKER_FILE="$(mktemp /tmp/adversarial-gemini-timeout.XXXXXX)"', text)
+        self.assertNotIn('rm -f "$TIMEOUT_MARKER_FILE"', text)
+
+    def test_a_call_that_finishes_in_time_is_unchanged(self):
+        h = GeminiHarness(self, [FOUND])
+        res = h.run("--diff", h.diff, "--mode", "find", "--timeout", "30")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.calls()), 1)
+
+    def test_ctrl_c_kills_the_gemini_group(self):
+        # Gemini runs in its own session, so a terminal SIGINT never reaches it;
+        # the runner must pass it on.
+        h, pids = self.hung()
+        proc = subprocess.Popen(["bash", str(SCRIPT), "--diff", str(h.diff), "--mode", "find",
+                                 "--timeout", "60"], env=h.env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        self.addCleanup(kill_quietly, proc.pid)
+        end = time.time() + 15
+        while time.time() < end and not pids.exists():
+            time.sleep(0.1)
+        time.sleep(0.3)
+        os.killpg(proc.pid, signal.SIGINT)
+        proc.communicate(timeout=20)
+        self.assertEqual(proc.returncode, 128 + signal.SIGINT)
+        for pid in self.stub_pids(pids):
+            self.assertTrue(wait_dead(pid), "pid %d survived Ctrl-C" % pid)
+
+    def test_a_signal_to_the_script_alone_kills_the_runner_and_gemini(self):
+        # errors/code S1: a harness kill reaches only bash's pid. The runner and
+        # gemini must not be left running until the time limit.
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(sig=sig):
+                h, pids = self.hung()
+                proc = subprocess.Popen(["bash", str(SCRIPT), "--diff", str(h.diff), "--mode", "find",
+                                         "--timeout", "60"], env=h.env, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        start_new_session=True)
+                self.addCleanup(kill_quietly, proc.pid)
+                end = time.time() + 15
+                while time.time() < end and not (pids.exists() and pids.read_text().strip()):
+                    time.sleep(0.1)
+                stub, child = self.stub_pids(pids)
+                runner = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(stub)], capture_output=True,
+                                            text=True).stdout.strip())
+                self.addCleanup(kill_quietly, runner)
+                self.assertNotEqual(runner, proc.pid)
+                os.kill(proc.pid, sig)
+                try:
+                    proc.communicate(timeout=20)
+                except subprocess.TimeoutExpired:
+                    self.fail("the script's output stayed open: the runner outlived %s" % sig)
+                self.assertEqual(proc.returncode, 128 + sig)
+                for pid in (runner, stub, child):
+                    self.assertTrue(wait_dead(pid), "pid %d survived %s" % (pid, sig))
+
+    def test_the_default_limit_is_540(self):
+        # tests I4: the runner gets 540 when no flag is given and the env var is
+        # unset or bad. A python3 shim logs the runner's argv.
+        for env_value in (None, "abc", "0"):
+            with self.subTest(env=env_value):
+                h = GeminiHarness(self, [FOUND])
+                shim_dir = h.dir / "shim"
+                shim_dir.mkdir()
+                log = h.dir / "py-argv.log"
+                shim = shim_dir / "python3"
+                shim.write_text('#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexec "%s" "$@"\n'
+                                % (log, sys.executable))
+                shim.chmod(0o755)
+                h.env["PATH"] = str(shim_dir) + os.pathsep + h.env["PATH"]
+                h.env.pop("GEMINI_REVIEW_TIMEOUT", None)
+                if env_value is not None:
+                    h.env["GEMINI_REVIEW_TIMEOUT"] = env_value
+                res = h.run("--diff", h.diff, "--mode", "find")
+                self.assertEqual(res.returncode, 0, res.stderr)
+                runs = [line.split() for line in log.read_text().splitlines() if "run_bounded.py" in line]
+                self.assertEqual(len(runs), 1, log.read_text())
+                argv = runs[0]
+                at = [i for i, a in enumerate(argv) if a.endswith("run_bounded.py")][0]
+                self.assertEqual(argv[at + 1], "540")
+
+    def test_help_documents_the_flag_and_the_env_var(self):
+        res = subprocess.run(["bash", str(SCRIPT), "--help"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("--timeout <secs>", res.stdout)
+        self.assertIn("GEMINI_REVIEW_TIMEOUT", res.stdout)
+        self.assertIn("timed out", res.stdout)
+
+
+def copy_with_runner(test, h, runner_source):
+    """gemini-review.sh and its helpers copied to a new dir; run_bounded.py is
+    replaced by runner_source, or left out when it is None."""
+    d = h.dir / "copy"
+    d.mkdir()
+    for name in ("secret_scan.py", "audit_record.py", "gemini-review.sh"):
+        shutil.copy(str(HERE / name), str(d / name))
+    if runner_source is not None:
+        (d / "run_bounded.py").write_text(runner_source)
+    return d / "gemini-review.sh"
+
+
+class RunnerFailureTests(unittest.TestCase):
+    """errors I3: an install problem with run_bounded.py is exit 1, never exit 3
+    ("Gemini is down"), and each call's stderr is its own."""
+
+    def run_copy(self, h, script):
+        return subprocess.run(["bash", str(script), "--diff", str(h.diff), "--mode", "find"],
+                              capture_output=True, text=True, env=h.env, timeout=60,
+                              stdin=subprocess.DEVNULL)
+
+    def test_a_missing_runner_is_exit_1_before_any_call(self):
+        h = GeminiHarness(self, [FOUND])
+        res = self.run_copy(h, copy_with_runner(self, h, None))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("run_bounded.py", res.stderr)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+        self.assertEqual(h.calls(), [])
+
+    def test_runner_exit_125_is_exit_1(self):
+        h = GeminiHarness(self, [FOUND])
+        res = self.run_copy(h, copy_with_runner(self, h, "import sys\nsys.exit(125)\n"))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("run_bounded.py", res.stderr)
+        self.assertNotIn("ADVERSARY_UNAVAILABLE", res.stderr)
+
+    def test_a_retry_never_shows_the_first_calls_stderr(self):
+        # Call 1 writes stderr and an answer that does not parse; call 2 fails
+        # before it writes any stderr. Call 2's report must not quote call 1.
+        h = GeminiHarness(self, [FOUND])
+        count = h.dir / "runner-calls"
+        runner = (
+            "import sys, os\n"
+            "count = %r\n"
+            "n = int(open(count).read()) + 1 if os.path.exists(count) else 1\n"
+            "open(count, 'w').write(str(n))\n"
+            "if n == 1:\n"
+            "    open(sys.argv[3], 'w').write('not json')\n"
+            "    open(sys.argv[4], 'w').write('FIRST-CALL-STDERR 401 unauthorized')\n"
+            "    sys.exit(0)\n"
+            "sys.exit(1)\n" % str(count))
+        res = self.run_copy(h, copy_with_runner(self, h, runner))
+        self.assertEqual(count.read_text(), "2")
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertNotIn("FIRST-CALL-STDERR", res.stderr)
+        self.assertNotIn("authentication", res.stderr)
+
+
+class IdStartTests(unittest.TestCase):
+    """#171: find mode numbers Gemini's findings itself, G-NNN from --id-start
+    (default 1). The model's own ids are never trusted."""
+
+    MODEL = {"findings": [
+        dict(FOUND["findings"][0], id="C-001", title="reuses a Claude id"),
+        dict(FOUND["findings"][0], id="G-001", title="dup 1"),
+        dict(FOUND["findings"][0], id="G-001", title="dup 2"),
+        {k: v for k, v in FOUND["findings"][0].items() if k != "id"},
+        dict(FOUND["findings"][0], id=7, title="numeric id"),
+        "not a finding",
+    ]}
+
+    def test_ids_come_from_id_start(self):
+        h = GeminiHarness(self, [self.MODEL])
+        res = h.run("--diff", h.diff, "--mode", "find", "--id-start", "12")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        found = json.loads(res.stdout)["findings"]
+        self.assertEqual([f["id"] for f in found], ["G-012", "G-013", "G-014", "G-015", "G-016"])
+        self.assertEqual([f["origin"] for f in found], ["gemini"] * 5)
+
+    def test_the_default_starts_at_1(self):
+        h = GeminiHarness(self, [self.MODEL])
+        res = h.run("--diff", h.diff, "--mode", "find")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual([f["id"] for f in json.loads(res.stdout)["findings"]][:2], ["G-001", "G-002"])
+
+    def test_a_finding_without_an_id_is_kept(self):
+        h = GeminiHarness(self, [{"findings": [{"path": "a", "title": "no id", "rationale": "r"}]}])
+        res = h.run("--diff", h.diff, "--mode", "find", "--id-start", "3")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["findings"][0]["id"], "G-003")
+
+    def test_bad_id_start_is_a_usage_error(self):
+        for raw in ("0", "-1", "abc", "", "1.5"):
+            with self.subTest(raw=raw):
+                h = GeminiHarness(self, [FOUND])
+                res = h.run("--diff", h.diff, "--mode", "find", "--id-start", raw)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("--id-start must be", res.stderr)
+                self.assertEqual(h.calls(), [])
+
+    def test_id_start_is_find_mode_only(self):
+        h = GeminiHarness(self, [VERDICTS])
+        res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge", "--id-start", "4")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("--id-start works only with --mode find", res.stderr)
+        self.assertEqual(h.calls(), [])
+
+    def test_judge_mode_ids_are_unchanged(self):
+        h = GeminiHarness(self, [VERDICTS])
+        res = h.run("--diff", h.diff, "--findings", h.findings, "--mode", "judge")
+        self.assertEqual(json.loads(res.stdout)["verdicts"][0]["id"], "C-001")
+
+
+RUN_BOUNDED = HERE / "run_bounded.py"
+
+
+class RunBoundedMarkerTests(unittest.TestCase):
+    """The timeout marker is written only through an existing regular file: never
+    created, never followed through a symlink."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="run-bounded-test-"))
+        self.addCleanup(shutil.rmtree, str(self.dir), True)
+        self.inp = self.dir / "in"
+        self.inp.write_text("")
+
+    def run_sleep(self, marker):
+        return subprocess.run([sys.executable, str(RUN_BOUNDED), "1", str(self.inp), str(self.dir / "out"),
+                               str(self.dir / "err"), str(marker), "sleep", "30"],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_a_timeout_writes_the_existing_marker(self):
+        marker = self.dir / "marker"
+        marker.write_text("")
+        self.assertEqual(self.run_sleep(marker).returncode, 124)
+        self.assertNotEqual(marker.read_text(), "")
+
+    def test_a_symlinked_marker_is_not_followed(self):
+        target = self.dir / "target"
+        target.write_text("keep\n")
+        marker = self.dir / "marker"
+        os.symlink(str(target), str(marker))
+        self.assertEqual(self.run_sleep(marker).returncode, 124)
+        self.assertEqual(target.read_text(), "keep\n")
+
+    def run_cmd(self, secs, *cmd):
+        marker = self.dir / "m"
+        marker.write_text("")
+        res = subprocess.run([sys.executable, str(RUN_BOUNDED), secs, str(self.inp), str(self.dir / "out"),
+                              str(self.dir / "err"), str(marker)] + list(cmd),
+                             capture_output=True, text=True, timeout=30)
+        return res.returncode, marker.read_text()
+
+    def test_exit_codes(self):
+        # The command's own code passes through (124 included, with no marker),
+        # a signal death is 128+N, a missing command 127, a bad limit 125.
+        self.assertEqual(self.run_cmd("10", "sh", "-c", "exit 7"), (7, ""))
+        self.assertEqual(self.run_cmd("10", "sh", "-c", "exit 124"), (124, ""))
+        self.assertEqual(self.run_cmd("10", "sh", "-c", "kill -TERM $$"), (128 + signal.SIGTERM, ""))
+        self.assertEqual(self.run_cmd("10", str(self.dir / "no-such-cmd")), (127, ""))
+        for secs in ("0", "-1", "x"):
+            self.assertEqual(self.run_cmd(secs, "true")[0], 125)
+
+    def test_a_child_left_after_a_normal_exit_is_killed(self):
+        # tests I2: the group is killed after a normal exit too.
+        pidfile = self.dir / "bg.pid"
+        rc, marker = self.run_cmd("10", "sh", "-c", "sleep 60 & echo $! > '%s'; exit 0" % pidfile)
+        self.assertEqual((rc, marker), (0, ""))
+        pid = int(pidfile.read_text())
+        self.addCleanup(kill_quietly, pid)
+        self.assertTrue(wait_dead(pid), "the background child survived")
+
+    def test_a_missing_marker_is_not_created(self):
+        marker = self.dir / "marker"
+        self.assertEqual(self.run_sleep(marker).returncode, 124)
+        self.assertFalse(marker.exists())
+
+
+class RunBoundedPendingSignalTests(unittest.TestCase):
+    """A stop signal that lands while Popen is still running kills the new group."""
+
+    def test_a_signal_during_popen_kills_the_child_group(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("run_bounded_under_test", str(RUN_BOUNDED))
+        rb = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rb)
+        tmp = Path(tempfile.mkdtemp(prefix="run-bounded-pending-"))
+        self.addCleanup(shutil.rmtree, str(tmp), True)
+        (tmp / "in").write_text("")
+        marker = tmp / "marker"
+        marker.write_text("")
+        saved = {sig: signal.getsignal(sig) for sig in rb.STOP_SIGNALS}
+
+        def restore():
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
+        self.addCleanup(restore)
+
+        class FakeProc(object):
+            pid = 424242
+
+            def wait(self, timeout=None):
+                return 0
+
+            def poll(self):
+                return None
+
+        def fake_popen(*args, **kwargs):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            return FakeProc()
+
+        killed = []
+        reaped = []
+
+        def fake_exit(code):
+            raise SystemExit(code)
+
+        orig = (rb.subprocess.Popen, rb.kill_group, rb.reap, rb.os._exit)
+        self.addCleanup(lambda: (setattr(rb.subprocess, "Popen", orig[0]), setattr(rb, "kill_group", orig[1]),
+                                 setattr(rb, "reap", orig[2]), setattr(rb.os, "_exit", orig[3])))
+        rb.subprocess.Popen = fake_popen
+        rb.kill_group = lambda pid: killed.append(pid)
+        rb.reap = lambda proc: reaped.append(proc)
+        rb.os._exit = fake_exit
+        with self.assertRaises(SystemExit) as ctx:
+            rb.main(["run_bounded.py", "5", str(tmp / "in"), str(tmp / "out"), str(tmp / "err"),
+                     str(marker), "true"])
+        self.assertEqual(ctx.exception.code, 128 + signal.SIGTERM)
+        self.assertEqual(killed, [FakeProc.pid])
+        self.assertEqual(len(reaped), 1)
 
 
 if __name__ == "__main__":

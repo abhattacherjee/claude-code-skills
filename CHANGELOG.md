@@ -7,6 +7,24 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-21
+
+### Added
+
+- **`review`: tiered lane for `deep` (`--lane tiered`; abhattacherjee/cc-token-router#193).** Two Sonnet reviewers plus Codex in round 1, and a Sonnet test-quality pass when tests or guards change. A Sonnet judge, one Opus call per pass to break ties, fixes on Sonnet, and a Codex re-check as the sign-off (Gemini when Codex is unavailable). It became the default in 1.4.0 (see Changed). See `plugins/review/CHANGELOG.md`.
+
+### Fixed
+
+- **`review`: concede-or-defend outcomes reach `report.json`, and fixture names no longer trip the secret scan (abhattacherjee/cc-token-router#193).** `synthesize.py --decisions` applies the R3 outcomes, so findings the tiebreak upheld no longer read `rejected`. A captured-output fixture (`*.stdout`, `*.stderr`, `*.exit`) such as `extra-no-credentials.stderr` is no longer flagged for `*credentials*` in its name; other secret names such as `.env.stdout` still are, and its contents are still scanned. The adversary prompts say to judge correctness, with a plan or spec as context only. Every judge, the tiebreak included, now counts a test that cannot fail as a defect. See `plugins/review/CHANGELOG.md`.
+- **`review` 1.3.0: bounded Gemini calls, a stale Codex CLI named, and a Gemini sweep when Codex refuses a re-check (#53, #207, #185, #171).** `gemini-review.sh` takes `--timeout` (default 540 s) and kills a hung call's process group, exiting 3. Every review command in both skills passes `--timeout 540`. `ensure-codex.sh` prints `CODEX_STALE`, and `codex-review.sh` says the CLI looks stale on a "not supported when using Codex with a ChatGPT account" error. A Codex content refusal exits 3 as `ADVERSARY_REFUSED:`; `deep` (1.3.0) then has Gemini sweep the fix range and leaves the Codex threads open. `adversarial` 1.3.0. See `plugins/review/CHANGELOG.md`.
+- **`github-board` 1.2.3: a draft PR no longer pins its issue to This week (#234).** `plan-week` (2.0.1) `sync` skips draft PRs when it looks for work in progress, so a card moved to Later stays there while its PR is a draft. See `plugins/github-board/CHANGELOG.md`.
+- **`github-board` 1.2.4: the 2026-10-20 deep-review fixes, ported onto develop (#249).** Six skills: a NOT_FOUND user lookup reaches the organization fallback, `apply-plan.sh` does not repost a rationale, `Fixes:#N` with no space counts, `cleanup-branches.sh` keeps a local branch with commits the merged PR did not have, truncated searches warn, and the docs' flags and exit codes match the scripts. See `plugins/github-board/CHANGELOG.md`.
+
+### Changed
+
+- **`review` 1.3.1: `deep` dispatches its implementer sub-agents on Sonnet (#237).** Phase 1 step 3 and Step 2.5 say `model: "sonnet"`, with Opus only when any fix in the spec touches a security gate, a data migration or a destructive path. Reviewer dispatches keep their models. See `plugins/review/CHANGELOG.md`.
+- **`review` 1.4.0: `deep` runs the tiered lane by default (abhattacherjee/cc-token-router#193).** A replay on five past PRs passed its gate. `bug-hunter` is on Sonnet; `--lane legacy`, `--phase1-only` and `--phase2-only` run the old two-phase flow, which dispatches `bug-hunter` with `model: "opus"`. `adversarial` 1.4.0 runs `bug-hunter` on Sonnet. See `plugins/review/CHANGELOG.md`.
+
 ## [4.1.0] - 2026-10-11
 
 ### Fixed

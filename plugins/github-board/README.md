@@ -1,7 +1,7 @@
 # github-board
 
 <!-- plugin-meta:start -->
-**Version:** 1.2.2 · **7** skills · **4** agents · **0** commands
+**Version:** 1.2.4 · **7** skills · **4** agents · **0** commands
 <!-- plugin-meta:end -->
 
 GitHub workflow skills in one install: create a board from a template, triage issues, plan milestones, plan the week, move cards, promote shipped work to Done, and prune stale branches.
@@ -59,7 +59,7 @@ Per-user values live outside the plugin, so upgrades never touch them and launch
 
 - Write it with `/github-board:plan-week init` and `/github-board:create-board init`. Both ask a few questions with suggestions fetched from GitHub, show the file, and write it only after you confirm.
 - Lane rules match in order; the first match wins, else `default_lane`. `schedule` is `null` (no fixed days) or `{"mon": [lanes], …}`.
-- No config: every `plan-week` command except `init` exits 4, and so does a config that has no `plan_week` section yet (for example one written by `create-board init`); the message names the init to run. An invalid file, or a config path that is a dangling symlink, exits 2 and names the key or the file.
+- No config: `weekly-focus.py` commands `sync`, `set`, `pick`, `show` and `config` exit 4 (`init` and `--help` need no existing config), and so does a config that has no `plan_week` section yet (for example one written by `create-board init`); the message names the init to run. An invalid file, or a config path that is a dangling symlink, exits 2 and names the key or the file.
 - Optional `"prune_branches": {"tracking_issue_authors": ["<login>", "app/<bot>"]}`: logins besides the repo owner whose issues `prune-branches` accepts as tracking issues for a Dependabot PR. Without it, only the owner counts; `prune-branches` needs no config.
 - Optional `"milestones": {"next_release": {"<owner>/<repo>": "<milestone title>"}}`: the milestone that work merged into each repo belongs to. `move-card` sets it on issues moved to a post-merge column, and `plan-milestones` step 0 checks against it. Without an entry, both use the repo's open milestone with the lowest version (`vX.Y` or `vX.Y.Z`, sorted by version, not number) above the newest version tag, and say which one they picked. A milestone at or below that tag has shipped, even if it is still open. An entry naming a milestone that is missing, closed, or at or below the newest tag prints a warning and sets nothing.
 - Optional `"move_card": {"post_merge_columns": ["<column>", …]}`: the Status columns that count as post-merge for `move-card`. It replaces the built-in names "Development Complete", "Dev Complete" and "Done in develop" (any case); an empty list turns the milestone write off.
@@ -79,7 +79,7 @@ PW="$(ls -d ~/.claude/plugins/cache/*/github-board/*/skills/plan-week | sort -V 
 "$PW/scripts/install-launchd.sh" --check    # link, copy up to date, plists, loaded
 ```
 
-If a plist with the same label already runs another copy's scripts, the install refuses with exit 3 and names that copy. `--takeover` hands the jobs to the plugin. `install-launchd.sh --check` exits 1 when the link, the copy, a plist or a loaded job is missing, wrong or out of date. With `plan_week.launchd.enabled` false the jobs never reinstall each other. If the config is missing or invalid, both jobs record it in `~/.local/state/weekly-focus/last-error` and send a "config error" notification at most once per 6 hours.
+If a plist with the same label already runs another copy's scripts, the install refuses with exit 3 and names that copy. Exit 3 also covers an unreadable plist or a link path that exists and is not a symlink. `--takeover` allows replacing a plist; move a non-symlink link path away before re-running. `install-launchd.sh --check` exits 1 when the link, the copy, a plist or a loaded job is missing, wrong or out of date. Before those checks, it can exit 2 for bad arguments, invalid config or disabled launchd, or 4 for missing config or a missing `plan_week` section. With `plan_week.launchd.enabled` false the jobs never reinstall each other. If the config is missing or invalid, both jobs record it in `~/.local/state/weekly-focus/last-error` and send a "config error" notification at most once per 6 hours.
 
 ## Running next to the old bare skills
 
