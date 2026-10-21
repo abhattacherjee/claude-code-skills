@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+### Fixed
+
+- **`scripts/bump-version.sh` reads the highest `vX.Y.Z` tag, not the nearest one (#255).** `git describe` found an older release on develop (3.20.0 after v4.2.0), so `patch` would have made 3.20.1. Pre-release and partial tags are ignored. New `scripts/test-bump-version.sh` runs in CI as `bump-version-tests`.
+
 ## [4.2.0] - 2026-10-21
 
 ### Added
