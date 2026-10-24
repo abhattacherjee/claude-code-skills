@@ -336,6 +336,19 @@ class PostTests(unittest.TestCase):
         h.post(record([finding()], run_id="ar-test-2"), "other.json")
         self.assertEqual(len(h.posted("thread")), 2)
 
+    def test_post_without_fallback_flag_writes_nothing_outside_a_repo(self):
+        # post --pr run outside a git repo used to invent an
+        # unknown-branch.adversarial-review.md and look recorded (#266).
+        h = Harness(self, fail=["read"])
+        res = h.run("post", "--pr", "7", "--repo", "octo/demo",
+                    "--record", h.write(record([finding()])))
+        self.assertEqual(res.returncode, 1)
+        # gh uninstalled (gh_ready) and read failure are both acceptable paths;
+        # the invariant is the invented file's absence.
+        self.assertTrue("pass --fallback-out" in res.stderr
+                        or "could not read PR #7" in res.stderr, res.stderr)
+        self.assertFalse((h.dir / "unknown-branch.adversarial-review.md").exists())
+
     def test_unknown_pr_exits_1_cleanly(self):
         h = Harness(self, fail=["read"])
         res = h.post(record([finding()]))
