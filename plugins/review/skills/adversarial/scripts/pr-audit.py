@@ -205,14 +205,25 @@ def cmd_local(args):
     return 0
 
 
+def local_fallback_or_note(rec, reason, out):
+    """The post paths' failure sink. An explicit --fallback-out gets the audit
+    trail written there; without one, only the error is printed — inventing an
+    unknown-branch file next to an unusable run made a failed post look
+    recorded (#266)."""
+    if out is None:
+        print(f"pr-audit: {reason}; pass --fallback-out to keep a local copy.",
+              file=sys.stderr)
+        return
+    print(f"pr-audit: {reason}; writing the audit trail to {out} instead.",
+          file=sys.stderr)
+    write_local(rec, out)
+
+
 def cmd_post(args):
     rec = load_record(args.record)
     ready, reason = gh_ready()
     if not ready:
-        out = args.fallback_out or default_local_out()
-        print(f"pr-audit: {reason}; writing the audit trail to {out} instead.",
-              file=sys.stderr)
-        write_local(rec, out)
+        local_fallback_or_note(rec, reason, args.fallback_out)
         return 1
     return post_round(rec, args)
 
@@ -354,10 +365,8 @@ def post_round(rec, args):
         existing = hub.comments()
         reviews = hub.reviews()
     except POST_ERRORS as exc:
-        print(f"pr-audit: could not read PR #{args.pr}: {exc}", file=sys.stderr)
-        out = args.fallback_out or default_local_out()
-        write_local(rec, out)
-        print(f"pr-audit: wrote the audit trail to {out} instead.", file=sys.stderr)
+        local_fallback_or_note(rec, f"could not read PR #{args.pr}: {exc}",
+                               args.fallback_out)
         return 1
 
     posted_markers, openers = set(), {}
