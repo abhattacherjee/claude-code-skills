@@ -813,7 +813,11 @@ def test_sync_does_not_rewrite_done_or_open_cards(wf, monkeypatch, capsys):
                      "app#2": {"id": "i2", "focus": "This week", "status": "Todo",
                                "content": {"number": 2, "state": "OPEN", "repository": "app"}},
                      "app#3": {"id": "i3", "focus": "This week", "status": "Todo"},   # no content
-                     "app#4": _closed(4, "Todo")},
+                     "app#4": _closed(4, "Todo"),
+                     # open and no-content cards that are NOT in `issues`
+                     "app#5": {"id": "i5", "focus": "This week", "status": "Todo",
+                               "content": {"number": 5, "state": "OPEN", "repository": "app"}},
+                     "app#6": {"id": "i6", "focus": "This week", "status": "Todo"}},
               issues={"app#2": _iss("app", "v1.0"), "app#3": _iss("app", "v1.0"),
                       "app#4": _iss("app", "v1.0")},   # app#4 reopened after the board read
               current={"app": "v1.0"}, in_progress=set())
@@ -1158,6 +1162,13 @@ def test_sync_graphql_cost_is_null_when_the_budget_window_resets(wf, monkeypatch
     Board(wf, monkeypatch, items={}, issues={}, current={}, in_progress=set(),
           rate=({"remaining": 4700, "used": 300}, {"remaining": 4889, "used": 111}))
     assert _sync_json(wf, capsys)["graphql_cost"] is None
+
+
+def test_sync_graphql_cost_is_zero_when_nothing_was_spent(wf, monkeypatch, capsys):
+    # A zero-cost run is a real 0, not unknown.
+    Board(wf, monkeypatch, items={}, issues={}, current={}, in_progress=set(),
+          rate=({"remaining": 5000, "used": 100}, {"remaining": 5000, "used": 100}))
+    assert _sync_json(wf, capsys)["graphql_cost"] == 0
 
 
 def test_sync_graphql_cost_is_null_when_the_final_query_fails(wf, monkeypatch, capsys):
