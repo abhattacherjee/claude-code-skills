@@ -15,6 +15,8 @@ like "what do I work on next") is the normal way to use this.
                                   Focus=This week with Status=In Progress, and reported as
                                   unplanned when it is outside the plan. Reports what started,
                                   what is new since Monday and what closed since Monday.
+                                  A closed issue's card whose Status is not Done is set to
+                                  Done (marked_done).
                                   Focus of other existing items is never changed.
                                   Exits 3 without writing anything when the GitHub GraphQL
                                   budget is under MIN_BUDGET (skipped, not a failure).
@@ -796,11 +798,14 @@ def _skip_low_budget():
 
 
 def _graphql_cost(before):
+    """Points this run used, or None when unknown. A drop in `used` means the hourly window
+    reset during the run, so the difference is not the cost."""
     after = _safe_rate_limit()
     try:
-        return int(after["used"]) - int(before["used"])
+        cost = int(after["used"]) - int(before["used"])
     except (TypeError, KeyError, ValueError):
         return None
+    return cost if cost >= 0 else None
 
 
 def sync(as_json=False):
@@ -861,6 +866,18 @@ def sync(as_json=False):
                     set_opt(pid, it["id"], fields["Status"], "Todo")
                 else:
                     print(f"warning: board has no Status option 'Todo' ({key})", file=sys.stderr)
+    # A closed issue's card goes to Done. The board's "Item closed" workflow can be undone by a
+    # later workflow run (#264). A key in the open-issue list was reopened after the board read.
+    marked_done = []
+    for key, it in sorted(have.items()):
+        state = (it.get("content") or {}).get("state")
+        if state != "CLOSED" or key in issues or it.get("status") == "Done":
+            continue
+        if "Done" in fields.get("Status", {}).get("opts", {}):
+            set_opt(pid, it["id"], fields["Status"], "Done")
+            marked_done.append(key)
+        else:
+            print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
     unplanned = [k for k in started
                  if out_of_plan(k.split("#")[0], issues.get(k, {}).get("milestone"), current)]
 
@@ -878,7 +895,7 @@ def sync(as_json=False):
                           "focus_filled": focus_filled, "stale_in_progress": stale_cards,
                           "unplanned": unplanned, "new_since_monday": new_since,
                           "closed_since_monday": closed, "done_this_week": done_this_week,
-                          "graphql_cost": cost, "config_warnings": warnings},
+                          "marked_done": marked_done, "graphql_cost": cost, "config_warnings": warnings},
                          indent=2))
         return _finish_sync(failed_boards)
     for repo, title in current.items():
@@ -896,6 +913,7 @@ def sync(as_json=False):
     print(f"new since {start} {len(new_since)}: {' '.join(new_since) or '-'}")
     print(f"closed since {start} {len(closed)}: {' '.join(closed) or '-'}")
     print(f"done this week {len(done_this_week)}: {' '.join(done_this_week) or '-'}")
+    print(f"marked done {len(marked_done)}: {' '.join(marked_done) or '-'}")
     print("graphql cost: " + (f"{cost} points" if cost is not None else "unknown"))
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)

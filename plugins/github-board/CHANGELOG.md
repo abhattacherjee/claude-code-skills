@@ -2,6 +2,13 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.2.5] - 2026-10-23
+
+### Fixed
+
+- `plan-week` 2.0.3: `sync` sets a closed issue's card to Done when its Status is anything else (#264). It used to count the issue in `done_this_week` and leave the Status to the board's "Item closed" workflow, which a later workflow run can undo. A card already in Done is not written again. A board with no Done option gets a warning and no write. The moved keys are listed in a new `marked_done` field in `sync --json` and a `marked done` line in the text output, and SKILL.md step 1 reports them.
+- `plan-week` 2.0.3: `sync` reports `graphql_cost` as null (text: `unknown`) when the GraphQL budget window resets during the run. It used to report a negative cost (seen as `-189` on a live run).
+
 ## [1.2.4] - 2026-10-21
 
 ### Fixed
