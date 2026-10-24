@@ -574,7 +574,7 @@ def test_sync_json_shape_and_human_output(wf, monkeypatch, capsys):
     out = _sync_json(wf, capsys)
     assert set(out) == {"url", "current", "added", "started", "stopped", "stale_in_progress",
                         "lane_changed", "focus_filled", "unplanned", "new_since_monday", "closed_since_monday",
-                        "done_this_week", "graphql_cost", "config_warnings"}
+                        "done_this_week", "marked_done", "graphql_cost", "config_warnings"}
     assert out["url"] == "URL36" and out["current"] == {"app": "v1.0"}
 
 
@@ -786,6 +786,52 @@ def test_sync_done_this_week_is_closed_items_with_focus_this_week(wf, monkeypatc
     out = _sync_json(wf, capsys)
     assert out["closed_since_monday"] == ["app#1", "app#2"]
     assert out["done_this_week"] == ["app#1"]
+
+
+# ---- marked_done: closed cards go to Done (#264) ---------------------------
+
+def _closed(n, status, focus="This week"):
+    return {"id": f"i{n}", "focus": focus, "status": status,
+            "content": {"number": n, "state": "CLOSED", "repository": "app"}}
+
+
+def test_sync_marks_closed_cards_done(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch,
+              items={"app#1": _closed(1, "Todo"), "app#2": _closed(2, "In Progress"),
+                     "app#3": _closed(3, None, focus="Next")},
+              issues={}, current={"app": "v1.0"}, in_progress=set())
+    out = _sync_json(wf, capsys)
+    assert out["marked_done"] == ["app#1", "app#2", "app#3"]
+    assert sorted(b.sets) == [("i1", "S", "Done"), ("i2", "S", "Done"), ("i3", "S", "Done")]
+    wf.sync()
+    assert "marked done 3: app#1 app#2 app#3" in capsys.readouterr().out
+
+
+def test_sync_does_not_rewrite_done_or_open_cards(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch,
+              items={"app#1": _closed(1, "Done"),
+                     "app#2": {"id": "i2", "focus": "This week", "status": "Todo",
+                               "content": {"number": 2, "state": "OPEN", "repository": "app"}},
+                     "app#3": {"id": "i3", "focus": "This week", "status": "Todo"},   # no content
+                     "app#4": _closed(4, "Todo")},
+              issues={"app#2": _iss("app", "v1.0"), "app#3": _iss("app", "v1.0"),
+                      "app#4": _iss("app", "v1.0")},   # app#4 reopened after the board read
+              current={"app": "v1.0"}, in_progress=set())
+    out = _sync_json(wf, capsys)
+    assert out["marked_done"] == []
+    assert b.sets == []
+
+
+def test_sync_without_a_done_option_warns_and_writes_nothing(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={"app#1": _closed(1, "Todo")},
+              issues={}, current={"app": "v1.0"}, in_progress=set())
+    fields = wf.ensure_fields(36)
+    del fields["Status"]["opts"]["Done"]
+    wf.sync(as_json=True)
+    cap = capsys.readouterr()
+    assert json.loads(cap.out)["marked_done"] == []
+    assert b.sets == []
+    assert "board has no Status option 'Done' (app#1)" in cap.err
 
 
 # ---- local dates ----------------------------------------------------------
@@ -1105,6 +1151,13 @@ def test_sync_reports_graphql_cost_as_the_used_difference(wf, monkeypatch, capsy
     Board(wf, monkeypatch, items={}, issues={}, current={}, in_progress=set())
     wf.sync()
     assert "graphql cost: 76 points" in capsys.readouterr().out
+
+
+def test_sync_graphql_cost_is_null_when_the_budget_window_resets(wf, monkeypatch, capsys):
+    # The hourly window reset mid-run: `used` went down, so the difference is not the cost.
+    Board(wf, monkeypatch, items={}, issues={}, current={}, in_progress=set(),
+          rate=({"remaining": 4700, "used": 300}, {"remaining": 4889, "used": 111}))
+    assert _sync_json(wf, capsys)["graphql_cost"] is None
 
 
 def test_sync_graphql_cost_is_null_when_the_final_query_fails(wf, monkeypatch, capsys):
