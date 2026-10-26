@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+### Fixed
+
+- **`review`: `pr-audit.py post` no longer invents an `unknown-branch.adversarial-review.md` fallback (#266, PR #267 by bfs2021).** It writes a local file only with `--fallback-out`. See `plugins/review/CHANGELOG.md`.
+
 ## [4.2.0] - 2026-10-21
 
 ### Added

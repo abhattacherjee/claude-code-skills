@@ -40,13 +40,15 @@ as a Codex re-check closes Codex and Claude findings. Gemini never closes a
 Codex finding: those stay open and are named on stderr. This cannot be combined with
 --gemini-sweep.
 
-When gh is missing, not logged in, or cannot read the PR, `post` says why,
-writes the same content to the local markdown file instead, and exits 1. A gh
-call that fails, or returns output that cannot be parsed, is a failed post.
+When gh is missing, not logged in, or cannot read the PR, `post` says why on
+stderr and exits 1. It writes the same content to a local markdown file only
+when --fallback-out is given; otherwise it writes nothing. A gh call that
+fails, or returns output that cannot be parsed, is a failed post.
 
 Exit codes:
   0  everything was posted (or `local`/`record` succeeded)
-  1  the trail is incomplete: some posts failed, or it went to the local file
+  1  the trail is incomplete: some posts failed, or `post` could not reach the PR
+     (the trail went to --fallback-out if given, else nowhere)
   2  usage error, invalid record, or invalid report, or `record`/`recheck` could
      not write --out
   3  unexpected error (one line on stderr, no traceback); the trail may be partial
