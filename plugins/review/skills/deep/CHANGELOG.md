@@ -4,6 +4,12 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-27
+
+### Changed
+
+- `references/audit-trail.md`: exit code 1 now says `post` writes a local file only with `--fallback-out`; `local` is the way to write the trail by hand (#266, PR #267 by bfs2021).
+
 ## [1.4.0] - 2026-10-20
 
 ### Added
