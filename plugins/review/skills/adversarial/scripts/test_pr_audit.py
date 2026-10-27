@@ -336,6 +336,26 @@ class PostTests(unittest.TestCase):
         h.post(record([finding()], run_id="ar-test-2"), "other.json")
         self.assertEqual(len(h.posted("thread")), 2)
 
+    def test_post_without_fallback_flag_writes_nothing_outside_a_repo(self):
+        # post --pr run outside a git repo used to invent an
+        # unknown-branch.adversarial-review.md and look recorded (#266).
+        h = Harness(self, fail=["read"])
+        res = h.run("post", "--pr", "7", "--repo", "octo/demo",
+                    "--record", h.write(record([finding()])))
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("could not read PR #7", res.stderr)
+        self.assertIn("pass --fallback-out", res.stderr)
+        self.assertEqual(list(h.dir.glob("*.adversarial-review.md")), [])
+
+    def test_unauthenticated_gh_without_fallback_flag_writes_nothing(self):
+        # The gh_ready failure path in cmd_post, with no --fallback-out (#266).
+        h = Harness(self, auth=False)
+        res = h.run("post", "--pr", "7", "--repo", "octo/demo",
+                    "--record", h.write(record([finding()])))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("pass --fallback-out", res.stderr)
+        self.assertEqual(list(h.dir.glob("*.adversarial-review.md")), [])
+
     def test_unknown_pr_exits_1_cleanly(self):
         h = Harness(self, fail=["read"])
         res = h.post(record([finding()]))
@@ -349,7 +369,7 @@ class PostTests(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertTrue(h.fallback.exists(), "fallback file was not written")
         self.assertIn("Retry loop never resets the backoff", h.fallback.read_text())
-        self.assertIn(f"wrote the audit trail to {h.fallback}", res.stderr)
+        self.assertIn(f"writing the audit trail to {h.fallback} instead", res.stderr)
 
     def test_garbage_json_on_read_falls_back(self):
         h = Harness(self, garbage=["read"])

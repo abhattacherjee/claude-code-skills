@@ -81,8 +81,10 @@ python3 "<SCRIPTS_DIR>/pr-audit.py" local --record "<RUN_DIR>/round-<K>.json" --
 Exit codes:
 
 - 0: everything was posted.
-- 1: the trail is incomplete. Some posts failed (listed on stderr), or it went to the local file
-  because `gh` is unusable or the PR cannot be read. Note it for the final report and carry on.
+- 1: the trail is incomplete. Some posts failed (listed on stderr), or `gh` is unusable or the PR
+  cannot be read. `post` writes a local file only when `--fallback-out` is given — without it the
+  failure is only reported (pass `--fallback-out` to keep a copy), and the `local` subcommand is
+  the documented way to write the trail by hand. Note it for the final report and carry on.
   Rerunning the same command later posts only what is missing and updates the summary.
 - 2: the record is invalid. Fix the JSON and rerun.
 - 3: pr-audit.py crashed. Some posts may already be on the PR, so the trail may be partial.

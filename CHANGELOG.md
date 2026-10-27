@@ -11,6 +11,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 - **`github-board` 1.2.5: `plan-week sync` sets a closed issue's card to Done (#264).** The board's own "Item closed" workflow can be undone by a later workflow run, which left closed cards in Todo. `sync --json` lists the moved cards in `marked_done`. See `plugins/github-board/CHANGELOG.md`.
 - **`scripts/bump-version.sh` reads the highest `vX.Y.Z` tag, not the nearest one (#255).** `git describe` found an older release on develop (3.20.0 after v4.2.0), so `patch` would have made 3.20.1. Pre-release and partial tags are ignored. New `scripts/test-bump-version.sh` runs in CI as `bump-version-tests`.
+- **`review`: `pr-audit.py post` no longer invents an `unknown-branch.adversarial-review.md` fallback (#266, PR #267 by bfs2021).** It writes a local file only with `--fallback-out`. See `plugins/review/CHANGELOG.md`.
 
 ## [4.2.0] - 2026-10-21
 
