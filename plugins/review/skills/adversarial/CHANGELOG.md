@@ -4,6 +4,8 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-27
+
 ### Fixed
 
 - `pr-audit.py post` no longer writes an `unknown-branch.adversarial-review.md` fallback when it cannot reach gh or read the PR. It writes a local file only with `--fallback-out`; otherwise it reports the failure and exits 1 (#266, PR #267 by bfs2021).
