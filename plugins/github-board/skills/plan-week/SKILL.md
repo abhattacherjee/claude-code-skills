@@ -2,7 +2,7 @@
 name: plan-week
 description: "Answers what to work on next from the cross-repo Weekly Focus board, plans the week, and sets the board up. Use when: (1) 'what do I work on next' or 'what should I work on', (2) 'what's my focus this week', (3) 'plan my next week' or 'weekly plan', (4) 'weekly focus' or /weekly-focus (the old name of this skill), (5) 'set up plan-week' or 'plan-week init', or a command exits 4 (no config yet)."
 metadata:
-  version: 2.0.2
+  version: 2.0.3
 ---
 
 # Plan Week
@@ -15,7 +15,7 @@ Exit 4 from `weekly-focus.py` commands that read the config (`sync`, `set`, `pic
 
 ## Every mode except init
 
-1. `python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" sync --json`, with a Bash timeout of 300000 ms (it scans every board). Report changes first, one short line each, only non-empty: started (name the unplanned ones), stopped (cards reset to Todo), `lane_changed` (lanes filled or lifted to a label lane), `stale_in_progress` (name each key and tell the user to move the card back on its `board`), new since Monday, `done_this_week`, and each `config_warnings` entry (a frozen repo or always issue that matches no open issue: suggest fixing the config). If sync fails, say so, show the error, and carry on from `show --json` (it reads the board as it is). Exit 3 means sync skipped itself because the GitHub GraphQL budget is low: say so, carry on from `show --json`. Never fail silently.
+1. `python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" sync --json`, with a Bash timeout of 300000 ms (it scans every board). Report changes first, one short line each, only non-empty: started (name the unplanned ones), stopped (cards reset to Todo), `lane_changed` (lanes filled or lifted to a label lane), `stale_in_progress` (name each key and tell the user to move the card back on its `board`), new since Monday, `done_this_week`, `marked_done` (closed issues whose card sync set to Done), and each `config_warnings` entry (a frozen repo or always issue that matches no open issue: suggest fixing the config). If sync fails, say so, show the error, and carry on from `show --json` (it reads the board as it is). Exit 3 means sync skipped itself because the GitHub GraphQL budget is low: say so, carry on from `show --json`. Never fail silently.
 2. `python3 "${CLAUDE_SKILL_DIR}/scripts/weekly-focus.py" show --json`. It carries the config's `schedule`, `capacity`, `lanes` and `default_lane`. Use those; never a remembered weekday table.
 
 ## Mode: next (default)
