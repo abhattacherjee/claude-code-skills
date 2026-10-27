@@ -134,8 +134,9 @@ hand: Step 2.5, the re-check and any replay scoring read it.
 One fix wave for all survivors, as Step 2.5 says: check cites first, then one implementer sub-agent
 on `model: "sonnet"`. Never give the fixes to the adversary's model (Codex, or Gemini on the
 fallback path), even through a code-change tool such as `cx`: its re-check in T5 is the sign-off,
-and it must not sign off its own fixes. This lane never puts the implementer on Opus unless the
-user asks for it; Step 2.5's security-gate exception does not apply here, because the adversary
+and it must not sign off its own fixes. With Codex as the adversary, the dispatch carries the
+`cx-declined: codex-adversary:` line from `./dispatch-contract.md`. This lane never puts the
+implementer on Opus unless the user asks for it; Step 2.5's security-gate exception does not apply here, because the adversary
 re-checks every fix in T5. Verify the fixes in your own context, as Step 2.5 says, and record
 `phase2-fix`.
 
