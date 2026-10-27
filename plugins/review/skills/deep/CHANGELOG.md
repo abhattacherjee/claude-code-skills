@@ -4,6 +4,10 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 
 ## [Unreleased]
 
+### Added
+
+- `references/dispatch-contract.md`: with Codex as the adversary, every implementer dispatch and SendMessage carries `cx-declined: codex-adversary: <reason>`, so cc-token-router does not steer the fixes to `cx` and counts them as ineligible (abhattacherjee/cc-token-router#213). The tiered lane's T4 points to it.
+
 ## [1.4.1] - 2026-10-27
 
 ### Changed
