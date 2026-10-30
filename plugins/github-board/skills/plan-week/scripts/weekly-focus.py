@@ -19,6 +19,7 @@ like "what do I work on next") is the normal way to use this.
                                   what is new since Monday and what closed since Monday.
                                   A closed issue's card whose Status is not Done is set to
                                   Done (marked_done).
+                                  Completed issues closed this week are backfilled into This week.
                                   Focus of other existing items is never changed.
                                   Exits 3 without writing anything when the GitHub GraphQL
                                   budget is under MIN_BUDGET (skipped, not a failure).
@@ -589,7 +590,7 @@ NON_TEXT_RE = re.compile(r"<!--.*?-->|```.*?```|~~~.*?~~~|`[^`\n]*`", re.S)
 CLOSED_Q = (
     "query($endCursor:String){search(query:\"user:%s is:issue is:closed closed:>=%s\",type:ISSUE,"
     "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number closedAt "
-    "repository{name}}}}}")
+    "stateReason labels(first:20){nodes{name}} repository{name}}}}}")
 
 
 def _parse_ts(ts):
@@ -705,11 +706,14 @@ def week_start(today=None):
 def closed_since(start):
     # `closed:` filters on the UTC date, so ask from a day earlier and filter on the local date.
     q = CLOSED_Q % (OWNER, (start - datetime.timedelta(days=1)).isoformat())
-    out = set()
+    out = {}
     for n in gql_search(q, "closed issues"):
         day = local_date(n.get("closedAt"))
         if day is None or day >= start:
-            out.add(f'{n["repository"]["name"]}#{n["number"]}')
+            out[f'{n["repository"]["name"]}#{n["number"]}'] = {
+                "reason": n.get("stateReason"),
+                "labels": [l["name"] for l in (n.get("labels") or {}).get("nodes", [])],
+            }
     return out
 
 
@@ -893,15 +897,37 @@ def sync(as_json=False):
             marked_done.append(key)
         else:
             print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
+    start = week_start()
+    closed = closed_since(start)
+    backfilled = []
+    for key in sorted(closed):
+        if closed[key]["reason"] != "COMPLETED" or key in issues:
+            continue
+        if key.split("#")[0] in FROZEN and key not in ALWAYS:
+            continue
+        if key not in have:
+            item_id = add(num, pid, fields, key, closed[key]["labels"], "This week")
+            if "Done" in fields.get("Status", {}).get("opts", {}):
+                set_opt(pid, item_id, fields["Status"], "Done")
+            else:
+                print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
+            have[key] = {"id": item_id, "focus": "This week", "status": "Done",
+                         "title": "", "content": {"state": "CLOSED"}}
+        elif have[key].get("focus") != "This week":
+            set_opt(pid, have[key]["id"], fields["Focus"], "This week")
+            have[key]["focus"] = "This week"
+        else:
+            continue
+        backfilled.append(key)
+
     unplanned = [k for k in started
                  if out_of_plan(k.split("#")[0], issues.get(k, {}).get("milestone"), current)]
 
-    start = week_start()
     board_open = set(have) | set(added)
     new_since = sorted(k for k in board_open
                        if k in issues and (local_date(issues[k]["created"]) or datetime.date.min) >= start)
-    closed = sorted(closed_since(start) & board_open)
-    done_this_week = [k for k in closed if (have.get(k) or {}).get("focus") == "This week"]
+    closed_since_monday = sorted(set(closed) & board_open)
+    done_this_week = [k for k in closed_since_monday if (have.get(k) or {}).get("focus") == "This week"]
     cost = _graphql_cost(before)
 
     if as_json:
@@ -909,8 +935,9 @@ def sync(as_json=False):
                           "stopped": stopped, "lane_changed": lane_changed,
                           "focus_filled": focus_filled, "stale_in_progress": stale_cards,
                           "unplanned": unplanned, "new_since_monday": new_since,
-                          "closed_since_monday": closed, "done_this_week": done_this_week,
-                          "marked_done": marked_done, "graphql_cost": cost, "config_warnings": warnings},
+                          "closed_since_monday": closed_since_monday, "done_this_week": done_this_week,
+                          "marked_done": marked_done, "backfilled": backfilled,
+                          "graphql_cost": cost, "config_warnings": warnings},
                          indent=2))
         return _finish_sync(failed_boards)
     for repo, title in current.items():
@@ -926,9 +953,10 @@ def sync(as_json=False):
               f"move the card back on {c['board']}")
     print(f"unplanned {len(unplanned)}: {' '.join(unplanned) or '-'}")
     print(f"new since {start} {len(new_since)}: {' '.join(new_since) or '-'}")
-    print(f"closed since {start} {len(closed)}: {' '.join(closed) or '-'}")
+    print(f"closed since {start} {len(closed_since_monday)}: {' '.join(closed_since_monday) or '-'}")
     print(f"done this week {len(done_this_week)}: {' '.join(done_this_week) or '-'}")
     print(f"marked done {len(marked_done)}: {' '.join(marked_done) or '-'}")
+    print(f"backfilled {len(backfilled)}: {' '.join(backfilled) or '-'}")
     print("graphql cost: " + (f"{cost} points" if cost is not None else "unknown"))
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
