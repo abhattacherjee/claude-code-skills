@@ -6,7 +6,7 @@ All notable changes to the **github-board** plugin are documented here.
 
 ### Added
 
-- `plan-week` 2.1.0: `sync` files each new card into Next or Later (#281). Next holds Security lane cards and P1/P2 issues in the repo's current milestone. Everything else goes to Later. A card with an empty Focus gets the same rule. Sync never moves a card that already has a Focus, except to pull work in progress into This week. The board README and the skill README say what Next and Later mean.
+- `plan-week` 2.1.0: `sync` files each new card into Next or Later (#281). Next holds Security lane cards and P1/P2 issues in the repo's current milestone. Everything else goes to Later. A card with an empty Focus gets the same rule. Sync never moves a card that already has a Focus, except to pull work in progress, or a completed issue closed this week, into This week. The board README and the skill README say what Next and Later mean.
 - `plan-week` 2.1.0: `sync` backfills issues closed as completed since Monday (#280). One missing from the board is added as This week / Done. One on the board in Next or Later moves to This week. Issues closed as not planned or duplicate, reopened issues, and issues in frozen repos (unless listed in `always`) are left alone. The cards are listed in a new `backfilled` field in `sync --json` and a `backfilled` line in the text output, and SKILL.md step 1 reports them.
 
 ## [1.2.5] - 2026-10-23

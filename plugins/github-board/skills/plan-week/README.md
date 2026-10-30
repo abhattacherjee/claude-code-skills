@@ -6,7 +6,7 @@ A skill and script that keep a cross-repo "Weekly Focus" GitHub Project current,
 - `SKILL.md`: `/github-board:plan-week` and questions like "what should I work on".
 - `launchd/`: templates for two agents, labelled `<plan_week.launchd.label_prefix>-sync` (runs `scripts/run-sync.sh` at `plan_week.launchd.times`) and `<prefix>-watchdog` (runs `scripts/watchdog.sh` hourly and at load). No KeepAlive.
 
-Next holds Security lane issues and P1/P2 issues in their repo's current milestone. Later holds everything else. `sync` files new cards and fills empty Focus fields by this rule. It never moves a card that already has a Focus, except to pull work in progress into This week.
+Next holds Security lane issues and P1/P2 issues in their repo's current milestone. Later holds everything else. `sync` files new cards and fills empty Focus fields by this rule. It never moves a card that already has a Focus, except to pull work in progress, or a completed issue closed this week, into This week.
 
 The watchdog reinstalls a missing plist, reloads an unloaded sync job, and sends a macOS notification if the last successful sync is more than 26 hours old (each alert, and each label's reinstall failure, at most once per 6 hours). Each sync run also reloads the watchdog if it is not loaded. With `plan_week.launchd.enabled` false, neither job reinstalls anything. If the config is missing or invalid, both jobs record it in `last-error` and notify ("config error", at most once per 6 hours) instead of failing silently.
 

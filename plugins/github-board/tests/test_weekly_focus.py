@@ -1528,3 +1528,84 @@ def test_show_json_reports_config_warnings_schedule_and_capacity(wf, monkeypatch
     assert data["capacity"] == TEST_CFG["plan_week"]["capacity"]
     assert data["lanes"] == ["Security", "Season", "Tooling"] and data["default_lane"] == "Product"
     assert len(data["config_warnings"]) == 2
+
+
+# ---- review follow-ups: stale backfill, lane refresh, backfill budget -----
+
+def test_backfill_of_a_stale_open_card_also_marks_it_done(wf, monkeypatch, capsys):
+    # The board read says OPEN (the issue closed after it), so marked_done skips the card.
+    stale = {"id": "i1", "focus": "Next", "status": "Todo",
+             "content": {"number": 1, "state": "OPEN", "repository": "app"}}
+    b = Board(wf, monkeypatch, items={"app#1": stale}, issues={}, current={}, in_progress=set(),
+              closed={"app#1": {"reason": "COMPLETED", "labels": []}})
+    out = _sync_json(wf, capsys)
+    assert out["marked_done"] == []
+    assert out["backfilled"] == ["app#1"]
+    assert b.sets == [("i1", "F", "This week"), ("i1", "S", "Done")]
+
+
+def test_backfill_fills_an_empty_focus_on_a_closed_card(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={"app#1": _closed(1, "Todo", focus=None)},
+              issues={}, current={}, in_progress=set(),
+              closed={"app#1": {"reason": "COMPLETED", "labels": []}})
+    out = _sync_json(wf, capsys)
+    assert out["backfilled"] == ["app#1"]
+    assert b.sets == [("i1", "S", "Done"), ("i1", "F", "This week")]
+
+
+def test_backfill_of_a_done_card_in_later_writes_no_status(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={"app#1": _closed(1, "Done", "Later")},
+              issues={}, current={}, in_progress=set(),
+              closed={"app#1": {"reason": "COMPLETED", "labels": []}})
+    out = _sync_json(wf, capsys)
+    assert out["backfilled"] == ["app#1"]
+    assert b.sets == [("i1", "F", "This week")]
+
+
+def test_backfill_is_skipped_when_the_budget_is_low(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={"app#1": _closed(1, "Todo", "Next")},
+              issues={}, current={}, in_progress=set(),
+              closed={key: {"reason": "COMPLETED", "labels": []} for key in ("app#1", "app#2")},
+              rate=({"remaining": 5000, "used": 100}, {"remaining": 305, "used": 4795},
+                    {"remaining": 300, "used": 4800}))
+    wf.sync(as_json=True)
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["backfilled"] == []
+    assert b.adds == []
+    # Only marked_done (the existing closed-card rule) may write; backfill wrote nothing.
+    assert b.sets == [("i1", "S", "Done")]
+    assert ("weekly-focus: warning: skipped backfill of 2 card(s): GraphQL budget low (305 left)"
+            in cap.err)
+
+
+def test_refresh_lanes_updates_the_lane_the_focus_fill_reads(wf, monkeypatch, capsys):
+    monkeypatch.setattr(wf, "LANES", [{"name": "Product", "labels_containing": ["feature"]},
+                                      {"name": "Security", "labels_containing": ["security"]}])
+    b = Board(wf, monkeypatch,
+              items={"app#1": {"id": "i1", "focus": None, "lane": "Security", "status": "Todo"}},
+              issues={"app#1": _iss("app", "v1.0", labels=["feature", "P3"])},
+              current={"app": "v1.0"}, in_progress=set())
+    out = _sync_json(wf, capsys)
+    assert [c["to"] for c in out["lane_changed"]] == ["Product"]
+    assert out["focus_filled"] == ["app#1"]
+    assert [s for s in b.sets if s[1] == "F"] == [("i1", "F", "Later")]
+
+
+def test_empty_focus_p1_outside_the_current_milestone_is_filled_with_later(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch,
+              items={"app#1": {"id": "i1", "focus": None, "status": "Todo"}},
+              issues={"app#1": _iss("app", "v2.0", labels=["P1"])},
+              current={"app": "v1.0"}, in_progress=set())
+    assert _sync_json(wf, capsys)["focus_filled"] == ["app#1"]
+    assert [s for s in b.sets if s[1] == "F"] == [("i1", "F", "Later")]
+
+
+def test_new_card_in_a_repo_rule_security_lane_lands_in_next(wf, monkeypatch, capsys):
+    # The Security lane comes from a repo rule; the issue has no security label and no priority.
+    monkeypatch.setattr(wf, "LANES", [{"name": "Security", "repos": ["app"]}])
+    b = Board(wf, monkeypatch, items={},
+              issues={"app#1": _iss("app", "v1.0")},
+              current={"app": "v1.0"}, in_progress=set())
+    assert _sync_json(wf, capsys)["added"] == ["app#1"]
+    assert b.adds == [("app#1", "Next")]

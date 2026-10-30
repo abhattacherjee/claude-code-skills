@@ -20,7 +20,8 @@ like "what do I work on next") is the normal way to use this.
                                   A closed issue's card whose Status is not Done is set to
                                   Done (marked_done).
                                   Completed issues closed this week are backfilled into This week.
-                                  Focus of other existing items is never changed.
+                                  Focus of other existing items is never changed, except by that
+                                  backfill.
                                   Exits 3 without writing anything when the GitHub GraphQL
                                   budget is under MIN_BUDGET (skipped, not a failure).
   weekly-focus.py set FOCUS REPO#N...
@@ -122,7 +123,8 @@ def board_readme():
         "  next release. Key rotations with no code change are the exception.",
         "- Next holds Security lane issues and P1/P2 issues in their repo's current milestone.",
         "  Later holds everything else. Sync files new cards by this rule and never moves a card",
-        "  that already has a Focus, except to pull work in progress into This week.",
+        "  that already has a Focus, except to pull work in progress, or a completed issue closed",
+        "  this week, into This week.",
         f"- At most {CAPACITY['max_repos_besides_security']} repos per week besides Security. "
         "Everything else stays Next or Later.",
         "",
@@ -787,6 +789,7 @@ def refresh_lanes(pid, fields, have, issues):
             print(f"warning: board has no Lane option {new!r} ({key})", file=sys.stderr)
             continue
         set_opt(pid, it["id"], fields["Lane"], new)
+        it["lane"] = new
         changed.append({"key": key, "from": cur, "to": new})
     return changed
 
@@ -894,17 +897,29 @@ def sync(as_json=False):
             continue
         if "Done" in fields.get("Status", {}).get("opts", {}):
             set_opt(pid, it["id"], fields["Status"], "Done")
+            it["status"] = "Done"
             marked_done.append(key)
         else:
             print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
     start = week_start()
     closed = closed_since(start)
     backfilled = []
+    pending = []
     for key in sorted(closed):
         if closed[key]["reason"] != "COMPLETED" or key in issues:
             continue
         if key.split("#")[0] in FROZEN and key not in ALWAYS:
             continue
+        if key not in have or have[key].get("focus") != "This week":
+            pending.append(key)
+    # About 4 writes per card, and the budget was only checked at the start.
+    if pending:
+        remaining = (_safe_rate_limit() or {}).get("remaining")
+        if isinstance(remaining, int) and remaining - MIN_BUDGET < 4 * len(pending):
+            print(f"weekly-focus: warning: skipped backfill of {len(pending)} card(s): "
+                  f"GraphQL budget low ({remaining} left)", file=sys.stderr)
+            pending = []
+    for key in pending:
         if key not in have:
             item_id = add(num, pid, fields, key, closed[key]["labels"], "This week")
             if "Done" in fields.get("Status", {}).get("opts", {}):
@@ -913,11 +928,16 @@ def sync(as_json=False):
                 print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
             have[key] = {"id": item_id, "focus": "This week", "status": "Done",
                          "title": "", "content": {"state": "CLOSED"}}
-        elif have[key].get("focus") != "This week":
+        else:
             set_opt(pid, have[key]["id"], fields["Focus"], "This week")
             have[key]["focus"] = "This week"
-        else:
-            continue
+            # A stale board read (closed after it) leaves the card out of marked_done.
+            if have[key].get("status") != "Done":
+                if "Done" in fields.get("Status", {}).get("opts", {}):
+                    set_opt(pid, have[key]["id"], fields["Status"], "Done")
+                    have[key]["status"] = "Done"
+                else:
+                    print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
         backfilled.append(key)
 
     unplanned = [k for k in started
