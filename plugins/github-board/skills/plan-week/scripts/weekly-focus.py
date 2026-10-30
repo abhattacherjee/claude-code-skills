@@ -7,9 +7,11 @@ lanes, schedule, frozen and always lists, capacity and launchd settings.
 launchd runs `sync` at the configured times. The skill (/github-board:plan-week, or a question
 like "what do I work on next") is the normal way to use this.
 
-  weekly-focus.py sync [--json]   create the board if missing, add (as Focus=Next) every open
+  weekly-focus.py sync [--json]   create the board if missing, add every open
                                   issue in each active repo's current milestone, plus
-                                  P1/security issues from any milestone. Work already in
+                                  P1/security issues from any milestone. New cards go to Next
+                                  for the Security lane or P1/P2 in the current milestone;
+                                  everything else goes to Later. Work already in
                                   progress (a Status of In progress / In review on any of your
                                   boards, or an open non-draft PR that closes the issue) is pulled in as
                                   Focus=This week with Status=In Progress, and reported as
@@ -17,7 +19,9 @@ like "what do I work on next") is the normal way to use this.
                                   what is new since Monday and what closed since Monday.
                                   A closed issue's card whose Status is not Done is set to
                                   Done (marked_done).
-                                  Focus of other existing items is never changed.
+                                  Completed issues closed this week are backfilled into This week.
+                                  Focus of other existing items is never changed, except by that
+                                  backfill.
                                   Exits 3 without writing anything when the GitHub GraphQL
                                   budget is under MIN_BUDGET (skipped, not a failure).
   weekly-focus.py set FOCUS REPO#N...
@@ -78,6 +82,7 @@ FROZEN = set()
 ALWAYS = set()          # repo#N pulled in even though the repo is frozen
 LANES = []              # [{"name", "labels_containing"?, "repos"?}]; first match wins
 DEFAULT_LANE = "Product"
+SECURITY_LANE = "Security"
 SCHEDULE = None         # {"mon": [lane, ...], ...}, or None for no fixed days
 CAPACITY = {"max_repos_besides_security": 3, "hours": [10, 20]}
 LAUNCHD = {"enabled": False, "times": [], "label_prefix": ""}
@@ -116,6 +121,10 @@ def board_readme():
         "  milestone with open issues). `show` flags any This week item outside it.",
         "- Security may jump ahead. Move that issue into the current milestone so it ships in the",
         "  next release. Key rotations with no code change are the exception.",
+        "- Next holds Security lane issues and P1/P2 issues in their repo's current milestone.",
+        "  Later holds everything else. Sync files new cards by this rule and never moves a card",
+        "  that already has a Focus, except to pull work in progress, or a completed issue closed",
+        "  this week, into This week.",
         f"- At most {CAPACITY['max_repos_besides_security']} repos per week besides Security. "
         "Everything else stays Next or Later.",
         "",
@@ -583,7 +592,7 @@ NON_TEXT_RE = re.compile(r"<!--.*?-->|```.*?```|~~~.*?~~~|`[^`\n]*`", re.S)
 CLOSED_Q = (
     "query($endCursor:String){search(query:\"user:%s is:issue is:closed closed:>=%s\",type:ISSUE,"
     "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number closedAt "
-    "repository{name}}}}}")
+    "stateReason labels(first:20){nodes{name}} repository{name}}}}}")
 
 
 def _parse_ts(ts):
@@ -699,11 +708,14 @@ def week_start(today=None):
 def closed_since(start):
     # `closed:` filters on the UTC date, so ask from a day earlier and filter on the local date.
     q = CLOSED_Q % (OWNER, (start - datetime.timedelta(days=1)).isoformat())
-    out = set()
+    out = {}
     for n in gql_search(q, "closed issues"):
         day = local_date(n.get("closedAt"))
         if day is None or day >= start:
-            out.add(f'{n["repository"]["name"]}#{n["number"]}')
+            out[f'{n["repository"]["name"]}#{n["number"]}'] = {
+                "reason": n.get("stateReason"),
+                "labels": [l["name"] for l in (n.get("labels") or {}).get("nodes", [])],
+            }
     return out
 
 
@@ -727,12 +739,16 @@ def current_milestones(repos):
     return cur
 
 
+def issue_in_current(issue, current):
+    return issue["milestone"] is not None and issue["milestone"] == current.get(issue["repo"])
+
+
 def candidates(issues, current):
     for key, i in issues.items():
         repo = i["repo"]
         low = [l.lower() for l in i["labels"]]
         hot = any(l.startswith("p1") or l == "priority: p1" or "security" in l for l in low)
-        in_current = i["milestone"] is not None and i["milestone"] == current.get(repo)
+        in_current = issue_in_current(i, current)
         if key in ALWAYS or (repo not in FROZEN and (hot or in_current)):
             yield key, i["labels"]
 
@@ -773,8 +789,20 @@ def refresh_lanes(pid, fields, have, issues):
             print(f"warning: board has no Lane option {new!r} ({key})", file=sys.stderr)
             continue
         set_opt(pid, it["id"], fields["Lane"], new)
+        it["lane"] = new
         changed.append({"key": key, "from": cur, "to": new})
     return changed
+
+
+def _read_budget():
+    """The rateLimit dict. An explicit rate-limit error counts as 0 left; any other GhError
+    gives None (unknown)."""
+    try:
+        return rate_limit()
+    except GhError as e:
+        if RATE_RE.search(str(e)):
+            return {"remaining": 0, "resetAt": None}
+        return None
 
 
 def _skip_low_budget():
@@ -782,13 +810,9 @@ def _skip_low_budget():
 
     Returns the preflight rateLimit dict (None if it could not be read).
     """
-    try:
-        rl = rate_limit()
-    except GhError as e:
-        if RATE_RE.search(str(e)):
-            rl = {"remaining": 0, "resetAt": None}
-        else:
-            return None
+    rl = _read_budget()
+    if rl is None:
+        return None
     remaining = rl.get("remaining")
     if isinstance(remaining, int) and remaining < MIN_BUDGET:
         print(f"weekly-focus: skipped: GraphQL budget low ({remaining} left, resets "
@@ -821,10 +845,11 @@ def sync(as_json=False):
     added = []
     for key, labels in candidates(issues, current):
         if key not in have:
-            item_id = add(num, pid, fields, key, labels, "Next")
+            lane = lane_for(issues[key]["repo"], labels)
+            focus = focus_for(lane, labels, issue_in_current(issues[key], current))
+            item_id = add(num, pid, fields, key, labels, focus)
             added.append(key)
-            have[key] = {"id": item_id, "focus": "Next", "status": None, "title": "",
-                         "lane": lane_for(key.split("#")[0], labels)}
+            have[key] = {"id": item_id, "focus": focus, "status": None, "title": "", "lane": lane}
 
     lane_changed = refresh_lanes(pid, fields, have, issues)
 
@@ -833,8 +858,12 @@ def sync(as_json=False):
     for key, labels in candidates(issues, current):
         it = have.get(key)
         if it is not None and key not in added and not it.get("focus"):
-            set_opt(pid, it["id"], fields["Focus"], "Next")
-            it["focus"] = "Next"
+            lane = lane_for(issues[key]["repo"], labels)
+            if it.get("lane") == SECURITY_LANE:
+                lane = SECURITY_LANE
+            focus = focus_for(lane, labels, issue_in_current(issues[key], current))
+            set_opt(pid, it["id"], fields["Focus"], focus)
+            it["focus"] = focus
             focus_filled.append(key)
 
     # Work already in progress: pull onto the board as This week / In Progress.
@@ -875,18 +904,60 @@ def sync(as_json=False):
             continue
         if "Done" in fields.get("Status", {}).get("opts", {}):
             set_opt(pid, it["id"], fields["Status"], "Done")
+            it["status"] = "Done"
             marked_done.append(key)
         else:
             print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
+    start = week_start()
+    closed = closed_since(start)
+    backfilled = []
+    pending = []
+    for key in sorted(closed):
+        if closed[key]["reason"] != "COMPLETED" or key in issues:
+            continue
+        if key.split("#")[0] in FROZEN and key not in ALWAYS:
+            continue
+        if key not in have or have[key].get("focus") != "This week":
+            pending.append(key)
+    # About 4 writes per card, and the budget was only checked at the start.
+    if pending:
+        try:
+            remaining = (_read_budget() or {}).get("remaining")
+        except (subprocess.SubprocessError, OSError, ValueError):
+            remaining = None
+        if isinstance(remaining, int) and remaining - MIN_BUDGET < 4 * len(pending):
+            print(f"weekly-focus: warning: skipped backfill of {len(pending)} card(s): "
+                  f"GraphQL budget low ({remaining} left)", file=sys.stderr)
+            pending = []
+    for key in pending:
+        if key not in have:
+            item_id = add(num, pid, fields, key, closed[key]["labels"], "This week")
+            if "Done" in fields.get("Status", {}).get("opts", {}):
+                set_opt(pid, item_id, fields["Status"], "Done")
+            else:
+                print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
+            have[key] = {"id": item_id, "focus": "This week", "status": "Done",
+                         "title": "", "content": {"state": "CLOSED"}}
+        else:
+            set_opt(pid, have[key]["id"], fields["Focus"], "This week")
+            have[key]["focus"] = "This week"
+            # A stale board read (closed after it) leaves the card out of marked_done.
+            if have[key].get("status") != "Done":
+                if "Done" in fields.get("Status", {}).get("opts", {}):
+                    set_opt(pid, have[key]["id"], fields["Status"], "Done")
+                    have[key]["status"] = "Done"
+                else:
+                    print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
+        backfilled.append(key)
+
     unplanned = [k for k in started
                  if out_of_plan(k.split("#")[0], issues.get(k, {}).get("milestone"), current)]
 
-    start = week_start()
     board_open = set(have) | set(added)
     new_since = sorted(k for k in board_open
                        if k in issues and (local_date(issues[k]["created"]) or datetime.date.min) >= start)
-    closed = sorted(closed_since(start) & board_open)
-    done_this_week = [k for k in closed if (have.get(k) or {}).get("focus") == "This week"]
+    closed_since_monday = sorted(set(closed) & board_open)
+    done_this_week = [k for k in closed_since_monday if (have.get(k) or {}).get("focus") == "This week"]
     cost = _graphql_cost(before)
 
     if as_json:
@@ -894,8 +965,9 @@ def sync(as_json=False):
                           "stopped": stopped, "lane_changed": lane_changed,
                           "focus_filled": focus_filled, "stale_in_progress": stale_cards,
                           "unplanned": unplanned, "new_since_monday": new_since,
-                          "closed_since_monday": closed, "done_this_week": done_this_week,
-                          "marked_done": marked_done, "graphql_cost": cost, "config_warnings": warnings},
+                          "closed_since_monday": closed_since_monday, "done_this_week": done_this_week,
+                          "marked_done": marked_done, "backfilled": backfilled,
+                          "graphql_cost": cost, "config_warnings": warnings},
                          indent=2))
         return _finish_sync(failed_boards)
     for repo, title in current.items():
@@ -911,9 +983,10 @@ def sync(as_json=False):
               f"move the card back on {c['board']}")
     print(f"unplanned {len(unplanned)}: {' '.join(unplanned) or '-'}")
     print(f"new since {start} {len(new_since)}: {' '.join(new_since) or '-'}")
-    print(f"closed since {start} {len(closed)}: {' '.join(closed) or '-'}")
+    print(f"closed since {start} {len(closed_since_monday)}: {' '.join(closed_since_monday) or '-'}")
     print(f"done this week {len(done_this_week)}: {' '.join(done_this_week) or '-'}")
     print(f"marked done {len(marked_done)}: {' '.join(marked_done) or '-'}")
+    print(f"backfilled {len(backfilled)}: {' '.join(backfilled) or '-'}")
     print("graphql cost: " + (f"{cost} points" if cost is not None else "unknown"))
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
@@ -962,6 +1035,10 @@ def priority(labels):
     return min(found) if found else None
 
 
+def focus_for(lane, labels, in_current):
+    return "Next" if lane == SECURITY_LANE or (in_current and priority(labels) in (1, 2)) else "Later"
+
+
 def show_items(p, issues=None):
     issues = open_issues() if issues is None else issues
     current = current_milestones({i["repo"] for i in issues.values()} - FROZEN)
@@ -980,7 +1057,7 @@ def show_items(p, issues=None):
             "title": it.get("title", ""), "focus": focus, "lane": it.get("lane") or "",
             "status": it.get("status") or "", "milestone": raw_ms,
             "current_milestone": current.get(repo), "labels": labels, "priority": priority(labels),
-            "in_current": raw_ms is not None and raw_ms == current.get(repo),
+            "in_current": issue_in_current(issues[k], current),
             "frozen": frozen, "in_progress": in_prog,
             "not_current": focus == "This week" and off and not frozen,
             "unplanned": in_prog and off,

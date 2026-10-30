@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+### Added
+
+- **`github-board` 1.3.0: `plan-week sync` files new cards into Next or Later, and backfills issues closed this week (#280, #281).** Next holds Security lane cards and P1/P2 issues in the current milestone. Completed issues closed since Monday land in This week. See `plugins/github-board/CHANGELOG.md`.
+
 ## [4.2.1] - 2026-10-27
 
 ### Fixed
