@@ -490,6 +490,73 @@ def _sync_json(wf, capsys):
     return json.loads(capsys.readouterr().out)
 
 
+def test_new_security_lane_issue_lands_in_next(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={},
+              issues={"app#1": _iss("app", None, labels=["security"])},
+              current={}, in_progress=set())
+    assert _sync_json(wf, capsys)["added"] == ["app#1"]
+    assert b.adds == [("app#1", "Next")]
+
+
+@pytest.mark.parametrize("label", ["P1", "P2"])
+def test_new_p1_or_p2_in_current_milestone_lands_in_next(wf, monkeypatch, capsys, label):
+    b = Board(wf, monkeypatch, items={},
+              issues={"app#1": _iss("app", "v1.0", labels=[label])},
+              current={"app": "v1.0"}, in_progress=set())
+    assert _sync_json(wf, capsys)["added"] == ["app#1"]
+    assert b.adds == [("app#1", "Next")]
+
+
+@pytest.mark.parametrize("milestone, labels, current", [
+    ("v2.0", ["P1"], {"app": "v1.0"}),
+    (None, ["P1"], {}),
+    ("v1.0", ["P3"], {"app": "v1.0"}),
+    ("v1.0", ["P4"], {"app": "v1.0"}),
+    ("v1.0", [], {"app": "v1.0"}),
+])
+def test_new_issue_outside_current_or_low_priority_lands_in_later(
+        wf, monkeypatch, capsys, milestone, labels, current):
+    b = Board(wf, monkeypatch, items={},
+              issues={"app#1": _iss("app", milestone, labels=labels)},
+              current=current, in_progress=set())
+    assert _sync_json(wf, capsys)["added"] == ["app#1"]
+    assert b.adds == [("app#1", "Later")]
+
+
+@pytest.mark.parametrize("focus, labels", [
+    ("This week", []), ("Next", []), ("Later", ["P1"]),
+])
+def test_sync_keeps_an_existing_focus(wf, monkeypatch, capsys, focus, labels):
+    b = Board(wf, monkeypatch,
+              items={"app#1": {"id": "i1", "focus": focus, "status": "Todo"}},
+              issues={"app#1": _iss("app", "v1.0", labels=labels)},
+              current={"app": "v1.0"}, in_progress=set())
+    assert _sync_json(wf, capsys)["focus_filled"] == []
+    assert b.adds == []
+    assert not [s for s in b.sets if s[1] == "F"]
+
+
+@pytest.mark.parametrize("lane, labels", [
+    ("Security", []), ("Product", ["security"]), ("Product", ["P2"]),
+])
+def test_empty_focus_is_filled_by_the_same_rule(wf, monkeypatch, capsys, lane, labels):
+    b = Board(wf, monkeypatch,
+              items={"app#1": {"id": "i1", "focus": None, "lane": lane, "status": "Todo"},
+                     "app#2": {"id": "i2", "focus": "", "lane": "Product", "status": "Todo"}},
+              issues={"app#1": _iss("app", "v1.0", labels=labels),
+                      "app#2": _iss("app", "v1.0", labels=["P3"])},
+              current={"app": "v1.0"}, in_progress=set())
+    assert _sync_json(wf, capsys)["focus_filled"] == ["app#1", "app#2"]
+    assert [s for s in b.sets if s[1] == "F"] == [("i1", "F", "Next"), ("i2", "F", "Later")]
+    assert b.adds == []
+
+
+def test_skill_plan_mode_still_reads_next():
+    text = (SCRIPT.parents[1] / "SKILL.md").read_text()
+    plan = text.split("## Mode: plan\n", 1)[1].split("\n## ", 1)[0]
+    assert "Security lane Next items" in plan
+
+
 def test_sync_adds_missing_in_progress_item_as_this_week_and_in_progress(wf, monkeypatch, capsys):
     b = Board(wf, monkeypatch, items={}, issues={"app#1": _iss("app", "v9.0")},
               current={"app": "v1.0"}, in_progress={"app#1"})   # not a candidate: only in-progress adds it
@@ -1285,7 +1352,7 @@ def test_foreign_card_with_same_repo_and_number_does_not_suppress_adding(wf, mon
     rows = [_item_node("x", 1, owner="someone-else")]
     monkeypatch.setattr(wf, "gh", lambda *a, parse=True, **k: "\n".join(json.dumps(r) for r in rows))
     have = wf.board_items(36)
-    b = Board(wf, monkeypatch, items={}, issues={"app#1": _iss("app", "v1.0")},
+    b = Board(wf, monkeypatch, items={}, issues={"app#1": _iss("app", "v1.0", labels=["P2"])},
               current={"app": "v1.0"}, in_progress=set())
     monkeypatch.setattr(wf, "board_items", lambda n: dict(have))
     out = _sync_json(wf, capsys)
@@ -1296,7 +1363,7 @@ def test_sync_fills_empty_focus_on_candidate_but_not_a_set_one(wf, monkeypatch, 
     b = Board(wf, monkeypatch,
               items={"app#1": {"id": "i1", "focus": None, "status": "Todo"},
                      "app#2": {"id": "i2", "focus": "Later", "status": "Todo"}},
-              issues={f"app#{n}": _iss("app", "v1.0") for n in (1, 2)},
+              issues={f"app#{n}": _iss("app", "v1.0", labels=["P2"]) for n in (1, 2)},
               current={"app": "v1.0"}, in_progress=set())
     out = _sync_json(wf, capsys)
     assert out["focus_filled"] == ["app#1"]

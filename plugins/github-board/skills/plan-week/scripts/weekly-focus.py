@@ -7,9 +7,11 @@ lanes, schedule, frozen and always lists, capacity and launchd settings.
 launchd runs `sync` at the configured times. The skill (/github-board:plan-week, or a question
 like "what do I work on next") is the normal way to use this.
 
-  weekly-focus.py sync [--json]   create the board if missing, add (as Focus=Next) every open
+  weekly-focus.py sync [--json]   create the board if missing, add every open
                                   issue in each active repo's current milestone, plus
-                                  P1/security issues from any milestone. Work already in
+                                  P1/security issues from any milestone. New cards go to Next
+                                  for the Security lane or P1/P2 in the current milestone;
+                                  everything else goes to Later. Work already in
                                   progress (a Status of In progress / In review on any of your
                                   boards, or an open non-draft PR that closes the issue) is pulled in as
                                   Focus=This week with Status=In Progress, and reported as
@@ -78,6 +80,7 @@ FROZEN = set()
 ALWAYS = set()          # repo#N pulled in even though the repo is frozen
 LANES = []              # [{"name", "labels_containing"?, "repos"?}]; first match wins
 DEFAULT_LANE = "Product"
+SECURITY_LANE = "Security"
 SCHEDULE = None         # {"mon": [lane, ...], ...}, or None for no fixed days
 CAPACITY = {"max_repos_besides_security": 3, "hours": [10, 20]}
 LAUNCHD = {"enabled": False, "times": [], "label_prefix": ""}
@@ -116,6 +119,9 @@ def board_readme():
         "  milestone with open issues). `show` flags any This week item outside it.",
         "- Security may jump ahead. Move that issue into the current milestone so it ships in the",
         "  next release. Key rotations with no code change are the exception.",
+        "- Next holds Security lane issues and P1/P2 issues in their repo's current milestone.",
+        "  Later holds everything else. Sync files new cards by this rule and never moves a card",
+        "  that already has a Focus, except to pull work in progress into This week.",
         f"- At most {CAPACITY['max_repos_besides_security']} repos per week besides Security. "
         "Everything else stays Next or Later.",
         "",
@@ -727,12 +733,16 @@ def current_milestones(repos):
     return cur
 
 
+def issue_in_current(issue, current):
+    return issue["milestone"] is not None and issue["milestone"] == current.get(issue["repo"])
+
+
 def candidates(issues, current):
     for key, i in issues.items():
         repo = i["repo"]
         low = [l.lower() for l in i["labels"]]
         hot = any(l.startswith("p1") or l == "priority: p1" or "security" in l for l in low)
-        in_current = i["milestone"] is not None and i["milestone"] == current.get(repo)
+        in_current = issue_in_current(i, current)
         if key in ALWAYS or (repo not in FROZEN and (hot or in_current)):
             yield key, i["labels"]
 
@@ -821,10 +831,11 @@ def sync(as_json=False):
     added = []
     for key, labels in candidates(issues, current):
         if key not in have:
-            item_id = add(num, pid, fields, key, labels, "Next")
+            lane = lane_for(issues[key]["repo"], labels)
+            focus = focus_for(lane, labels, issue_in_current(issues[key], current))
+            item_id = add(num, pid, fields, key, labels, focus)
             added.append(key)
-            have[key] = {"id": item_id, "focus": "Next", "status": None, "title": "",
-                         "lane": lane_for(key.split("#")[0], labels)}
+            have[key] = {"id": item_id, "focus": focus, "status": None, "title": "", "lane": lane}
 
     lane_changed = refresh_lanes(pid, fields, have, issues)
 
@@ -833,8 +844,12 @@ def sync(as_json=False):
     for key, labels in candidates(issues, current):
         it = have.get(key)
         if it is not None and key not in added and not it.get("focus"):
-            set_opt(pid, it["id"], fields["Focus"], "Next")
-            it["focus"] = "Next"
+            lane = lane_for(issues[key]["repo"], labels)
+            if it.get("lane") == SECURITY_LANE:
+                lane = SECURITY_LANE
+            focus = focus_for(lane, labels, issue_in_current(issues[key], current))
+            set_opt(pid, it["id"], fields["Focus"], focus)
+            it["focus"] = focus
             focus_filled.append(key)
 
     # Work already in progress: pull onto the board as This week / In Progress.
@@ -962,6 +977,10 @@ def priority(labels):
     return min(found) if found else None
 
 
+def focus_for(lane, labels, in_current):
+    return "Next" if lane == SECURITY_LANE or (in_current and priority(labels) in (1, 2)) else "Later"
+
+
 def show_items(p, issues=None):
     issues = open_issues() if issues is None else issues
     current = current_milestones({i["repo"] for i in issues.values()} - FROZEN)
@@ -980,7 +999,7 @@ def show_items(p, issues=None):
             "title": it.get("title", ""), "focus": focus, "lane": it.get("lane") or "",
             "status": it.get("status") or "", "milestone": raw_ms,
             "current_milestone": current.get(repo), "labels": labels, "priority": priority(labels),
-            "in_current": raw_ms is not None and raw_ms == current.get(repo),
+            "in_current": issue_in_current(issues[k], current),
             "frozen": frozen, "in_progress": in_prog,
             "not_current": focus == "This week" and off and not frozen,
             "unplanned": in_prog and off,
