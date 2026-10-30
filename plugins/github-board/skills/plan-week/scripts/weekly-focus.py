@@ -794,18 +794,25 @@ def refresh_lanes(pid, fields, have, issues):
     return changed
 
 
+def _read_budget():
+    """The rateLimit dict. An explicit rate-limit error counts as 0 left; any other GhError
+    gives None (unknown)."""
+    try:
+        return rate_limit()
+    except GhError as e:
+        if RATE_RE.search(str(e)):
+            return {"remaining": 0, "resetAt": None}
+        return None
+
+
 def _skip_low_budget():
     """Exit 3 (nothing written) if fewer than MIN_BUDGET GraphQL points are left.
 
     Returns the preflight rateLimit dict (None if it could not be read).
     """
-    try:
-        rl = rate_limit()
-    except GhError as e:
-        if RATE_RE.search(str(e)):
-            rl = {"remaining": 0, "resetAt": None}
-        else:
-            return None
+    rl = _read_budget()
+    if rl is None:
+        return None
     remaining = rl.get("remaining")
     if isinstance(remaining, int) and remaining < MIN_BUDGET:
         print(f"weekly-focus: skipped: GraphQL budget low ({remaining} left, resets "
@@ -914,7 +921,10 @@ def sync(as_json=False):
             pending.append(key)
     # About 4 writes per card, and the budget was only checked at the start.
     if pending:
-        remaining = (_safe_rate_limit() or {}).get("remaining")
+        try:
+            remaining = (_read_budget() or {}).get("remaining")
+        except (subprocess.SubprocessError, OSError, ValueError):
+            remaining = None
         if isinstance(remaining, int) and remaining - MIN_BUDGET < 4 * len(pending):
             print(f"weekly-focus: warning: skipped backfill of {len(pending)} card(s): "
                   f"GraphQL budget low ({remaining} left)", file=sys.stderr)

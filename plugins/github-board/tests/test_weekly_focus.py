@@ -1609,3 +1609,35 @@ def test_new_card_in_a_repo_rule_security_lane_lands_in_next(wf, monkeypatch, ca
               current={"app": "v1.0"}, in_progress=set())
     assert _sync_json(wf, capsys)["added"] == ["app#1"]
     assert b.adds == [("app#1", "Next")]
+
+
+def test_backfill_is_skipped_when_the_backfill_budget_check_is_rate_limited(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={"app#1": _closed(1, "Todo", "Next")},
+              issues={}, current={}, in_progress=set(),
+              closed={"app#1": {"reason": "COMPLETED", "labels": []}})
+    calls = []
+
+    def fake_rate():
+        calls.append(1)
+        if len(calls) == 1:
+            return {"remaining": 5000, "used": 100}
+        raise wf.GhError("GitHub GraphQL rate limit exhausted: gh api graphql")
+    monkeypatch.setattr(wf, "rate_limit", fake_rate)
+    wf.sync(as_json=True)
+    cap = capsys.readouterr()
+    assert json.loads(cap.out)["backfilled"] == []
+    assert b.adds == []
+    assert ("i1", "F", "This week") not in b.sets
+    assert "skipped backfill of 1 card(s): GraphQL budget low (0 left)" in cap.err
+
+
+def test_new_security_label_card_in_a_product_lane_listed_first_lands_in_later(wf, monkeypatch, capsys):
+    # Product is listed before Security, so lane_for gives Product. A security-label shortcut
+    # in focus_for would wrongly put the card in Next.
+    monkeypatch.setattr(wf, "LANES", [{"name": "Product", "repos": ["app"]},
+                                      {"name": "Security", "labels_containing": ["security"]}])
+    b = Board(wf, monkeypatch, items={},
+              issues={"app#1": _iss("app", None, labels=["security"])},
+              current={"app": "v1.0"}, in_progress=set())
+    assert _sync_json(wf, capsys)["added"] == ["app#1"]
+    assert b.adds == [("app#1", "Later")]
