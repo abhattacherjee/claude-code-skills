@@ -1430,6 +1430,7 @@ class RedesignStopRuleTests(unittest.TestCase):
         self.assertIn("two rounds in a row each find a defect caused by the previous round's fix, "
                       "in the same rule or subsystem, stop patching that rule", self.rule)
         self.assertIn("Do not send a third, narrower patch.", self.rule)
+        self.assertIn("The first finding, the one the first fix was for, does not count. The rule trips on the second round in a row whose defect the previous fix caused.", self.rule)
         self.assertIn("Write the defect trend", self.rule)
         self.assertIn("Propose a structural redesign", self.rule)
         self.assertIn("`Not signed off: redesign needed (<rule>)`", self.rule)
@@ -1441,6 +1442,7 @@ class RedesignStopRuleTests(unittest.TestCase):
         self.assertIn("`./references/redesign-stop.md`", step26)
         self.assertIn("`./redesign-stop.md`", self.t5)
         self.assertIn("Not signed off: redesign needed (<rule>)", self.t5)
+
 
 VACUOUS_RULE = ("A test that cannot fail is a correctness defect, not a style point or a wish "
                 "for more coverage")

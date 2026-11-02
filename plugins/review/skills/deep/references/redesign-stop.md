@@ -9,6 +9,8 @@ tiered-lane T5 re-check.
 When two rounds in a row each find a defect caused by the previous round's fix, in the same rule
 or subsystem, stop patching that rule. Do not send a third, narrower patch.
 
+The first finding, the one the first fix was for, does not count. The rule trips on the second round in a row whose defect the previous fix caused.
+
 A defect is caused by the previous fix when its cited lines are in that fix's range (the round's
 fix diff, or `REVIEWED_SHA..FIX_SHA` in Step 2.6 and T5), or when it is a new bypass or edge case
 of the guard, parser or heuristic that the fix changed.
