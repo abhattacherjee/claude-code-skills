@@ -1416,6 +1416,32 @@ class TieredLaneDocTests(unittest.TestCase):
         self.assertRegex(n, r"With Gemini or Claude-only there is no re-check round[^.]*tiered")
 
 
+class RedesignStopRuleTests(unittest.TestCase):
+    """Two rounds in a row whose defects come from the previous fix in the same rule stop the
+    patching and ask for a redesign (abhattacherjee/claude-code-config#430)."""
+
+    def setUp(self):
+        self.skill = (DEEP / "SKILL.md").read_text(encoding="utf-8")
+        self.rule = norm((DEEP / "references" / "redesign-stop.md").read_text(encoding="utf-8"))
+        lane = (DEEP / "references" / "tiered-lane.md").read_text(encoding="utf-8")
+        self.t5 = norm(section(lane, "### T5", "### T6"))
+
+    def test_reference_states_the_rule_and_the_report_line(self):
+        self.assertIn("two rounds in a row each find a defect caused by the previous round's fix, "
+                      "in the same rule or subsystem, stop patching that rule", self.rule)
+        self.assertIn("Do not send a third, narrower patch.", self.rule)
+        self.assertIn("Write the defect trend", self.rule)
+        self.assertIn("Propose a structural redesign", self.rule)
+        self.assertIn("`Not signed off: redesign needed (<rule>)`", self.rule)
+
+    def test_every_loop_points_to_it(self):
+        phase1 = norm(section(self.skill, "### Each round", "### Phase 1 convergence"))
+        self.assertIn("`./references/redesign-stop.md`", phase1)
+        step26 = norm(section(self.skill, "### Step 2.6", "\n---\n"))
+        self.assertIn("`./references/redesign-stop.md`", step26)
+        self.assertIn("`./redesign-stop.md`", self.t5)
+        self.assertIn("Not signed off: redesign needed (<rule>)", self.t5)
+
 VACUOUS_RULE = ("A test that cannot fail is a correctness defect, not a style point or a wish "
                 "for more coverage")
 

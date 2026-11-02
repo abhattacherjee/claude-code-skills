@@ -141,7 +141,7 @@ dimension** AND the previous round's fixes introduced nothing new.
    `"status":"CONVERGED"`; collect them from disk as in step 2.
 5. **Converge or iterate.** If all dimensions report CONVERGED -> Phase 1 done. Else apply the new
    fixes and run another round. Respect `--max-rounds` (default 4); if not converged at the cap,
-   surface the remaining items to the user rather than looping forever.
+   surface the remaining items to the user rather than looping forever. Two rounds in a row whose findings come from the previous fix in the same rule: stop and redesign, per `./references/redesign-stop.md`.
 6. **Record the round** per `./references/audit-trail.md` (phase `phase1`): this round's findings
    with their `resolution` events, and `recheck` events for last round's fixes.
 
@@ -427,7 +427,7 @@ after writing the `phase2-fix` record, note these values and write them into the
    findings), right before checking the cap below. Stop when a re-check round has every finding
    `resolved`, `unchecked=0` and no new survivors, or once `RECHECK_ROUND` reaches 3 — a fixed cap
    on re-check rounds, separate from Phase 1's `--max-rounds`; surface whatever is left to the
-   user, and name each finding still unchecked as one Codex never re-checked.
+   user, and name each finding still unchecked as one Codex never re-checked. Before any loop back to step 1, apply `./references/redesign-stop.md`: two re-checks in a row that find a defect caused by the previous fix in the same rule stop the loop for that rule.
 
 With Gemini or Claude-only there is no re-check round (the tiered lane adds a Gemini one;
 see T5 and T6), and fixed Phase 2 threads stay open for a person to resolve.

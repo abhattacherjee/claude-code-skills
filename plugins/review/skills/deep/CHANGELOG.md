@@ -6,6 +6,7 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 
 ### Added
 
+- `references/redesign-stop.md`: when two rounds in a row each find a defect caused by the previous round's fix in the same rule or subsystem, stop patching that rule, write the defect trend and propose a structural redesign. The run is not signed off; the report's first line says `Not signed off: redesign needed (<rule>)`. Phase 1 step 5, Step 2.6 and the tiered lane's T5 point to it (#284, abhattacherjee/claude-code-config#430).
 - `references/dispatch-contract.md`: with Codex as the adversary, every implementer dispatch and SendMessage carries `cx-declined: codex-adversary: <reason>`, so cc-token-router does not steer the fixes to `cx` and counts them as ineligible (abhattacherjee/cc-token-router#213). The tiered lane's T4 points to it.
 
 ## [1.4.1] - 2026-10-27
