@@ -153,6 +153,9 @@ The re-check is the sign-off:
   `FIX_SHA` it checked.
 - New findings go back through T2 to T4, for those findings only. Then re-check the new fix range.
 - At the cap, the open items go to the user. The run is not signed off.
+- Two re-check rounds in a row that each find a defect caused by the previous fix, in the same
+  rule or subsystem: stop patching that rule and propose a redesign, as
+  `./redesign-stop.md` says. The report's first line says `Not signed off: redesign needed (<rule>)`.
 
 The Claude reviewers do not run again in rounds 2+. There is one exception: a re-check finding that
 changes the design, or touches the guard behind a Critical. For that, run T1's two reviewers once
