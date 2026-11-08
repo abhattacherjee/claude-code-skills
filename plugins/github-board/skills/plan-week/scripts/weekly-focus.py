@@ -96,6 +96,8 @@ IN_PROGRESS_STATUSES = {"in progress", "in review"}
 GH_TIMEOUT = 120
 GH_RETRY_DELAY = 3
 STALE_DAYS = 21          # a board card counts as in progress only if its issue moved this recently
+DRAIN_DAYS = 7
+DRAIN_MAX = 100          # limit writes to avoid secondary rate limits
 MIN_BUDGET = 300         # sync skips (exit 3) when fewer GraphQL points than this are left
 EXIT_SKIPPED = 3
 KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+#\d+$")
@@ -125,6 +127,8 @@ def board_readme():
         "  Later holds everything else. Sync files new cards by this rule and never moves a card",
         "  that already has a Focus, except to pull work in progress, or a completed issue closed",
         "  this week, into This week.",
+        "- Sync clears the Focus of a Done card whose issue closed more than 7 days ago, so it "
+        "leaves every view (set the Focus again to bring it back).",
         f"- At most {CAPACITY['max_repos_besides_security']} repos per week besides Security. "
         "Everything else stays Next or Later.",
         "",
@@ -315,7 +319,7 @@ _BOARD_ITEMS_Q = (
     'focus:fieldValueByName(name:"Focus"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
     'lane:fieldValueByName(name:"Lane"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
     'status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
-    "content{... on Issue{number title state repository{name owner{login}}}}}}}}}")
+    "content{... on Issue{number title state closedAt repository{name owner{login}}}}}}}}}")
 PROJECTS_Q = FIELDS_Q = BOARD_ITEMS_Q = PR_LINKED_Q = ""   # set by apply_config()
 
 
@@ -454,7 +458,8 @@ def board_items(num):
                 "lane": (n.get("lane") or {}).get("name"),
                 "status": (n.get("status") or {}).get("name"),
                 "title": c.get("title") or "",
-                "content": {"number": c["number"], "state": c.get("state"), "repository": repo},
+                "content": {"number": c["number"], "state": c.get("state"), "repository": repo,
+                            "closed_at": c.get("closedAt")},
             }
         return out
     return _cached(("items", num), read)
@@ -463,6 +468,11 @@ def board_items(num):
 def set_opt(pid, item_id, field, opt):
     gh("project", "item-edit", "--project-id", pid, "--id", item_id, "--field-id", field["id"],
        "--single-select-option-id", field["opts"][opt], parse=False)
+
+
+def clear_opt(pid, item_id, field):
+    gh("project", "item-edit", "--project-id", pid, "--id", item_id, "--field-id", field["id"],
+       "--clear", parse=False)
 
 
 def label_lane(labels):
@@ -593,6 +603,10 @@ CLOSED_Q = (
     "query($endCursor:String){search(query:\"user:%s is:issue is:closed closed:>=%s\",type:ISSUE,"
     "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number closedAt "
     "stateReason labels(first:20){nodes{name}} repository{name}}}}}")
+
+
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def _parse_ts(ts):
@@ -950,6 +964,36 @@ def sync(as_json=False):
                     print(f"warning: board has no Status option 'Done' ({key})", file=sys.stderr)
         backfilled.append(key)
 
+    cutoff = _now() - datetime.timedelta(days=DRAIN_DAYS)
+    due = []
+    for key, it in have.items():
+        content = it.get("content") or {}
+        if not it.get("focus") or it.get("status") != "Done":
+            continue
+        if content.get("state") != "CLOSED" or key in issues:
+            continue
+        closed_at = _parse_ts(content.get("closed_at"))
+        if closed_at and closed_at.tzinfo and closed_at < cutoff:
+            due.append((closed_at, key))
+    due.sort()
+    drain = due[:DRAIN_MAX]
+    if drain:
+        try:
+            remaining = (_read_budget() or {}).get("remaining")
+        except (subprocess.SubprocessError, OSError, ValueError):
+            remaining = None
+        if isinstance(remaining, int) and remaining - MIN_BUDGET < len(drain):
+            drain = drain[:max(0, remaining - MIN_BUDGET)]
+            print(f"weekly-focus: warning: drained {len(drain)} of {len(due)} card(s): "
+                  f"GraphQL budget low ({remaining} left)", file=sys.stderr)
+    drained = []
+    for _, key in drain:
+        it = have[key]
+        clear_opt(pid, it["id"], fields["Focus"])
+        it["focus"] = None
+        drained.append(key)
+    drain_left = len(due) - len(drained)
+
     unplanned = [k for k in started
                  if out_of_plan(k.split("#")[0], issues.get(k, {}).get("milestone"), current)]
 
@@ -967,6 +1011,7 @@ def sync(as_json=False):
                           "unplanned": unplanned, "new_since_monday": new_since,
                           "closed_since_monday": closed_since_monday, "done_this_week": done_this_week,
                           "marked_done": marked_done, "backfilled": backfilled,
+                          "drained": drained, "drain_left": drain_left,
                           "graphql_cost": cost, "config_warnings": warnings},
                          indent=2))
         return _finish_sync(failed_boards)
@@ -987,6 +1032,8 @@ def sync(as_json=False):
     print(f"done this week {len(done_this_week)}: {' '.join(done_this_week) or '-'}")
     print(f"marked done {len(marked_done)}: {' '.join(marked_done) or '-'}")
     print(f"backfilled {len(backfilled)}: {' '.join(backfilled) or '-'}")
+    left = f" ({drain_left} left for the next run)" if drain_left else ""
+    print(f"drained {len(drained)}: {' '.join(drained) or '-'}{left}")
     print("graphql cost: " + (f"{cost} points" if cost is not None else "unknown"))
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)

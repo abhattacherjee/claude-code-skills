@@ -2,6 +2,12 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.4.0] - 2026-11-08
+
+### Added
+
+- `plan-week` 2.2.0: `sync` drains Done cards out of every Focus column (#290). A card whose Status is Done and whose issue closed more than 7 days ago gets its Focus cleared, so it leaves the This week, Next and Later views. It stays on the board, and setting its Focus again brings it back. A reopened issue, or a card with no close date, is left alone. Sync drains at most 100 cards per run, oldest first, and fewer when the GraphQL budget is low. The cards are listed in a new `drained` field in `sync --json` (with `drain_left` for the ones left for the next run) and a `drained` line in the text output, and SKILL.md step 1 reports them. The board README states the rule.
+
 ## [1.3.0] - 2026-10-29
 
 ### Added

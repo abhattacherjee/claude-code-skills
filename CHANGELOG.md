@@ -9,6 +9,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ### Added
 
+- **`github-board` 1.4.0: `plan-week sync` drains old Done cards out of This week, Next and Later (#290).** It clears the Focus of a Done card closed more than 7 days ago, at most 100 per run. See `plugins/github-board/CHANGELOG.md`.
 - **`github-board` 1.3.0: `plan-week sync` files new cards into Next or Later, and backfills issues closed this week (#280, #281).** Next holds Security lane cards and P1/P2 issues in the current milestone. Completed issues closed since Monday land in This week. See `plugins/github-board/CHANGELOG.md`.
 - **CI: a red test job now blocks a merge to `develop` (#291).** New `required-checks` job in `validate-skill.yml` needs the other 17 jobs, runs even when one fails, and fails unless each passed or skipped. The `develop` ruleset requires it next to `validate-skills` and `validate-plugins`. `scripts/check-required-checks.py` fails the job when its `needs` list misses a workflow job or a job line it cannot read. `scripts/check-needs-results.sh` reads the job results and fails closed on empty or invalid input. Their tests, `scripts/test-check-required-checks.sh` and `scripts/test-check-needs-results.sh`, run in `validate-plugin-tests`.
 
