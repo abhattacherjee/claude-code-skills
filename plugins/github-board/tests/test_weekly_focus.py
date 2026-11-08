@@ -1689,6 +1689,21 @@ def test_drain_boundary_is_strictly_older_than_seven_days(wf, monkeypatch, capsy
     assert b.sets == [("i2", "F", None)]
 
 
+def test_drain_skips_a_naive_close_date(wf, monkeypatch, capsys):
+    card = _closed(1, "Done")
+    card["content"]["closed_at"] = "2026-09-01T12:00:00"
+    b = _drain_board(wf, monkeypatch, {"app#1": card})
+    assert "app#1" not in _sync_json(wf, capsys)["drained"]
+    assert ("i1", "F", None) not in b.sets
+
+
+def test_drain_skips_a_card_that_is_not_done(wf, monkeypatch, capsys):
+    b = _drain_board(wf, monkeypatch, {"app#1": _drain_card(1, 20, status="Todo")})
+    del wf.ensure_fields(36)["Status"]["opts"]["Done"]
+    assert _sync_json(wf, capsys)["drained"] == []
+    assert ("i1", "F", None) not in b.sets
+
+
 def test_drain_caps_each_run_and_reports_what_is_left(wf, monkeypatch, capsys):
     monkeypatch.setattr(wf, "DRAIN_MAX", 2, raising=False)
     items = {"app#3": _drain_card(3, 20), "app#4": _drain_card(4, 8),
@@ -1714,6 +1729,44 @@ def test_drain_is_cut_to_the_budget(wf, monkeypatch, capsys, remaining, count):
     assert b.sets == [(f"i{n}", "F", None) for n in range(1, count + 1)]
     assert (f"weekly-focus: warning: drained {count} of 4 card(s): "
             f"GraphQL budget low ({remaining} left)") in cap.err
+
+
+def test_drain_with_an_exact_budget_drains_all_without_a_warning(wf, monkeypatch, capsys):
+    b = _drain_board(wf, monkeypatch,
+                     {f"app#{n}": _drain_card(n, 30 - n) for n in range(1, 5)},
+                     rate=({"remaining": 5000, "used": 100}, {"remaining": 304}))
+    wf.sync(as_json=True)
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["drained"] == [f"app#{n}" for n in range(1, 5)]
+    assert out["drain_left"] == 0
+    assert b.sets == [(f"i{n}", "F", None) for n in range(1, 5)]
+    assert "budget low" not in cap.err
+
+
+@pytest.mark.parametrize("error", ["ValueError", "GhError"])
+def test_drain_with_an_unknown_budget_drains_as_usual(wf, monkeypatch, capsys, error):
+    monkeypatch.setattr(wf, "DRAIN_MAX", 3)
+    b = _drain_board(wf, monkeypatch,
+                     {f"app#{n}": _drain_card(n, 30 - n) for n in range(1, 5)})
+    rates = iter([{"remaining": 5000, "used": 100},
+                  ValueError("boom") if error == "ValueError" else wf.GhError("boom"),
+                  {"remaining": 4997, "used": 103}])
+
+    def fake_rate():
+        result = next(rates)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(wf, "rate_limit", fake_rate)
+    wf.sync(as_json=True)
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["drained"] == [f"app#{n}" for n in range(1, 4)]
+    assert out["drain_left"] == 1
+    assert b.sets == [(f"i{n}", "F", None) for n in range(1, 4)]
+    assert "budget low" not in cap.err
 
 
 def test_drain_marks_and_drains_an_old_closed_todo_card(wf, monkeypatch, capsys):
