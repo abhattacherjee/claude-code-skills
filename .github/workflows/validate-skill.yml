@@ -237,7 +237,7 @@ jobs:
 
       # Unconditional: no changed-path filter covers scripts/**.
       - name: Run bump-version tests
-        run: ./scripts/test-bump-version.sh
+        run: echo 'forced failure for #291, reverted next commit'; exit 1
 
   review-tests:
     runs-on: ubuntu-latest
