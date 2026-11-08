@@ -55,6 +55,10 @@ run 'not json'
 run '[]'
 [[ $RC -ne 0 ]] && ok 'JSON array' || bad 'JSON array' "rc=$RC out=$OUT"
 
+# A non-empty array passes the length check, so only the object check rejects it.
+run '[{"result":"success"}]'
+[[ $RC -ne 0 ]] && ok 'non-empty JSON array' || bad 'non-empty JSON array' "rc=$RC out=$OUT"
+
 run ''
 [[ $RC -ne 0 ]] && ok 'empty RESULTS' || bad 'empty RESULTS' "rc=$RC out=$OUT"
 
