@@ -119,6 +119,51 @@ reported 'empty needs' 'empty needs in required-checks'
 fixture '    needs: [build, test]' '    if: success()'; run "$TMP/workflow.yml"
 reported 'wrong condition' 'no if: always()'
 
+# Job declarations the guard cannot read must fail closed (X-001).
+fixture '    needs: [build, test]'
+sed 's/^  build:$/  "build":/' "$TMP/workflow.yml" > "$TMP/w2.yml"; run "$TMP/w2.yml"
+reported 'quoted job id' 'unrecognized job declaration: "build":'
+
+fixture '    needs: [build, test]'
+printf '%s\n' '  extra: {runs-on: ubuntu-latest}' > "$TMP/inline"
+sed '/^  test:/r '"$TMP/inline" "$TMP/workflow.yml" > "$TMP/w2.yml"; run "$TMP/w2.yml"
+reported 'inline mapping job' 'unrecognized job declaration: extra: {runs-on: ubuntu-latest}'
+
+fixture '    needs: [build, test]'
+sed 's/^  build:$/ build:/' "$TMP/workflow.yml" > "$TMP/w2.yml"; run "$TMP/w2.yml"
+reported 'one-space job indent' 'unrecognized job declaration: build:'
+
+fixture '    needs: [build, test]'
+sed 's/^  build:$/   build:/' "$TMP/workflow.yml" > "$TMP/w2.yml"; run "$TMP/w2.yml"
+reported 'three-space job indent' 'unrecognized job declaration: build:'
+
+# Trailing comments on block list items are stripped (C-003).
+fixture '    needs:
+      - build
+      - test # the tests'; run "$TMP/workflow.yml"
+clean 'block list item with trailing comment'
+
+# Valid YAML forms (C-005).
+fixture '    needs:
+    - build
+    - test'; run "$TMP/workflow.yml"
+clean 'block list at the key indent'
+
+printf '%s\n' 'name: Validate' 'jobs:' '  build:' '    runs-on: ubuntu-latest' \
+  '  required-checks:' '    needs: build' '    if: always()' '    runs-on: ubuntu-latest' > "$TMP/workflow.yml"
+run "$TMP/workflow.yml"
+[[ $RC -eq 0 && "$OUT" == 'required-checks: needs covers all 1 jobs' && -z "$ERR" ]] \
+  && ok 'scalar needs with one job' || bad 'scalar needs with one job' "rc=$RC stdout=$OUT stderr=$ERR"
+
+fixture '    needs: build'; run "$TMP/workflow.yml"
+reported 'scalar needs missing the other job' 'missing from needs: test'
+
+fixture '    needs: [build, test'; run "$TMP/workflow.yml"
+reported 'unclosed flow list' 'invalid needs: unclosed flow list'
+
+fixture '    needs: {build: x}'; run "$TMP/workflow.yml"
+reported 'invalid needs value' 'invalid needs'
+
 cat > "$TMP/workflow.yml" <<'YAML'
 name: Validate
 on:

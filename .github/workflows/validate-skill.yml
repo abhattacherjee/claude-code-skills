@@ -183,6 +183,9 @@ jobs:
       - name: Test check-required-checks.py
         run: bash scripts/test-check-required-checks.sh
 
+      - name: Test check-needs-results.sh
+        run: bash scripts/test-check-needs-results.sh
+
   docs-drift:
     runs-on: ubuntu-latest
     steps:
@@ -578,10 +581,4 @@ jobs:
       - name: Every needed job passed or skipped
         env:
           RESULTS: ${{ toJSON(needs) }}
-        run: |
-          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          bad="$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(", ")')"
-          if [ -n "$bad" ]; then
-            echo "::error::These jobs did not pass: $bad"
-            exit 1
-          fi
+        run: bash scripts/check-needs-results.sh

@@ -11,7 +11,6 @@ from pathlib import Path
 
 
 JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$")
-TWO_SPACE_KEY = re.compile(r"^  [^\s#][^:]*:")
 TOP_LEVEL = re.compile(r"^[^\s#]")
 
 
@@ -24,6 +23,7 @@ def unquote(value):
 
 def check(text):
     jobs = []
+    unrecognized = []
     block = []
     in_jobs = False
     found_jobs = False
@@ -37,10 +37,15 @@ def check(text):
             continue
         if TOP_LEVEL.match(line):
             break
-        if TWO_SPACE_KEY.match(line):
-            match = JOB.match(line)
+        indent = len(line) - len(line.lstrip(" "))
+        if indent in (1, 2, 3):
+            # Fail closed: a job declaration this guard cannot read (quoted id,
+            # inline mapping, odd indent) must not silently drop out of the set.
+            match = JOB.match(line) if indent == 2 else None
             if match:
                 jobs.append(match.group(1))
+            else:
+                unrecognized.append(f"unrecognized job declaration: {line.strip()}")
             in_required = bool(match and match.group(1) == "required-checks")
         elif in_required and line.startswith("    "):
             # Job ids and the supported values cannot contain a YAML comment.
@@ -48,6 +53,8 @@ def check(text):
 
     if not found_jobs:
         return ["no jobs: section"]
+    if unrecognized:
+        return unrecognized
     if "required-checks" not in jobs:
         return ["no required-checks job"]
 
@@ -80,13 +87,15 @@ def check(text):
                          if item.strip()]
         elif not value:
             while i < len(block):
-                item = re.match(r"^      -\s+(.+)$", block[i])
+                item = re.match(r"^(?: {4}| {6})-\s+(.+)$", block[i])
                 if not item:
                     break
                 needs.append(unquote(item.group(1)))
                 i += 1
+        elif re.match(r"^[A-Za-z0-9_-]+$", unquote(value)):
+            needs.append(unquote(value))
         else:
-            problems.append("invalid needs: expected a flow or block list")
+            problems.append("invalid needs: expected a job id, flow list or block list")
 
     if needs is None:
         problems.append("no needs in required-checks")
