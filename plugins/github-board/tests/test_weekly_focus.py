@@ -474,6 +474,9 @@ class Board:
             self.sets.append((item_id, field["id"], opt))
         monkeypatch.setattr(wf, "add", fake_add)
         monkeypatch.setattr(wf, "set_opt", fake_set)
+        monkeypatch.setattr(wf, "clear_opt",
+                            lambda pid, item_id, field: fake_set(pid, item_id, field, None),
+                            raising=False)
 
     def _board(self):
         out = {k: dict(v) for k, v in self.items.items()}
@@ -640,11 +643,12 @@ def test_sync_json_shape_and_human_output(wf, monkeypatch, capsys):
     wf.sync()
     text = capsys.readouterr().out
     assert "current  app" in text and "added 1: app#1" in text and "URL36" in text
-    assert "backfilled 0: -" in text
+    assert "backfilled 0: -\ndrained 0: -" in text
     out = _sync_json(wf, capsys)
     assert set(out) == {"url", "current", "added", "started", "stopped", "stale_in_progress",
                         "lane_changed", "focus_filled", "unplanned", "new_since_monday", "closed_since_monday",
-                        "done_this_week", "marked_done", "backfilled", "graphql_cost", "config_warnings"}
+                        "done_this_week", "marked_done", "backfilled", "drained", "drain_left",
+                        "graphql_cost", "config_warnings"}
     assert out["url"] == "URL36" and out["current"] == {"app": "v1.0"}
 
 
@@ -1009,6 +1013,13 @@ def test_skill_reports_backfilled():
     assert "`backfilled` (closed-this-week issues sync added or moved to This week)" in step
 
 
+def test_skill_reports_drained():
+    text = (SCRIPT.parents[1] / "SKILL.md").read_text()
+    step = text.split("## Every mode except init", 1)[1].split("\n2.", 1)[0]
+    assert "`drained` (Done cards closed more than 7 days ago whose Focus sync cleared" in step
+    assert "`drain_left`" in step
+
+
 # ---- local dates ----------------------------------------------------------
 
 def test_new_since_monday_uses_the_local_date(wf, monkeypatch, capsys):
@@ -1140,7 +1151,7 @@ def test_board_items_uses_one_lean_graphql_query_and_keeps_the_old_shape(wf, mon
     assert set(items) == {"app#1", "app#2"}
     assert items["app#1"] == {"id": "a", "focus": "This week", "lane": "Product",
                               "status": "In Progress", "title": "one",
-                              "content": {"number": 1, "state": "OPEN", "repository": "app"}}
+                              "content": {"number": 1, "state": "OPEN", "repository": "app", "closed_at": None}}
     assert (items["app#2"]["focus"], items["app#2"]["lane"], items["app#2"]["status"]) == (None,) * 3
 
 
@@ -1629,6 +1640,113 @@ def test_backfill_is_skipped_when_the_backfill_budget_check_is_rate_limited(wf, 
     assert b.adds == []
     assert ("i1", "F", "This week") not in b.sets
     assert "skipped backfill of 1 card(s): GraphQL budget low (0 left)" in cap.err
+
+
+# ---- drain: old Done cards leave the views --------------------------------
+
+def _drain_board(wf, monkeypatch, items, **kwargs):
+    now = datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr(wf, "_now", lambda: now, raising=False)
+    return Board(wf, monkeypatch, items=items, issues=kwargs.pop("issues", {}),
+                 current={}, in_progress=set(), **kwargs)
+
+
+def _drain_card(n, days, focus="This week", status="Done"):
+    it = _closed(n, status, focus)
+    now = datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.timezone.utc)
+    it["content"]["closed_at"] = (now - datetime.timedelta(days=days)).isoformat()
+    return it
+
+
+def test_drain_and_backfill_on_one_fixture_board(wf, monkeypatch, capsys):
+    items = {"app#1": _drain_card(1, 8),
+             "app#2": _drain_card(2, 20, "Next"),
+             "app#3": _drain_card(3, 30, "Later"),
+             "app#4": _drain_card(4, 3),
+             "app#5": _drain_card(5, 1, "Next"),
+             "app#6": _drain_card(6, 20),
+             "app#7": _drain_card(7, 20),
+             "app#8": _drain_card(8, 20, None),
+             "app#9": _closed(9, "Done"),
+             "app#10": _drain_card(10, 20)}
+    items["app#7"]["content"]["state"] = "OPEN"
+    items["app#10"]["content"]["closed_at"] = "bad date"
+    b = _drain_board(wf, monkeypatch, items, issues={"app#6": _iss("app", None)},
+                     closed={"app#5": {"reason": "COMPLETED", "labels": []}})
+    out = _sync_json(wf, capsys)
+    assert out["drained"] == ["app#3", "app#2", "app#1"]
+    assert out["drain_left"] == 0
+    assert out["backfilled"] == ["app#5"]
+    assert b.sets == [("i5", "F", "This week"), ("i3", "F", None),
+                      ("i2", "F", None), ("i1", "F", None)]
+
+
+def test_drain_boundary_is_strictly_older_than_seven_days(wf, monkeypatch, capsys):
+    older = _drain_card(2, 7)
+    older["content"]["closed_at"] = "2026-09-23T11:59:59Z"
+    b = _drain_board(wf, monkeypatch, {"app#1": _drain_card(1, 7), "app#2": older})
+    assert _sync_json(wf, capsys)["drained"] == ["app#2"]
+    assert b.sets == [("i2", "F", None)]
+
+
+def test_drain_caps_each_run_and_reports_what_is_left(wf, monkeypatch, capsys):
+    monkeypatch.setattr(wf, "DRAIN_MAX", 2, raising=False)
+    items = {"app#3": _drain_card(3, 20), "app#4": _drain_card(4, 8),
+             "app#2": _drain_card(2, 20), "app#1": _drain_card(1, 30)}
+    b = _drain_board(wf, monkeypatch, items)
+    out = _sync_json(wf, capsys)
+    assert out["drained"] == ["app#1", "app#2"] and out["drain_left"] == 2
+    assert b.sets == [("i1", "F", None), ("i2", "F", None)]
+    wf.sync()
+    assert "backfilled 0: -\ndrained 2: app#1 app#2 (2 left for the next run)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("remaining,count", [(302, 2), (300, 0), (299, 0)])
+def test_drain_is_cut_to_the_budget(wf, monkeypatch, capsys, remaining, count):
+    b = _drain_board(wf, monkeypatch,
+                     {f"app#{n}": _drain_card(n, 30 - n) for n in range(1, 5)},
+                     rate=({"remaining": 5000, "used": 100}, {"remaining": remaining}))
+    wf.sync(as_json=True)
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["drained"] == [f"app#{n}" for n in range(1, count + 1)]
+    assert out["drain_left"] == 4 - count
+    assert b.sets == [(f"i{n}", "F", None) for n in range(1, count + 1)]
+    assert (f"weekly-focus: warning: drained {count} of 4 card(s): "
+            f"GraphQL budget low ({remaining} left)") in cap.err
+
+
+def test_drain_marks_and_drains_an_old_closed_todo_card(wf, monkeypatch, capsys):
+    b = _drain_board(wf, monkeypatch, {"app#1": _drain_card(1, 20, status="Todo")})
+    out = _sync_json(wf, capsys)
+    assert out["marked_done"] == out["drained"] == ["app#1"]
+    assert b.sets == [("i1", "S", "Done"), ("i1", "F", None)]
+
+
+def test_board_items_reads_closed_at(wf, monkeypatch):
+    seen = []
+    rows = [_item_node("i1", 1), _item_node("i2", 2)]
+    rows[0]["content"].update(state="CLOSED", closedAt="2026-09-01T12:00:00Z")
+
+    def fake(*args, **kwargs):
+        seen.append((args, kwargs))
+        return "\n".join(json.dumps(row) for row in rows)
+    monkeypatch.setattr(wf, "gh", fake)
+    items = wf.board_items(36)
+    assert items["app#1"]["content"]["closed_at"] == "2026-09-01T12:00:00Z"
+    assert items["app#2"]["content"]["closed_at"] is None
+    args, kwargs = seen[0]
+    assert args[:3] == ("api", "graphql", "--paginate")
+    assert "closedAt" in next(a for a in args if a.startswith("query="))
+    assert kwargs == {"parse": False}
+
+
+def test_clear_opt_runs_item_edit_clear(wf, monkeypatch):
+    seen = []
+    monkeypatch.setattr(wf, "gh", lambda *args, **kwargs: seen.append((args, kwargs)))
+    wf.clear_opt("PID", "i1", {"id": "F"})
+    assert seen == [(("project", "item-edit", "--project-id", "PID", "--id", "i1",
+                      "--field-id", "F", "--clear"), {"parse": False})]
 
 
 def test_new_security_label_card_in_a_product_lane_listed_first_lands_in_later(wf, monkeypatch, capsys):
