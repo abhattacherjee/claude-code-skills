@@ -10,6 +10,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 ### Added
 
 - **`github-board` 1.3.0: `plan-week sync` files new cards into Next or Later, and backfills issues closed this week (#280, #281).** Next holds Security lane cards and P1/P2 issues in the current milestone. Completed issues closed since Monday land in This week. See `plugins/github-board/CHANGELOG.md`.
+- **CI: a red test job now blocks a merge to `develop` (#291).** New `required-checks` job in `validate-skill.yml` needs the other 17 jobs, runs even when one fails, and fails unless each passed or skipped. The `develop` ruleset requires it next to `validate-skills` and `validate-plugins`. `scripts/check-required-checks.py` fails the job when its `needs` list misses a workflow job; its tests are `scripts/test-check-required-checks.sh`, run in `validate-plugin-tests`.
 
 ## [4.2.1] - 2026-10-27
 
