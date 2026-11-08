@@ -4,6 +4,8 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-08
+
 ### Added
 
 - `references/redesign-stop.md`: when two rounds in a row each find a defect caused by the previous round's fix in the same rule or subsystem, stop patching that rule, write the defect trend and propose a structural redesign. The run is not signed off; the report's first line says `Not signed off: redesign needed (<rule>)`. Phase 1 step 5, Step 2.6 and the tiered lane's T5 point to it (#284, abhattacherjee/claude-code-config#430).
