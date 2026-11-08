@@ -180,6 +180,12 @@ jobs:
       - name: Test the changed-skill detection steps
         run: ./scripts/test-ci-skill-detect.sh
 
+      - name: Test check-required-checks.py
+        run: bash scripts/test-check-required-checks.sh
+
+      - name: Test check-needs-results.sh
+        run: bash scripts/test-check-needs-results.sh
+
   docs-drift:
     runs-on: ubuntu-latest
     steps:
@@ -554,3 +560,25 @@ jobs:
           bash --version | head -1
           /usr/bin/env bash --version | head -1
           bash plugins/demo-video/tests/run-tests.sh
+
+  # The one check the develop ruleset requires for the test jobs (#291).
+  # Requiring each job by name would break on matrix jobs: their check names carry the
+  # matrix values, so a renamed job or matrix entry leaves a required check that never
+  # reports and blocks every merge. This job needs every other job, runs even when one
+  # fails (if: always(), so it is never skipped), and fails when any of them failed or
+  # was cancelled. A job that skipped itself counts as passing. The first step keeps the
+  # needs list equal to the job list, so a new job cannot be added without being required.
+  required-checks:
+    needs: [validate-skills, validate-plugins, discovery-guards, validate-plugin-tests, docs-drift, sync-hygiene, bump-version-tests, review-tests, github-board-tests, statusline-tests, skill-commands, spec-tests, skill-kit-tests, context-tests, dev-flow-tests, ui-design-tests, demo-video-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: needs lists every job in this workflow
+        run: python3 scripts/check-required-checks.py .github/workflows/validate-skill.yml
+
+      - name: Every needed job passed or skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: bash scripts/check-needs-results.sh

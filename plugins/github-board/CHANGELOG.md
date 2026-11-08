@@ -2,6 +2,19 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.4.0] - 2026-11-08
+
+### Added
+
+- `plan-week` 2.2.0: `sync` drains Done cards out of every Focus column (#290). A card whose Status is Done and whose issue closed more than 7 days ago gets its Focus cleared, so it leaves the This week, Next and Later views. It stays on the board, and setting its Focus again brings it back. A reopened issue, or a card with no close date, is left alone. Sync drains at most 100 cards per run, oldest first, and fewer when the GraphQL budget is low. The cards are listed in a new `drained` field in `sync --json` (with `drain_left` for the ones left for the next run) and a `drained` line in the text output, and SKILL.md step 1 reports them. The board README states the rule.
+
+## [1.3.0] - 2026-10-29
+
+### Added
+
+- `plan-week` 2.1.0: `sync` files each new card into Next or Later (#281). Next holds Security lane cards and P1/P2 issues in the repo's current milestone. Everything else goes to Later. A card with an empty Focus gets the same rule. Sync never moves a card that already has a Focus, except to pull work in progress, or a completed issue closed this week, into This week. The board README and the skill README say what Next and Later mean.
+- `plan-week` 2.1.0: `sync` backfills issues closed as completed since Monday (#280). One missing from the board is added as This week / Done. One on the board in Next or Later moves to This week. Issues closed as not planned or duplicate, reopened issues, and issues in frozen repos (unless listed in `always`) are left alone. The cards are listed in a new `backfilled` field in `sync --json` and a `backfilled` line in the text output, and SKILL.md step 1 reports them.
+
 ## [1.2.5] - 2026-10-23
 
 ### Fixed

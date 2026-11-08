@@ -134,8 +134,9 @@ hand: Step 2.5, the re-check and any replay scoring read it.
 One fix wave for all survivors, as Step 2.5 says: check cites first, then one implementer sub-agent
 on `model: "sonnet"`. Never give the fixes to the adversary's model (Codex, or Gemini on the
 fallback path), even through a code-change tool such as `cx`: its re-check in T5 is the sign-off,
-and it must not sign off its own fixes. This lane never puts the implementer on Opus unless the
-user asks for it; Step 2.5's security-gate exception does not apply here, because the adversary
+and it must not sign off its own fixes. With Codex as the adversary, the dispatch carries the
+`cx-declined: codex-adversary:` line from `./dispatch-contract.md`. This lane never puts the
+implementer on Opus unless the user asks for it; Step 2.5's security-gate exception does not apply here, because the adversary
 re-checks every fix in T5. Verify the fixes in your own context, as Step 2.5 says, and record
 `phase2-fix`.
 
@@ -152,6 +153,9 @@ The re-check is the sign-off:
   `FIX_SHA` it checked.
 - New findings go back through T2 to T4, for those findings only. Then re-check the new fix range.
 - At the cap, the open items go to the user. The run is not signed off.
+- Two re-check rounds in a row that each find a defect caused by the previous fix, in the same
+  rule or subsystem: stop patching that rule and propose a redesign, as
+  `./redesign-stop.md` says. The report's first line says `Not signed off: redesign needed (<rule>)`.
 
 The Claude reviewers do not run again in rounds 2+. There is one exception: a re-check finding that
 changes the design, or touches the guard behind a Critical. For that, run T1's two reviewers once

@@ -4,6 +4,12 @@ All notable changes to the **review** plugin are documented here.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-08
+
+### Added
+
+- review:deep stops patching a rule after two rounds in a row whose defects come from the previous fix, and asks for a redesign (`skills/deep/references/redesign-stop.md`, #284).
+
 ## [1.4.1] - 2026-10-27
 
 ### Fixed

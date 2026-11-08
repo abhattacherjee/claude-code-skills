@@ -13,6 +13,7 @@ named, and the orchestrator reads that file. Every dispatch in `review:deep` and
 - Collect results from disk
 - Silence, the chase cap, and NO REPORT
 - When an agent says it is waiting on a background job
+- Implementer dispatches when Codex is the adversary
 
 ## The block every dispatch starts with
 
@@ -117,3 +118,18 @@ Check its results file, output or process within about 10 minutes
 (`ps -axo pid,etime,command | grep <harness>`, or its scratch output), and ping it if it is idle.
 Never report "waiting on X" to the user without having looked at X. An idle agent is not woken
 when its own background job ends.
+
+## Implementer dispatches when Codex is the adversary
+
+When `ADVERSARY=codex`, Codex re-checks the fixes as the run's sign-off, so Codex must not write
+them. cc-token-router's delegate refusal sends code-change dispatches to `cx`, which is Codex. Put
+this line, on its own line right after the contract block, in every implementer dispatch and every
+SendMessage to an implementer in that run (Phase 1 step 3, Step 2.5, tiered T4):
+
+```
+cx-declined: codex-adversary: Codex re-checks these fixes as this run's sign-off
+```
+
+The router lets the dispatch through and counts it as ineligible for `cx`, not as a missed `cx`
+run (abhattacherjee/cc-token-router#213). Where the router is not installed, the line does
+nothing. Leave it out when the adversary is Gemini.

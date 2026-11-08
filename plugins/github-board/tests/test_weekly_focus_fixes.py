@@ -52,7 +52,7 @@ def _closed(n):
 def test_a_truncated_closed_issue_search_warns(wf, monkeypatch, capsys):
     import datetime
     seen = _search_gh(wf, monkeypatch, 1500, [_closed(1), _closed(2)])
-    assert wf.closed_since(datetime.date(2026, 9, 28)) == {"app#1", "app#2"}
+    assert set(wf.closed_since(datetime.date(2026, 9, 28))) == {"app#1", "app#2"}
     err = capsys.readouterr().err
     assert "1500" in err and "only 2" in err
     assert any(a.startswith("query=") and "issueCount" in a for a in seen[0])  # the query asks for the total
