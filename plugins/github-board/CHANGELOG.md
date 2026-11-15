@@ -2,6 +2,12 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.5.0] - 2026-11-15
+
+### Added
+
+- `plan-week` 2.3.0: new `weekly-focus.py start REPO#N...` (#322). It sets Focus to This week, adding the card when it is missing, and sets Status to In Progress. A board with no In Progress option gets a warning on stderr; Focus is still set. claude-code-config's `/ship` runs it when a run starts, so the card shows In Progress at once instead of at the next sync. `sync` still owns Status afterwards: it resets the card to Todo when no other board shows the issue In Progress and no open PR closes it. An issue started this way is already In Progress at the next sync, so that sync does not list it under `started`. `set_focus` now returns each key's item id.
+
 ## [1.4.0] - 2026-11-08
 
 ### Added

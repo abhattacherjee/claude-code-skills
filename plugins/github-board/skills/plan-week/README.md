@@ -2,7 +2,7 @@
 
 A skill and script that keep a cross-repo "Weekly Focus" GitHub Project current, and answer "what do I work on next". Settings come from the github-board config (`plan-week init` writes it).
 
-- `scripts/weekly-focus.py`: `sync`, `set <Focus> repo#N...` (`pick` = `set "This week"`), `show`, `init`, `config`. `sync` and `show` take `--json`; every command takes `--no-cache`.
+- `scripts/weekly-focus.py`: `sync`, `set <Focus> repo#N...` (`pick` = `set "This week"`), `start repo#N...` (This week plus Status In Progress; `/ship` runs it when a run starts), `show`, `init`, `config`. `sync` and `show` take `--json`; every command takes `--no-cache`.
 - `SKILL.md`: `/github-board:plan-week` and questions like "what should I work on".
 - `launchd/`: templates for two agents, labelled `<plan_week.launchd.label_prefix>-sync` (runs `scripts/run-sync.sh` at `plan_week.launchd.times`) and `<prefix>-watchdog` (runs `scripts/watchdog.sh` hourly and at load). No KeepAlive.
 

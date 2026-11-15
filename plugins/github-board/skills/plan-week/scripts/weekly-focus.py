@@ -27,6 +27,11 @@ like "what do I work on next") is the normal way to use this.
   weekly-focus.py set FOCUS REPO#N...
                                   set Focus (This week / Next / Later) on those issues
                                   (adds them if needed). `pick` = `set "This week"`.
+  weekly-focus.py start REPO#N...
+                                  set Focus to This week and Status to In Progress
+                                  (adds missing cards). `sync` resets Status to Todo later
+                                  unless another board shows the issue In Progress / In review
+                                  or an open non-draft PR closes it.
   weekly-focus.py show [--json]   print open items by Focus and Lane, with milestone;
                                   flags This week items outside their repo's current milestone
                                   and in-progress items outside the plan (unplanned)
@@ -1060,19 +1065,38 @@ def set_focus(focus, keys):
     num, pid = p["number"], p["id"]
     fields = ensure_fields(num)
     have = board_items(num)
+    ids = {}
     for key in keys:
         if key in have:
-            set_opt(pid, have[key]["id"], fields["Focus"], focus)
+            ids[key] = have[key]["id"]
+            set_opt(pid, ids[key], fields["Focus"], focus)
         else:
             repo, n = key.split("#")
             labels = [l["name"] for l in gh("issue", "view", n, "--repo", f"{OWNER}/{repo}",
                                               "--json", "labels")["labels"]]
-            add(num, pid, fields, key, labels, focus)
+            ids[key] = add(num, pid, fields, key, labels, focus)
         print(f"{focus}:", key)
+    return ids
 
 
 def pick(keys):
     set_focus("This week", keys)
+
+
+def start(keys):
+    if not keys:
+        print("usage: start repo#N...", file=sys.stderr)
+        sys.exit(2)
+    ids = set_focus("This week", keys)
+    p = find_or_create_project()
+    num, pid = p["number"], p["id"]
+    fields = ensure_fields(num)
+    for key in keys:
+        if "In Progress" in fields.get("Status", {}).get("opts", {}):
+            set_opt(pid, ids[key], fields["Status"], "In Progress")
+            print(f"In Progress: {key}")
+        else:
+            print(f"warning: board has no Status option 'In Progress' ({key})", file=sys.stderr)
 
 
 def priority(labels):
@@ -1137,7 +1161,7 @@ def show(as_json=False):
         print(f"warning: {w}", file=sys.stderr)
 
 
-COMMANDS = ("sync", "set", "pick", "show", "init", "config")
+COMMANDS = ("sync", "set", "pick", "start", "show", "init", "config")
 
 
 def init_cmd(args):
@@ -1183,6 +1207,8 @@ def main(argv):
             set_focus(args[1] if len(args) > 1 else "", args[2:])
         elif cmd == "pick":
             pick(args[1:])
+        elif cmd == "start":
+            start(args[1:])
         else:
             show(as_json)
     _run_with_refetch(run)
