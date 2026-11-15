@@ -7,6 +7,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ## [Unreleased]
 
+### Added
+
+- **`github-board` 1.5.0: `weekly-focus.py start REPO#N...` sets This week and Status In Progress (#322).** claude-code-config's `/ship` calls it when a run starts. See `plugins/github-board/CHANGELOG.md`.
+
 ## [4.3.0] - 2026-11-08
 
 ### Added

@@ -703,7 +703,7 @@ def test_show_human_marks_unplanned_rows(wf, monkeypatch, capsys):
     assert "unplanned" not in [l for l in out if " app#2 " in l][0]
 
 
-# ---- set / pick -----------------------------------------------------------
+# ---- set / pick / start ---------------------------------------------------
 
 def test_set_rejects_unknown_focus_with_exit_2(wf, monkeypatch, capsys):
     monkeypatch.setattr(wf, "find_or_create_project",
@@ -721,6 +721,73 @@ def test_set_updates_existing_and_pick_is_alias_for_this_week(wf, monkeypatch, c
     assert ("i1", "F", "Later") in b.sets
     wf.pick(["app#1"])
     assert ("i1", "F", "This week") in b.sets
+
+
+def test_start_sets_this_week_and_in_progress_on_existing_card(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={"app#1": {"id": "i1", "focus": "Next", "status": "Todo"}},
+              issues={}, current={}, in_progress=set())
+    wf.start(["app#1"])
+    assert b.sets == [("i1", "F", "This week"), ("i1", "S", "In Progress")]
+    assert "In Progress: app#1" in capsys.readouterr().out
+
+
+def test_start_adds_missing_card_then_sets_both(wf, monkeypatch):
+    b = Board(wf, monkeypatch, items={}, issues={}, current={}, in_progress=set())
+
+    def fake_gh(*args):
+        assert args == ("issue", "view", "2", "--repo", f"{wf.OWNER}/app", "--json", "labels")
+        return {"labels": []}
+
+    monkeypatch.setattr(wf, "gh", fake_gh)
+    reads = []
+
+    def board_items(num):
+        reads.append(num)
+        assert len(reads) == 1, "must use add's returned id without re-reading the board"
+        return b._board()
+
+    monkeypatch.setattr(wf, "board_items", board_items)
+    wf.start(["app#2"])
+    assert b.adds == [("app#2", "This week")]
+    assert ("id-app#2", "S", "In Progress") in b.sets
+
+
+def test_start_warns_when_board_has_no_in_progress_option(wf, monkeypatch, capsys):
+    b = Board(wf, monkeypatch, items={"app#1": {"id": "i1", "focus": "Next", "status": "Todo"}},
+              issues={}, current={}, in_progress=set())
+    fields = copy.deepcopy(wf.ensure_fields(36))
+    del fields["Status"]["opts"]["In Progress"]
+    monkeypatch.setattr(wf, "ensure_fields", lambda n: fields)
+    wf.start(["app#1"])
+    assert b.sets == [("i1", "F", "This week")]
+    assert "warning: board has no Status option 'In Progress' (app#1)" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("keys", [["app#1", "nope"], []])
+def test_start_rejects_a_malformed_key_before_any_write(wf, monkeypatch, keys):
+    monkeypatch.setattr(wf, "find_or_create_project",
+                        lambda: (_ for _ in ()).throw(AssertionError("must not reach the board")))
+    with pytest.raises(SystemExit) as e:
+        wf.start(keys)
+    assert e.value.code == 2
+
+
+def test_help_lists_start():
+    result = subprocess.run(["python3", str(SCRIPT), "--help"], capture_output=True, text=True)
+    assert result.returncode == 0
+    assert "weekly-focus.py start REPO#N..." in result.stdout
+
+
+def test_set_focus_returns_item_ids(wf, monkeypatch):
+    Board(wf, monkeypatch, items={"app#1": {"id": "i1", "focus": "Next", "status": "Todo"}},
+          issues={}, current={}, in_progress=set())
+
+    def fake_gh(*args):
+        assert args == ("issue", "view", "2", "--repo", f"{wf.OWNER}/app", "--json", "labels")
+        return {"labels": []}
+
+    monkeypatch.setattr(wf, "gh", fake_gh)
+    assert wf.set_focus("This week", ["app#1", "app#2"]) == {"app#1": "i1", "app#2": "id-app#2"}
 
 
 # ---- stale in-progress cards ----------------------------------------------
