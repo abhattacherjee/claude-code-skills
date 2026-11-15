@@ -764,12 +764,14 @@ def test_start_warns_when_board_has_no_in_progress_option(wf, monkeypatch, capsy
 
 
 @pytest.mark.parametrize("keys", [["app#1", "nope"], []])
-def test_start_rejects_a_malformed_key_before_any_write(wf, monkeypatch, keys):
+def test_start_rejects_a_malformed_key_before_any_write(wf, monkeypatch, capsys, keys):
     monkeypatch.setattr(wf, "find_or_create_project",
                         lambda: (_ for _ in ()).throw(AssertionError("must not reach the board")))
     with pytest.raises(SystemExit) as e:
         wf.start(keys)
     assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert ("usage: start repo#N..." in err) if not keys else ("nope" in err)
 
 
 def test_help_lists_start():

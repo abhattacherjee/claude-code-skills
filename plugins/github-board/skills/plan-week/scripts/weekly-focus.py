@@ -1084,6 +1084,9 @@ def pick(keys):
 
 
 def start(keys):
+    if not keys:
+        print("usage: start repo#N...", file=sys.stderr)
+        sys.exit(2)
     ids = set_focus("This week", keys)
     p = find_or_create_project()
     num, pid = p["number"], p["id"]
