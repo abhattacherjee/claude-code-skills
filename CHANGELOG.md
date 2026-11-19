@@ -11,6 +11,10 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 - **`github-board` 1.5.0: `weekly-focus.py start REPO#N...` sets This week and Status In Progress (#322).** claude-code-config's `/ship` calls it when a run starts. See `plugins/github-board/CHANGELOG.md`.
 
+### Fixed
+
+- **`review`: `pr-audit.py post` paces writes and retries on GitHub's secondary rate limit (#292).** A 1 s gap is shared by every run on the machine, so parallel `/review:deep` runs no longer block content creation on the account. See `plugins/review/CHANGELOG.md`.
+
 ## [4.3.0] - 2026-11-08
 
 ### Added
