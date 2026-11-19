@@ -541,12 +541,20 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(len(writes), 4)  # opener, reply, resolve, summary update
         self.assert_spaced(writes, 0.3)
         self.assertTrue(all(c["argv"][:2] == ["api", "-i"] for c in writes))
-        reads = [c for c in h.calls() if c not in writes]
+
+    def test_reads_before_the_first_write_are_not_paced(self):
+        h = Harness(self)
+        h.env["PR_AUDIT_WRITE_GAP"] = "1.5"
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        writes = h.writes()
+        self.assertEqual(len(writes), 2)  # opener, summary
+        reads = [c for c in h.calls() if c["t"] < writes[0]["t"]]
+        self.assertGreaterEqual(len(reads), 3, h.calls())  # login, comments, reviews
         self.assertTrue(all("-i" not in c["argv"] for c in reads))
-        # Consecutive preflight reads and the thread lookup following a reply
-        # can both run immediately, even with no rate-limit budget.
-        self.assertLess(min(b["t"] - a["t"] for a, b in zip(reads, reads[1:])), 0.28)
-        self.assertLess(reads[-1]["t"] - writes[1]["t"], 0.28)
+        # Pacing any one read would put a 1.5 s gap here; 1.0 s leaves 0.5 s for load.
+        for first, second in zip(reads, reads[1:]):
+            self.assertLess(second["t"] - first["t"], 1.0, reads)
 
     def test_concurrent_posts_share_the_gap(self):
         first, second = Harness(self), Harness(self)
@@ -644,15 +652,93 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(len(h.posted("reply")), 1)
         self.assertEqual(len(h.posted("review")), 1)
 
-    def test_exponential_backoff_and_retry_after_are_capped(self):
-        h = Harness(self, rate_limit=[self.limit(times=3), self.limit(retry_after=60)])
+    def gaps(self, attempts):
+        return [b["t"] - a["t"] for a, b in zip(attempts, attempts[1:])]
+
+    def test_backoff_doubles_each_retry(self):
+        h = Harness(self, rate_limit=[self.limit(times=3)])
+        h.env.update(PR_AUDIT_BACKOFF_BASE="0.2", PR_AUDIT_BACKOFF_CAP="10", PR_AUDIT_RETRY_BUDGET="5")
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        attempts = h.posted("thread")
+        self.assertEqual(len(attempts), 4)
+        first, second, third = self.gaps(attempts)
+        self.assertGreaterEqual(first, 0.2)
+        self.assertGreaterEqual(second, 0.4)
+        self.assertGreaterEqual(third, 0.8)
+        # A growth factor of 3 would wait 0.6 s and 1.8 s.
+        self.assertLess(second, 0.58)
+        self.assertLess(third, 1.5)
+
+    def test_backoff_is_capped_by_backoff_cap(self):
+        h = Harness(self, rate_limit=[self.limit(times=3)])
         h.env.update(PR_AUDIT_BACKOFF_BASE="0.15", PR_AUDIT_BACKOFF_CAP="0.25", PR_AUDIT_RETRY_BUDGET="1")
         res = h.post(record([finding()]))
         self.assertEqual(res.returncode, 0, res.stderr)
         attempts = h.posted("thread")
-        self.assertEqual(len(attempts), 5)
-        for first, retry, wait in zip(attempts, attempts[1:], (0.15, 0.25, 0.25, 0.25)):
-            self.assertGreaterEqual(retry["t"] - first["t"], wait)
+        self.assertEqual(len(attempts), 4)
+        first, second, third = self.gaps(attempts)
+        self.assertGreaterEqual(first, 0.15)
+        self.assertGreaterEqual(second, 0.25)
+        self.assertGreaterEqual(third, 0.25)
+        self.assertLess(third, 0.5)  # uncapped, the third wait would be 0.6 s
+
+    def test_retry_after_is_never_cut_by_backoff_cap(self):
+        h = Harness(self, rate_limit=[self.limit(retry_after=60)])
+        h.env.update(PR_AUDIT_BACKOFF_CAP="0.25", PR_AUDIT_RETRY_BUDGET="1")
+        start = time.monotonic()
+        res = h.post(record([finding()]))
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(len(h.writes()), 1)
+        pace = json.loads((h.dir / "pace" / "write-pace.json").read_text())
+        self.assertGreaterEqual(pace["blocked_until"], h.writes()[0]["t"] + 59)
+
+    def test_shared_cooldown_over_budget_stops_without_a_write(self):
+        h = Harness(self)
+        pace = Path(h.env["PR_AUDIT_STATE_DIR"])
+        pace.mkdir()
+        (pace / "write-pace.json").write_text(
+            json.dumps({"last_write": 0, "blocked_until": time.time() + 100}))
+        h.env["PR_AUDIT_RETRY_BUDGET"] = "1"
+        start = time.monotonic()
+        res = h.post(record([finding()]))
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(h.writes(), [])
+        self.assertIn("hit GitHub's rate limit", res.stderr)
+
+    def test_primary_limit_on_a_graphql_200_is_retried(self):
+        h = Harness(self, rate_limit=[self.limit("graphql_primary", "resolve")])
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        first, retry = h.resolves()
+        self.assertGreaterEqual(retry["t"] - first["t"], 0.9)
+        self.assertEqual(len(h.state()["resolved"]), 1)
+
+    def test_permission_403_is_not_retried(self):
+        h = Harness(self, rate_limit=[self.limit("plain_403", times=5)])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(len(h.posted("thread")), 1)
+        self.assertIn("FAILED X-001 open thread: gh: Resource not accessible by integration", res.stderr)
+        self.assertNotIn("rate limit", res.stderr)
+
+    def test_429_and_abuse_detection_are_retried(self):
+        for form in ("429", "abuse"):
+            with self.subTest(form=form):
+                h = Harness(self, rate_limit=[self.limit(form)])
+                res = h.post(record([finding()]))
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertEqual(len(h.posted("thread")), 2)
+                self.assertEqual(len(h.state()["comments"]), 1)
+
+    def test_negative_retry_after_falls_back_to_the_reset_header(self):
+        h = Harness(self, rate_limit=[self.limit("primary", retry_after="-5")])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        first, retry = h.posted("thread")
+        self.assertGreaterEqual(retry["t"] - first["t"], 0.9)
 
     def test_shared_blocked_until_delays_first_write(self):
         h = Harness(self)

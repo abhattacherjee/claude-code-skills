@@ -13,7 +13,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 ### Fixed
 
-- **`review`: `pr-audit.py post` paces writes and retries on GitHub's secondary rate limit (#292).** A 1 s gap is shared by every run on the machine, so parallel `/review:deep` runs no longer block content creation on the account. See `plugins/review/CHANGELOG.md`.
+- **`review`: `pr-audit.py post` paces writes and retries on GitHub's secondary rate limit (#292).** `post` now posts more slowly: a 1 s gap is shared by every run on the machine, it waits and retries on the limit, and it stops cleanly so a rerun posts what is missing. See `plugins/review/CHANGELOG.md`.
 
 ## [4.3.0] - 2026-11-08
 

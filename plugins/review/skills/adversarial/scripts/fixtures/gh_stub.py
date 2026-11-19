@@ -21,8 +21,10 @@ State keys that change behaviour:
   rate_limit        list of {kind, times, form, retry_after} objects. The next
                     'times' calls of kind comment, reply, review, review_update
                     or resolve fail with the given form (secondary, too_quickly,
-                    too_quickly_422 or primary). A non-null retry_after supplies
-                    the Retry-After header. A primary limit resets in one second.
+                    too_quickly_422, primary, graphql_primary, abuse, 429 or
+                    plain_403). plain_403 is a permission error, not a rate limit.
+                    A non-null retry_after supplies the Retry-After header. A
+                    primary limit resets in one second.
 """
 import json
 import os
@@ -76,10 +78,10 @@ def respond(body, code=200):
     print(body)
 
 
-def die(message, body=None, headers=None):
+def die(message, body=None, headers=None, code=None):
     if INCLUDE_HEADERS:
         status = re.search(r" \(HTTP (\d{3})\)$", message)
-        print_headers(int(status[1]) if status else 500, headers)
+        print_headers(code or (int(status[1]) if status else 500), headers)
         if body is None:
             detail = message[:status.start()] if status else message
             body = {"message": detail.removeprefix("gh: ")}
@@ -100,9 +102,23 @@ def rate_limit(state, kind):
         form = rule["form"]
         code = 403
         body = {}
+        if form == "graphql_primary":
+            # GraphQL answers a spent quota with HTTP 200 and an error body; gh exits 1.
+            headers.update({"x-ratelimit-remaining": 0, "x-ratelimit-reset": time.time() + 1})
+            message = "API rate limit exceeded for user ID 1."
+            body["errors"] = [{"type": "RATE_LIMITED", "message": message}]
+            die(f"gh: {message}", body, headers, code=200)
         if form == "primary":
             message = "API rate limit exceeded"
             headers.update({"x-ratelimit-remaining": 0, "x-ratelimit-reset": time.time() + 1})
+        elif form == "plain_403":
+            message = "Resource not accessible by integration"
+            headers["x-ratelimit-remaining"] = 4000
+        elif form == "429":
+            code = 429
+            message = "Too Many Requests"
+        elif form == "abuse":
+            message = "You have triggered an abuse detection mechanism."
         elif form == "too_quickly_422":
             code = 422
             message = "Validation Failed"

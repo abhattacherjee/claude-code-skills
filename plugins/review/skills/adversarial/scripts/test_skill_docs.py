@@ -1459,21 +1459,44 @@ class VacuousTestJudgeRuleTests(unittest.TestCase):
                 self.assertIn("name the code change that should turn the test red", text)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PacingDocTests(unittest.TestCase):
-    """Every PR_AUDIT_* setting pr-audit.py reads is in the audit-trail table, and the table names
-    no setting the script does not read (#292)."""
+    """Every PR_AUDIT_* setting pr-audit.py reads is in the audit-trail table with the default the
+    code uses, and the table names no setting the script does not read (#292)."""
 
-    def test_pacing_settings_table_matches_the_script(self):
-        script = (HERE / "pr-audit.py").read_text()
-        read = set(re.findall(r'pacing_number\("([A-Z_]+)"', script))
-        read = {f"PR_AUDIT_{name}" for name in read}
-        read |= set(re.findall(r'os\.environ\.get\("(PR_AUDIT_[A-Z_]+)"', script))
+    def setUp(self):
+        self.script = (HERE / "pr-audit.py").read_text()
         doc = (DEEP / "references" / "audit-trail.md").read_text()
         block = doc.split("| Variable | Default | Meaning |", 1)[1].split("\n\n", 1)[0]
-        documented = set(re.findall(r"^\| `(PR_AUDIT_[A-Z_]+)` \|", block, re.M))
+        self.rows = dict(re.findall(r"^\| `(PR_AUDIT_[A-Z0-9_]+)` \| `([^`]*)` \|", block, re.M))
+
+    def code_defaults(self):
+        found = {f"PR_AUDIT_{n}": d for n, d in
+                 re.findall(r'pacing_number\("([A-Z0-9_]+)", ([^)]+)\)', self.script)}
+        found.update(re.findall(r'os\.environ\.get\("(PR_AUDIT_[A-Z0-9_]+)", "([^"]*)"\)', self.script))
+        return found
+
+    def test_pacing_settings_table_matches_the_script(self):
+        read = set(re.findall(r'pacing_number\("([A-Z0-9_]+)"', self.script))
+        read = {f"PR_AUDIT_{name}" for name in read}
+        read |= set(re.findall(r'os\.environ\.get\("(PR_AUDIT_[A-Z0-9_]+)"', self.script))
+        doc = (DEEP / "references" / "audit-trail.md").read_text()
+        block = doc.split("| Variable | Default | Meaning |", 1)[1].split("\n\n", 1)[0]
+        documented = set(re.findall(r"^\| `(PR_AUDIT_[A-Z0-9_]+)` \|", block, re.M))
         self.assertEqual(len(read), 6, read)
         self.assertEqual(documented, read)
+
+    def test_table_defaults_match_the_code(self):
+        defaults = self.code_defaults()
+        self.assertEqual(len(defaults), 6, defaults)
+        self.assertEqual(set(self.rows), set(defaults))
+        for name, code_default in defaults.items():
+            with self.subTest(name=name):
+                doc_default = self.rows[name]
+                try:
+                    self.assertEqual(float(doc_default), float(code_default))
+                except ValueError:
+                    self.assertEqual(doc_default, code_default)
+
+
+if __name__ == "__main__":
+    unittest.main()

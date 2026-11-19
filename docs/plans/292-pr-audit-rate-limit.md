@@ -66,7 +66,7 @@ All in `plugins/review/skills/adversarial/scripts/pr-audit.py`.
   | `PR_AUDIT_RETRIES` | `4` | Retries per write after a rate limit |
   | `PR_AUDIT_BACKOFF_BASE` | `60` | First back-off in seconds when there is no `retry-after` |
   | `PR_AUDIT_BACKOFF_CAP` | `600` | Largest single back-off |
-  | `PR_AUDIT_RETRY_BUDGET` | `900` | Total seconds one run may spend waiting on rate limits |
+  | `PR_AUDIT_RETRY_BUDGET` | `300` (300 after review; was 900) | Total seconds one run may spend waiting on rate limits |
   | `PR_AUDIT_STATE_DIR` | `~/.cache/pr-audit` | Where the shared pacing state lives |
 
 The 60 s base follows GitHub's guidance: with no `retry-after`, wait at least a

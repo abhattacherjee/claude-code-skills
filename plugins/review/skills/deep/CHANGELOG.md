@@ -6,7 +6,7 @@ All notable changes to the **deep** skill (was `deep-review`) are documented her
 
 ### Fixed
 
-- The audit trail no longer trips GitHub's secondary rate limit: `pr-audit.py post` paces its writes across parallel runs and retries after a rate limit. `references/audit-trail.md` lists the settings (#292).
+- `pr-audit.py post` now posts more slowly: it paces its writes across parallel runs, waits and retries on GitHub's rate limit, and stops cleanly so a rerun posts what is missing. `references/audit-trail.md` lists the settings (#292).
 
 ## [1.5.0] - 2026-11-08
 

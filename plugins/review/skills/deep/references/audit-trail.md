@@ -78,9 +78,13 @@ python3 "<SCRIPTS_DIR>/pr-audit.py" local --record "<RUN_DIR>/round-<K>.json" --
 
    `post` waits at least 1 s between writes, and the gap holds across every `pr-audit.py` on the
    machine, so parallel review runs on one account do not burst. On GitHub's secondary rate limit
-   it waits (`Retry-After`, else a back-off from 60 s) and retries; after 15 minutes of waiting in
-   one run it stops writing for that run. A round takes about one second per comment, so do not
-   run `post` in the background. The settings are in the table below.
+   it waits (`Retry-After`, else a back-off from 60 s) and retries; after 5 minutes of waiting in
+   one run it stops writing for that run. A round takes about one second per comment, so run
+   `post` in the foreground with the Bash tool's `timeout` set to 600000 ms. The default 120 s
+   can kill it during a back-off; a rerun later posts only what is missing. The 1 s gap keeps a
+   run under GitHub's per-minute content limit, but not its hourly one (about 500 content writes
+   an hour). Long runs can still hit the limit, and then `post` waits or stops. The settings are
+   in the table below.
 
 4. Set `PREV_HEAD` to this round's head SHA, as a JSON string (for example `"abc123..."`).
 
@@ -93,8 +97,9 @@ Exit codes:
   the documented way to write the trail by hand. Note it for the final report and carry on.
   Rerunning the same command later posts only what is missing and updates the summary. When
   stderr says `hit GitHub's rate limit`, rerun it after the review ends, not at once.
-- 2: the record is invalid, or a `PR_AUDIT_*` setting is not a non-negative number. Fix it and
-  rerun.
+- 2: the record is invalid, or a `PR_AUDIT_*` setting is invalid: a number below 0 or not a
+  number, a `PR_AUDIT_RETRIES` that is not a whole number, or an empty `PR_AUDIT_STATE_DIR`. Fix
+  it and rerun.
 - 3: pr-audit.py crashed. Some posts may already be on the PR, so the trail may be partial.
   Note its one-line error for the final report and carry on.
 
@@ -107,8 +112,8 @@ Write pacing settings (environment variables, read by `post`):
 | `PR_AUDIT_WRITE_GAP` | `1.0` | Minimum seconds between writes; `0` turns the gap off |
 | `PR_AUDIT_RETRIES` | `4` | Retries per write after a rate limit |
 | `PR_AUDIT_BACKOFF_BASE` | `60` | First back-off in seconds when GitHub sends no `Retry-After` |
-| `PR_AUDIT_BACKOFF_CAP` | `600` | Longest single wait |
-| `PR_AUDIT_RETRY_BUDGET` | `900` | Total seconds one run may wait on rate limits |
+| `PR_AUDIT_BACKOFF_CAP` | `600` | Longest computed back-off; a wait GitHub names (`Retry-After`) is used in full |
+| `PR_AUDIT_RETRY_BUDGET` | `300` | Total seconds one run may wait on rate limits; waiting on another run's shared cooldown counts too |
 | `PR_AUDIT_STATE_DIR` | `~/.cache/pr-audit` | Shared pacing state; a different dir opts out of sharing |
 
 The gap is shared per machine. Sessions on two machines posting as one account are not paced

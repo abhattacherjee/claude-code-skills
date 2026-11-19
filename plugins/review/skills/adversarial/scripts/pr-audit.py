@@ -24,8 +24,10 @@ gap). Processes share pacing and rate-limit deadlines through PR_AUDIT_STATE_DIR
 (default ~/.cache/pr-audit). A rate-limited write gets up to PR_AUDIT_RETRIES
 retries (4), using GitHub's wait time or exponential back-off starting at
 PR_AUDIT_BACKOFF_BASE seconds (60). PR_AUDIT_BACKOFF_CAP (600 seconds) caps
-each rate-limit wait. PR_AUDIT_RETRY_BUDGET (900 seconds) limits their sum
-per run. After either retry limit is reached, rerun later to post missing items.
+each computed back-off; a wait GitHub names (Retry-After or x-ratelimit-reset)
+is used in full. PR_AUDIT_RETRY_BUDGET (300 seconds, so a run fits the Bash
+tool's 600 s cap) limits their sum per run. After either retry limit is
+reached, rerun later to post missing items.
 
 `recheck` builds the record for an adversary re-check round: each earlier
 finding the adversary re-checked gets one recheck event by the adversary, and
@@ -115,9 +117,12 @@ def write_response(proc):
     exhausted = headers.get("x-ratelimit-remaining") == "0"
     message = proc.stderr.strip() or f"gh exited {proc.returncode}"
     detail = (message + "\n" + body).lower()
+    # GraphQL reports a rate limit as HTTP 200 with an error body, so a failed write
+    # whose primary quota is spent counts as rate limited whatever the status.
     limit_message = any(phrase in detail for phrase in
-                        ("secondary rate limit", "submitted too quickly", "abuse detection"))
-    if limit_message or code == 429 or (code == 403 and exhausted):
+                        ("secondary rate limit", "submitted too quickly", "abuse detection",
+                         "api rate limit exceeded"))
+    if limit_message or code == 429 or exhausted:
         wait = finite_number(headers.get("retry-after"))
         if wait is None or wait < 0:
             reset = finite_number(headers.get("x-ratelimit-reset")) if exhausted else None
@@ -292,7 +297,7 @@ class WritePacer:
         self.retries = pacing_number("RETRIES", 4)
         self.base = pacing_number("BACKOFF_BASE", 60.0)
         self.cap = pacing_number("BACKOFF_CAP", 600.0)
-        self.budget = pacing_number("RETRY_BUDGET", 900.0)
+        self.budget = pacing_number("RETRY_BUDGET", 300.0)
         directory = os.environ.get("PR_AUDIT_STATE_DIR", "~/.cache/pr-audit")
         if not directory:
             raise ValueError("PR_AUDIT_STATE_DIR must be a non-empty path")
@@ -371,7 +376,7 @@ class WritePacer:
                 except GhError as exc:
                     if not exc.rate_limited:
                         raise
-                    wait = min(exc.retry_after, self.cap) if exc.retry_after is not None else backoff
+                    wait = exc.retry_after if exc.retry_after is not None else backoff
                     if attempt == self.retries or wait > self.budget:
                         self.blocked = True
                         raise
