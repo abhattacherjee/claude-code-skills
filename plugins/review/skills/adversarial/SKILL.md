@@ -370,7 +370,9 @@ Add `--pr "<PR>"` in PR mode. Add `--no-post` when the user asked for it. Relay 
 Model text is posted as written under your GitHub account, so @mentions and #refs in it will notify people and link issues.
 
 - Exit 0: posted. In pr mode, each finding with a path has a thread on the PR. The opposing model's verdict is a reply in it. Refuted findings' threads are resolved. One summary review lists every finding; it is split into numbered parts if very long. Findings without a path, or that GitHub rejected twice, appear only in the summary.
-- Exit 4: the report was delivered, but the audit trail is incomplete or went to the local file. See the `pr-audit:` lines and tell the user. Rerunning Step 5 with the same record posts only what is missing and updates the summary.
+- Exit 4: the report was delivered, but the audit trail is incomplete or went to the local file. See the `pr-audit:` lines and tell the user. Rerunning Step 5 with the same record posts only what is missing and updates the summary. When a line says `hit GitHub's rate limit`, rerun later, not at once.
+
+The audit trail's `post` step waits at least 1 s between writes, shared by every run on the machine, and retries after GitHub's secondary rate limit (`Retry-After`, else a back-off from 60 s, at most 15 minutes of waiting per run). The `PR_AUDIT_*` settings are listed in `../deep/references/audit-trail.md`.
 - Exit 1 or 2: `sink.sh` itself failed. Show the error.
 
 The run directory (`<RUN_DIR>`) keeps `round-1.json`. Give the user its path.

@@ -57,7 +57,7 @@ Exit codes:
   0  everything was posted (or `local`/`record` succeeded)
   1  the trail is incomplete: some posts failed, or `post` could not reach the PR
      (the trail went to --fallback-out if given, else nowhere)
-  2  usage error, invalid record, or invalid report, or `record`/`recheck` could
+  2  usage error (including a bad PR_AUDIT_* setting), invalid record, or invalid report, or `record`/`recheck` could
      not write --out
   3  unexpected error (one line on stderr, no traceback); the trail may be partial
 """

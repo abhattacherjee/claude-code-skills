@@ -4,6 +4,10 @@ All notable changes to the **review** plugin are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pr-audit.py post` paces writes (1 s, shared across processes on one machine) and retries after GitHub's secondary rate limit, so parallel review runs no longer block content creation on the account (#292).
+
 ## [1.5.0] - 2026-11-08
 
 ### Added

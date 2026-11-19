@@ -1461,3 +1461,19 @@ class VacuousTestJudgeRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PacingDocTests(unittest.TestCase):
+    """Every PR_AUDIT_* setting pr-audit.py reads is in the audit-trail table, and the table names
+    no setting the script does not read (#292)."""
+
+    def test_pacing_settings_table_matches_the_script(self):
+        script = (HERE / "pr-audit.py").read_text()
+        read = set(re.findall(r'pacing_number\("([A-Z_]+)"', script))
+        read = {f"PR_AUDIT_{name}" for name in read}
+        read |= set(re.findall(r'os\.environ\.get\("(PR_AUDIT_[A-Z_]+)"', script))
+        doc = (DEEP / "references" / "audit-trail.md").read_text()
+        block = doc.split("| Variable | Default | Meaning |", 1)[1].split("\n\n", 1)[0]
+        documented = set(re.findall(r"^\| `(PR_AUDIT_[A-Z_]+)` \|", block, re.M))
+        self.assertEqual(len(read), 6, read)
+        self.assertEqual(documented, read)
