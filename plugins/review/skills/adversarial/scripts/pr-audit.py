@@ -102,13 +102,43 @@ def finite_number(value):
 RUN_LIMIT_MESSAGE = "not attempted: run time limit reached"
 
 
-def graphql_limited(body):
-    """True when a GraphQL body carries an error of type RATE_LIMITED."""
+def _error_items(errors):
+    """(message, type) for each item of a response's `errors` list. An item is a string
+    (a message) or an object; a field that is not a string reads as ""."""
+    items = []
+    for item in errors if isinstance(errors, list) else []:
+        if isinstance(item, str):
+            items.append((item, ""))
+        elif isinstance(item, dict):
+            text, kind = item.get("message"), item.get("type")
+            items.append((text if isinstance(text, str) else "", kind if isinstance(kind, str) else ""))
+    return items
+
+
+def is_rate_limited(code, headers, body):
+    """Decide from the parsed response alone. Only these exact signs count; free text
+    elsewhere (stderr, a file path echoed in an error) never does."""
     try:
-        errors = json.loads(body).get("errors")
-    except (ValueError, AttributeError, RecursionError):
-        return False
-    return "rate_limited" in json.dumps(errors).lower()
+        parsed = json.loads(body)
+    except (ValueError, RecursionError):
+        parsed = None
+    parsed = parsed if isinstance(parsed, dict) else {}
+    message = parsed.get("message")
+    message = message.strip().lower() if isinstance(message, str) else ""
+    errors = _error_items(parsed.get("errors"))
+    exhausted = headers.get("x-ratelimit-remaining") == "0"
+    if code == 429:
+        return True
+    if code == 403:
+        return (exhausted or "retry-after" in headers
+                or any(p in message for p in ("secondary rate limit", "abuse detection",
+                                              "submitted too quickly"))
+                or message.startswith("api rate limit exceeded"))
+    if code == 200:  # GraphQL reports a rate limit as HTTP 200 with an error body
+        return exhausted or any(kind == "RATE_LIMITED" for _, kind in errors)
+    if code == 422:
+        return any(text.strip().lower() == "was submitted too quickly" for text, _ in errors)
+    return False
 
 
 def write_response(proc):
@@ -127,18 +157,12 @@ def write_response(proc):
         name, sep, value = line.partition(":")
         if sep:
             headers[name.lower()] = value.strip()
-    exhausted = headers.get("x-ratelimit-remaining") == "0"
     message = proc.stderr.strip() or f"gh exited {proc.returncode}"
-    detail = (message + "\n" + body).lower()
-    # GraphQL reports a rate limit as HTTP 200 with an error body. A spent primary quota
-    # counts only on 403 or 200: a 422 with remaining 0 is still a validation failure.
-    limit_message = any(phrase in detail for phrase in
-                        ("secondary rate limit", "submitted too quickly", "abuse detection",
-                         "api rate limit exceeded"))
-    if limit_message or code == 429 or (exhausted and code in (403, 200)) or graphql_limited(body):
+    if is_rate_limited(code, headers, body):
         wait = finite_number(headers.get("retry-after"))
         if wait is None or wait < 0:
-            reset = finite_number(headers.get("x-ratelimit-reset")) if exhausted else None
+            reset = (finite_number(headers.get("x-ratelimit-reset"))
+                     if headers.get("x-ratelimit-remaining") == "0" else None)
             wait = max(0.0, reset - time.time()) if reset is not None else None
         raise GhError(message, rate_limited=True, retry_after=wait)
     raise GhError(message, 422 if code == 422 else None)
@@ -319,7 +343,7 @@ class WritePacer:
         self.directory = Path(os.path.expanduser(directory))
         self.last_write = self.blocked_until = 0.0
         self.blocked = False
-        self.out_of_time = False
+        self.timed_out = False
 
     def _use_local_state(self, exc):
         print(f"pr-audit: note: write pacing is not shared ({exc})", file=sys.stderr)
@@ -334,17 +358,40 @@ class WritePacer:
             self.last_write = max(self.last_write, finite_number(state.get("last_write")) or 0.0)
             self.blocked_until = max(self.blocked_until, finite_number(state.get("blocked_until")) or 0.0)
 
+    def out_of_time(self):
+        """True when this run has used its run limit, or a write already stopped for it."""
+        return self.timed_out or bool(
+            self.run_limit and time.monotonic() - self.started >= self.run_limit)
+
+    def _flock(self, lock):
+        """Take the exclusive lock. With a run limit, poll and give up (False) once it is
+        used up, so another process holding the lock cannot stall this run past the cap."""
+        if not self.run_limit:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return True
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                if self.out_of_time():
+                    return False
+                time.sleep(0.05)
+
     def _lock_state(self, files):
+        """Lock and read the shared state. False when the run limit passed while waiting."""
         if self.directory is None:
-            return
+            return True
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             lock = files.enter_context((self.directory / "write-pace.lock").open("a"))
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not self._flock(lock):
+                return False
             self._read_state()
         except OSError as exc:
             files.close()
             self._use_local_state(exc)
+        return True
 
     def _save_state(self):
         if self.directory is not None:
@@ -357,17 +404,25 @@ class WritePacer:
             except OSError as exc:
                 self._use_local_state(exc)
 
+    def _run_limit_reached(self, last_error):
+        """Stop all later writes. When a rate-limited write was waiting to retry, GitHub's
+        limit is the reason this write failed, so keep that error and not the run-limit one."""
+        self.blocked = True
+        self.timed_out = last_error is None
+
     @contextmanager
     def _write_turn(self, last_error):
         """Release the lock to sleep, then recheck the shared deadlines before yielding."""
         while not self.blocked:
             with ExitStack() as files:
-                self._lock_state(files)
+                if not self._lock_state(files):
+                    self._run_limit_reached(last_error)
+                    break
                 now = time.time()
                 ready = max(self.last_write + self.gap, self.blocked_until)
                 wait = max(0.0, ready - now)
                 if self.run_limit and time.monotonic() - self.started + wait > self.run_limit:
-                    self.blocked = self.out_of_time = True
+                    self._run_limit_reached(last_error)
                     break
                 if wait == 0.0:
                     yield
@@ -381,7 +436,7 @@ class WritePacer:
                 self.budget -= rate_wait
             time.sleep(ready - now)
 
-        if self.out_of_time:
+        if self.timed_out:
             raise GhError(RUN_LIMIT_MESSAGE, rate_limited=True)
         if last_error is not None:
             raise last_error
@@ -627,7 +682,11 @@ def post_round(rec, args, pacer):
     # Resolve in a second pass, after every thread this round has been opened (and
     # every reply posted), so a thread opened later in this same loop is not missed
     # by a threads() snapshot taken before it existed.
-    if to_resolve:
+    if to_resolve and pacer.out_of_time():
+        # Out of time: every resolve would be refused anyway, so skip the thread lookup.
+        for fid, _ in to_resolve:
+            failures.append((fid, "resolve thread", GhError(RUN_LIMIT_MESSAGE, rate_limited=True)))
+    elif to_resolve:
         try:
             threads = hub.threads()
         except POST_ERRORS as exc:

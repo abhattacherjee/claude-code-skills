@@ -22,8 +22,10 @@ State keys that change behaviour:
                     'times' calls of kind comment, reply, review, review_update
                     or resolve fail with the given form (secondary, too_quickly,
                     too_quickly_422, validation_422_exhausted, primary, graphql_primary,
-                    abuse, 429 or
-                    plain_403). plain_403 is a permission error, not a rate limit.
+                    abuse, 429, plain_403, path_rate_limited_422, path_too_quickly_422
+                    or graphql_forbidden). plain_403, validation_422_exhausted and the
+                    last three are not rate limits: a permission error, and failures
+                    whose text only mentions a rate limit (an echoed path, a field name).
                     A non-null retry_after supplies the Retry-After header. A
                     primary limit resets in one second.
 """
@@ -109,6 +111,11 @@ def rate_limit(state, kind):
             message = "API rate limit exceeded for user ID 1."
             body["errors"] = [{"type": "RATE_LIMITED", "message": message}]
             die(f"gh: {message}", body, headers, code=200)
+        if form == "graphql_forbidden":
+            # HTTP 200 with a GraphQL error that is not of type RATE_LIMITED; gh exits 1.
+            message = "rate_limited is not a valid field"
+            body["errors"] = [{"type": "FORBIDDEN", "message": message}]
+            die(f"gh: {message}", body, headers, code=200)
         if form == "primary":
             message = "API rate limit exceeded"
             headers.update({"x-ratelimit-remaining": 0, "x-ratelimit-reset": time.time() + 1})
@@ -130,6 +137,14 @@ def rate_limit(state, kind):
             code = 422
             message = "Validation Failed"
             body["errors"] = ["was submitted too quickly"]
+        elif form == "path_rate_limited_422":
+            code = 422
+            message = "Validation Failed"
+            body["errors"] = ["Invalid path RATE_LIMITED.py"]
+        elif form == "path_too_quickly_422":
+            code = 422
+            message = "Validation Failed"
+            body["errors"] = ["path docs/was submitted too quickly.md is not part of the diff"]
         elif form == "too_quickly":
             message = "was submitted too quickly"
         elif form == "secondary":

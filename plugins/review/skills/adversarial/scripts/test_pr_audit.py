@@ -1,4 +1,5 @@
 """CLI tests for pr-audit.py against a stateful `gh` stub."""
+import fcntl
 import importlib.util
 import json
 import os
@@ -74,13 +75,13 @@ class Harness:
         path.write_text(json.dumps(rec) if isinstance(rec, dict) else rec)
         return path
 
-    def run(self, *args):
+    def run(self, *args, **kw):
         return subprocess.run([sys.executable, str(PR_AUDIT), *map(str, args)],
-                              capture_output=True, text=True, env=self.env, cwd=self.dir)
+                              capture_output=True, text=True, env=self.env, cwd=self.dir, **kw)
 
-    def post(self, rec, name="round.json"):
+    def post(self, rec, name="round.json", **kw):
         return self.run("post", "--pr", "7", "--repo", "octo/demo",
-                        "--record", self.write(rec, name), "--fallback-out", self.fallback)
+                        "--record", self.write(rec, name), "--fallback-out", self.fallback, **kw)
 
     def calls(self):
         if not self.log_path.exists():
@@ -604,6 +605,80 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(len(h.writes()), 3)
 
+    def test_run_limit_does_not_overrun_while_waiting_for_the_next_write(self):
+        h = Harness(self)
+        # The limit sits just above the gap, so the second write cannot fit however fast the
+        # first one ran, and the first has about 0.8 s of start-up room.
+        h.env.update(PR_AUDIT_WRITE_GAP="1.0", PR_AUDIT_RUN_LIMIT="1.05")
+        res = h.post(record([finding(), finding("X-002")]))
+        exited = time.time()
+        self.assertEqual(res.returncode, 1, res.stderr)
+        writes = h.writes()
+        self.assertGreaterEqual(len(writes), 1, res.stderr)
+        # Without the wait in the check, the second write sleeps 1.0 s first and then runs.
+        self.assertLess(exited - writes[0]["t"], 0.7)
+        self.assertEqual(len(writes), 1)
+        self.assertIn("not attempted: run time limit reached", res.stderr)
+
+    def pacer_with(self, **env):
+        spec = importlib.util.spec_from_file_location("pr_audit_pacer", PR_AUDIT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with mock.patch.dict(os.environ, env):
+            return mod.WritePacer()
+
+    def test_run_limit_zero_is_never_out_of_time(self):
+        pacer = self.pacer_with(PR_AUDIT_RUN_LIMIT="0")
+        self.assertEqual(pacer.run_limit, 0)
+        pacer.started -= 10_000
+        self.assertFalse(pacer.out_of_time())
+        # Control: the same elapsed time is out of time under a real limit.
+        limited = self.pacer_with(PR_AUDIT_RUN_LIMIT="1")
+        self.assertFalse(limited.out_of_time())
+        limited.started -= 10_000
+        self.assertTrue(limited.out_of_time())
+
+    def test_run_limit_bounds_the_wait_for_the_shared_lock(self):
+        h = Harness(self)
+        h.env["PR_AUDIT_RUN_LIMIT"] = "1"
+        pace = Path(h.env["PR_AUDIT_STATE_DIR"])
+        pace.mkdir()
+        with open(pace / "write-pace.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            start = time.monotonic()
+            # A run that waits on the lock with no bound would hang here; the timeout fails it.
+            res = h.post(record([finding()]), timeout=20)
+            elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 4)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(h.writes(), [])
+        self.assertIn("not attempted: run time limit reached", res.stderr)
+        self.assertIn("because the run reached PR_AUDIT_RUN_LIMIT", res.stderr)
+        self.assertNotIn("hit GitHub's rate limit", res.stderr)
+
+    def test_out_of_time_run_skips_the_thread_lookup(self):
+        h = Harness(self)
+        h.env.update(PR_AUDIT_WRITE_GAP="1.5", PR_AUDIT_RUN_LIMIT="1.5")
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(len(h.posted("thread")), 1, res.stderr)  # the opener got in; the reply did not
+        self.assertEqual(h.posted("reply"), [])
+        self.assertFalse([c for c in h.calls() if "graphql" in c["argv"]], h.calls())
+        self.assertIn("FAILED X-001 resolve thread: not attempted: run time limit reached", res.stderr)
+
+    def test_run_limit_keeps_githubs_error_when_its_retry_cannot_fit(self):
+        h = Harness(self, rate_limit=[self.limit(retry_after=5)])
+        h.env["PR_AUDIT_RUN_LIMIT"] = "2"
+        start = time.monotonic()
+        res = h.post(record([finding()]))
+        self.assertLess(time.monotonic() - start, 4)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(len(h.posted("thread")), 1)
+        self.assertIn("FAILED X-001 open thread: gh: You have exceeded a secondary rate limit", res.stderr)
+        self.assertIn("hit GitHub's rate limit", res.stderr)
+        self.assertNotIn("run time limit", res.stderr)
+        self.assertNotIn("PR_AUDIT_RUN_LIMIT", res.stderr)
+
     def test_bad_run_limit_makes_no_gh_calls(self):
         for value in ("abc", "-1", "nan"):
             with self.subTest(value=value):
@@ -774,6 +849,27 @@ class RateLimitTests(unittest.TestCase):
         first, retry = h.resolves()
         self.assertGreaterEqual(retry["t"] - first["t"], 0.9)
         self.assertEqual(len(h.state()["resolved"]), 1)
+
+    def test_a_422_that_only_mentions_a_rate_limit_keeps_its_file_level_fallback(self):
+        for form in ("path_rate_limited_422", "path_too_quickly_422"):
+            with self.subTest(form=form):
+                h = Harness(self, rate_limit=[self.limit(form)])
+                res = h.post(record([finding()]))
+                self.assertEqual(res.returncode, 0, res.stderr)
+                attempts = h.posted("thread")
+                self.assertEqual([c["input"].get("subject_type") for c in attempts], [None, "file"])
+                self.assertEqual([c["subject_type"] for c in h.state()["comments"]], ["file"])
+                self.assertNotIn("rate limit", res.stderr)
+                pace = json.loads((h.dir / "pace" / "write-pace.json").read_text())
+                self.assertEqual(pace["blocked_until"], 0)
+
+    def test_graphql_error_that_is_not_rate_limited_is_not_retried(self):
+        h = Harness(self, rate_limit=[self.limit("graphql_forbidden", "resolve", times=5)])
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(len(h.resolves()), 1)
+        self.assertIn("FAILED X-001 resolve thread: gh: rate_limited is not a valid field", res.stderr)
+        self.assertNotIn("hit GitHub's rate limit", res.stderr)
 
     def test_permission_403_is_not_retried(self):
         h = Harness(self, rate_limit=[self.limit("plain_403", times=5)])
