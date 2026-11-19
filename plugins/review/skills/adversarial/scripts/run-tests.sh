@@ -2438,6 +2438,9 @@ git init -q "$SINK_REPO"
 printf '# report\n' >"$TMP_DIR/sink-report.md"
 printf '{"findings":[]}\n' >"$TMP_DIR/sink-report.json"
 SINK_RECORD="$FIXTURES_DIR/audit_round_min.json"
+# No write gap, and a private pacing state dir, so these tests stay fast and never
+# touch ~/.cache/pr-audit (#292).
+export PR_AUDIT_WRITE_GAP=0 PR_AUDIT_STATE_DIR="$TMP_DIR/sink-pace"
 
 # Usage: sink_run OUT_VAR EXIT_VAR STATE_JSON sink-args...
 # Runs sink.sh from inside a throwaway git repo so gitignore and local files land there.

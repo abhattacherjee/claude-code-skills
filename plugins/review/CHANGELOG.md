@@ -4,6 +4,10 @@ All notable changes to the **review** plugin are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pr-audit.py post` now posts more slowly: it paces writes (1 s, shared across processes on one machine), waits and retries on GitHub's rate limit, and stops cleanly so a rerun posts what is missing (#292).
+
 ## [1.5.0] - 2026-11-08
 
 ### Added

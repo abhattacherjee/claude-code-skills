@@ -1,6 +1,8 @@
 """Doc-contract tests for the review plugin: the skill steps run scripts that exist, and wire in
 the adversary. They read only plugins/review/ (the `adversarial` and `deep` skills, the agents and
 the README); the old adversarial-review plugin (removed in v4.0.0) had its own copy."""
+import ast
+import importlib.util
 import json
 import os
 import re
@@ -9,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1457,6 +1460,91 @@ class VacuousTestJudgeRuleTests(unittest.TestCase):
                 text = norm(path.read_text())
                 self.assertIn(VACUOUS_RULE, text)
                 self.assertIn("name the code change that should turn the test red", text)
+
+
+class PacingDocTests(unittest.TestCase):
+    """Every PR_AUDIT_* setting pr-audit.py reads is in the audit-trail table with the default the
+    code uses, and the table names no setting the script does not read (#292)."""
+
+    def setUp(self):
+        self.script = (HERE / "pr-audit.py").read_text()
+        doc = (DEEP / "references" / "audit-trail.md").read_text()
+        block = doc.split("| Variable | Default | Meaning |", 1)[1].split("\n\n", 1)[0]
+        self.rows = dict(re.findall(r"^\| `(PR_AUDIT_[A-Z0-9_]+)` \| `([^`]*)` \|", block, re.M))
+
+    @staticmethod
+    def pacing_calls(source):
+        """{PR_AUDIT_<name>: default} for every pacing_number(...) call, found with ast: the
+        name is the first positional argument or name=, the default the second or default=."""
+        found = {}
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "pacing_number"):
+                continue
+            keywords = {k.arg: k.value for k in node.keywords}
+            name = node.args[0] if node.args else keywords.get("name")
+            default = node.args[1] if len(node.args) > 1 else keywords.get("default")
+            found[f"PR_AUDIT_{ast.literal_eval(name)}"] = ast.literal_eval(default)
+        return found
+
+    def code_defaults(self):
+        found = self.pacing_calls(self.script)
+        found.update(re.findall(r'os\.environ\.get\("(PR_AUDIT_[A-Z0-9_]+)", "([^"]*)"\)', self.script))
+        return found
+
+    @classmethod
+    def script_settings(cls, source):
+        """Every PR_AUDIT_* name the source mentions, plus each pacing_number name."""
+        return set(re.findall(r"PR_AUDIT_[A-Z0-9_]+", source)) | set(cls.pacing_calls(source))
+
+    def test_pacing_settings_table_matches_the_script(self):
+        read = self.script_settings(self.script)
+        self.assertEqual(len(read), 7, read)
+        self.assertEqual(set(self.rows), read)
+
+    def test_a_setting_the_script_reads_but_the_table_lacks_is_seen(self):
+        mutated = self.script + "\nos.getenv('PR_AUDIT_EXTRA')\n"
+        read = self.script_settings(mutated)
+        self.assertIn("PR_AUDIT_EXTRA", read)
+        self.assertNotEqual(set(self.rows), read)
+
+    def test_pacing_calls_are_read_by_ast_in_every_call_shape(self):
+        source = ("pacing_number('A', 1.5)\npacing_number(name='B', default=2)\n"
+                  "pacing_number('C', default=3.0)\nx = pacing_number(\n    name='D',\n    default=4)\n")
+        self.assertEqual(self.pacing_calls(source),
+                         {"PR_AUDIT_A": 1.5, "PR_AUDIT_B": 2, "PR_AUDIT_C": 3.0, "PR_AUDIT_D": 4})
+        self.assertIn("PR_AUDIT_B", self.script_settings(source))
+
+    def test_effective_defaults_match_the_table(self):
+        spec = importlib.util.spec_from_file_location("pr_audit_defaults", HERE / "pr-audit.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PR_AUDIT_")}
+        with mock.patch.dict(os.environ, env, clear=True):
+            pacer = mod.WritePacer()
+        attributes = {"PR_AUDIT_WRITE_GAP": "gap", "PR_AUDIT_RETRIES": "retries",
+                      "PR_AUDIT_BACKOFF_BASE": "base", "PR_AUDIT_BACKOFF_CAP": "cap",
+                      "PR_AUDIT_RETRY_BUDGET": "budget", "PR_AUDIT_RUN_LIMIT": "run_limit"}
+        # Every pacing_number setting in the script needs an attribute here, so a new one fails.
+        self.assertEqual(set(attributes), set(self.pacing_calls(self.script)))
+        effective = {name: getattr(pacer, attr) for name, attr in attributes.items()}
+        self.assertEqual(set(effective) | {"PR_AUDIT_STATE_DIR"}, set(self.rows))
+        for name, value in effective.items():
+            with self.subTest(name=name):
+                self.assertEqual(float(self.rows[name]), float(value))
+        self.assertEqual(pacer.directory, Path(os.path.expanduser(self.rows["PR_AUDIT_STATE_DIR"])))
+
+    def test_table_defaults_match_the_code(self):
+        defaults = self.code_defaults()
+        self.assertEqual(len(defaults), 7, defaults)
+        self.assertEqual(set(self.rows), set(defaults))
+        for name, code_default in defaults.items():
+            with self.subTest(name=name):
+                doc_default = self.rows[name]
+                try:
+                    self.assertEqual(float(doc_default), float(code_default))
+                except ValueError:
+                    self.assertEqual(doc_default, code_default)
 
 
 if __name__ == "__main__":
