@@ -16,8 +16,16 @@ line, file-level when GitHub rejects the line (HTTP 422) or there is no line,
 and none when GitHub rejects both. Findings with no thread appear only in the
 summary. Each later event is a reply in the finding's thread. Each round gets
 one COMMENT review with a summary table; a long table is split over several
-numbered reviews. Earlier threads and summaries are found by a hidden marker,
-so no local state is kept. A rerun updates its own summary in place.
+numbered reviews. Earlier threads and summaries are found by a hidden marker.
+A rerun updates its own summary in place.
+
+`post` spaces writes by PR_AUDIT_WRITE_GAP seconds (default 1, 0 disables the
+gap). Processes share pacing and rate-limit deadlines through PR_AUDIT_STATE_DIR
+(default ~/.cache/pr-audit). A rate-limited write gets up to PR_AUDIT_RETRIES
+retries (4), using GitHub's wait time or exponential back-off starting at
+PR_AUDIT_BACKOFF_BASE seconds (60). PR_AUDIT_BACKOFF_CAP (600 seconds) caps
+each rate-limit wait. PR_AUDIT_RETRY_BUDGET (900 seconds) limits their sum
+per run. After either retry limit is reached, rerun later to post missing items.
 
 `recheck` builds the record for an adversary re-check round: each earlier
 finding the adversary re-checked gets one recheck event by the adversary, and
@@ -54,10 +62,16 @@ Exit codes:
   3  unexpected error (one line on stderr, no traceback); the trail may be partial
 """
 import argparse
+import fcntl
 import json
+import math
+import os
+import re
 import subprocess
 import sys
+import time
 from collections import Counter
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -67,18 +81,54 @@ LOCAL_SUFFIX = ".adversarial-review.md"
 
 
 class GhError(RuntimeError):
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, *, rate_limited=False, retry_after=None):
         super().__init__(message)
         self.status = status
+        self.rate_limited = rate_limited
+        self.retry_after = retry_after
+
+
+def finite_number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def write_response(proc):
+    parts = re.split(r"\r?\n\r?\n", proc.stdout, maxsplit=1)
+    body = parts[-1]
+    if proc.returncode == 0:
+        return body
+
+    lines = parts[0].splitlines() if len(parts) == 2 else []
+    status = re.match(r"HTTP/\S+\s+(\d{3})\b", lines[0]) if lines else None
+    if not status:
+        status = re.search(r"\(HTTP (\d{3})\)", proc.stderr)
+    code = int(status[1]) if status else None
+    headers = {}
+    for line in lines[1:]:
+        name, sep, value = line.partition(":")
+        if sep:
+            headers[name.lower()] = value.strip()
+    exhausted = headers.get("x-ratelimit-remaining") == "0"
+    message = proc.stderr.strip() or f"gh exited {proc.returncode}"
+    detail = (message + "\n" + body).lower()
+    limit_message = any(phrase in detail for phrase in
+                        ("secondary rate limit", "submitted too quickly", "abuse detection"))
+    if limit_message or code == 429 or (code == 403 and exhausted):
+        wait = finite_number(headers.get("retry-after"))
+        if wait is None or wait < 0:
+            reset = finite_number(headers.get("x-ratelimit-reset")) if exhausted else None
+            wait = max(0.0, reset - time.time()) if reset is not None else None
+        raise GhError(message, rate_limited=True, retry_after=wait)
+    raise GhError(message, 422 if code == 422 else None)
 
 
 def gh(args, payload=None):
-    """Run gh and return its stdout.
-
-    Raise GhError on any failure: gh missing, a timeout, or a non-zero exit.
-    GhError.status is 422 only when gh's stderr contains "(HTTP 422)"; it is
-    None for every other failure.
-    """
+    """Return gh's output, stripping HTTP headers for writes. A 422 status on
+    GhError identifies a validation failure eligible for file-level fallback."""
     try:
         proc = subprocess.run(
             ["gh", *args], input=None if payload is None else json.dumps(payload),
@@ -87,6 +137,8 @@ def gh(args, payload=None):
         raise GhError("gh not found on PATH") from exc
     except subprocess.TimeoutExpired as exc:
         raise GhError("gh timed out after 60s") from exc
+    if args[:2] == ["api", "-i"]:
+        return write_response(proc)
     if proc.returncode != 0:
         err = proc.stderr.strip() or f"gh exited {proc.returncode}"
         raise GhError(err, 422 if "(HTTP 422)" in err else None)
@@ -221,13 +273,129 @@ def local_fallback_or_note(rec, reason, out):
     write_local(rec, out)
 
 
+def pacing_number(name, default):
+    name = f"PR_AUDIT_{name}"
+    kind = type(default)
+    try:
+        value = kind(os.environ.get(name, default))
+        if value >= 0 and (kind is int or math.isfinite(value)):
+            return value
+    except ValueError:
+        pass
+    unit = "integer" if kind is int else "finite number"
+    raise ValueError(f"{name} must be a non-negative {unit}")
+
+
+class WritePacer:
+    def __init__(self):
+        self.gap = pacing_number("WRITE_GAP", 1.0)
+        self.retries = pacing_number("RETRIES", 4)
+        self.base = pacing_number("BACKOFF_BASE", 60.0)
+        self.cap = pacing_number("BACKOFF_CAP", 600.0)
+        self.budget = pacing_number("RETRY_BUDGET", 900.0)
+        directory = os.environ.get("PR_AUDIT_STATE_DIR", "~/.cache/pr-audit")
+        if not directory:
+            raise ValueError("PR_AUDIT_STATE_DIR must be a non-empty path")
+        self.directory = Path(os.path.expanduser(directory))
+        self.last_write = self.blocked_until = 0.0
+        self.blocked = False
+
+    def _use_local_state(self, exc):
+        print(f"pr-audit: note: write pacing is not shared ({exc})", file=sys.stderr)
+        self.directory = None
+
+    def _read_state(self):
+        try:
+            state = json.loads((self.directory / "write-pace.json").read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError, RecursionError):
+            return
+        if isinstance(state, dict):
+            self.last_write = max(self.last_write, finite_number(state.get("last_write")) or 0.0)
+            self.blocked_until = max(self.blocked_until, finite_number(state.get("blocked_until")) or 0.0)
+
+    def _lock_state(self, files):
+        if self.directory is None:
+            return
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            lock = files.enter_context((self.directory / "write-pace.lock").open("a"))
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self._read_state()
+        except OSError as exc:
+            files.close()
+            self._use_local_state(exc)
+
+    def _save_state(self):
+        if self.directory is not None:
+            # The exclusive lock also protects the temporary file.
+            tmp = self.directory / "write-pace.tmp"
+            try:
+                tmp.write_text(json.dumps({"last_write": self.last_write,
+                                           "blocked_until": self.blocked_until}), encoding="utf-8")
+                os.replace(tmp, self.directory / "write-pace.json")
+            except OSError as exc:
+                self._use_local_state(exc)
+
+    @contextmanager
+    def _write_turn(self, last_error):
+        """Release the lock to sleep, then recheck the shared deadlines before yielding."""
+        while not self.blocked:
+            with ExitStack() as files:
+                self._lock_state(files)
+                now = time.time()
+                ready = max(self.last_write + self.gap, self.blocked_until)
+                if ready <= now:
+                    yield
+                    return
+                # A shared cooldown counts against this run's budget, even on
+                # its first attempt. Any additional gap time is free.
+                rate_wait = max(0.0, self.blocked_until - now)
+                if rate_wait > self.budget:
+                    self.blocked = True
+                    break
+                self.budget -= rate_wait
+            time.sleep(ready - now)
+
+        if last_error is not None:
+            raise last_error
+        raise GhError("not attempted: GitHub's secondary rate limit", rate_limited=True)
+
+    def write(self, args, payload=None):
+        backoff = min(self.base, self.cap)
+        last_error = None
+        for attempt in range(self.retries + 1):
+            with self._write_turn(last_error):
+                wait = None
+                try:
+                    return gh(["api", "-i", *args], payload)
+                except GhError as exc:
+                    if not exc.rate_limited:
+                        raise
+                    wait = min(exc.retry_after, self.cap) if exc.retry_after is not None else backoff
+                    if attempt == self.retries or wait > self.budget:
+                        self.blocked = True
+                        raise
+                    last_error = exc
+                    backoff = min(self.cap, 2 * backoff)
+                finally:
+                    self.last_write = time.time()
+                    if wait is not None:
+                        self.blocked_until = self.last_write + wait
+                    self._save_state()
+
+
 def cmd_post(args):
+    try:
+        pacer = WritePacer()
+    except ValueError as exc:
+        print(f"pr-audit: {exc}", file=sys.stderr)
+        return 2
     rec = load_record(args.record)
     ready, reason = gh_ready()
     if not ready:
         local_fallback_or_note(rec, reason, args.fallback_out)
         return 1
-    return post_round(rec, args)
+    return post_round(rec, args, pacer)
 
 
 THREADS_QUERY = """
@@ -258,9 +426,10 @@ def json_object(text):
 
 
 class GitHub:
-    def __init__(self, repo, pr):
+    def __init__(self, repo, pr, pacer):
         self.repo, self.pr = repo, pr
         self.base = f"repos/{repo}/pulls/{pr}"
+        self.pacer = pacer
 
     def login(self):
         return gh(["api", "user", "-q", ".login"]).strip()
@@ -280,20 +449,20 @@ class GitHub:
             payload["subject_type"] = "file"
         else:
             payload.update(line=line, side="RIGHT")
-        return json_object(gh(["api", "-X", "POST", f"{self.base}/comments", "--input", "-"],
-                              payload))
+        return json_object(self.pacer.write(["-X", "POST", f"{self.base}/comments", "--input", "-"],
+                                            payload))
 
     def reply(self, comment_id, body):
-        return json_object(gh(["api", "-X", "POST", f"{self.base}/comments/{comment_id}/replies",
-                               "--input", "-"], {"body": body}))
+        return json_object(self.pacer.write(["-X", "POST", f"{self.base}/comments/{comment_id}/replies",
+                                             "--input", "-"], {"body": body}))
 
     def review(self, sha, body):
-        return json_object(gh(["api", "-X", "POST", f"{self.base}/reviews", "--input", "-"],
-                              {"commit_id": sha, "body": body, "event": "COMMENT"}))
+        return json_object(self.pacer.write(["-X", "POST", f"{self.base}/reviews", "--input", "-"],
+                                            {"commit_id": sha, "body": body, "event": "COMMENT"}))
 
     def update_review(self, review_id, body):
-        return json_object(gh(["api", "-X", "PUT", f"{self.base}/reviews/{review_id}",
-                               "--input", "-"], {"body": body}))
+        return json_object(self.pacer.write(["-X", "PUT", f"{self.base}/reviews/{review_id}",
+                                             "--input", "-"], {"body": body}))
 
     def threads(self):
         """Map each thread's first comment id to (thread node id, isResolved)."""
@@ -314,7 +483,7 @@ class GitHub:
             after = conn["pageInfo"]["endCursor"]
 
     def resolve(self, thread_id):
-        gh(["api", "graphql", "-f", f"query={RESOLVE_MUTATION}", "-f", f"id={thread_id}"])
+        self.pacer.write(["graphql", "-f", f"query={RESOLVE_MUTATION}", "-f", f"id={thread_id}"])
 
 
 def open_thread(hub, rec, f, body):
@@ -358,11 +527,11 @@ def error_text(exc):
     return f"bad response from gh: {type(exc).__name__}: {exc}"
 
 
-def post_round(rec, args):
+def post_round(rec, args, pacer):
     try:
         repo = args.repo or gh(["repo", "view", "--json", "nameWithOwner",
                                 "-q", ".nameWithOwner"]).strip()
-        hub = GitHub(repo, args.pr)
+        hub = GitHub(repo, args.pr, pacer)
         me = hub.login()
         existing = hub.comments()
         reviews = hub.reviews()
@@ -400,7 +569,7 @@ def post_round(rec, args):
                 opener, note = open_thread(hub, rec, f, body)
                 n_posted += opener is not None
             except POST_ERRORS as exc:
-                failures.append((fid, "open thread", error_text(exc)))
+                failures.append((fid, "open thread", exc))
                 note = "posting failed"
         else:
             if is_new:
@@ -421,7 +590,7 @@ def post_round(rec, args):
                     hub.reply(opener["id"], body)
                     n_posted += 1
                 except POST_ERRORS as exc:
-                    failures.append((fid, f"reply {rec['round']}.{idx}", error_text(exc)))
+                    failures.append((fid, f"reply {rec['round']}.{idx}", exc))
             if ar.should_resolve(f, rec):
                 to_resolve.append((fid, opener))
         rows.append({"id": fid, "severity": f["severity"], "origin": f["origin"],
@@ -436,12 +605,12 @@ def post_round(rec, args):
             threads = hub.threads()
         except POST_ERRORS as exc:
             for fid, _ in to_resolve:
-                failures.append((fid, "resolve thread", error_text(exc)))
+                failures.append((fid, "resolve thread", exc))
         else:
             for fid, opener in to_resolve:
                 entry = threads.get(opener["id"])
                 if entry is None:
-                    failures.append((fid, "resolve thread", "thread not found"))
+                    failures.append((fid, "resolve thread", GhError("thread not found")))
                     continue
                 thread_id, done = entry
                 if done:
@@ -450,7 +619,7 @@ def post_round(rec, args):
                     hub.resolve(thread_id)
                     n_resolved += 1
                 except POST_ERRORS as exc:
-                    failures.append((fid, "resolve thread", error_text(exc)))
+                    failures.append((fid, "resolve thread", exc))
 
     details, red = ar.no_thread_details(rec, no_thread)
     redacted += red
@@ -474,13 +643,19 @@ def post_round(rec, args):
                 hub.update_review(old["id"], body)
                 n_updated += 1
         except POST_ERRORS as exc:
-            failures.append(("summary", f"part {i}", error_text(exc)))
+            failures.append(("summary", f"part {i}", exc))
 
     print(f"pr-audit: PR #{args.pr}: posted {n_posted}, updated {n_updated}, "
           f"skipped {n_skipped} already on the PR, "
           f"resolved {n_resolved}, failed {len(failures)}, redacted {total_redacted}")
-    for fid, what, err in failures:
-        print(f"pr-audit: FAILED {fid} {what}: {err}", file=sys.stderr)
+    rate_limited = 0
+    for fid, what, exc in failures:
+        print(f"pr-audit: FAILED {fid} {what}: {error_text(exc)}", file=sys.stderr)
+        if isinstance(exc, GhError) and exc.rate_limited:
+            rate_limited += 1
+    if rate_limited:
+        print(f"pr-audit: {rate_limited} of {len(failures)} failed posts hit GitHub's rate limit; "
+              "rerun the same command later and it posts only what is missing", file=sys.stderr)
     return 1 if failures else 0
 
 

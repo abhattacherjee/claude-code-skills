@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -59,8 +60,12 @@ class Harness:
         self.state_path = self.dir / "state.json"
         self.log_path = self.dir / "log.jsonl"
         self.state_path.write_text(json.dumps(state))
+        # TMPDIR can be inside the checkout. Only discover Git repos created by the tests.
         self.env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+                    "GIT_CEILING_DIRECTORIES": str(self.dir.parent),
                     "GH_STUB_STATE": str(self.state_path), "GH_STUB_LOG": str(self.log_path),
+                    "PR_AUDIT_WRITE_GAP": "0", "PR_AUDIT_BACKOFF_BASE": "0.05",
+                    "PR_AUDIT_STATE_DIR": str(self.dir / "pace"),
                     "PYTHONDONTWRITEBYTECODE": "1"}
         self.fallback = self.dir / "fallback.md"
 
@@ -96,8 +101,12 @@ class Harness:
         return out
 
     def resolves(self):
-        return [c for c in self.calls() if c["argv"][:2] == ["api", "graphql"]
+        return [c for c in self.calls() if "graphql" in c["argv"]
                 and any("resolveReviewThread" in a for a in c["argv"])]
+
+    def writes(self):
+        return [c for c in self.calls() if "-X" in c["argv"]
+                or any("resolveReviewThread" in a for a in c["argv"])]
 
     def state(self):
         return json.loads(self.state_path.read_text())
@@ -510,6 +519,190 @@ class PostTests(unittest.TestCase):
         opener_ids = [c["id"] for c in h.state()["comments"] if c["in_reply_to_id"] is None]
         self.assertEqual(sorted(h.state()["resolved"]), sorted(opener_ids))
         self.assertIn("resolved 3,", res.stdout)
+
+
+class RateLimitTests(unittest.TestCase):
+    def limit(self, form="secondary", kind="comment", times=1, retry_after=None):
+        return {"kind": kind, "times": times, "form": form, "retry_after": retry_after}
+
+    def assert_spaced(self, calls, gap):
+        times = sorted(c["t"] for c in calls)
+        self.assertGreaterEqual(len(times), 2)
+        for first, second in zip(times, times[1:]):
+            self.assertGreaterEqual(second - first, gap - 0.02, times)
+
+    def test_writes_are_spaced_and_reads_are_unpaced(self):
+        h = Harness(self, reviews=[{"id": 7, "body": ar.summary_marker("ar-test-1", 1, 1)}])
+        h.env.update(PR_AUDIT_WRITE_GAP="0.3", PR_AUDIT_RETRY_BUDGET="0")
+        rec = record([finding(status="rejected", events=[ev("verdict", verdict="refute")])])
+        res = h.run("post", "--pr", "7", "--record", h.write(rec))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        writes = h.writes()
+        self.assertEqual(len(writes), 4)  # opener, reply, resolve, summary update
+        self.assert_spaced(writes, 0.3)
+        self.assertTrue(all(c["argv"][:2] == ["api", "-i"] for c in writes))
+        reads = [c for c in h.calls() if c not in writes]
+        self.assertTrue(all("-i" not in c["argv"] for c in reads))
+        # Consecutive preflight reads and the thread lookup following a reply
+        # can both run immediately, even with no rate-limit budget.
+        self.assertLess(min(b["t"] - a["t"] for a, b in zip(reads, reads[1:])), 0.28)
+        self.assertLess(reads[-1]["t"] - writes[1]["t"], 0.28)
+
+    def test_concurrent_posts_share_the_gap(self):
+        first, second = Harness(self), Harness(self)
+        processes = []
+        for h in (first, second):
+            h.env.update(PR_AUDIT_STATE_DIR=first.env["PR_AUDIT_STATE_DIR"], PR_AUDIT_WRITE_GAP="0.3")
+            proc = subprocess.Popen([sys.executable, str(PR_AUDIT), "post", "--pr", "7",
+                                     "--repo", "octo/demo", "--record", h.write(record([finding()]))],
+                                    env=h.env, cwd=h.dir, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+            self.addCleanup(proc.wait)
+            self.addCleanup(proc.kill)
+            processes.append(proc)
+        for proc in processes:
+            _, err = proc.communicate(timeout=15)
+            self.assertEqual(proc.returncode, 0, err)
+        self.assertEqual([len(first.writes()), len(second.writes())], [2, 2])
+        self.assert_spaced(first.writes() + second.writes(), 0.3)
+
+    def test_secondary_honors_retry_after(self):
+        h = Harness(self, rate_limit=[self.limit(retry_after=1)])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        first, retry = h.posted("thread")
+        self.assertGreaterEqual(retry["t"] - first["t"], 1)
+        self.assertEqual(len(h.state()["comments"]), 1)
+
+    def test_each_rate_limit_form_is_retried(self):
+        for form, kind in (("secondary", "reply"), ("too_quickly", "review"),
+                           ("too_quickly_422", "resolve"), ("primary", "review_update")):
+            with self.subTest(form=form, kind=kind):
+                h = Harness(self, rate_limit=[self.limit(form, kind)])
+                if kind == "review_update":
+                    h.set_state(reviews=[{"id": 8, "body": ar.summary_marker("ar-test-1", 1, 1)}])
+                res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+                self.assertEqual(res.returncode, 0, res.stderr)
+                if kind == "resolve":
+                    attempts = h.resolves()
+                elif kind == "review_update":
+                    attempts = [c for c in h.writes() if "PUT" in c["argv"]]
+                else:
+                    attempts = h.posted(kind)
+                first, retry = attempts
+                self.assertEqual(retry["input"], first["input"])
+                self.assertGreaterEqual(retry["t"] - first["t"], 1 if form == "primary" else 0.05)
+                self.assertEqual(len(h.state()["reviews"]), 1)
+                self.assertEqual(len(h.state()["resolved"]), 1)
+
+    def test_too_quickly_422_retries_inline(self):
+        h = Harness(self, rate_limit=[self.limit("too_quickly_422")])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        attempts = h.posted("thread")
+        self.assertEqual([c["input"].get("line") for c in attempts], [41, 41])
+        self.assertTrue(all(c["input"].get("subject_type") != "file" for c in attempts))
+        self.assertEqual([c["subject_type"] for c in h.state()["comments"]], ["line"])
+
+    def test_exhausted_retries_block_later_writes(self):
+        h = Harness(self, rate_limit=[self.limit(times=10)])
+        h.env["PR_AUDIT_RETRIES"] = "1"
+        res = h.post(record([finding(), finding("X-002")]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(len(h.writes()), 2)
+        self.assertEqual(h.writes(), h.posted("thread"))
+        self.assertEqual(h.state()["comments"], [])
+        self.assertIn("posted 0,", res.stdout)
+        self.assertIn("failed 3,", res.stdout)
+        self.assertIn("FAILED X-001 open thread: gh: You have exceeded", res.stderr)
+        self.assertIn("FAILED X-002 open thread: not attempted: GitHub's secondary rate limit", res.stderr)
+        self.assertIn("FAILED summary part 1: not attempted: GitHub's secondary rate limit", res.stderr)
+        self.assertIn("pr-audit: 3 of 3 failed posts hit GitHub's rate limit; "
+                      "rerun the same command later and it posts only what is missing", res.stderr.splitlines())
+
+    def test_wait_over_budget_fails_without_sleeping(self):
+        h = Harness(self, rate_limit=[self.limit(retry_after=5)])
+        h.env["PR_AUDIT_RETRY_BUDGET"] = "0.1"
+        start = time.monotonic()
+        res = h.post(record([finding()]))
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("hit GitHub's rate limit", res.stderr)
+        self.assertEqual(len(h.writes()), 1)
+        pace = json.loads((h.dir / "pace" / "write-pace.json").read_text())
+        self.assertGreaterEqual(pace["blocked_until"], h.writes()[0]["t"] + 5)
+
+    def test_retry_budget_is_shared_across_writes(self):
+        h = Harness(self, fail=["reply"], rate_limit=[self.limit(retry_after=0.4),
+                                                      self.limit(kind="review", retry_after=0.4)])
+        h.env["PR_AUDIT_RETRY_BUDGET"] = "0.6"
+        res = h.post(record([finding(events=[ev("verdict", verdict="confirm")])]))
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("FAILED summary part 1: gh:", res.stderr)
+        self.assertIn("1 of 2 failed posts hit GitHub's rate limit", res.stderr)
+        self.assertEqual(len(h.posted("thread")), 2)
+        self.assertEqual(len(h.posted("reply")), 1)
+        self.assertEqual(len(h.posted("review")), 1)
+
+    def test_exponential_backoff_and_retry_after_are_capped(self):
+        h = Harness(self, rate_limit=[self.limit(times=3), self.limit(retry_after=60)])
+        h.env.update(PR_AUDIT_BACKOFF_BASE="0.15", PR_AUDIT_BACKOFF_CAP="0.25", PR_AUDIT_RETRY_BUDGET="1")
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        attempts = h.posted("thread")
+        self.assertEqual(len(attempts), 5)
+        for first, retry, wait in zip(attempts, attempts[1:], (0.15, 0.25, 0.25, 0.25)):
+            self.assertGreaterEqual(retry["t"] - first["t"], wait)
+
+    def test_shared_blocked_until_delays_first_write(self):
+        h = Harness(self)
+        pace = Path(h.env["PR_AUDIT_STATE_DIR"])
+        pace.mkdir()
+        start = time.time()
+        (pace / "write-pace.json").write_text(json.dumps({"last_write": 0, "blocked_until": start + 0.6}))
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertGreaterEqual(h.writes()[0]["t"] - start, 0.5)
+
+    def test_corrupt_state_is_replaced_and_writes_are_paced(self):
+        h = Harness(self)
+        h.env["PR_AUDIT_WRITE_GAP"] = "0.3"
+        pace = Path(h.env["PR_AUDIT_STATE_DIR"])
+        pace.mkdir()
+        state = pace / "write-pace.json"
+        state.write_bytes(b"{not json")
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assert_spaced(h.writes(), 0.3)
+        self.assertGreaterEqual(json.loads(state.read_text())["last_write"], h.writes()[-1]["t"])
+
+    def test_regular_file_as_state_dir_falls_back_to_local_pacing(self):
+        h = Harness(self, rate_limit=[self.limit(retry_after=0.4)])
+        h.env["PR_AUDIT_WRITE_GAP"] = "0.2"
+        Path(h.env["PR_AUDIT_STATE_DIR"]).touch()
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stderr.count("pr-audit: note: write pacing is not shared"), 1)
+        self.assert_spaced(h.writes(), 0.2)
+        self.assert_spaced(h.posted("thread"), 0.4)
+
+    def test_bad_env_values_make_no_gh_calls(self):
+        for name, value in (("PR_AUDIT_WRITE_GAP", "abc"), ("PR_AUDIT_RETRIES", "-1")):
+            with self.subTest(name=name):
+                h = Harness(self)
+                h.env[name] = value
+                res = h.post(record([finding()]))
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn(f"pr-audit: {name} must be ", res.stderr)
+                self.assertEqual(h.calls(), [])
+
+    def test_http_date_retry_after_uses_backoff(self):
+        h = Harness(self, rate_limit=[self.limit(retry_after="Fri, 01 Jan 2100 00:00:00 GMT")])
+        h.env.update(PR_AUDIT_BACKOFF_BASE="0.3", PR_AUDIT_RETRY_BUDGET="1")
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        first, retry = h.posted("thread")
+        self.assertGreaterEqual(retry["t"] - first["t"], 0.3)
 
 
 class ForgeryTests(unittest.TestCase):
