@@ -6,7 +6,7 @@ on:
 
 jobs:
   validate-skills:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,7 +83,7 @@ jobs:
         run: echo "No skill directories were modified — skipping validation"
 
   validate-plugins:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -153,7 +153,7 @@ jobs:
         run: echo "No plugin directories were modified — skipping validation"
 
   discovery-guards:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -166,7 +166,7 @@ jobs:
         run: ./scripts/test-discovery-guards.sh
 
   validate-plugin-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -187,7 +187,7 @@ jobs:
         run: bash scripts/test-check-needs-results.sh
 
   docs-drift:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -218,7 +218,7 @@ jobs:
         run: bash scripts/test-check-docs.sh
 
   sync-hygiene:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -234,7 +234,7 @@ jobs:
         run: ./scripts/test-sync-hygiene.sh
 
   bump-version-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -243,7 +243,7 @@ jobs:
         run: ./scripts/test-bump-version.sh
 
   review-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -266,7 +266,7 @@ jobs:
         run: bash plugins/review/skills/adversarial/scripts/run-tests.sh
 
   github-board-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -303,7 +303,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -343,7 +343,7 @@ jobs:
           fi
 
   skill-commands:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -371,7 +371,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bash_major: "5"
           - os: macos-latest
             bash_major: "3"
@@ -404,7 +404,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bash_major: "5"
           - os: macos-latest
             bash_major: "3"
@@ -437,7 +437,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bash_major: "5"
           - os: macos-latest
             bash_major: "3"
@@ -470,7 +470,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bash_major: "5"
           - os: macos-latest
             bash_major: "3"
@@ -503,7 +503,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bash_major: "5"
           - os: macos-latest
             bash_major: "3"
@@ -536,7 +536,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             bash_major: "5"
           - os: macos-latest
             bash_major: "3"
@@ -571,7 +571,7 @@ jobs:
   required-checks:
     needs: [validate-skills, validate-plugins, discovery-guards, validate-plugin-tests, docs-drift, sync-hygiene, bump-version-tests, review-tests, github-board-tests, statusline-tests, skill-commands, spec-tests, skill-kit-tests, context-tests, dev-flow-tests, ui-design-tests, demo-video-tests]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

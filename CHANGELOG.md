@@ -14,6 +14,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 ### Fixed
 
 - **`review`: `pr-audit.py post` paces writes and retries on GitHub's secondary rate limit (#292).** `post` now posts more slowly: a 1 s gap is shared by every run on the machine, it waits and retries on the limit, and it stops cleanly so a rerun posts what is missing. See `plugins/review/CHANGELOG.md`.
+- **CI: jobs run on `ubuntu-24.04`, not `ubuntu-latest`.** `ubuntu-latest` moved to Ubuntu 26.04, which `actions/setup-python` has no Python 3.9 for, so every Python job failed at setup (found on PR #331).
 
 ## [4.3.0] - 2026-11-08
 
