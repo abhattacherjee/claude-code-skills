@@ -545,8 +545,11 @@ class RateLimitTests(unittest.TestCase):
     def test_reads_before_the_first_write_are_not_paced(self):
         h = Harness(self)
         h.env["PR_AUDIT_WRITE_GAP"] = "1.5"
+        started = time.time()
         res = h.post(record([finding()]))
         self.assertEqual(res.returncode, 0, res.stderr)
+        # No hidden delay before the first read: only interpreter start-up separates them.
+        self.assertLess(h.calls()[0]["t"] - started, 1.0)
         writes = h.writes()
         self.assertEqual(len(writes), 2)  # opener, summary
         reads = [c for c in h.calls() if c["t"] < writes[0]["t"]]
@@ -555,6 +558,61 @@ class RateLimitTests(unittest.TestCase):
         # Pacing any one read would put a 1.5 s gap here; 1.0 s leaves 0.5 s for load.
         for first, second in zip(reads, reads[1:]):
             self.assertLess(second["t"] - first["t"], 1.0, reads)
+
+    def test_thread_lookup_is_not_paced(self):
+        h = Harness(self)
+        h.env["PR_AUDIT_WRITE_GAP"] = "1.5"
+        res = h.post(record([finding(status="rejected", events=[ev("verdict", verdict="refute")])]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        reply = h.posted("reply")[0]
+        lookups = [c for c in h.calls() if "graphql" in c["argv"]
+                   and not any("resolveReviewThread" in a for a in c["argv"])]
+        self.assertEqual(len(lookups), 1)
+        self.assertGreaterEqual(lookups[0]["t"], reply["t"])
+        # Pacing the lookup would put a 1.5 s gap after the reply.
+        self.assertLess(lookups[0]["t"] - reply["t"], 1.0)
+        self.assertEqual(len(h.resolves()), 1)
+
+    def test_plain_422_with_spent_quota_keeps_its_file_level_fallback(self):
+        h = Harness(self, rate_limit=[self.limit("validation_422_exhausted")])
+        res = h.post(record([finding()]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        attempts = h.posted("thread")
+        self.assertEqual([c["input"].get("subject_type") for c in attempts], [None, "file"])
+        self.assertEqual([c["subject_type"] for c in h.state()["comments"]], ["file"])
+        self.assertNotIn("rate limit", res.stderr)
+        pace = json.loads((h.dir / "pace" / "write-pace.json").read_text())
+        self.assertEqual(pace["blocked_until"], 0)
+
+    def test_run_limit_stops_writes_before_the_tool_cap(self):
+        h = Harness(self)
+        h.env.update(PR_AUDIT_RUN_LIMIT="0.5", PR_AUDIT_WRITE_GAP="0.4")
+        start = time.monotonic()
+        res = h.post(record([finding(), finding("X-002"), finding("X-003")]))
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertLess(len(h.writes()), 4)  # three openers and a summary are needed
+        self.assertIn("not attempted: run time limit reached", res.stderr)
+        self.assertIn("were not attempted because the run reached PR_AUDIT_RUN_LIMIT; rerun the same "
+                      "command", res.stderr)
+        self.assertNotIn("hit GitHub's rate limit", res.stderr)
+
+    def test_run_limit_zero_means_no_limit(self):
+        h = Harness(self)
+        h.env.update(PR_AUDIT_RUN_LIMIT="0", PR_AUDIT_WRITE_GAP="0.2")
+        res = h.post(record([finding(), finding("X-002")]))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(h.writes()), 3)
+
+    def test_bad_run_limit_makes_no_gh_calls(self):
+        for value in ("abc", "-1", "nan"):
+            with self.subTest(value=value):
+                h = Harness(self)
+                h.env["PR_AUDIT_RUN_LIMIT"] = value
+                res = h.post(record([finding()]))
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("pr-audit: PR_AUDIT_RUN_LIMIT must be ", res.stderr)
+                self.assertEqual(h.calls(), [])
 
     def test_concurrent_posts_share_the_gap(self):
         first, second = Harness(self), Harness(self)
@@ -580,6 +638,7 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         first, retry = h.posted("thread")
         self.assertGreaterEqual(retry["t"] - first["t"], 1)
+        self.assertLess(retry["t"] - first["t"], 1.9)  # a doubled header would wait 2.0 s
         self.assertEqual(len(h.state()["comments"]), 1)
 
     def test_each_rate_limit_form_is_retried(self):

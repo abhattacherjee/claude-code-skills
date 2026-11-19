@@ -25,9 +25,10 @@ gap). Processes share pacing and rate-limit deadlines through PR_AUDIT_STATE_DIR
 retries (4), using GitHub's wait time or exponential back-off starting at
 PR_AUDIT_BACKOFF_BASE seconds (60). PR_AUDIT_BACKOFF_CAP (600 seconds) caps
 each computed back-off; a wait GitHub names (Retry-After or x-ratelimit-reset)
-is used in full. PR_AUDIT_RETRY_BUDGET (300 seconds, so a run fits the Bash
-tool's 600 s cap) limits their sum per run. After either retry limit is
-reached, rerun later to post missing items.
+is used in full. PR_AUDIT_RETRY_BUDGET (300 seconds) limits their sum per run.
+PR_AUDIT_RUN_LIMIT (540 seconds, 0 for no limit) stops a run from starting or
+waiting for a write that would pass it, so `post` reports before the Bash tool's
+600 s cap. After any of these limits is reached, rerun later to post missing items.
 
 `recheck` builds the record for an adversary re-check round: each earlier
 finding the adversary re-checked gets one recheck event by the adversary, and
@@ -98,6 +99,18 @@ def finite_number(value):
     return number if math.isfinite(number) else None
 
 
+RUN_LIMIT_MESSAGE = "not attempted: run time limit reached"
+
+
+def graphql_limited(body):
+    """True when a GraphQL body carries an error of type RATE_LIMITED."""
+    try:
+        errors = json.loads(body).get("errors")
+    except (ValueError, AttributeError, RecursionError):
+        return False
+    return "rate_limited" in json.dumps(errors).lower()
+
+
 def write_response(proc):
     parts = re.split(r"\r?\n\r?\n", proc.stdout, maxsplit=1)
     body = parts[-1]
@@ -117,12 +130,12 @@ def write_response(proc):
     exhausted = headers.get("x-ratelimit-remaining") == "0"
     message = proc.stderr.strip() or f"gh exited {proc.returncode}"
     detail = (message + "\n" + body).lower()
-    # GraphQL reports a rate limit as HTTP 200 with an error body, so a failed write
-    # whose primary quota is spent counts as rate limited whatever the status.
+    # GraphQL reports a rate limit as HTTP 200 with an error body. A spent primary quota
+    # counts only on 403 or 200: a 422 with remaining 0 is still a validation failure.
     limit_message = any(phrase in detail for phrase in
                         ("secondary rate limit", "submitted too quickly", "abuse detection",
                          "api rate limit exceeded"))
-    if limit_message or code == 429 or exhausted:
+    if limit_message or code == 429 or (exhausted and code in (403, 200)) or graphql_limited(body):
         wait = finite_number(headers.get("retry-after"))
         if wait is None or wait < 0:
             reset = finite_number(headers.get("x-ratelimit-reset")) if exhausted else None
@@ -298,12 +311,15 @@ class WritePacer:
         self.base = pacing_number("BACKOFF_BASE", 60.0)
         self.cap = pacing_number("BACKOFF_CAP", 600.0)
         self.budget = pacing_number("RETRY_BUDGET", 300.0)
+        self.run_limit = pacing_number("RUN_LIMIT", 540.0)
+        self.started = time.monotonic()
         directory = os.environ.get("PR_AUDIT_STATE_DIR", "~/.cache/pr-audit")
         if not directory:
             raise ValueError("PR_AUDIT_STATE_DIR must be a non-empty path")
         self.directory = Path(os.path.expanduser(directory))
         self.last_write = self.blocked_until = 0.0
         self.blocked = False
+        self.out_of_time = False
 
     def _use_local_state(self, exc):
         print(f"pr-audit: note: write pacing is not shared ({exc})", file=sys.stderr)
@@ -349,7 +365,11 @@ class WritePacer:
                 self._lock_state(files)
                 now = time.time()
                 ready = max(self.last_write + self.gap, self.blocked_until)
-                if ready <= now:
+                wait = max(0.0, ready - now)
+                if self.run_limit and time.monotonic() - self.started + wait > self.run_limit:
+                    self.blocked = self.out_of_time = True
+                    break
+                if wait == 0.0:
                     yield
                     return
                 # A shared cooldown counts against this run's budget, even on
@@ -361,6 +381,8 @@ class WritePacer:
                 self.budget -= rate_wait
             time.sleep(ready - now)
 
+        if self.out_of_time:
+            raise GhError(RUN_LIMIT_MESSAGE, rate_limited=True)
         if last_error is not None:
             raise last_error
         raise GhError("not attempted: GitHub's secondary rate limit", rate_limited=True)
@@ -653,14 +675,21 @@ def post_round(rec, args, pacer):
     print(f"pr-audit: PR #{args.pr}: posted {n_posted}, updated {n_updated}, "
           f"skipped {n_skipped} already on the PR, "
           f"resolved {n_resolved}, failed {len(failures)}, redacted {total_redacted}")
-    rate_limited = 0
+    rate_limited = out_of_time = 0
     for fid, what, exc in failures:
         print(f"pr-audit: FAILED {fid} {what}: {error_text(exc)}", file=sys.stderr)
         if isinstance(exc, GhError) and exc.rate_limited:
-            rate_limited += 1
+            if str(exc) == RUN_LIMIT_MESSAGE:
+                out_of_time += 1
+            else:
+                rate_limited += 1
     if rate_limited:
         print(f"pr-audit: {rate_limited} of {len(failures)} failed posts hit GitHub's rate limit; "
               "rerun the same command later and it posts only what is missing", file=sys.stderr)
+    if out_of_time:
+        print(f"pr-audit: {out_of_time} of {len(failures)} failed posts were not attempted because "
+              "the run reached PR_AUDIT_RUN_LIMIT; rerun the same command and it posts only what is "
+              "missing", file=sys.stderr)
     return 1 if failures else 0
 
 

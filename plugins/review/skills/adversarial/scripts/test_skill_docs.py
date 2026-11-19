@@ -1,6 +1,7 @@
 """Doc-contract tests for the review plugin: the skill steps run scripts that exist, and wire in
 the adversary. They read only plugins/review/ (the `adversarial` and `deep` skills, the agents and
 the README); the old adversarial-review plugin (removed in v4.0.0) had its own copy."""
+import importlib.util
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1475,19 +1477,43 @@ class PacingDocTests(unittest.TestCase):
         found.update(re.findall(r'os\.environ\.get\("(PR_AUDIT_[A-Z0-9_]+)", "([^"]*)"\)', self.script))
         return found
 
+    @staticmethod
+    def script_settings(source):
+        """Every PR_AUDIT_* name the source mentions, plus each pacing_number name."""
+        found = set(re.findall(r"PR_AUDIT_[A-Z0-9_]+", source))
+        found |= {f"PR_AUDIT_{n}" for n in re.findall(r"""pacing_number\(\s*["']([A-Z0-9_]+)["']""", source)}
+        return found
+
     def test_pacing_settings_table_matches_the_script(self):
-        read = set(re.findall(r'pacing_number\("([A-Z0-9_]+)"', self.script))
-        read = {f"PR_AUDIT_{name}" for name in read}
-        read |= set(re.findall(r'os\.environ\.get\("(PR_AUDIT_[A-Z0-9_]+)"', self.script))
-        doc = (DEEP / "references" / "audit-trail.md").read_text()
-        block = doc.split("| Variable | Default | Meaning |", 1)[1].split("\n\n", 1)[0]
-        documented = set(re.findall(r"^\| `(PR_AUDIT_[A-Z0-9_]+)` \|", block, re.M))
-        self.assertEqual(len(read), 6, read)
-        self.assertEqual(documented, read)
+        read = self.script_settings(self.script)
+        self.assertEqual(len(read), 7, read)
+        self.assertEqual(set(self.rows), read)
+
+    def test_a_setting_the_script_reads_but_the_table_lacks_is_seen(self):
+        mutated = self.script + "\nos.getenv('PR_AUDIT_EXTRA')\n"
+        read = self.script_settings(mutated)
+        self.assertIn("PR_AUDIT_EXTRA", read)
+        self.assertNotEqual(set(self.rows), read)
+
+    def test_effective_defaults_match_the_table(self):
+        spec = importlib.util.spec_from_file_location("pr_audit_defaults", HERE / "pr-audit.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PR_AUDIT_")}
+        with mock.patch.dict(os.environ, env, clear=True):
+            pacer = mod.WritePacer()
+        effective = {"PR_AUDIT_WRITE_GAP": pacer.gap, "PR_AUDIT_RETRIES": pacer.retries,
+                     "PR_AUDIT_BACKOFF_BASE": pacer.base, "PR_AUDIT_BACKOFF_CAP": pacer.cap,
+                     "PR_AUDIT_RETRY_BUDGET": pacer.budget, "PR_AUDIT_RUN_LIMIT": pacer.run_limit}
+        self.assertEqual(set(effective) | {"PR_AUDIT_STATE_DIR"}, set(self.rows))
+        for name, value in effective.items():
+            with self.subTest(name=name):
+                self.assertEqual(float(self.rows[name]), float(value))
+        self.assertEqual(pacer.directory, Path(os.path.expanduser(self.rows["PR_AUDIT_STATE_DIR"])))
 
     def test_table_defaults_match_the_code(self):
         defaults = self.code_defaults()
-        self.assertEqual(len(defaults), 6, defaults)
+        self.assertEqual(len(defaults), 7, defaults)
         self.assertEqual(set(self.rows), set(defaults))
         for name, code_default in defaults.items():
             with self.subTest(name=name):

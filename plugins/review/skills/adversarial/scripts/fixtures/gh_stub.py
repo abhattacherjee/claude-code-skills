@@ -21,7 +21,8 @@ State keys that change behaviour:
   rate_limit        list of {kind, times, form, retry_after} objects. The next
                     'times' calls of kind comment, reply, review, review_update
                     or resolve fail with the given form (secondary, too_quickly,
-                    too_quickly_422, primary, graphql_primary, abuse, 429 or
+                    too_quickly_422, validation_422_exhausted, primary, graphql_primary,
+                    abuse, 429 or
                     plain_403). plain_403 is a permission error, not a rate limit.
                     A non-null retry_after supplies the Retry-After header. A
                     primary limit resets in one second.
@@ -119,6 +120,12 @@ def rate_limit(state, kind):
             message = "Too Many Requests"
         elif form == "abuse":
             message = "You have triggered an abuse detection mechanism."
+        elif form == "validation_422_exhausted":
+            # A plain validation failure on a spent primary quota is not a rate limit.
+            code = 422
+            message = "Validation Failed"
+            body["errors"] = ["pull_request_review_thread.line must be part of the diff"]
+            headers.update({"x-ratelimit-remaining": 0, "x-ratelimit-reset": time.time() + 60})
         elif form == "too_quickly_422":
             code = 422
             message = "Validation Failed"

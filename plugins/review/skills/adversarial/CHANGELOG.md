@@ -6,7 +6,7 @@ All notable changes to the **adversarial** skill (was `adversarial-review`) are 
 
 ### Fixed
 
-- `pr-audit.py post` now posts more slowly instead of in one burst. It waits at least 1 s between writes, and the gap holds across every `pr-audit.py` on the machine. On a rate-limit response it waits (`Retry-After`, else a back-off from 60 s) and retries; once a run has waited 5 minutes it stops cleanly and says to rerun later, and a rerun posts what is missing. Settings: `PR_AUDIT_WRITE_GAP`, `PR_AUDIT_RETRIES`, `PR_AUDIT_BACKOFF_BASE`, `PR_AUDIT_BACKOFF_CAP`, `PR_AUDIT_RETRY_BUDGET`, `PR_AUDIT_STATE_DIR` (#292).
+- `pr-audit.py post` now posts more slowly instead of in one burst. It waits at least 1 s between writes, and the gap holds across every `pr-audit.py` on the machine. On a rate-limit response it waits (`Retry-After`, else a back-off from 60 s) and retries; once a run has waited 5 minutes, or has run for 540 s, it stops cleanly and says to rerun later, and a rerun posts what is missing. Settings: `PR_AUDIT_WRITE_GAP`, `PR_AUDIT_RETRIES`, `PR_AUDIT_BACKOFF_BASE`, `PR_AUDIT_BACKOFF_CAP`, `PR_AUDIT_RETRY_BUDGET`, `PR_AUDIT_RUN_LIMIT`, `PR_AUDIT_STATE_DIR` (#292).
 
 ## [1.4.1] - 2026-10-27
 
