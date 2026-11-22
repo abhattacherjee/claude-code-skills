@@ -119,7 +119,7 @@ _preflight_write_token() {
     local _rc=0
     python3 -E - "$TOKEN_FILE" "$1" "$TOKEN_EXPIRY_SECONDS" "$2" "$3" "$4" \
         "$TOKEN_HEAD" "$TOKEN_TREE" "$TOKEN_WORKTREE" <<'PY' || _rc=$?
-import fcntl, json, os, stat, sys, tempfile, time
+import json, os, sys, tempfile
 path, created, ttl, staged, checks, reason, head, tree, worktree = sys.argv[1:10]
 token = {"created": int(created), "expires": int(created) + int(ttl),
          "staged_files": int(staged), "checks_run": checks}
@@ -128,27 +128,10 @@ if reason:
 token.update(head=head, tree=tree, worktree=os.path.realpath(worktree))
 fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".",
                            dir=os.path.dirname(path))
-lock_fd = None
 try:
     with os.fdopen(fd, "w") as handle:
         json.dump(token, handle, indent=4)
         handle.write("\n")
-    # Take the same lock as require-preflight.py (_lock_token): same path,
-    # same flags, same 2.0 s wait. A hook call that holds it is reading or
-    # spending the token, so the new token is published only after it lets go.
-    lock_fd = os.open(path + ".lock",
-                      os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
-    if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
-        raise OSError("the lock file is not a regular file")
-    give_up = time.monotonic() + 2.0
-    while True:
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except BlockingIOError:
-            if time.monotonic() >= give_up:
-                sys.exit(3)  # the except below removes tmp
-            time.sleep(0.05)
     os.replace(tmp, path)
 except BaseException:
     try:
@@ -156,16 +139,8 @@ except BaseException:
     except OSError:
         pass
     raise
-finally:
-    if lock_fd is not None:
-        os.close(lock_fd)
 PY
-    if [ "$_rc" -eq 3 ]; then
-        # Linked worktrees share one token path: another call may have just
-        # published it, so it is left in place.
-        echo "❌ PREFLIGHT FAILED — the preflight token is locked by a commit in progress; no token written. Retry in a few seconds."
-        exit 1
-    elif [ "$_rc" -ne 0 ]; then
+    if [ "$_rc" -ne 0 ]; then
         echo "❌ PREFLIGHT FAILED — could not write the token."
         rm -f "$TOKEN_FILE"
         exit 1

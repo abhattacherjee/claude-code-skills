@@ -159,26 +159,8 @@ PY
   else bad "7 full path: token fields wrong" "$(cat "$TOKEN")"; fi
 else bad "7 full path: rc=$RC, token present: $([[ -f "$TOKEN" ]] && echo yes || echo no)" "$OUT"; fi
 
-# 8. Token lock held by another process: exit 1, and the existing token stays.
-CASES=$((CASES + 1)); setup; stage_doc zz-test.md
-now="$(date +%s)"
-printf '{"created":%s,"expires":%s,"staged_files":1,"checks_run":"lint"}\n' "$now" "$((now + 300))" > "$TOKEN"
-python3 -c "
-import fcntl, os, sys, time
-fd = os.open(sys.argv[1] + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
-fcntl.flock(fd, fcntl.LOCK_EX)
-print('held', flush=True)
-time.sleep(5)" "$TOKEN" > "$TMP/holder.out" &
-holder=$!
-for _ in $(seq 1 50); do grep -q held "$TMP/holder.out" 2>/dev/null && break; sleep 0.1; done
-preflight
-wait "$holder" || true
-if grep -q held "$TMP/holder.out" && [[ "$RC" == 1 && "$OUT" == *"locked by a commit in progress"* && -f "$TOKEN" ]]; then
-  ok "8 lock timeout: exit 1, message printed, existing token kept"
-else bad "8 lock timeout: rc=$RC, token present: $([[ -f "$TOKEN" ]] && echo yes || echo no)" "$OUT"; fi
-
 # Positive control: every case ran.
-if [[ "$CASES" == 8 ]]; then ok "positive control: 8 cases ran"; else bad "positive control: $CASES cases ran, want 8"; fi
+if [[ "$CASES" == 7 ]]; then ok "positive control: 7 cases ran"; else bad "positive control: $CASES cases ran, want 7"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" == 0 ]] || exit 1
