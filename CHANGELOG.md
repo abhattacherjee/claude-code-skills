@@ -15,6 +15,7 @@ Format: Monorepo-level events only. For per-skill change details, see `plugins/<
 
 - **`review`: `pr-audit.py post` paces writes and retries on GitHub's secondary rate limit (#292).** `post` now posts more slowly: a 1 s gap is shared by every run on the machine, it waits and retries on the limit, and it stops cleanly so a rerun posts what is missing. See `plugins/review/CHANGELOG.md`.
 - **CI: jobs run on `ubuntu-24.04`, not `ubuntu-latest`.** `ubuntu-latest` moved to Ubuntu 26.04, which `actions/setup-python` has no Python 3.9 for, so every Python job failed at setup (found on PR #331).
+- **Repo hooks: refreshed to harden-repo 1.3.2, so a worktree `/ship` can push and open PRs (#335).** The four hooks in `.claude/hooks/` (`prevent-direct-push.py`, `require-preflight.py`, `update-changelog-before-pr.py`, `validate-branch-name.py`) now read the tool payload's `cwd`. Before, they judged a worktree push or PR against the main checkout. `scripts/commit-preflight.sh` now writes `head`, `tree` and `worktree` into its token, which the new `require-preflight.py` requires. A branch whose `commit-preflight.sh` predates this change must merge `develop` before it can commit.
 
 ## [4.3.0] - 2026-11-08
 
