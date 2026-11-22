@@ -65,7 +65,8 @@ echo ""
 # is read here, before any check runs, and again just before the token is
 # written, so a check that stages a file cannot leave a token naming a tree
 # nobody checked. HEAD is empty on an unborn branch. The tree is read before
-# the staged file list, so the list and the token describe the same tree.
+# the staged file list, and the list is built from the captured tree, so the
+# list and the token describe the same tree.
 TOKEN_HEAD=$(git rev-parse --verify -q HEAD 2>/dev/null || true)
 if ! _wt_out=$(git write-tree 2>&1) || ! [[ "$_wt_out" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
     echo "❌ PREFLIGHT FAILED — cannot read the staged tree (git write-tree failed; unmerged files?)"
@@ -81,7 +82,12 @@ if ! TOKEN_WORKTREE=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$TOKEN
 fi
 
 # Get staged files
-STAGED_FILES=$(git diff --cached --name-only 2>/dev/null || echo "")
+if [ -n "$TOKEN_HEAD" ]; then
+    _diff_base=$TOKEN_HEAD
+else
+    _diff_base=$(git hash-object -t tree /dev/null 2>/dev/null || true)
+fi
+STAGED_FILES=$(git diff --name-only --no-renames "$_diff_base" "$TOKEN_TREE" 2>/dev/null || echo "")
 
 if [ -z "$STAGED_FILES" ]; then
     echo "⚠️  No staged files. Stage files first with 'git add'"
@@ -110,8 +116,9 @@ _preflight_write_token() {
         rm -f "$TOKEN_FILE"
         exit 1
     fi
-    if ! python3 -E - "$TOKEN_FILE" "$1" "$TOKEN_EXPIRY_SECONDS" "$2" "$3" "$4" \
-        "$TOKEN_HEAD" "$TOKEN_TREE" "$TOKEN_WORKTREE" <<'PY'
+    local _rc=0
+    python3 -E - "$TOKEN_FILE" "$1" "$TOKEN_EXPIRY_SECONDS" "$2" "$3" "$4" \
+        "$TOKEN_HEAD" "$TOKEN_TREE" "$TOKEN_WORKTREE" <<'PY' || _rc=$?
 import fcntl, json, os, stat, sys, tempfile, time
 path, created, ttl, staged, checks, reason, head, tree, worktree = sys.argv[1:10]
 token = {"created": int(created), "expires": int(created) + int(ttl),
@@ -140,7 +147,7 @@ try:
             break
         except BlockingIOError:
             if time.monotonic() >= give_up:
-                raise OSError("the token lock is held by another call")
+                sys.exit(3)  # the except below removes tmp
             time.sleep(0.05)
     os.replace(tmp, path)
 except BaseException:
@@ -153,7 +160,12 @@ finally:
     if lock_fd is not None:
         os.close(lock_fd)
 PY
-    then
+    if [ "$_rc" -eq 3 ]; then
+        # Linked worktrees share one token path: another call may have just
+        # published it, so it is left in place.
+        echo "❌ PREFLIGHT FAILED — the preflight token is locked by a commit in progress; no token written. Retry in a few seconds."
+        exit 1
+    elif [ "$_rc" -ne 0 ]; then
         echo "❌ PREFLIGHT FAILED — could not write the token."
         rm -f "$TOKEN_FILE"
         exit 1

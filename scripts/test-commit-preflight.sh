@@ -10,6 +10,7 @@ set -euo pipefail
 #
 # Usage: bash scripts/test-commit-preflight.sh
 #   PREFLIGHT_UNDER_TEST=<path> tests another copy of commit-preflight.sh.
+#   PREFLIGHT_TEST_DETACH=1 detaches HEAD in every clone (as CI's checkout is).
 
 REPO_ROOT="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 PREFLIGHT_SRC="${PREFLIGHT_UNDER_TEST:-$REPO_ROOT/scripts/commit-preflight.sh}"
@@ -43,6 +44,7 @@ setup() {
   n=$((n + 1))
   C="$TMP/clone$n"
   git clone -q --no-hardlinks "$REPO_ROOT" "$C"
+  [[ "${PREFLIGHT_TEST_DETACH:-}" == 1 ]] && git -C "$C" checkout -q --detach HEAD
   git -C "$C" config user.email t@example.com
   git -C "$C" config user.name t
   cp "$PREFLIGHT_SRC" "$C/scripts/commit-preflight.sh"
@@ -56,12 +58,17 @@ setup() {
   TOKENS+=("$TOKEN")
   rm -f "$TOKEN" "$TOKEN.lock"
 }
+preflight_full() { OUT="$(cd "$C" && ./scripts/commit-preflight.sh 2>&1)" && RC=0 || RC=$?; }
 preflight() { OUT="$(cd "$C" && ./scripts/commit-preflight.sh --skip-tests "test" 2>&1)" && RC=0 || RC=$?; }
 hook() {
   local payload
   payload="$(printf '{"tool_name":"Bash","tool_input":{"command":"git %s -m t"},"cwd":"%s","hook_event_name":"PreToolUse"}' "$COMMIT_VERB" "$C")"
   HOUT="$(cd "$C" && printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$C" python3 "$C/.claude/hooks/require-preflight.py" 2>&1)" && HRC=0 || HRC=$?
 }
+# decision: the hook's permissionDecision from its stdout JSON, or <unparseable>.
+decision() { printf '%s' "$HOUT" | python3 -c "import json, sys
+try: print(json.load(sys.stdin)['hookSpecificOutput'].get('permissionDecision', '<none>'))
+except Exception: print('<unparseable>')"; }
 tokfield() { python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], '<missing>'))" "$TOKEN" "$1"; }
 stage_doc() { printf 'line\n' > "$C/docs/$1"; git -C "$C" add "docs/$1"; }
 
@@ -80,14 +87,14 @@ else bad "1 skip-tests: rc=$RC, token present: $([[ -f "$TOKEN" ]] && echo yes |
 # 2. Hook positive arm: the same token lets the commit through.
 CASES=$((CASES + 1))
 hook
-if [[ "$HRC" == 0 && "$HOUT" != *'"permissionDecision": "deny"'* && "$HOUT" != *'"permissionDecision":"deny"'* ]]; then
-  ok "2 hook allows a commit that matches the token"
+if [[ "$HRC" == 0 && "$(decision)" != deny && "$HOUT" == *"Preflight verified"* ]]; then
+  ok "2 hook allows a commit that matches the token (exit 0, not deny, success text)"
 else bad "2 hook denied a matching commit (rc=$HRC)" "$HOUT"; fi
 
 # 3. Hook negative arm: the staged tree moved after the token.
 CASES=$((CASES + 1)); setup; stage_doc zz-test.md; preflight
 stage_doc zz-test2.md; hook
-if [[ "$RC" == 0 && "$HOUT" == *deny* && "$HOUT" == *"The staged files changed since preflight ran"* ]]; then
+if [[ "$RC" == 0 && "$(decision)" == deny && "$HOUT" == *"The staged files changed since preflight ran"* ]]; then
   ok "3 hook denies when the staged tree moved (tree-changed reason)"
 else bad "3 hook did not deny a moved tree (preflight rc=$RC, hook rc=$HRC)" "$HOUT"; fi
 
@@ -96,7 +103,7 @@ CASES=$((CASES + 1)); setup; stage_doc zz-test.md
 now="$(date +%s)"
 printf '{"created":%s,"expires":%s,"staged_files":1,"checks_run":"lint"}\n' "$now" "$((now + 300))" > "$TOKEN"
 hook
-if [[ "$HOUT" == *deny* && "$HOUT" == *"old format"* ]]; then
+if [[ "$(decision)" == deny && "$HOUT" == *"old format"* ]]; then
   ok "4 hook denies an old-format token (old-format reason)"
 else bad "4 hook did not deny an old-format token (rc=$HRC)" "$HOUT"; fi
 
@@ -116,7 +123,8 @@ else bad "5 mid-run staging: rc=$RC, token present: $([[ -e "$TOKEN" ]] && echo 
 CASES=$((CASES + 1)); setup
 now="$(date +%s)"
 printf '{"created":%s,"expires":%s,"staged_files":1,"checks_run":"lint"}\n' "$now" "$((now + 300))" > "$TOKEN"
-base="$(git -C "$C" rev-parse --abbrev-ref HEAD)"
+git -C "$C" switch -q -c zz-main
+base=zz-main
 printf 'base\n' > "$C/zz-conflict.txt"; git -C "$C" add zz-conflict.txt
 git -C "$C" "$COMMIT_VERB" -q --no-verify -m "base"
 git -C "$C" checkout -q -b zz-side; printf 'side\n' > "$C/zz-conflict.txt"
@@ -129,8 +137,48 @@ if [[ "$RC" == 1 && "$OUT" == *"cannot read the staged tree"* && ! -e "$TOKEN" ]
   ok "6 write-tree failure: exit 1, message printed, older token removed"
 else bad "6 write-tree failure: rc=$RC, token present: $([[ -e "$TOKEN" ]] && echo yes || echo no)" "$OUT"; fi
 
+# 7. Full path (no --skip-tests): a docs-only change writes a complete token.
+CASES=$((CASES + 1)); setup; stage_doc zz-test.md; preflight_full
+if [[ "$RC" == 0 && -f "$TOKEN" ]]; then
+  want_tree="$(git -C "$C" write-tree)"; want_head="$(git -C "$C" rev-parse HEAD)"
+  want_wt="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$C")"
+  tokcheck=0
+  python3 - "$TOKEN" "$(date +%s)" <<'PY' || tokcheck=1
+import json, sys
+t = json.load(open(sys.argv[1])); now = int(sys.argv[2])
+c = t.get("created")
+assert isinstance(c, int) and abs(now - c) <= 60, "created"
+assert t.get("expires") == c + 300, "expires"
+assert t.get("staged_files") == 1, "staged_files"
+assert t.get("checks_run") not in (None, "", "skipped"), "checks_run"
+assert "skip_reason" not in t, "skip_reason"
+PY
+  if [[ "$tokcheck" == 0 && "$(tokfield tree)" == "$want_tree" && "$(tokfield head)" == "$want_head" \
+     && "$want_head" =~ ^[0-9a-f]{40}$ && "$(tokfield worktree)" == "$want_wt" ]]; then
+    ok "7 full path: exit 0, token has created, expires, staged_files, checks_run, no skip_reason"
+  else bad "7 full path: token fields wrong" "$(cat "$TOKEN")"; fi
+else bad "7 full path: rc=$RC, token present: $([[ -f "$TOKEN" ]] && echo yes || echo no)" "$OUT"; fi
+
+# 8. Token lock held by another process: exit 1, and the existing token stays.
+CASES=$((CASES + 1)); setup; stage_doc zz-test.md
+now="$(date +%s)"
+printf '{"created":%s,"expires":%s,"staged_files":1,"checks_run":"lint"}\n' "$now" "$((now + 300))" > "$TOKEN"
+python3 -c "
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1] + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print('held', flush=True)
+time.sleep(5)" "$TOKEN" > "$TMP/holder.out" &
+holder=$!
+for _ in $(seq 1 50); do grep -q held "$TMP/holder.out" 2>/dev/null && break; sleep 0.1; done
+preflight
+wait "$holder" || true
+if grep -q held "$TMP/holder.out" && [[ "$RC" == 1 && "$OUT" == *"locked by a commit in progress"* && -f "$TOKEN" ]]; then
+  ok "8 lock timeout: exit 1, message printed, existing token kept"
+else bad "8 lock timeout: rc=$RC, token present: $([[ -f "$TOKEN" ]] && echo yes || echo no)" "$OUT"; fi
+
 # Positive control: every case ran.
-if [[ "$CASES" == 6 ]]; then ok "positive control: 6 cases ran"; else bad "positive control: $CASES cases ran, want 6"; fi
+if [[ "$CASES" == 8 ]]; then ok "positive control: 8 cases ran"; else bad "positive control: $CASES cases ran, want 8"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" == 0 ]] || exit 1

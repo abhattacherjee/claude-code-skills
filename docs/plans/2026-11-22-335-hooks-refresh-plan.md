@@ -21,13 +21,15 @@ Delegate: claude — reads the template outside the worktree, and must be checke
 ## Failure modes
 
 - Fail-open paths: an old-format token must still be refused; `git write-tree` failing must exit 1 with no token. Test: `scripts/test-commit-preflight.sh`. It runs the real script and the real hook in a throwaway clone, so it never touches your own token. CI runs it in `validate-plugin-tests`.
-- Exit codes: `commit-preflight.sh` must exit 1, not 0, when the staged tree changes during the run. Test: the same script. Its six cases:
+- Exit codes: `commit-preflight.sh` must exit 1, not 0, when the staged tree changes during the run. Test: the same script. Its eight cases:
   1. Skip-tests run exits 0 and writes a token with tree, head, worktree, checks_run and skip_reason.
-  2. The hook allows a commit that matches that token.
+  2. The hook allows a commit that matches that token (exit 0, decision not deny, "Preflight verified").
   3. The hook denies a commit after another file is staged.
   4. The hook denies an old-format token.
   5. A check that stages a file mid-run makes preflight exit 1 and removes an older token.
   6. An unmerged index makes preflight exit 1 ("cannot read the staged tree") and removes an older token.
+  7. A full run (no `--skip-tests`) on a docs file writes a token with created, expires (created + 300), staged_files, a real checks_run and no skip_reason.
+  8. A held token lock makes preflight exit 1 ("locked by a commit in progress") and leaves an existing token in place.
 - Date boundaries: none; the token uses epoch seconds, unchanged.
 - Doc counts: the CHANGELOG and PR body name four hooks; count them from `git diff --stat`.
 - Broken Markdown: the CHANGELOG entry goes inside the `[Unreleased]` block; re-read the lines around it.
