@@ -58,6 +58,28 @@ done
 echo "🔍 Running commit preflight checks..."
 echo ""
 
+# What this run checks, recorded in the token. Ported from the harden-repo
+# 1.3.2 template (#335): its require-preflight.py refuses a token without
+# "head", "tree" and "worktree", and keeps a token across commit calls only
+# while HEAD, the staged tree and this checkout all still match it. The tree
+# is read here, before any check runs, and again just before the token is
+# written, so a check that stages a file cannot leave a token naming a tree
+# nobody checked. HEAD is empty on an unborn branch. The tree is read before
+# the staged file list, so the list and the token describe the same tree.
+TOKEN_HEAD=$(git rev-parse --verify -q HEAD 2>/dev/null || true)
+if ! _wt_out=$(git write-tree 2>&1) || ! [[ "$_wt_out" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    echo "❌ PREFLIGHT FAILED — cannot read the staged tree (git write-tree failed; unmerged files?)"
+    printf '%s\n' "$_wt_out" | sed 's/^/   git: /' || true
+    rm -f "$TOKEN_FILE"
+    exit 1
+fi
+TOKEN_TREE=$_wt_out
+if ! TOKEN_WORKTREE=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$TOKEN_WORKTREE" ]; then
+    echo "❌ PREFLIGHT FAILED — cannot read this checkout's toplevel"
+    rm -f "$TOKEN_FILE"
+    exit 1
+fi
+
 # Get staged files
 STAGED_FILES=$(git diff --cached --name-only 2>/dev/null || echo "")
 
@@ -74,27 +96,6 @@ if [ "$TOTAL" -gt 10 ]; then
 fi
 echo ""
 
-# What this run checks, recorded in the token. Ported from the harden-repo
-# 1.3.2 template (#335): its require-preflight.py refuses a token without
-# "head", "tree" and "worktree", and keeps a token across commit calls only
-# while HEAD, the staged tree and this checkout all still match it. The tree
-# is read here, before any check runs, and again just before the token is
-# written, so a check that stages a file cannot leave a token naming a tree
-# nobody checked. HEAD is empty on an unborn branch.
-TOKEN_HEAD=$(git rev-parse --verify -q HEAD 2>/dev/null || true)
-if ! _wt_out=$(git write-tree 2>&1) || ! [[ "$_wt_out" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
-    echo "❌ PREFLIGHT FAILED — cannot read the staged tree (git write-tree failed; unmerged files?)"
-    printf '%s\n' "$_wt_out" | sed 's/^/   git: /' || true
-    rm -f "$TOKEN_FILE"
-    exit 1
-fi
-TOKEN_TREE=$_wt_out
-if ! TOKEN_WORKTREE=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$TOKEN_WORKTREE" ]; then
-    echo "❌ PREFLIGHT FAILED — cannot read this checkout's toplevel"
-    rm -f "$TOKEN_FILE"
-    exit 1
-fi
-
 # Write the token: a temp file in the same directory, then a rename, so the
 # hook never reads a half-written token. JSON comes from python, not a shell
 # heredoc, because the worktree path may hold a quote or a backslash.
@@ -109,9 +110,9 @@ _preflight_write_token() {
         rm -f "$TOKEN_FILE"
         exit 1
     fi
-    python3 -E - "$TOKEN_FILE" "$1" "$TOKEN_EXPIRY_SECONDS" "$2" "$3" "$4" \
+    if ! python3 -E - "$TOKEN_FILE" "$1" "$TOKEN_EXPIRY_SECONDS" "$2" "$3" "$4" \
         "$TOKEN_HEAD" "$TOKEN_TREE" "$TOKEN_WORKTREE" <<'PY'
-import json, os, sys, tempfile
+import fcntl, json, os, stat, sys, tempfile, time
 path, created, ttl, staged, checks, reason, head, tree, worktree = sys.argv[1:10]
 token = {"created": int(created), "expires": int(created) + int(ttl),
          "staged_files": int(staged), "checks_run": checks}
@@ -120,10 +121,27 @@ if reason:
 token.update(head=head, tree=tree, worktree=os.path.realpath(worktree))
 fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".",
                            dir=os.path.dirname(path))
+lock_fd = None
 try:
     with os.fdopen(fd, "w") as handle:
         json.dump(token, handle, indent=4)
         handle.write("\n")
+    # Take the same lock as require-preflight.py (_lock_token): same path,
+    # same flags, same 2.0 s wait. A hook call that holds it is reading or
+    # spending the token, so the new token is published only after it lets go.
+    lock_fd = os.open(path + ".lock",
+                      os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+        raise OSError("the lock file is not a regular file")
+    give_up = time.monotonic() + 2.0
+    while True:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= give_up:
+                raise OSError("the token lock is held by another call")
+            time.sleep(0.05)
     os.replace(tmp, path)
 except BaseException:
     try:
@@ -131,7 +149,15 @@ except BaseException:
     except OSError:
         pass
     raise
+finally:
+    if lock_fd is not None:
+        os.close(lock_fd)
 PY
+    then
+        echo "❌ PREFLIGHT FAILED — could not write the token."
+        rm -f "$TOKEN_FILE"
+        exit 1
+    fi
 }
 
 # Auto-detect if tests are needed

@@ -20,12 +20,18 @@ Delegate: claude — reads the template outside the worktree, and must be checke
 
 ## Failure modes
 
-- Fail-open paths: an old-format token must still be refused (the hook does this, line 8527); `git write-tree` failing must exit 1 with no token. Test: the commit of this PR itself (new hook, new writer), and a hand-written old-format token fed to the hook, which must deny.
-- Exit codes: `commit-preflight.sh` must exit 1, not 0, when the staged tree changes during the run. Test: stage a file change mid-run in a scratch copy and check exit 1 and no token.
+- Fail-open paths: an old-format token must still be refused; `git write-tree` failing must exit 1 with no token. Test: `scripts/test-commit-preflight.sh`. It runs the real script and the real hook in a throwaway clone, so it never touches your own token. CI runs it in `validate-plugin-tests`.
+- Exit codes: `commit-preflight.sh` must exit 1, not 0, when the staged tree changes during the run. Test: the same script. Its six cases:
+  1. Skip-tests run exits 0 and writes a token with tree, head, worktree, checks_run and skip_reason.
+  2. The hook allows a commit that matches that token.
+  3. The hook denies a commit after another file is staged.
+  4. The hook denies an old-format token.
+  5. A check that stages a file mid-run makes preflight exit 1 and removes an older token.
+  6. An unmerged index makes preflight exit 1 ("cannot read the staged tree") and removes an older token.
 - Date boundaries: none; the token uses epoch seconds, unchanged.
 - Doc counts: the CHANGELOG and PR body name four hooks; count them from `git diff --stat`.
 - Broken Markdown: the CHANGELOG entry goes inside the `[Unreleased]` block; re-read the lines around it.
-- Unrelated changes: only the four hooks, `scripts/commit-preflight.sh`, `CHANGELOG.md` and this plan. No deletions.
+- Unrelated changes: only the four hooks, `scripts/commit-preflight.sh`, `scripts/test-commit-preflight.sh`, its CI step in `.github/workflows/validate-skill.yml`, `CHANGELOG.md` and this plan. No deletions.
 - Inputs: the hooks come from the installed 1.3.2 plugin cache. A stale copy would show as a sha256 mismatch against the template; checked with `cmp` at commit time.
 - Bypass routes: the cheapest input that would pass the preflight gate is a hand-written token with `head`/`tree`/`worktree` set. That is outside this change's threat model (the hook docstring says it is not forgery protection). Pushes: a push to `develop` from a worktree must still be denied (acceptance check 3).
 
