@@ -67,6 +67,22 @@ setup() {
 }
 preflight_full() { OUT="$(cd "$C" && ./scripts/commit-preflight.sh 2>&1)" && RC=0 || RC=$?; }
 preflight() { OUT="$(cd "$C" && ./scripts/commit-preflight.sh --skip-tests "test" 2>&1)" && RC=0 || RC=$?; }
+# preflight with a deadline in seconds: past it, the whole process group is
+# killed and RC is 124, so a writer that blocks on the lock fails the case
+# instead of hanging it. macOS has no timeout(1), so python3 does the timing.
+preflight_deadline() {
+  OUT="$(cd "$C" && python3 -c '
+import os, signal, subprocess, sys
+p = subprocess.Popen(["./scripts/commit-preflight.sh", "--skip-tests", "test"],
+                     stdout=sys.stdout, stderr=subprocess.STDOUT, start_new_session=True)
+try:
+    sys.exit(p.wait(timeout=float(sys.argv[1])))
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    p.wait()
+    print("DEADLINE: preflight still running after %s s" % sys.argv[1])
+    sys.exit(124)' "$1" 2>&1)" && RC=0 || RC=$?
+}
 hook() {
   local payload
   payload="$(printf '{"tool_name":"Bash","tool_input":{"command":"git %s -m t"},"cwd":"%s","hook_event_name":"PreToolUse"}' "$COMMIT_VERB" "$C")"
@@ -185,7 +201,7 @@ while not os.path.exists(sys.argv[2]):
 holder=$!
 HOLDER_PID=$holder  # cleanup() kills it if the test exits before the release
 for _ in $(seq 1 100); do grep -q held "$TMP/holder.out" 2>/dev/null && break; sleep 0.1; done
-preflight
+preflight_deadline 60
 : > "$TMP/release"
 holder_rc=0; wait "$holder" || holder_rc=$?
 HOLDER_PID=""
