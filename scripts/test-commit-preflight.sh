@@ -37,6 +37,9 @@ ok()  { PASS=$((PASS + 1)); printf '  PASS  %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; [[ -n "${2:-}" ]] && printf '        %s\n' "$(printf '%s' "$2" | tail -n 12)"; return 0; }
 
 COMMIT_VERB="com""mit"
+# checks_run the full path writes for one staged docs file in the clone: the
+# secrets scan only (observed by running case 7 once on this repo).
+FULL_CHECKS_RUN="secrets"
 n=0
 # setup: a fresh clone in $C with the working-tree script and hook committed.
 # Sets C and TOKEN (the clone's own token path, removed on exit).
@@ -87,8 +90,10 @@ else bad "1 skip-tests: rc=$RC, token present: $([[ -f "$TOKEN" ]] && echo yes |
 # 2. Hook positive arm: the same token lets the commit through.
 CASES=$((CASES + 1))
 hook
-if [[ "$HRC" == 0 && "$(decision)" != deny && "$HOUT" == *"Preflight verified"* ]]; then
-  ok "2 hook allows a commit that matches the token (exit 0, not deny, success text)"
+# The hook's success path prints one JSON document with additionalContext
+# "Preflight verified: ..." and no permissionDecision. Unparseable output never passes.
+if [[ "$HRC" == 0 && "$(decision)" != "<unparseable>" && "$(decision)" != deny && "$HOUT" == *"Preflight verified"* ]]; then
+  ok "2 hook allows a commit that matches the token (exit 0, parseable JSON, not deny, success text)"
 else bad "2 hook denied a matching commit (rc=$HRC)" "$HOUT"; fi
 
 # 3. Hook negative arm: the staged tree moved after the token.
@@ -143,15 +148,15 @@ if [[ "$RC" == 0 && -f "$TOKEN" ]]; then
   want_tree="$(git -C "$C" write-tree)"; want_head="$(git -C "$C" rev-parse HEAD)"
   want_wt="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$C")"
   tokcheck=0
-  python3 - "$TOKEN" "$(date +%s)" <<'PY' || tokcheck=1
+  python3 - "$TOKEN" "$(date +%s)" "$FULL_CHECKS_RUN" <<'PY' || tokcheck=1
 import json, sys
 t = json.load(open(sys.argv[1])); now = int(sys.argv[2])
 c = t.get("created")
-assert isinstance(c, int) and abs(now - c) <= 60, "created"
-assert t.get("expires") == c + 300, "expires"
-assert t.get("staged_files") == 1, "staged_files"
-assert t.get("checks_run") not in (None, "", "skipped"), "checks_run"
-assert "skip_reason" not in t, "skip_reason"
+if not (isinstance(c, int) and abs(now - c) <= 60): sys.exit(1)
+if t.get("expires") != c + 300: sys.exit(1)
+if t.get("staged_files") != 1: sys.exit(1)
+if t.get("checks_run") != sys.argv[3]: sys.exit(1)
+if "skip_reason" in t: sys.exit(1)
 PY
   if [[ "$tokcheck" == 0 && "$(tokfield tree)" == "$want_tree" && "$(tokfield head)" == "$want_head" \
      && "$want_head" =~ ^[0-9a-f]{40}$ && "$(tokfield worktree)" == "$want_wt" ]]; then
@@ -159,8 +164,34 @@ PY
   else bad "7 full path: token fields wrong" "$(cat "$TOKEN")"; fi
 else bad "7 full path: rc=$RC, token present: $([[ -f "$TOKEN" ]] && echo yes || echo no)" "$OUT"; fi
 
+# 8. Token lock held by another process: exit 1, and the existing token stays
+# byte for byte. The holder releases only when told to, after preflight returns.
+CASES=$((CASES + 1)); setup; stage_doc zz-test.md
+now="$(date +%s)"
+printf '{"created":%s,"expires":%s,"staged_files":1,"checks_run":"lint"}\n' "$now" "$((now + 300))" > "$TOKEN"
+cp "$TOKEN" "$TMP/token.before"
+rm -f "$TMP/release" "$TMP/holder.out"
+python3 -c "
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1] + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print('held', flush=True)
+for _ in range(2400):
+    if os.path.exists(sys.argv[2]): sys.exit(0)
+    time.sleep(0.05)
+sys.exit(2)" "$TOKEN" "$TMP/release" > "$TMP/holder.out" &
+holder=$!
+for _ in $(seq 1 100); do grep -q held "$TMP/holder.out" 2>/dev/null && break; sleep 0.1; done
+preflight
+: > "$TMP/release"
+holder_rc=0; wait "$holder" || holder_rc=$?
+if [[ "$holder_rc" == 0 ]] && grep -q held "$TMP/holder.out" && [[ "$RC" == 1 && "$OUT" == *"locked by a commit in progress"* ]] \
+   && [[ -f "$TOKEN" ]] && cmp -s "$TOKEN" "$TMP/token.before"; then
+  ok "8 lock timeout: exit 1, message printed, existing token kept byte for byte"
+else bad "8 lock timeout: rc=$RC, holder rc=$holder_rc, token present: $([[ -f "$TOKEN" ]] && echo yes || echo no), same bytes: $(cmp -s "$TOKEN" "$TMP/token.before" && echo yes || echo no)" "$OUT"; fi
+
 # Positive control: every case ran.
-if [[ "$CASES" == 7 ]]; then ok "positive control: 7 cases ran"; else bad "positive control: $CASES cases ran, want 7"; fi
+if [[ "$CASES" == 8 ]]; then ok "positive control: 8 cases ran"; else bad "positive control: $CASES cases ran, want 8"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" == 0 ]] || exit 1
