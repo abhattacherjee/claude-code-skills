@@ -23,8 +23,12 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
 TMP="$(mktemp -d)"
 TOKENS=()
+HOLDER_PID=""
 cleanup() {
   local t
+  # Case 8's lock holder releases only on a signal file, with no timer, so a
+  # test that dies early must stop it here.
+  if [[ -n "$HOLDER_PID" ]]; then kill "$HOLDER_PID" 2>/dev/null || true; fi
   for t in ${TOKENS[@]+"${TOKENS[@]}"}; do rm -f "$t" "$t.lock"; done
   rm -rf "$TMP"
 }
@@ -176,15 +180,15 @@ import fcntl, os, sys, time
 fd = os.open(sys.argv[1] + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
 fcntl.flock(fd, fcntl.LOCK_EX)
 print('held', flush=True)
-for _ in range(2400):
-    if os.path.exists(sys.argv[2]): sys.exit(0)
-    time.sleep(0.05)
-sys.exit(2)" "$TOKEN" "$TMP/release" > "$TMP/holder.out" &
+while not os.path.exists(sys.argv[2]):
+    time.sleep(0.05)" "$TOKEN" "$TMP/release" > "$TMP/holder.out" &
 holder=$!
+HOLDER_PID=$holder  # cleanup() kills it if the test exits before the release
 for _ in $(seq 1 100); do grep -q held "$TMP/holder.out" 2>/dev/null && break; sleep 0.1; done
 preflight
 : > "$TMP/release"
 holder_rc=0; wait "$holder" || holder_rc=$?
+HOLDER_PID=""
 if [[ "$holder_rc" == 0 ]] && grep -q held "$TMP/holder.out" && [[ "$RC" == 1 && "$OUT" == *"locked by a commit in progress"* ]] \
    && [[ -f "$TOKEN" ]] && cmp -s "$TOKEN" "$TMP/token.before"; then
   ok "8 lock timeout: exit 1, message printed, existing token kept byte for byte"
