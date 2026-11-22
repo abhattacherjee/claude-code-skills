@@ -186,6 +186,9 @@ jobs:
       - name: Test check-needs-results.sh
         run: bash scripts/test-check-needs-results.sh
 
+      - name: commit-preflight.sh token tests
+        run: bash scripts/test-commit-preflight.sh
+
   docs-drift:
     runs-on: ubuntu-24.04
     steps:

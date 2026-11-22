@@ -58,8 +58,36 @@ done
 echo "🔍 Running commit preflight checks..."
 echo ""
 
+# What this run checks, recorded in the token. Ported from the harden-repo
+# 1.3.2 template (#335): its require-preflight.py refuses a token without
+# "head", "tree" and "worktree", and keeps a token across commit calls only
+# while HEAD, the staged tree and this checkout all still match it. The tree
+# is read here, before any check runs, and again just before the token is
+# written, so a check that stages a file cannot leave a token naming a tree
+# nobody checked. HEAD is empty on an unborn branch. The tree is read before
+# the staged file list, and the list is built from the captured tree, so the
+# list and the token describe the same tree.
+TOKEN_HEAD=$(git rev-parse --verify -q HEAD 2>/dev/null || true)
+if ! _wt_out=$(git write-tree 2>&1) || ! [[ "$_wt_out" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    echo "❌ PREFLIGHT FAILED — cannot read the staged tree (git write-tree failed; unmerged files?)"
+    printf '%s\n' "$_wt_out" | sed 's/^/   git: /' || true
+    rm -f "$TOKEN_FILE"
+    exit 1
+fi
+TOKEN_TREE=$_wt_out
+if ! TOKEN_WORKTREE=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$TOKEN_WORKTREE" ]; then
+    echo "❌ PREFLIGHT FAILED — cannot read this checkout's toplevel"
+    rm -f "$TOKEN_FILE"
+    exit 1
+fi
+
 # Get staged files
-STAGED_FILES=$(git diff --cached --name-only 2>/dev/null || echo "")
+if [ -n "$TOKEN_HEAD" ]; then
+    _diff_base=$TOKEN_HEAD
+else
+    _diff_base=$(git hash-object -t tree /dev/null 2>/dev/null || true)
+fi
+STAGED_FILES=$(git diff --name-only --no-renames "$_diff_base" "$TOKEN_TREE" 2>/dev/null || echo "")
 
 if [ -z "$STAGED_FILES" ]; then
     echo "⚠️  No staged files. Stage files first with 'git add'"
@@ -73,6 +101,76 @@ if [ "$TOTAL" -gt 10 ]; then
     echo "   ... and $((TOTAL - 10)) more"
 fi
 echo ""
+
+# Write the token: a temp file in the same directory, then a rename, so the
+# hook never reads a half-written token. JSON comes from python, not a shell
+# heredoc, because the worktree path may hold a quote or a backslash.
+# Refuses (no token, exit 1) when the staged tree is no longer the one read
+# before the checks.
+# Args: created, staged file count, checks_run, skip_reason ("" for none).
+_preflight_write_token() {
+    local _tree_now
+    if ! _tree_now=$(git write-tree 2>/dev/null) || [ "$_tree_now" != "$TOKEN_TREE" ]; then
+        echo "❌ PREFLIGHT FAILED — the staged files changed while preflight ran; no token written."
+        echo "   Stage everything first, then run preflight again."
+        rm -f "$TOKEN_FILE"
+        exit 1
+    fi
+    local _rc=0
+    python3 -E - "$TOKEN_FILE" "$1" "$TOKEN_EXPIRY_SECONDS" "$2" "$3" "$4" \
+        "$TOKEN_HEAD" "$TOKEN_TREE" "$TOKEN_WORKTREE" <<'PY' || _rc=$?
+import fcntl, json, os, stat, sys, tempfile, time
+path, created, ttl, staged, checks, reason, head, tree, worktree = sys.argv[1:10]
+token = {"created": int(created), "expires": int(created) + int(ttl),
+         "staged_files": int(staged), "checks_run": checks}
+if reason:
+    token["skip_reason"] = reason
+token.update(head=head, tree=tree, worktree=os.path.realpath(worktree))
+fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".",
+                           dir=os.path.dirname(path))
+lock_fd = None
+try:
+    with os.fdopen(fd, "w") as handle:
+        json.dump(token, handle, indent=4)
+        handle.write("\n")
+    # Take the same lock as require-preflight.py (_lock_token): same path,
+    # same flags, same 2.0 s wait. A hook call that holds it is reading or
+    # spending the token, so the new token is published only after it lets go.
+    lock_fd = os.open(path + ".lock",
+                      os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+        raise OSError("the lock file is not a regular file")
+    give_up = time.monotonic() + 2.0
+    while True:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= give_up:
+                sys.exit(3)  # the except below removes tmp
+            time.sleep(0.05)
+    os.replace(tmp, path)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+finally:
+    if lock_fd is not None:
+        os.close(lock_fd)
+PY
+    if [ "$_rc" -eq 3 ]; then
+        # Linked worktrees share one token path: another call may have just
+        # published it, so it is left in place.
+        echo "❌ PREFLIGHT FAILED — the preflight token is locked by a commit in progress; no token written. Retry in a few seconds."
+        exit 1
+    elif [ "$_rc" -ne 0 ]; then
+        echo "❌ PREFLIGHT FAILED — could not write the token."
+        rm -f "$TOKEN_FILE"
+        exit 1
+    fi
+}
 
 # Auto-detect if tests are needed
 if [ "$AUTO_DETECT" = true ]; then
@@ -127,17 +225,7 @@ if [ "$SKIP_TESTS" = true ]; then
 
     TIMESTAMP=$(date +%s)
     STAGED_COUNT=$(echo "$STAGED_FILES" | wc -l | tr -d ' ')
-    python3 -c "
-import json, sys
-token = {
-    'created': int(sys.argv[1]),
-    'expires': int(sys.argv[1]) + int(sys.argv[2]),
-    'staged_files': int(sys.argv[3]),
-    'checks_run': 'skipped',
-    'skip_reason': sys.argv[4]
-}
-print(json.dumps(token, indent=4))
-" "$TIMESTAMP" "$TOKEN_EXPIRY_SECONDS" "$STAGED_COUNT" "$SKIP_REASON" > "$TOKEN_FILE"
+    _preflight_write_token "$TIMESTAMP" "$STAGED_COUNT" "skipped" "$SKIP_REASON"
 
     echo "✅ PREFLIGHT PASSED (tests skipped)"
     echo "📝 You may now run: git commit -m \"your message\""
@@ -252,17 +340,7 @@ fi
 
 # Create confirmation token
 TIMESTAMP=$(date +%s)
-TOKEN_DATA=$(cat <<EOF
-{
-    "created": $TIMESTAMP,
-    "expires": $((TIMESTAMP + TOKEN_EXPIRY_SECONDS)),
-    "staged_files": $(echo "$STAGED_FILES" | wc -l | tr -d ' '),
-    "checks_run": "${CHECKS_RUN%,}"
-}
-EOF
-)
-
-echo "$TOKEN_DATA" > "$TOKEN_FILE"
+_preflight_write_token "$TIMESTAMP" "$(echo "$STAGED_FILES" | wc -l | tr -d ' ')" "${CHECKS_RUN%,}" ""
 
 echo ""
 echo "✅ PREFLIGHT PASSED"
