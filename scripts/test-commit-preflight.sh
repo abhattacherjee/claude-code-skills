@@ -31,7 +31,9 @@ cleanup() {
   if [[ -n "$HOLDER_PID" ]]; then kill "$HOLDER_PID" 2>/dev/null || true; fi
   # "$t".* also takes the lock file and any temp token a killed writer left
   # (mkstemp names it <token>.<random> next to the token).
-  for t in ${TOKENS[@]+"${TOKENS[@]}"}; do rm -f "$t" "$t".*; done
+  # Cleanup never aborts the exit trap: a stray directory matching the glob
+  # must not leave the clones behind.
+  for t in ${TOKENS[@]+"${TOKENS[@]}"}; do rm -f "$t" "$t".* 2>/dev/null || true; done
   rm -rf "$TMP"
 }
 trap cleanup EXIT
