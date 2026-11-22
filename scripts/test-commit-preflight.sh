@@ -29,7 +29,9 @@ cleanup() {
   # Case 8's lock holder releases only on a signal file, with no timer, so a
   # test that dies early must stop it here.
   if [[ -n "$HOLDER_PID" ]]; then kill "$HOLDER_PID" 2>/dev/null || true; fi
-  for t in ${TOKENS[@]+"${TOKENS[@]}"}; do rm -f "$t" "$t.lock"; done
+  # "$t".* also takes the lock file and any temp token a killed writer left
+  # (mkstemp names it <token>.<random> next to the token).
+  for t in ${TOKENS[@]+"${TOKENS[@]}"}; do rm -f "$t" "$t".*; done
   rm -rf "$TMP"
 }
 trap cleanup EXIT
