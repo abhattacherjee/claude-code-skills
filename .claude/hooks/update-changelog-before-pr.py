@@ -4,9 +4,9 @@ Pre-PR Hook: Block PR Creation Unless Changelog is Updated
 
 Installed by /harden-repo into target repo's .claude/hooks/
 
-This hook triggers before `gh pr create` commands. It BLOCKS the PR if
-CHANGELOG.md has no meaningful entries under [Unreleased], ensuring every
-PR includes a changelog update.
+This hook triggers before `gh pr create` and its alias `gh pr new` commands.
+It BLOCKS the PR if CHANGELOG.md has no meaningful entries under [Unreleased],
+ensuring every PR includes a changelog update.
 """
 
 import json
@@ -14,6 +14,32 @@ import os
 import re
 import subprocess
 import sys
+from functools import lru_cache
+
+
+# --- BEGIN crash guard v1 (keep in sync across all hook copies) ---
+def _deny_on_crash(exc_type, exc, tb):
+    # Exit 1 lets the call run. os._exit(2) blocks and drops buffered stdout.
+    try:
+        import traceback
+        traceback.print_exception(exc_type, exc, tb, file=sys.stderr)
+    except Exception:
+        pass
+    try:
+        sys.stderr.write(f"BLOCKED: this guard hook crashed ({exc_type.__name__}); "
+                         "blocking as a safety measure.\n")
+    except Exception:
+        pass
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(2)
+
+
+if __name__ == "__main__":
+    sys.excepthook = _deny_on_crash
+# --- END crash guard v1 ---
 
 
 # --- BEGIN shared command scanner v1 (keep in sync across all hook copies) ---
@@ -44,19 +70,10 @@ import sys
 #   * the body of a heredoc fed to a shell RUNNER (`bash <<EOF`, `sh -s <<EOF`,
 #     `cat <<EOF | bash`), which is a script rather than data — and is
 #     therefore scanned whether or not the delimiter was quoted.
-# Recursion is capped at _MAX_SCAN_DEPTH levels of nesting to bound work on
-# adversarial input: a payload nested deeper than that is still emitted as an
-# opaque token but is not parsed further. Three levels covers every realistic
-# wrapper stack (`sudo bash -c "eval ..."` is only two).
-#
-# ACCEPTED LIMIT: executed code nested 4+ levels deep — `$($($($(cmd))))` or
-# four stacked `bash -c` payloads — is NOT parsed, so a verb hidden that deep
-# is not matched. This is adversarial-only: no legitimate workflow nests that
-# far, and removing the cap makes work grow with attacker-controlled nesting
-# depth. See specs/043-parse-dont-grep-hook-commands.md. One partial
-# exception: an unparsed `$( ... )` left in COMMAND position with the verb as
-# a whole word inside it is reported as a possible verb by _may_hide_verb, so
-# `$($($($(git push origin main))))` does match, fail-closed.
+# Recursion is capped at _MAX_SCAN_DEPTH to bound work on adversarial input.
+# If a runner payload, substitution body, or any heredoc remains unread at
+# the cap, the scan raises ValueError. Each hook then denies the command
+# when its text names the hook's guarded verb (#95).
 #
 # Fail-closed contract: _scan_commands raises ValueError when it cannot parse
 # reliably (unbalanced quotes, an unterminated substitution). Callers MUST
@@ -1818,6 +1835,15 @@ def _extra_stdin_runner(argv):
         return False
     if not _extra_shell_reads(argv)[1]:
         return False
+    # A wrapper option can take a program name as its value. Only skip
+    # this fallback for a lookup behind plain wrapper names.
+    for index, word in enumerate(argv):
+        if _ENV_ASSIGN_RE.match(word):
+            continue
+        if word == "command" and _command_lookup(argv, index):
+            return False
+        if word not in _RUN_WRAPPERS:
+            break
     raw = getattr(argv, "raw", None)
     if not raw:
         return not any("<<" in word for word in argv)
@@ -2439,6 +2465,12 @@ def _scan_reading(cmd, _depth):
     """The statements of one reading of *cmd*: see _scan_commands_uncached."""
     scanned = []
     stripped, heredocs = _split_heredocs(cmd)
+    at_depth_limit = _depth >= _MAX_SCAN_DEPTH
+    # Skipping nested code at the cap could turn a guarded command into an ALLOW.
+    if at_depth_limit and (
+            any(marker in stripped for marker in ("$(", "`", "<(", ">("))
+            or heredocs):
+        raise ValueError("nested deeper than the scan limit")
     for statement in _split_statements(stripped):
         argv = _Argv(_split_words(statement))
         if not argv:
@@ -2447,17 +2479,17 @@ def _scan_reading(cmd, _depth):
         argv.top = not _depth
         argv.code = cmd  # the whole text this statement was split from
         scanned.append(argv)
-        if _depth >= _MAX_SCAN_DEPTH:
-            continue
         nested = _runner_payload(argv)
         # A tuple holds candidate payloads, each scanned alone (see
         # _payload_after_flag).
         for payload in nested if isinstance(nested, tuple) else (nested,):
             if payload:
+                if at_depth_limit:
+                    raise ValueError("nested deeper than the scan limit")
                 # Propagate ValueError: an unparseable payload must reach
                 # the caller, which denies it, not be silently dropped.
                 scanned.extend(_scan_commands(payload, _depth + 1))
-    if _depth < _MAX_SCAN_DEPTH:
+    if not at_depth_limit:
         # Extracted from the heredoc-STRIPPED text, so a `$(...)` inside a
         # heredoc with a QUOTED delimiter stays excluded — bash performs no
         # expansion there. An UNQUOTED delimiter is the opposite case: bash
@@ -3456,14 +3488,29 @@ def _stdin_shell_fed(argv):
             any(_STDIN_FEED_RE.match(word) for word in rest))
 
 
+def _command_lookup(argv, index):
+    """Whether the options immediately following `command` request a lookup."""
+    for position in range(index + 1, len(argv)):
+        option = argv[position]
+        if option == "--" or not option.startswith("-"):
+            break
+        if not option.startswith("--") and ("v" in option or "V" in option):
+            return True
+    return False
+
+
 def _wrapped_command_index(argv):
     """The index of the first word of *argv* that is not a `VAR=value`
     word, a _RUN_WRAPPERS name or an option, or None. That is the command
     when every wrapper in front of it takes no option value: `sudo -u root
-    x` stops at `root`."""
+    x` stops at `root`. A `v` or `V` in a short option of `command`
+    requests a lookup, so there is no command to run."""
     for index, word in enumerate(argv):
+        base = _program_base(word)
+        if base == "command" and _command_lookup(argv, index):
+            return None
         if (_ENV_ASSIGN_RE.match(word) or
-                _program_base(word) in _RUN_WRAPPERS or word.startswith("-")):
+                base in _RUN_WRAPPERS or word.startswith("-")):
             continue
         return index
     return None
@@ -5505,10 +5552,13 @@ def _is_absolute_cd_target(target):
     return _normalised_cd_target(target) is not None
 
 
-# The ONE `cd` shape that moves the scope (#107): the command opens with a
-# plain `cd`, one literal absolute path from a safe alphabet, then `&&`.
-# Matched on the RAW text, before any quote removal or normalising.
-_EXACT_CD_RE = re.compile(r"[ \t]*cd[ \t]+(/[A-Za-z0-9._/@+-]*)[ \t]*&&")
+# One leading `cd`, one whole absolute or relative path word, then `&&`.
+# Match the raw text so only a single pair of quotes can admit spaces.
+_EXACT_CD_RE = re.compile(
+    r"[ \t]*cd[ \t]+(?:"
+    r"(?P<bare>[A-Za-z0-9._/@][A-Za-z0-9._/@+-]*)|"
+    r"""(?P<quote>["'])(?P<quoted>[A-Za-z0-9._/@][A-Za-z0-9._/@+ -]*)(?P=quote)"""
+    r")[ \t]*&&")
 # The one `cd` allowed after it: a plain `&& cd -` that ENDS the command
 # (#156 G-7). It runs after every other statement, so it moves none of them.
 # No leading `[ \t]*`: searched, that rescans every run of blanks (quadratic).
@@ -5659,14 +5709,100 @@ _ZSH_PAREN_RE = re.compile(r"[^\s$<>;&|(){}]\(")
 _ARRAY_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=$")
 
 
+# Measured with zsh 5.9: `${(e)X}` evaluates X's text. `${~X}` and `$~X`
+# turn X's text into a pattern whose glob qualifier can run code. We can
+# match the braced forms by their first character alone: bash rejects
+# `${(`, `${~`, `${=` and `${^` as bad substitutions, so this wider match
+# costs no working bash expansion. The unbraced `$~`, `$=` and `$^` are
+# matched too. Bash prints them literally; denying them is the accepted
+# over-match. The GLOB_SUBST option is read from dequoted words instead
+# (_sets_glob_subst), because quoting cannot hide its name.
+def _zsh_param_code(raw):
+    """Whether *raw* holds a zsh parameter form (`${(e)X}`, `${~X}`, `$~X`,
+    `$=X`, `$^X`) outside single quotes, also inside an unquoted heredoc
+    body. A backslash before the `$` does not hide it (see below)."""
+    if re.search(r"\$\{?[(~=^]", raw) is None:
+        return False
+
+    def has_expansion(text, quoting=True):
+        quote = None
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "\\" and quote != "'":
+                if text[i + 1:i + 2] == "$":
+                    # A shell payload in double quotes reaches here with
+                    # its `\$` kept (the tokenizer matches shlex), but the
+                    # outer shell turns `\$` into `$` before zsh reads it:
+                    # `zsh -c "X='\$(cmd)'; echo \${(e)X}"` runs cmd.
+                    # So the `$` stays live.
+                    i += 1
+                    continue
+                i += 2
+                continue
+            if quoting and ch in ("'", '"'):
+                if quote is None:
+                    quote = ch
+                elif quote == ch:
+                    quote = None
+            elif ch == "$" and quote != "'" and text.startswith(
+                    ("${(", "${~", "${=", "${^", "$~", "$=", "$^"), i):
+                return True
+            i += 1
+        return False
+
+    try:
+        text, heredocs = _split_heredocs(raw)
+    except ValueError:
+        return has_expansion(raw)
+    return has_expansion(text) or any(
+        has_expansion(body, quoting=False)
+        for _, quoted_delim, body, _ in heredocs if not quoted_delim)
+
+
+# Measured with zsh 5.9, an unquoted `=name` expands to the command's
+# full path. Bash never runs such a word as a command. As an argument it
+# is rare, so denying it is safe. Skip the test operators `= ` and `==`
+# and the `[[ ]]` regex operator `=~`.
+def _zsh_equals_word(raw):
+    """Whether *raw* holds an unquoted word that starts with `=` and has a
+    name after it (`=git`). The `=` must follow whitespace or one of
+    `;&|(){}` and a backtick, and must not be escaped (`foo\\ =git` is one
+    word)."""
+    if not isinstance(raw, str) or "=" not in raw:
+        return False
+    try:
+        text = _strip_heredocs(raw)
+    except ValueError:
+        text = raw
+    # zsh drops a backslash-newline before it splits words, so
+    # `true; \<newline>=git` runs =git. Drop each unescaped one first.
+    text = re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", text)
+    mask, _quote = _quote_mask(text)
+    for i, ch in enumerate(text):
+        if ch != "=" or mask[i] or i + 1 == len(text):
+            continue
+        if i and (mask[i - 1] or not (
+                text[i - 1].isspace() or text[i - 1] in ";&|(){}`")):
+            continue
+        following = text[i + 1]
+        if not following.isspace() and following not in "=~":
+            return True
+    return False
+
+
 def _zsh_code_word(raw):
-    """Whether text *raw* holds a word with zsh code in an unquoted `(` --
-    see _ARRAY_ASSIGN_RE's comment. A `(` inside `[[ ... ]]` is a bash
+    """Whether *raw* uses zsh parameter code, expands `=word`, or holds code
+    in an unquoted `(` (see _ARRAY_ASSIGN_RE). A `(` inside `[[ ... ]]` is a bash
     regex group (`[[ $b =~ ^(a|b)$ ]]`) and does not count.
 
     Checked on the WHOLE command by _find_statements and _cd_target: the
     statement splitter reads `(` and `)` as a subshell, so no single
     statement keeps the word whole."""
+    if _zsh_param_code(raw):
+        return True
+    if _zsh_equals_word(raw):
+        return True
     if not _ZSH_PAREN_RE.search(raw):
         return False  # fast path: no `(` glued to a word character
     raw = _strip_heredocs(raw)
@@ -5695,14 +5831,111 @@ def _zsh_code_word(raw):
     return False
 
 
+_ZSH_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+_ZSH_SPECIAL_ARRAY_RE = re.compile(
+    r"^(?:functions|functions_source|aliases|galiases|saliases|dis_aliases|"
+    r"dis_galiases|dis_saliases|dis_functions|commands|nameddirs|userdirs|"
+    r"options|builtins|dis_builtins|reswords|dis_reswords)(?:\[[^\]]*\])?\+?=")
+
+
+# Measured with zsh 5.9, eval expands a newly defined alias, writing to
+# functions defines a callable function, and hash binds a name to a path.
+# The hook cannot follow a name defined in the command. Profile aliases
+# defined before the command are outside this check's scope (see #246).
+# A structural word the scanner leaves at the head (`then`, `do`, `{`, `!`)
+# is skipped, so `if true; then alias tt=git; fi` is still seen.
+def _defines_command_name(argv):
+    """Whether statement *argv* defines a command name zsh will later run:
+    `alias`, `hash`, or a write to a special array (`functions[tt]=...`)."""
+    index = 0
+    while index < len(argv) and (_ZSH_ASSIGNMENT_RE.match(argv[index])
+                                 or argv[index] in _HEAD_LEAD_WORDS):
+        if _ZSH_SPECIAL_ARRAY_RE.match(argv[index]):
+            return True
+        index += 1
+    while index < len(argv) and (
+            argv[index] in _HEAD_LEAD_WORDS or argv[index] in (
+                "builtin", "command", "noglob", "nocorrect", "exec", "-")):
+        index += 1
+    if index == len(argv):
+        return False
+
+    head = argv[index]
+    if head == "alias":
+        return any("=" in word for word in argv[index + 1:])
+    if head == "hash":
+        return any("=" in word or (word.startswith("-")
+                                   and not word.startswith("--")
+                                   and ("p" in word or "d" in word))
+                   for word in argv[index + 1:])
+    if head in ("typeset", "declare", "local", "export", "readonly",
+                "integer", "float"):
+        return any(_ZSH_SPECIAL_ARRAY_RE.match(word)
+                   for word in argv[index + 1:])
+    return False
+
+
+# Measured with zsh 5.9: zsh removes quotes and backslashes before `setopt`
+# reads its argument, so `setopt glob'subst'`, `glob""subst` and `glob\subst`
+# all turn GLOB_SUBST on. With it on, `X='*(e:cmd:)'; echo $X` runs cmd.
+# _scan_commands already yields quote-removed words, so a word that merely
+# NAMES the option is enough to deny: it may come from `setopt`, `unsetopt`,
+# `emulate`, `set -o` or `zsh -o`, and the `no` form turns it on in an
+# `unsetopt`. A word holding an expansion after those commands
+# (`setopt $o`, `set -o $o`) can name it at run time, so it is denied too.
+_GLOB_SUBST_NAMES = ("globsubst", "noglobsubst", "oglobsubst",
+                     "onoglobsubst")
+_OPTION_COMMANDS = ("setopt", "unsetopt", "emulate")
+
+
+def _sets_glob_subst(argv):
+    """Whether statement *argv* names the GLOB_SUBST option, or may name it
+    through an expansion (`setopt $o`). Over-matches: `echo globsubst`
+    does too, and is denied."""
+    for word in argv:
+        name = word.lower().replace("_", "").lstrip("-+")
+        if name in _GLOB_SUBST_NAMES or (
+                word[:1] in ("-", "+") and name.endswith("globsubst")):
+            return True
+    index = 0
+    while index < len(argv) and (
+            _ZSH_ASSIGNMENT_RE.match(argv[index])
+            or argv[index] in _HEAD_LEAD_WORDS
+            or argv[index] in ("builtin", "command", "noglob", "nocorrect",
+                               "exec", "-")):
+        index += 1
+        # `command -p setopt $o`: skip the precommand's own options.
+        while (index < len(argv) and argv[index - 1] in ("command", "exec")
+               and argv[index].startswith("-") and argv[index] != "-"):
+            index += 1
+    if index == len(argv):
+        return False
+    rest = argv[index + 1:]
+    if argv[index] in _OPTION_COMMANDS:
+        return any(_carries_expansion(word) for word in rest)
+    if argv[index] == "set":
+        if "--" in rest:
+            rest = rest[:rest.index("--")]  # then positional arguments
+        # `set -o $o`, and a bundle holding o (`set -eo $o`).
+        takes_name = any(word[:1] in ("-", "+") and word[1:2] != "-"
+                         and "o" in word[1:] for word in rest)
+        return takes_name and any(_carries_expansion(word) for word in rest)
+    return False
+
+
 def _zsh_code_in(cmd):
     """Whether *cmd*, or any code it runs -- a shell payload, `eval`, a
-    `$( )` body, a heredoc fed to a shell -- holds a zsh code word. Inside
-    quotes the outer check cannot see it: `zsh -c "echo /tmp(e:'cmd':)"`
-    runs cmd (PR #121 review, measured). Propagates ValueError."""
+    `$( )` body, a heredoc fed to a shell -- defines a command name or
+    holds a zsh code word. Inside quotes the outer check cannot see it:
+    `zsh -c "echo /tmp(e:'cmd':)"` runs cmd (PR #121 review, measured).
+    Propagates ValueError."""
     if _zsh_code_word(cmd):
         return True
-    texts = {getattr(argv, "code", None) for argv in _scan_commands(cmd)}
+    texts = set()
+    for argv in _scan_commands(cmd):
+        if _defines_command_name(argv) or _sets_glob_subst(argv):
+            return True
+        texts.add(getattr(argv, "code", None))
     return any(text and text != cmd and _zsh_code_word(text)
                for text in texts)
 
@@ -5952,6 +6185,11 @@ def _verb_runs_after_chain(cmd, verb):
                for argv in scanned)
 
 
+def _exact_cd_path(match):
+    """The literal path word of an exact cd, with any quotes removed."""
+    return match.group("bare") or match.group("quoted")
+
+
 # How many nested whole-command subshells _cd_target unwraps. Deeper is
 # _SCOPE_UNKNOWN: 1,100 nested `( ... )` once recursed past Python's limit,
 # and the crash let the command through (PR #121 review).
@@ -5968,10 +6206,11 @@ def _cd_target(cmd, verb=None):
     that never runs (`false && cd /tmp; git push origin main`), and `$C X`
     with C=cd. Each read as a push in another project while it ran HERE.
 
-    1. The command opens with a plain `cd`, ONE literal absolute path in
-       [A-Za-z0-9._/@+-] (no quotes, `~`, `$`, globs or backslashes), then
-       `&&` -- checked on the RAW text. If the `cd` fails, `&&` skips the
-       next command, but a later `;`, `||` or newline still runs it HERE,
+    1. The command opens with a plain `cd`, ONE literal absolute or relative
+       path word, then `&&`. The raw word uses the _EXACT_CD_RE alphabet.
+       A single pair of matching quotes also permits spaces after the first
+       character. Leading `-` and `+` are excluded. If the `cd` fails, `&&`
+       skips the next command, but a later `;`, `||` or newline still runs it HERE,
        so every run of *verb* must sit inside the unbroken `&&` chain
        (_verb_runs_after_chain, #154). A background `&` or
        `coproc` anywhere voids the shape. The answer is that path. The
@@ -5997,10 +6236,9 @@ def _cd_target(cmd, verb=None):
        is taken from the shorter command; anything else is read from the
        whole command.
 
-    Legitimate multi-`cd` shapes (`cd /a && npm ci && cd /a && git push`,
-    `cd sub && git push`) are unknown now; that cost was accepted. A file
-    the command sources, or a script it runs, may change directory too; that
-    is outside the command text and not read.
+    Legitimate multi-`cd` shapes like `cd /a && npm ci && cd /a && git push`
+    are unknown. A sourced file or script may also change directory outside
+    the visible command text.
 
     *verb* is the run rule 2a checks; with none, any nested statement
     counts. Propagates ValueError from the scanner.
@@ -6031,15 +6269,16 @@ def _cd_target(cmd, verb=None):
     hidden = (_defines_function(cmd) or _EXPORTED_FUNCTION in cmd or
               _zsh_code_in(cmd))
     match = _EXACT_CD_RE.match(cmd)
+    path = _exact_cd_path(match) if match else None
     # A background job cannot move this shell, so it voids only the exact
     # shape: `cd /x && true & cmd` runs the cd in the background.
-    if (match and not hidden and movers == [0] and
+    if (path is not None and not hidden and movers == [0] and
             not _runs_in_background(cmd) and
-            list(scanned[0]) == ["cd", match.group(1)]):
+            list(scanned[0]) == ["cd", path]):
         if (_verb_runs_nested(cmd, scanned, verb) or
                 _verb_runs_after_chain(cmd, verb)):
             return _SCOPE_UNKNOWN
-        return match.group(1)
+        return path
     if movers or hidden:
         return _SCOPE_UNKNOWN
     return None
@@ -6051,6 +6290,8 @@ def _git_redirect_target(argv, words):
     None means "no redirect option": the run obeys the shell's cwd, so the
     `cd` rules answer for it. _SCOPE_UNKNOWN means a redirect IS present but
     does not name one resolvable directory -- callers read that as this repo.
+    A path carrying expansion or starting with `~` returns _SCOPE_UNKNOWN
+    because the shell's environment can differ from the hook's.
 
     git applies `-C` first and resolves `--git-dir` / `--work-tree` from
     there, and a push updates the GIT DIR, so `--git-dir` decides when it is
@@ -6110,6 +6351,8 @@ def _git_redirect_target(argv, words):
     if "-C" in seen and len(seen) > 1:
         return _SCOPE_UNKNOWN
     path = gitdir if gitdir is not None else chdir
+    if path is not None and (_carries_expansion(path) or path.startswith("~")):
+        return _SCOPE_UNKNOWN
     if (path is not None and not path.startswith(("/", "~")) and
             (env_gitdir or _RELATIVE_REDIRECT_RE.fullmatch(path))):
         # A literal relative GIT_DIR, `-C` or `--git-dir` names a directory
@@ -6622,6 +6865,60 @@ def _anchor(path, base):
     return None
 
 
+def _resolve_cd_scope(target, base):
+    """Resolve a relative cd logically from the payload cwd, if enterable."""
+    if target is None or target is _SCOPE_UNKNOWN:
+        return target
+    absolute = _normalised_cd_target(target) is not None
+    if not absolute and os.environ.get("CDPATH") and (
+            target not in (".", "..") and
+            not target.startswith(("./", "../"))):
+        return _SCOPE_UNKNOWN
+    try:
+        if ".." in target.split("/"):
+            # Measured on macOS: from `/`, bash and zsh run
+            # `cd ./var/../tftpboot/..` and land in /private, because
+            # /tftpboot is missing so the shell falls back to the physical
+            # path. A shell run with `set -P` (bash) or `setopt chase_dots`
+            # (zsh) is physical too, and the hook cannot see that. So a `..`
+            # is only read logically when logical and physical agree.
+            if not _dotdot_is_stable(target, base, absolute):
+                return _SCOPE_UNKNOWN
+        if absolute:
+            return target
+        # _anchor rejects NUL and requires an absolute base for a relative
+        # path. A missing relative target may still be found via a
+        # shell-only CDPATH.
+        joined = _anchor(target, base)
+        if (joined is not None and os.path.isdir(joined) and
+                os.access(joined, os.X_OK)):
+            return joined
+    except (OSError, ValueError):
+        pass
+    return _SCOPE_UNKNOWN
+
+
+def _dotdot_is_stable(target, base, absolute):
+    """Whether every `..` in *target* reads the same logically and
+    physically: each prefix before a `..` is an existing directory, and the
+    folded path resolves to the same place as the raw one."""
+    if _has_nul(target) or _has_nul(base):
+        return False
+    raw = os.path.expandvars(os.path.expanduser(target))
+    if not absolute:
+        if not (isinstance(base, str) and base.startswith("/")):
+            return False
+        raw = os.path.join(base, raw)
+    parts = raw.split("/")
+    for index, part in enumerate(parts):
+        if part == "..":
+            prefix = "/".join(parts[:index]) or "/"
+            if not os.path.isdir(prefix):
+                return False
+    return (os.path.realpath(os.path.normpath(raw)) ==
+            os.path.realpath(raw))
+
+
 def _physical_path(path, base):
     """*path* resolved as the KERNEL resolves it -- `env -C`, `GIT_DIR`,
     `git -C` all chdir(2) or open through it -- so `link/..` is the
@@ -6716,10 +7013,9 @@ def _command_scope_uncached(cmd, verb=None, base=None):
     scope = _command_scope_raw(cmd, verb, base)
     if _has_nul(scope):
         return _SCOPE_UNKNOWN  # see _has_nul: no directory to follow
-    if (isinstance(scope, str) and base is not None and
-            _normalised_cd_target(scope) is None):
+    if isinstance(scope, str) and not scope.startswith("/"):
         anchored = _anchor(scope, base)
-        return anchored if anchored is not None else scope
+        return anchored if anchored is not None else _SCOPE_UNKNOWN
     return scope
 
 
@@ -6746,12 +7042,13 @@ def _command_scope_raw(cmd, verb=None, base=None):
     command. A hidden git run (#98) scores as unknown -- see the loop.
     *base* is the absolute payload cwd, or None. A relative GIT_DIR or
     `env -C` is anchored to it or to an absolute `cd`, else unknown.
-    _cd_target itself returns only an absolute path, None or unknown.
+    A relative `cd` is resolved against *base* before scoring the runs.
 
     Propagates ValueError like _cd_target does.
     """
     words = list(verb) if verb else []
     target = _cd_target(cmd, words or None)
+    target = _resolve_cd_scope(target, base)
     if not words:
         return target
     statements = _find_statements(cmd, words)
@@ -6860,13 +7157,11 @@ _MAX_INPUT_BYTES = 8 * _MAX_COMMAND_BYTES
 def _read_hook_input():
     """``(data, problem)`` from the hook's stdin (#152).
 
-    *problem* is None, or a phrase each hook puts in its own deny. A raise
-    here would exit 1, a NON-BLOCKING error, and the call would run, so every
-    failure is caught: a closed stdin (`sys.stdin` is None), a closed file
-    (ValueError), a non-blocking stdin with no data (read returns None),
-    invalid UTF-8, and the parse, where deep nesting raises RecursionError,
-    not a ValueError. *data* is whatever the JSON holds; each
-    hook still checks its shape.
+    *problem* is None, or a phrase each hook puts in its own deny. The crash
+    guard exits 2 on an uncaught exception. Catching read and parse failures
+    here gives the deny a specific reason, including for closed stdin,
+    invalid UTF-8, and JSON nested deeply enough to raise RecursionError.
+    *data* is whatever the JSON holds. Each hook still checks its shape.
     """
     try:
         raw = sys.stdin.buffer.read(_MAX_INPUT_BYTES + 1)
@@ -6888,6 +7183,7 @@ def _read_hook_input():
 # the review measured `$x` on 2 MB of lines at 8.5-10.3 s under load -- so the
 # hook stops itself first, at 7 s, and denies.
 _DEADLINE_SECONDS = 7.0
+_DEADLINE_ARMED = []
 _DEADLINE_REASON = (
     "This guard ran out of time checking this command; split it or write "
     "large content with the Write tool.")
@@ -6916,6 +7212,8 @@ def _arm_deadline():
     `try` that would swallow SystemExit. Writes straight to fd 1 for the same
     reason. A platform without setitimer runs without the deadline, as before.
     """
+    if _DEADLINE_ARMED:
+        return
     import signal as _signal
     if not hasattr(_signal, "setitimer"):
         return
@@ -6942,6 +7240,7 @@ def _arm_deadline():
     _signal.signal(_signal.SIGALRM, _expired)
     _signal.setitimer(_signal.ITIMER_REAL, _deadline_seconds(
         os.environ.get("HARDEN_HOOK_DEADLINE")))
+    _DEADLINE_ARMED.append(True)
 
 
 def _disarm_deadline():
@@ -6949,6 +7248,7 @@ def _disarm_deadline():
     import signal as _signal
     if hasattr(_signal, "setitimer"):
         _signal.setitimer(_signal.ITIMER_REAL, 0)
+    _DEADLINE_ARMED.clear()
 
 
 # Non-empty once _emit has started. A list, so no `global` is needed.
@@ -6969,8 +7269,8 @@ def _add_alias_note(spec):
     """Put a sentence before a deny reason in *spec*: the runner sentence
     when the noted command sets a config key or environment variable that
     makes git run another program (and no alias source), else the alias
-    sentence when it sets a git alias or include. Never raises: a crash
-    here would turn the deny into exit 1, which lets the command run."""
+    sentence when it sets a git alias or include. The crash guard exits 2 on
+    an uncaught exception. Catch note errors here to preserve the deny reason."""
     try:
         if (len(_NOTED_COMMAND) == 2 and
                 _sets_git_runner_config(_NOTED_COMMAND[0]) and
@@ -7260,7 +7560,7 @@ def _git_common_dir(path):
         proc = _subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
              "--git-common-dir"],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, timeout=5)
     except (OSError, ValueError, _subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
@@ -7403,14 +7703,146 @@ def _effective_cwd(cmd, default, verb=None, base=None):
     return resolved
 # --- END shared repo identity v1 ---
 
+
+# --- BEGIN shared repo config v1 (keep in sync across all hook copies) ---
+import json as _cfg_json
+import os as _cfg_os
+import re as _cfg_re
+import stat as _cfg_stat
+
+_REPO_CONFIG_NAME = "harden-repo.json"
+_CFG_MAX_BYTES = 16384
+
+
+def _repo_config_path():
+    hook_dir = _cfg_os.path.dirname(_cfg_os.path.abspath(__file__))
+    return _cfg_os.path.join(_cfg_os.path.dirname(hook_dir), _REPO_CONFIG_NAME)
+
+
+def _cfg_unique_keys(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError(f"duplicate key {key!r}")
+        obj[key] = value
+    return obj
+
+
+def _cfg_bad_constant(value):
+    raise ValueError(f"{value} is not a JSON number")
+
+
+def _cfg_object(value, name, keys):
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    for key in value:
+        if key not in keys:
+            raise ValueError(f"unknown key {key!r} in {name}")
+    return value
+
+
+def _cfg_names(values, name, minimum, maximum, pattern, reserved=()):
+    if not isinstance(values, list) or not minimum <= len(values) <= maximum:
+        raise ValueError(f"{name} must be a list with {minimum} to {maximum} entries")
+    seen = set()
+    for index, item in enumerate(values):
+        if not isinstance(item, str) or not _cfg_re.fullmatch(pattern, item):
+            raise ValueError(f"{name}[{index}] must be a string matching {pattern}")
+        if item in reserved:
+            raise ValueError(f"{name}[{index}] {item!r} is reserved")
+        if item in seen:
+            raise ValueError(f"{name}[{index}] repeats {item!r}")
+        seen.add(item)
+    return tuple(values)
+
+
+def _load_repo_config(path=None):
+    config = {"branch_prefixes": (), "release_style": "version",
+              "package_dirs": ("packages",), "allow_skip_env": True}
+    try:
+        path = _repo_config_path() if path is None else path
+        try:
+            info = _cfg_os.lstat(path)
+        except FileNotFoundError:
+            return config, None
+        if not _cfg_stat.S_ISREG(info.st_mode):
+            raise ValueError("expected a regular file")
+        flags = _cfg_os.O_RDONLY | _cfg_os.O_NOFOLLOW | getattr(_cfg_os, "O_NONBLOCK", 0)
+        fd = _cfg_os.open(path, flags)
+        try:
+            # The file may have changed since lstat.
+            if not _cfg_stat.S_ISREG(_cfg_os.fstat(fd).st_mode):
+                raise ValueError("expected a regular file")
+            data = bytearray()
+            while chunk := _cfg_os.read(fd, _CFG_MAX_BYTES + 1 - len(data)):
+                data.extend(chunk)
+                if len(data) > _CFG_MAX_BYTES:
+                    raise ValueError(f"file exceeds {_CFG_MAX_BYTES} bytes")
+        finally:
+            _cfg_os.close(fd)
+        obj = _cfg_json.loads(data.decode("utf-8"), object_pairs_hook=_cfg_unique_keys,
+                              parse_constant=_cfg_bad_constant)
+        _cfg_object(obj, "config", ("version", "branch_prefixes", "releases", "preflight"))
+        version = obj.get("version", 1)
+        if type(version) is not int or version != 1:
+            raise ValueError("version must be the integer 1")
+        if "branch_prefixes" in obj:
+            config["branch_prefixes"] = _cfg_names(
+                obj["branch_prefixes"], "branch_prefixes", 0, 16, r"[a-z][a-z0-9-]{0,31}",
+                ("feature", "release", "hotfix", "main", "master", "develop"))
+        releases = _cfg_object(obj.get("releases", {}), "releases", ("style", "package_dirs"))
+        style = releases.get("style", config["release_style"])
+        if style not in ("version", "package"):
+            raise ValueError("releases.style must be 'version' or 'package'")
+        config["release_style"] = style
+        if "package_dirs" in releases:
+            if style != "package":
+                raise ValueError("releases.package_dirs requires style 'package'")
+            config["package_dirs"] = _cfg_names(releases["package_dirs"], "releases.package_dirs",
+                                                1, 8, r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")
+        preflight = _cfg_object(obj.get("preflight", {}), "preflight", ("allow_skip_env",))
+        config["allow_skip_env"] = preflight.get("allow_skip_env", config["allow_skip_env"])
+        if not isinstance(config["allow_skip_env"], bool):
+            raise ValueError("preflight.allow_skip_env must be a boolean")
+        return config, None
+    except Exception as exc:  # noqa: BLE001 -- Fail closed on any read or config error.
+        return None, " ".join(str(exc).splitlines()) or type(exc).__name__
+
+
+def _repo_config_reason(problem):
+    return (f"❌ {_repo_config_path()}: {problem}. This hook denies the command until "
+            "you fix or remove the file. A missing file means defaults.")
+# --- END shared repo config v1 ---
+
+# Cover module initialization and main() with the same deadline.
+if __name__ == "__main__":
+    _arm_deadline()
+
+
 # Set once by main(), which is where the command first becomes known; every
 # git read and CHANGELOG lookup below goes through _hook_cwd() so none of
 # them can silently fall back to the hook's own directory.
 _HOOK_CWD = None
 
+CREATE = ["gh", "pr", "create"]
+CREATE_ALIAS = ["gh", "pr", "new"]
+
 
 def _hook_cwd():
     return _HOOK_CWD or os.environ.get("CLAUDE_PROJECT_DIR", ".")
+
+
+@lru_cache(maxsize=1)
+def _worktree_root(cwd):
+    try:
+        proc = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return os.path.realpath(proc.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
 
 
 def _changelog_path():
@@ -7425,15 +7857,7 @@ def _changelog_path():
     at the NEAREST CHANGELOG.md, so one in a subdirectory shadows the root's.
     """
     cwd = _hook_cwd()
-    top = None
-    try:
-        proc = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10)
-        if proc.returncode == 0 and proc.stdout.strip():
-            top = os.path.realpath(proc.stdout.strip())
-    except (OSError, ValueError, subprocess.SubprocessError):
-        top = None
+    top = _worktree_root(cwd)
     here = os.path.realpath(cwd)
     if top is not None:
         try:
@@ -7462,12 +7886,12 @@ def get_branch_commits():
         for base in ["origin/develop", "origin/main"]:
             check = subprocess.run(
                 ["git", "rev-parse", "--verify", base],
-                capture_output=True, text=True, cwd=cwd
+                capture_output=True, text=True, cwd=cwd, timeout=5
             )
             if check.returncode == 0:
                 result = subprocess.run(
                     ["git", "log", f"{base}..HEAD", "--oneline", "--no-merges"],
-                    capture_output=True, text=True, cwd=cwd
+                    capture_output=True, text=True, cwd=cwd, timeout=5
                 )
                 if result.returncode == 0:
                     commits = result.stdout.strip().split('\n')
@@ -7494,7 +7918,7 @@ def check_changelog_modified_on_branch():
         for base in ["origin/develop", "origin/main"]:
             check = subprocess.run(
                 ["git", "rev-parse", "--verify", base],
-                capture_output=True, text=True, cwd=cwd
+                capture_output=True, text=True, cwd=cwd, timeout=5
             )
             if check.returncode == 0:
                 # The file _changelog_path() found, not a bare `CHANGELOG.md`:
@@ -7503,7 +7927,7 @@ def check_changelog_modified_on_branch():
                 result = subprocess.run(
                     ["git", "diff", "--name-only", f"{base}...HEAD", "--",
                      _changelog_path()],
-                    capture_output=True, text=True, cwd=cwd
+                    capture_output=True, text=True, cwd=cwd, timeout=5
                 )
                 if result.returncode == 0:
                     return bool(result.stdout.strip()), base
@@ -7517,6 +7941,7 @@ def check_changelog_modified_on_branch():
 
 
 _BRANCH_CACHE = {}
+_DEFAULT_BASE_CACHE = {}
 
 
 def _get_current_branch():
@@ -7537,7 +7962,7 @@ def _get_current_branch():
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=cwd
+            capture_output=True, text=True, cwd=cwd, timeout=5
         )
         if result.returncode == 0:
             branch = result.stdout.strip()
@@ -7547,17 +7972,21 @@ def _get_current_branch():
     return branch
 
 
-def check_release_version_section(version):
-    """Check if CHANGELOG.md has a `## [version]` section with at least one entry.
-
-    Used when the PR is opened from a release/X.Y.Z or hotfix/X.Y.Z branch — the
-    release-prep commit moves [Unreleased] entries into [version], so requiring
-    [Unreleased] content would block every release PR.
-    """
+def check_release_version_section(version, changelog_path=None):
+    """Check for a populated release section. Explicit paths use the work tree root."""
+    name = "CHANGELOG.md"
+    location = ""
     try:
-        changelog_path = _changelog_path()
+        if changelog_path is None:
+            changelog_path = _changelog_path()
+        else:
+            cwd = _hook_cwd()
+            root = _worktree_root(cwd) or cwd
+            changelog_path = os.path.join(root, changelog_path)
+            name = os.path.relpath(changelog_path, root)
+            location = f" in {name}"
         if not os.path.exists(changelog_path):
-            return False, "CHANGELOG.md not found"
+            return False, f"{name} not found"
         with open(changelog_path, 'r') as f:
             content = f.read()
         pattern = (
@@ -7566,23 +7995,31 @@ def check_release_version_section(version):
         )
         m = re.search(pattern, content, re.DOTALL)
         if not m:
-            return False, f"[{version}] section not found in CHANGELOG.md"
+            return False, f"[{version}] section not found in {name}"
         body = m.group(1)
         entries = [line.strip() for line in body.split('\n')
                    if line.strip().startswith('- ')]
         if entries:
-            return True, f"{len(entries)} entries found under [{version}]"
-        return False, f"[{version}] section has no entries"
+            return True, f"{len(entries)} entries found under [{version}]{location}"
+        return False, f"[{version}] section has no entries{location}"
     except (PermissionError, OSError) as e:
-        return None, f"Cannot read CHANGELOG.md: {e}"
+        return None, f"Cannot read {name}: {e}"
     except Exception as e:
-        return None, f"Unexpected error checking changelog: {e}"
+        return None, f"Unexpected error checking changelog{location}: {e}"
 
 
 def _release_version_from_branch(branch):
     """Extract X.Y.Z version if branch is release/X.Y.Z or hotfix/X.Y.Z, else ''."""
     m = re.match(r'^(?:release|hotfix)/v?(\d+\.\d+\.\d+(?:[-.][\w.]+)?)$', branch)
     return m.group(1) if m else ""
+
+
+def _package_release_from_branch(branch):
+    match = re.fullmatch(
+        r"(?:release|hotfix)/([a-z0-9]+(?:-[a-z0-9]+)*)-v(\d+\.\d+\.\d+(?:[-.][\w.]+)?)",
+        branch,
+    )
+    return match.groups() if match else ("", "")
 
 
 def check_changelog_has_unreleased_entries():
@@ -7643,7 +8080,7 @@ def check_changelog_has_unreleased_entries():
         return None, f"Unexpected error checking changelog: {e}"
 
 
-def _pr_create_argvs(command):
+def _pr_create_argvs(command, verbs=(CREATE, CREATE_ALIAS)):
     """Tokens of EVERY real PR-create statement, or None if unparseable.
 
     Returns None only when the command cannot be parsed (callers deny); an
@@ -7654,9 +8091,12 @@ def _pr_create_argvs(command):
     outright (`gh -C <dir> pr create`) creates nothing and is left out
     (_gh_refuses_run, #156 G-14).
     """
-    words = ["gh", "pr", "create"]
     try:
-        return [argv for argv in _find_statements(command, words)
+        # No print-only filter here: a comment fold (`echo `# it's`` on the
+        # line before) can make a real `gh pr create` read as part of an
+        # `echo` statement, and dropping it let the PR through.
+        return [argv for words in verbs
+                for argv in _find_statements(command, words)
                 if not _gh_refuses_run(argv, words)]
     except ValueError:
         return None
@@ -7685,33 +8125,124 @@ def _flag_value(argv, flag):
     return ""
 
 
+_PR_VALUE_SHORT = "aBbFHlmpRrTt"
+_PR_VALUE_LONG = frozenset((
+    "--assignee", "--base", "--body", "--body-file", "--head", "--label",
+    "--milestone", "--project", "--recover", "--reviewer", "--template",
+    "--title", "--repo"))
+_PR_FLAG_LONG = frozenset((
+    "--draft", "--dry-run", "--editor", "--fill", "--fill-first",
+    "--fill-verbose", "--no-maintainer-edit", "--web", "--help"))
+# A bundled or attached short option (`-dt`, `-tX`, `-Hmain`).
+_PR_BUNDLED_SHORT = re.compile(r"^-[^-].+")
+
+
+def _plain_long_options(argv):
+    """Last value of each long option, or None if argv is not read plainly.
+
+    The back-merge exemption rests on this and nothing else. Plain means:
+    every option is a long one the hook knows (`--head V`, `--head=V`, a
+    value option or a flag); no `-H` / `-B` in any form; no bundled or
+    attached short option; no abbreviation of a long option; and no value
+    word that starts with `-` (gh would read it as an option, not a value),
+    except a lone `-` after `--body-file` (the body from stdin).
+    Anything else returns None and the exemption is withheld.
+    """
+    found = {}
+    words = iter(argv)
+    for token in words:
+        if token == "--" or _PR_BUNDLED_SHORT.match(token):
+            return None
+        if token.startswith("--"):
+            name, equals, value = token.partition("=")
+            if name in _PR_VALUE_LONG:
+                if not equals:
+                    value = next(words, "")
+                    # A lone `-` is stdin for `--body-file`; for any other
+                    # option, or a longer word, gh may read it as an option.
+                    if value.startswith("-") and not (
+                            name == "--body-file" and value == "-"):
+                        return None
+                found[name] = value
+            elif name not in _PR_FLAG_LONG:
+                return None
+        elif token in ("-H", "-B"):
+            return None
+        elif len(token) == 2 and token[0] == "-" and token[1] in _PR_VALUE_SHORT:
+            value = next(words, "")
+            if value.startswith("-"):
+                return None
+    return found
+
+
 def _base_from_argv(argv):
-    """The --base value of one PR-create statement, defaulting to develop."""
-    return _flag_value(argv, "--base") or "develop"
+    """The --base of one PR-create statement (message use), default develop."""
+    return (_plain_long_options(argv) or {}).get("--base") or "develop"
 
 
 def _head_from_argv(argv):
-    """The --head value of one PR-create statement, defaulting to gh's own."""
-    value = _flag_value(argv, "--head")
+    """The --head of one PR-create statement, defaulting to gh's own."""
+    value = (_plain_long_options(argv) or {}).get("--head")
     if value:
         return value.split(":")[-1]
     return _get_current_branch()
 
 
+def _default_base_is_develop(head):
+    """Verify the branch setting and origin/HEAD before exempting an implicit base."""
+    if not head:
+        return False
+    cwd = _hook_cwd()
+    key = (cwd, head)
+    if key in _DEFAULT_BASE_CACHE:
+        return _DEFAULT_BASE_CACHE[key]
+    is_develop = False
+    try:
+        config = subprocess.run(
+            ["git", "config", "--get", f"branch.{head}.gh-merge-base"],
+            capture_output=True, text=True, cwd=cwd, timeout=5
+        )
+        # git config --get exits 1 when the key is unset.
+        if config.returncode == 1 or (
+                config.returncode == 0 and config.stdout.rstrip("\n") == "develop"):
+            ref = subprocess.run(
+                ["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+                capture_output=True, text=True, cwd=cwd, timeout=5
+            )
+            is_develop = ref.returncode == 0 and ref.stdout.rstrip("\n") == "origin/develop"
+    except Exception as e:
+        print(f"Warning: Failed to get default PR base: {e}", file=sys.stderr)
+    _DEFAULT_BASE_CACHE[key] = is_develop
+    return is_develop
+
+
+def _backmerge_pair(argv):
+    """(base, head) of one PR-create statement if it reads plainly, else None."""
+    options = _plain_long_options(argv)
+    if options is None:
+        return None
+    head = _head_from_argv(argv)
+    base = options.get("--base")
+    if base:
+        return base, head
+    if _default_base_is_develop(head):
+        return "develop", head
+    return None
+
+
 def get_pr_base_branch(command):
-    """Extract the --base branch from the PR-create command, default develop.
+    """The --base the PR-create command plainly names, else None (message use).
 
     Scoped to the PR-create statement (issue #43): a `--base` appearing inside a
-    quoted body or heredoc must not be mistaken for the real base, which would
-    misroute the back-merge exemption.
+    quoted body or heredoc must not be mistaken for the real base. None when the
+    command names no base or does not read plainly: the message must not claim
+    `develop` for a command that does not say so (X-033). The exemption does
+    not use this; see _backmerge_pair.
     """
     argv = _pr_create_argv(command)
-    if argv is not None:
-        return _base_from_argv(argv)
-    base_match = re.search(r'--base(?:\s+|=)(\S+)', command)
-    if base_match:
-        return base_match.group(1)
-    return "develop"  # default base for Git Flow
+    if argv is None:
+        return None
+    return (_plain_long_options(argv) or {}).get("--base") or None
 
 
 def get_pr_head_branch(command):
@@ -7768,7 +8299,7 @@ def add_context(message):
     sys.exit(0)
 
 
-def _targets_this_project(cmd, base=None):
+def _targets_this_project(cmd, base=None, words=CREATE):
     """Check if the command targets a repo within this project."""
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if not project_dir:
@@ -7777,7 +8308,7 @@ def _targets_this_project(cmd, base=None):
     # Issue #43: locate `cd` among real statements, so a path inside a heredoc
     # body or a quoted string cannot veto this guard.
     try:
-        target = _command_scope(cmd, ["gh", "pr", "create"], base)
+        target = _command_scope(cmd, words, base)
     except ValueError:
         # The caller parsed this command already, so this cannot happen;
         # if it ever does, run the guard rather than skip it.
@@ -7826,8 +8357,8 @@ def _targets_this_project(cmd, base=None):
 
 
 def main():
-    # A crash is exit 1, a NON-BLOCKING error: the PR would go ahead. Every
-    # wrong type below is therefore a deny, as in the push hook.
+    # The crash guard exits 2 on an uncaught exception. Check input types
+    # here so the deny identifies the malformed input.
     # Stop before the harness timeout, which would let the tool call
     # through. Armed before the input is read, so a stdin that never
     # closes is bounded too (#152) -- see _arm_deadline.
@@ -7859,23 +8390,25 @@ def main():
     # Bash expands braces before it splits words, so `gh pr {create,}` runs
     # `gh pr create`, but the statement splitter cuts the command at the
     # `{` and found no create at all (#146). Each unquoted group becomes an
-    # expansion first, which reads as a possibly hidden create.
+    # expansion first, which reads as a possibly hidden PR creation.
     command = _neutralise_brace_expansion(command)
-    # Only check for gh pr create commands
+    # Only check for PR creation commands.
     if tool_name != "Bash":
         sys.exit(0)
 
     # Issue #43: only fire on a real PR-create statement, not on those tokens
     # appearing inside a quoted body or heredoc. A parse failure is denied when
-    # its letters hold `prcreate` (_deny_unparseable).
-    _pr_stmts = _pr_create_argvs(command)
-    if _pr_stmts is None:
-        if _deny_unparseable(command, ["gh", "pr", "create"]):
-            block(_UNPARSEABLE_REASON)
-            return
+    # its letters hold either PR creation verb (_deny_unparseable).
+    creates = [(words, _pr_create_argvs(command, (words,)))
+               for words in (CREATE, CREATE_ALIAS)]
+    if any(found is None and _deny_unparseable(command, words)
+           for words, found in creates):
+        block(_UNPARSEABLE_REASON)
+        return
+    creates = [(words, found) for words, found in creates if found]
+    if not creates:
         sys.exit(0)
-    if not _pr_stmts:
-        sys.exit(0)
+    _pr_stmts = [argv for _words, found in creates for argv in found]
 
     # The payload's `cwd` is where a command naming no directory runs (#103);
     # CLAUDE_PROJECT_DIR stands in only when it is unusable. As in the push
@@ -7885,14 +8418,41 @@ def main():
     # and every other Bash call reaches this hook.
     global _HOOK_CWD
     payload_cwd = _payload_cwd(input_data)
+    # Every PR creation must resolve to the same checkout. An unknown or
+    # conflicting checkout could supply a passing CHANGELOG or exempt branch.
+    try:
+        # A plain command has no scope (None); `env -C <cwd>` names the same
+        # checkout as an absolute path. Compare them as one.
+        scopes = {_scope_key(payload_cwd if scope_ is None else scope_)
+                  for scope_ in (_command_scope(command, words, payload_cwd)
+                                 for words, _found in creates)}
+        scope = scopes.pop() if len(scopes) == 1 else _SCOPE_UNKNOWN
+    except ValueError:
+        scope = _SCOPE_UNKNOWN
+    if scope is _SCOPE_UNKNOWN:
+        block("Cannot tell which checkout this PR is created from. Only "
+              "`cd /absolute/path && ...`, `cd \"/absolute/path\" && ...` or "
+              "`cd relative/path && ...` at the very start of the command "
+              "moves it. A relative path needs a usable Bash tool cwd and "
+              "an existing directory, and `..` must not cross a symlink; "
+              "with CDPATH set, write `./name`. Run `gh pr create` as its "
+              "own command or after one of those leading `cd` forms.")
+        return
+
+    # Both verbs agree on the scope, so either can supply the checkout.
+    words = creates[0][0]
     _HOOK_CWD = _effective_cwd(
         command,
         payload_cwd or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
-        ["gh", "pr", "create"], base=payload_cwd)
+        words, base=payload_cwd)
 
     # Skip if targeting a different repo
-    if not _targets_this_project(command, payload_cwd):
+    if not _targets_this_project(command, payload_cwd, words):
         sys.exit(0)
+
+    config, problem = _load_repo_config()
+    if problem is not None:
+        block(_repo_config_reason(problem))
 
     # Git Flow back-merge / sync into develop: merging a release/* or hotfix/*
     # branch (or main) back into develop introduces NO new [Unreleased] entries
@@ -7903,14 +8463,11 @@ def main():
     # EVERY PR-create statement is judged: the exemption applies only when ALL
     # of them are back-merges, so one exempt PR in a chain cannot carry a
     # second, gateable one past the check.
-    if _pr_stmts:
-        _judged = [(_base_from_argv(a), _head_from_argv(a)) for a in _pr_stmts]
-    else:
-        _judged = [(get_pr_base_branch(command), get_pr_head_branch(command))]
+    _judged = [_backmerge_pair(a) for a in _pr_stmts]
     _all_backmerge = all(
-        base in ("develop", "origin/develop") and _is_backmerge_head(head)
-        for base, head in _judged
-    )
+        pair is not None and pair[0] in ("develop", "origin/develop")
+        and _is_backmerge_head(pair[1])
+        for pair in _judged)
     if _all_backmerge:
         backmerge_base, backmerge_head = _judged[0]
         add_context(
@@ -7918,10 +8475,29 @@ def main():
             f"{backmerge_base} (head: {backmerge_head})"
         )
 
-    # Release/hotfix PRs: the release-prep commit moves [Unreleased] entries
-    # into a versioned section — that IS the changelog update. Accept either
-    # [Unreleased] entries OR a populated [X.Y.Z] section matching the branch.
-    release_version = _release_version_from_branch(_get_current_branch())
+    branch = _get_current_branch()
+    package_reason = ""
+    if config["release_style"] == "package":
+        package, version = _package_release_from_branch(branch)
+        if package:
+            cwd = _hook_cwd()
+            root = _worktree_root(cwd) or cwd
+            package_dirs = config["package_dirs"]
+            path = os.path.join(package_dirs[0], package, "CHANGELOG.md")
+            package_reason = f"{path} not found"
+            for directory in package_dirs:
+                if os.path.isdir(os.path.join(root, directory, package)):
+                    path = os.path.join(directory, package, "CHANGELOG.md")
+                    has_release, package_reason = check_release_version_section(version, path)
+                    if has_release is True:
+                        add_context(f"✅ Changelog check (release branch): {package_reason}")
+                    if has_release is None:
+                        block(f"❌ PR BLOCKED: {package_reason}")
+                    break
+            # Like a plain release, fall through to the [Unreleased] check.
+
+    # Plain release branches can use a populated version section or [Unreleased].
+    release_version = _release_version_from_branch(branch)
     if release_version:
         has_release, release_reason = check_release_version_section(release_version)
         if has_release is True:
@@ -7944,12 +8520,15 @@ def main():
             commit_summary += f"\n  ... and {commit_count - 5} more"
 
         base = get_pr_base_branch(command)
+        base = f"'{base}'" if base else "the base this command names"
 
+        if package_reason:
+            reason = f"{package_reason}\n{reason}"
         block(f"""❌ PR BLOCKED: Changelog not updated!
 
 {reason}
 
-This PR targets '{base}' and has {commit_count} commit(s):
+This PR targets {base} and has {commit_count} commit(s):
 {commit_summary}
 
 You MUST add entries under the [Unreleased] section in CHANGELOG.md
