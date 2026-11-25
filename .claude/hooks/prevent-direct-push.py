@@ -15,6 +15,31 @@ import sys
 import subprocess
 
 
+# --- BEGIN crash guard v1 (keep in sync across all hook copies) ---
+def _deny_on_crash(exc_type, exc, tb):
+    # Exit 1 lets the call run. os._exit(2) blocks and drops buffered stdout.
+    try:
+        import traceback
+        traceback.print_exception(exc_type, exc, tb, file=sys.stderr)
+    except Exception:
+        pass
+    try:
+        sys.stderr.write(f"BLOCKED: this guard hook crashed ({exc_type.__name__}); "
+                         "blocking as a safety measure.\n")
+    except Exception:
+        pass
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(2)
+
+
+if __name__ == "__main__":
+    sys.excepthook = _deny_on_crash
+# --- END crash guard v1 ---
+
+
 # --- BEGIN shared command scanner v1 (keep in sync across all hook copies) ---
 # Parses a Bash command into per-statement argv lists so hooks match on real
 # command tokens instead of substring-scanning the whole string (issue #43).
@@ -43,19 +68,10 @@ import subprocess
 #   * the body of a heredoc fed to a shell RUNNER (`bash <<EOF`, `sh -s <<EOF`,
 #     `cat <<EOF | bash`), which is a script rather than data — and is
 #     therefore scanned whether or not the delimiter was quoted.
-# Recursion is capped at _MAX_SCAN_DEPTH levels of nesting to bound work on
-# adversarial input: a payload nested deeper than that is still emitted as an
-# opaque token but is not parsed further. Three levels covers every realistic
-# wrapper stack (`sudo bash -c "eval ..."` is only two).
-#
-# ACCEPTED LIMIT: executed code nested 4+ levels deep — `$($($($(cmd))))` or
-# four stacked `bash -c` payloads — is NOT parsed, so a verb hidden that deep
-# is not matched. This is adversarial-only: no legitimate workflow nests that
-# far, and removing the cap makes work grow with attacker-controlled nesting
-# depth. See specs/043-parse-dont-grep-hook-commands.md. One partial
-# exception: an unparsed `$( ... )` left in COMMAND position with the verb as
-# a whole word inside it is reported as a possible verb by _may_hide_verb, so
-# `$($($($(git push origin main))))` does match, fail-closed.
+# Recursion is capped at _MAX_SCAN_DEPTH to bound work on adversarial input.
+# If a runner payload, substitution body, or any heredoc remains unread at
+# the cap, the scan raises ValueError. Each hook then denies the command
+# when its text names the hook's guarded verb (#95).
 #
 # Fail-closed contract: _scan_commands raises ValueError when it cannot parse
 # reliably (unbalanced quotes, an unterminated substitution). Callers MUST
@@ -1817,6 +1833,15 @@ def _extra_stdin_runner(argv):
         return False
     if not _extra_shell_reads(argv)[1]:
         return False
+    # A wrapper option can take a program name as its value. Only skip
+    # this fallback for a lookup behind plain wrapper names.
+    for index, word in enumerate(argv):
+        if _ENV_ASSIGN_RE.match(word):
+            continue
+        if word == "command" and _command_lookup(argv, index):
+            return False
+        if word not in _RUN_WRAPPERS:
+            break
     raw = getattr(argv, "raw", None)
     if not raw:
         return not any("<<" in word for word in argv)
@@ -2438,6 +2463,12 @@ def _scan_reading(cmd, _depth):
     """The statements of one reading of *cmd*: see _scan_commands_uncached."""
     scanned = []
     stripped, heredocs = _split_heredocs(cmd)
+    at_depth_limit = _depth >= _MAX_SCAN_DEPTH
+    # Skipping nested code at the cap could turn a guarded command into an ALLOW.
+    if at_depth_limit and (
+            any(marker in stripped for marker in ("$(", "`", "<(", ">("))
+            or heredocs):
+        raise ValueError("nested deeper than the scan limit")
     for statement in _split_statements(stripped):
         argv = _Argv(_split_words(statement))
         if not argv:
@@ -2446,17 +2477,17 @@ def _scan_reading(cmd, _depth):
         argv.top = not _depth
         argv.code = cmd  # the whole text this statement was split from
         scanned.append(argv)
-        if _depth >= _MAX_SCAN_DEPTH:
-            continue
         nested = _runner_payload(argv)
         # A tuple holds candidate payloads, each scanned alone (see
         # _payload_after_flag).
         for payload in nested if isinstance(nested, tuple) else (nested,):
             if payload:
+                if at_depth_limit:
+                    raise ValueError("nested deeper than the scan limit")
                 # Propagate ValueError: an unparseable payload must reach
                 # the caller, which denies it, not be silently dropped.
                 scanned.extend(_scan_commands(payload, _depth + 1))
-    if _depth < _MAX_SCAN_DEPTH:
+    if not at_depth_limit:
         # Extracted from the heredoc-STRIPPED text, so a `$(...)` inside a
         # heredoc with a QUOTED delimiter stays excluded — bash performs no
         # expansion there. An UNQUOTED delimiter is the opposite case: bash
@@ -3455,14 +3486,29 @@ def _stdin_shell_fed(argv):
             any(_STDIN_FEED_RE.match(word) for word in rest))
 
 
+def _command_lookup(argv, index):
+    """Whether the options immediately following `command` request a lookup."""
+    for position in range(index + 1, len(argv)):
+        option = argv[position]
+        if option == "--" or not option.startswith("-"):
+            break
+        if not option.startswith("--") and ("v" in option or "V" in option):
+            return True
+    return False
+
+
 def _wrapped_command_index(argv):
     """The index of the first word of *argv* that is not a `VAR=value`
     word, a _RUN_WRAPPERS name or an option, or None. That is the command
     when every wrapper in front of it takes no option value: `sudo -u root
-    x` stops at `root`."""
+    x` stops at `root`. A `v` or `V` in a short option of `command`
+    requests a lookup, so there is no command to run."""
     for index, word in enumerate(argv):
+        base = _program_base(word)
+        if base == "command" and _command_lookup(argv, index):
+            return None
         if (_ENV_ASSIGN_RE.match(word) or
-                _program_base(word) in _RUN_WRAPPERS or word.startswith("-")):
+                base in _RUN_WRAPPERS or word.startswith("-")):
             continue
         return index
     return None
@@ -5504,10 +5550,13 @@ def _is_absolute_cd_target(target):
     return _normalised_cd_target(target) is not None
 
 
-# The ONE `cd` shape that moves the scope (#107): the command opens with a
-# plain `cd`, one literal absolute path from a safe alphabet, then `&&`.
-# Matched on the RAW text, before any quote removal or normalising.
-_EXACT_CD_RE = re.compile(r"[ \t]*cd[ \t]+(/[A-Za-z0-9._/@+-]*)[ \t]*&&")
+# One leading `cd`, one whole absolute or relative path word, then `&&`.
+# Match the raw text so only a single pair of quotes can admit spaces.
+_EXACT_CD_RE = re.compile(
+    r"[ \t]*cd[ \t]+(?:"
+    r"(?P<bare>[A-Za-z0-9._/@][A-Za-z0-9._/@+-]*)|"
+    r"""(?P<quote>["'])(?P<quoted>[A-Za-z0-9._/@][A-Za-z0-9._/@+ -]*)(?P=quote)"""
+    r")[ \t]*&&")
 # The one `cd` allowed after it: a plain `&& cd -` that ENDS the command
 # (#156 G-7). It runs after every other statement, so it moves none of them.
 # No leading `[ \t]*`: searched, that rescans every run of blanks (quadratic).
@@ -5658,14 +5707,100 @@ _ZSH_PAREN_RE = re.compile(r"[^\s$<>;&|(){}]\(")
 _ARRAY_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=$")
 
 
+# Measured with zsh 5.9: `${(e)X}` evaluates X's text. `${~X}` and `$~X`
+# turn X's text into a pattern whose glob qualifier can run code. We can
+# match the braced forms by their first character alone: bash rejects
+# `${(`, `${~`, `${=` and `${^` as bad substitutions, so this wider match
+# costs no working bash expansion. The unbraced `$~`, `$=` and `$^` are
+# matched too. Bash prints them literally; denying them is the accepted
+# over-match. The GLOB_SUBST option is read from dequoted words instead
+# (_sets_glob_subst), because quoting cannot hide its name.
+def _zsh_param_code(raw):
+    """Whether *raw* holds a zsh parameter form (`${(e)X}`, `${~X}`, `$~X`,
+    `$=X`, `$^X`) outside single quotes, also inside an unquoted heredoc
+    body. A backslash before the `$` does not hide it (see below)."""
+    if re.search(r"\$\{?[(~=^]", raw) is None:
+        return False
+
+    def has_expansion(text, quoting=True):
+        quote = None
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "\\" and quote != "'":
+                if text[i + 1:i + 2] == "$":
+                    # A shell payload in double quotes reaches here with
+                    # its `\$` kept (the tokenizer matches shlex), but the
+                    # outer shell turns `\$` into `$` before zsh reads it:
+                    # `zsh -c "X='\$(cmd)'; echo \${(e)X}"` runs cmd.
+                    # So the `$` stays live.
+                    i += 1
+                    continue
+                i += 2
+                continue
+            if quoting and ch in ("'", '"'):
+                if quote is None:
+                    quote = ch
+                elif quote == ch:
+                    quote = None
+            elif ch == "$" and quote != "'" and text.startswith(
+                    ("${(", "${~", "${=", "${^", "$~", "$=", "$^"), i):
+                return True
+            i += 1
+        return False
+
+    try:
+        text, heredocs = _split_heredocs(raw)
+    except ValueError:
+        return has_expansion(raw)
+    return has_expansion(text) or any(
+        has_expansion(body, quoting=False)
+        for _, quoted_delim, body, _ in heredocs if not quoted_delim)
+
+
+# Measured with zsh 5.9, an unquoted `=name` expands to the command's
+# full path. Bash never runs such a word as a command. As an argument it
+# is rare, so denying it is safe. Skip the test operators `= ` and `==`
+# and the `[[ ]]` regex operator `=~`.
+def _zsh_equals_word(raw):
+    """Whether *raw* holds an unquoted word that starts with `=` and has a
+    name after it (`=git`). The `=` must follow whitespace or one of
+    `;&|(){}` and a backtick, and must not be escaped (`foo\\ =git` is one
+    word)."""
+    if not isinstance(raw, str) or "=" not in raw:
+        return False
+    try:
+        text = _strip_heredocs(raw)
+    except ValueError:
+        text = raw
+    # zsh drops a backslash-newline before it splits words, so
+    # `true; \<newline>=git` runs =git. Drop each unescaped one first.
+    text = re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", text)
+    mask, _quote = _quote_mask(text)
+    for i, ch in enumerate(text):
+        if ch != "=" or mask[i] or i + 1 == len(text):
+            continue
+        if i and (mask[i - 1] or not (
+                text[i - 1].isspace() or text[i - 1] in ";&|(){}`")):
+            continue
+        following = text[i + 1]
+        if not following.isspace() and following not in "=~":
+            return True
+    return False
+
+
 def _zsh_code_word(raw):
-    """Whether text *raw* holds a word with zsh code in an unquoted `(` --
-    see _ARRAY_ASSIGN_RE's comment. A `(` inside `[[ ... ]]` is a bash
+    """Whether *raw* uses zsh parameter code, expands `=word`, or holds code
+    in an unquoted `(` (see _ARRAY_ASSIGN_RE). A `(` inside `[[ ... ]]` is a bash
     regex group (`[[ $b =~ ^(a|b)$ ]]`) and does not count.
 
     Checked on the WHOLE command by _find_statements and _cd_target: the
     statement splitter reads `(` and `)` as a subshell, so no single
     statement keeps the word whole."""
+    if _zsh_param_code(raw):
+        return True
+    if _zsh_equals_word(raw):
+        return True
     if not _ZSH_PAREN_RE.search(raw):
         return False  # fast path: no `(` glued to a word character
     raw = _strip_heredocs(raw)
@@ -5694,14 +5829,111 @@ def _zsh_code_word(raw):
     return False
 
 
+_ZSH_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+_ZSH_SPECIAL_ARRAY_RE = re.compile(
+    r"^(?:functions|functions_source|aliases|galiases|saliases|dis_aliases|"
+    r"dis_galiases|dis_saliases|dis_functions|commands|nameddirs|userdirs|"
+    r"options|builtins|dis_builtins|reswords|dis_reswords)(?:\[[^\]]*\])?\+?=")
+
+
+# Measured with zsh 5.9, eval expands a newly defined alias, writing to
+# functions defines a callable function, and hash binds a name to a path.
+# The hook cannot follow a name defined in the command. Profile aliases
+# defined before the command are outside this check's scope (see #246).
+# A structural word the scanner leaves at the head (`then`, `do`, `{`, `!`)
+# is skipped, so `if true; then alias tt=git; fi` is still seen.
+def _defines_command_name(argv):
+    """Whether statement *argv* defines a command name zsh will later run:
+    `alias`, `hash`, or a write to a special array (`functions[tt]=...`)."""
+    index = 0
+    while index < len(argv) and (_ZSH_ASSIGNMENT_RE.match(argv[index])
+                                 or argv[index] in _HEAD_LEAD_WORDS):
+        if _ZSH_SPECIAL_ARRAY_RE.match(argv[index]):
+            return True
+        index += 1
+    while index < len(argv) and (
+            argv[index] in _HEAD_LEAD_WORDS or argv[index] in (
+                "builtin", "command", "noglob", "nocorrect", "exec", "-")):
+        index += 1
+    if index == len(argv):
+        return False
+
+    head = argv[index]
+    if head == "alias":
+        return any("=" in word for word in argv[index + 1:])
+    if head == "hash":
+        return any("=" in word or (word.startswith("-")
+                                   and not word.startswith("--")
+                                   and ("p" in word or "d" in word))
+                   for word in argv[index + 1:])
+    if head in ("typeset", "declare", "local", "export", "readonly",
+                "integer", "float"):
+        return any(_ZSH_SPECIAL_ARRAY_RE.match(word)
+                   for word in argv[index + 1:])
+    return False
+
+
+# Measured with zsh 5.9: zsh removes quotes and backslashes before `setopt`
+# reads its argument, so `setopt glob'subst'`, `glob""subst` and `glob\subst`
+# all turn GLOB_SUBST on. With it on, `X='*(e:cmd:)'; echo $X` runs cmd.
+# _scan_commands already yields quote-removed words, so a word that merely
+# NAMES the option is enough to deny: it may come from `setopt`, `unsetopt`,
+# `emulate`, `set -o` or `zsh -o`, and the `no` form turns it on in an
+# `unsetopt`. A word holding an expansion after those commands
+# (`setopt $o`, `set -o $o`) can name it at run time, so it is denied too.
+_GLOB_SUBST_NAMES = ("globsubst", "noglobsubst", "oglobsubst",
+                     "onoglobsubst")
+_OPTION_COMMANDS = ("setopt", "unsetopt", "emulate")
+
+
+def _sets_glob_subst(argv):
+    """Whether statement *argv* names the GLOB_SUBST option, or may name it
+    through an expansion (`setopt $o`). Over-matches: `echo globsubst`
+    does too, and is denied."""
+    for word in argv:
+        name = word.lower().replace("_", "").lstrip("-+")
+        if name in _GLOB_SUBST_NAMES or (
+                word[:1] in ("-", "+") and name.endswith("globsubst")):
+            return True
+    index = 0
+    while index < len(argv) and (
+            _ZSH_ASSIGNMENT_RE.match(argv[index])
+            or argv[index] in _HEAD_LEAD_WORDS
+            or argv[index] in ("builtin", "command", "noglob", "nocorrect",
+                               "exec", "-")):
+        index += 1
+        # `command -p setopt $o`: skip the precommand's own options.
+        while (index < len(argv) and argv[index - 1] in ("command", "exec")
+               and argv[index].startswith("-") and argv[index] != "-"):
+            index += 1
+    if index == len(argv):
+        return False
+    rest = argv[index + 1:]
+    if argv[index] in _OPTION_COMMANDS:
+        return any(_carries_expansion(word) for word in rest)
+    if argv[index] == "set":
+        if "--" in rest:
+            rest = rest[:rest.index("--")]  # then positional arguments
+        # `set -o $o`, and a bundle holding o (`set -eo $o`).
+        takes_name = any(word[:1] in ("-", "+") and word[1:2] != "-"
+                         and "o" in word[1:] for word in rest)
+        return takes_name and any(_carries_expansion(word) for word in rest)
+    return False
+
+
 def _zsh_code_in(cmd):
     """Whether *cmd*, or any code it runs -- a shell payload, `eval`, a
-    `$( )` body, a heredoc fed to a shell -- holds a zsh code word. Inside
-    quotes the outer check cannot see it: `zsh -c "echo /tmp(e:'cmd':)"`
-    runs cmd (PR #121 review, measured). Propagates ValueError."""
+    `$( )` body, a heredoc fed to a shell -- defines a command name or
+    holds a zsh code word. Inside quotes the outer check cannot see it:
+    `zsh -c "echo /tmp(e:'cmd':)"` runs cmd (PR #121 review, measured).
+    Propagates ValueError."""
     if _zsh_code_word(cmd):
         return True
-    texts = {getattr(argv, "code", None) for argv in _scan_commands(cmd)}
+    texts = set()
+    for argv in _scan_commands(cmd):
+        if _defines_command_name(argv) or _sets_glob_subst(argv):
+            return True
+        texts.add(getattr(argv, "code", None))
     return any(text and text != cmd and _zsh_code_word(text)
                for text in texts)
 
@@ -5951,6 +6183,11 @@ def _verb_runs_after_chain(cmd, verb):
                for argv in scanned)
 
 
+def _exact_cd_path(match):
+    """The literal path word of an exact cd, with any quotes removed."""
+    return match.group("bare") or match.group("quoted")
+
+
 # How many nested whole-command subshells _cd_target unwraps. Deeper is
 # _SCOPE_UNKNOWN: 1,100 nested `( ... )` once recursed past Python's limit,
 # and the crash let the command through (PR #121 review).
@@ -5967,10 +6204,11 @@ def _cd_target(cmd, verb=None):
     that never runs (`false && cd /tmp; git push origin main`), and `$C X`
     with C=cd. Each read as a push in another project while it ran HERE.
 
-    1. The command opens with a plain `cd`, ONE literal absolute path in
-       [A-Za-z0-9._/@+-] (no quotes, `~`, `$`, globs or backslashes), then
-       `&&` -- checked on the RAW text. If the `cd` fails, `&&` skips the
-       next command, but a later `;`, `||` or newline still runs it HERE,
+    1. The command opens with a plain `cd`, ONE literal absolute or relative
+       path word, then `&&`. The raw word uses the _EXACT_CD_RE alphabet.
+       A single pair of matching quotes also permits spaces after the first
+       character. Leading `-` and `+` are excluded. If the `cd` fails, `&&`
+       skips the next command, but a later `;`, `||` or newline still runs it HERE,
        so every run of *verb* must sit inside the unbroken `&&` chain
        (_verb_runs_after_chain, #154). A background `&` or
        `coproc` anywhere voids the shape. The answer is that path. The
@@ -5996,10 +6234,9 @@ def _cd_target(cmd, verb=None):
        is taken from the shorter command; anything else is read from the
        whole command.
 
-    Legitimate multi-`cd` shapes (`cd /a && npm ci && cd /a && git push`,
-    `cd sub && git push`) are unknown now; that cost was accepted. A file
-    the command sources, or a script it runs, may change directory too; that
-    is outside the command text and not read.
+    Legitimate multi-`cd` shapes like `cd /a && npm ci && cd /a && git push`
+    are unknown. A sourced file or script may also change directory outside
+    the visible command text.
 
     *verb* is the run rule 2a checks; with none, any nested statement
     counts. Propagates ValueError from the scanner.
@@ -6030,15 +6267,16 @@ def _cd_target(cmd, verb=None):
     hidden = (_defines_function(cmd) or _EXPORTED_FUNCTION in cmd or
               _zsh_code_in(cmd))
     match = _EXACT_CD_RE.match(cmd)
+    path = _exact_cd_path(match) if match else None
     # A background job cannot move this shell, so it voids only the exact
     # shape: `cd /x && true & cmd` runs the cd in the background.
-    if (match and not hidden and movers == [0] and
+    if (path is not None and not hidden and movers == [0] and
             not _runs_in_background(cmd) and
-            list(scanned[0]) == ["cd", match.group(1)]):
+            list(scanned[0]) == ["cd", path]):
         if (_verb_runs_nested(cmd, scanned, verb) or
                 _verb_runs_after_chain(cmd, verb)):
             return _SCOPE_UNKNOWN
-        return match.group(1)
+        return path
     if movers or hidden:
         return _SCOPE_UNKNOWN
     return None
@@ -6050,6 +6288,8 @@ def _git_redirect_target(argv, words):
     None means "no redirect option": the run obeys the shell's cwd, so the
     `cd` rules answer for it. _SCOPE_UNKNOWN means a redirect IS present but
     does not name one resolvable directory -- callers read that as this repo.
+    A path carrying expansion or starting with `~` returns _SCOPE_UNKNOWN
+    because the shell's environment can differ from the hook's.
 
     git applies `-C` first and resolves `--git-dir` / `--work-tree` from
     there, and a push updates the GIT DIR, so `--git-dir` decides when it is
@@ -6109,6 +6349,8 @@ def _git_redirect_target(argv, words):
     if "-C" in seen and len(seen) > 1:
         return _SCOPE_UNKNOWN
     path = gitdir if gitdir is not None else chdir
+    if path is not None and (_carries_expansion(path) or path.startswith("~")):
+        return _SCOPE_UNKNOWN
     if (path is not None and not path.startswith(("/", "~")) and
             (env_gitdir or _RELATIVE_REDIRECT_RE.fullmatch(path))):
         # A literal relative GIT_DIR, `-C` or `--git-dir` names a directory
@@ -6621,6 +6863,60 @@ def _anchor(path, base):
     return None
 
 
+def _resolve_cd_scope(target, base):
+    """Resolve a relative cd logically from the payload cwd, if enterable."""
+    if target is None or target is _SCOPE_UNKNOWN:
+        return target
+    absolute = _normalised_cd_target(target) is not None
+    if not absolute and os.environ.get("CDPATH") and (
+            target not in (".", "..") and
+            not target.startswith(("./", "../"))):
+        return _SCOPE_UNKNOWN
+    try:
+        if ".." in target.split("/"):
+            # Measured on macOS: from `/`, bash and zsh run
+            # `cd ./var/../tftpboot/..` and land in /private, because
+            # /tftpboot is missing so the shell falls back to the physical
+            # path. A shell run with `set -P` (bash) or `setopt chase_dots`
+            # (zsh) is physical too, and the hook cannot see that. So a `..`
+            # is only read logically when logical and physical agree.
+            if not _dotdot_is_stable(target, base, absolute):
+                return _SCOPE_UNKNOWN
+        if absolute:
+            return target
+        # _anchor rejects NUL and requires an absolute base for a relative
+        # path. A missing relative target may still be found via a
+        # shell-only CDPATH.
+        joined = _anchor(target, base)
+        if (joined is not None and os.path.isdir(joined) and
+                os.access(joined, os.X_OK)):
+            return joined
+    except (OSError, ValueError):
+        pass
+    return _SCOPE_UNKNOWN
+
+
+def _dotdot_is_stable(target, base, absolute):
+    """Whether every `..` in *target* reads the same logically and
+    physically: each prefix before a `..` is an existing directory, and the
+    folded path resolves to the same place as the raw one."""
+    if _has_nul(target) or _has_nul(base):
+        return False
+    raw = os.path.expandvars(os.path.expanduser(target))
+    if not absolute:
+        if not (isinstance(base, str) and base.startswith("/")):
+            return False
+        raw = os.path.join(base, raw)
+    parts = raw.split("/")
+    for index, part in enumerate(parts):
+        if part == "..":
+            prefix = "/".join(parts[:index]) or "/"
+            if not os.path.isdir(prefix):
+                return False
+    return (os.path.realpath(os.path.normpath(raw)) ==
+            os.path.realpath(raw))
+
+
 def _physical_path(path, base):
     """*path* resolved as the KERNEL resolves it -- `env -C`, `GIT_DIR`,
     `git -C` all chdir(2) or open through it -- so `link/..` is the
@@ -6715,10 +7011,9 @@ def _command_scope_uncached(cmd, verb=None, base=None):
     scope = _command_scope_raw(cmd, verb, base)
     if _has_nul(scope):
         return _SCOPE_UNKNOWN  # see _has_nul: no directory to follow
-    if (isinstance(scope, str) and base is not None and
-            _normalised_cd_target(scope) is None):
+    if isinstance(scope, str) and not scope.startswith("/"):
         anchored = _anchor(scope, base)
-        return anchored if anchored is not None else scope
+        return anchored if anchored is not None else _SCOPE_UNKNOWN
     return scope
 
 
@@ -6745,12 +7040,13 @@ def _command_scope_raw(cmd, verb=None, base=None):
     command. A hidden git run (#98) scores as unknown -- see the loop.
     *base* is the absolute payload cwd, or None. A relative GIT_DIR or
     `env -C` is anchored to it or to an absolute `cd`, else unknown.
-    _cd_target itself returns only an absolute path, None or unknown.
+    A relative `cd` is resolved against *base* before scoring the runs.
 
     Propagates ValueError like _cd_target does.
     """
     words = list(verb) if verb else []
     target = _cd_target(cmd, words or None)
+    target = _resolve_cd_scope(target, base)
     if not words:
         return target
     statements = _find_statements(cmd, words)
@@ -6859,13 +7155,11 @@ _MAX_INPUT_BYTES = 8 * _MAX_COMMAND_BYTES
 def _read_hook_input():
     """``(data, problem)`` from the hook's stdin (#152).
 
-    *problem* is None, or a phrase each hook puts in its own deny. A raise
-    here would exit 1, a NON-BLOCKING error, and the call would run, so every
-    failure is caught: a closed stdin (`sys.stdin` is None), a closed file
-    (ValueError), a non-blocking stdin with no data (read returns None),
-    invalid UTF-8, and the parse, where deep nesting raises RecursionError,
-    not a ValueError. *data* is whatever the JSON holds; each
-    hook still checks its shape.
+    *problem* is None, or a phrase each hook puts in its own deny. The crash
+    guard exits 2 on an uncaught exception. Catching read and parse failures
+    here gives the deny a specific reason, including for closed stdin,
+    invalid UTF-8, and JSON nested deeply enough to raise RecursionError.
+    *data* is whatever the JSON holds. Each hook still checks its shape.
     """
     try:
         raw = sys.stdin.buffer.read(_MAX_INPUT_BYTES + 1)
@@ -6887,6 +7181,7 @@ def _read_hook_input():
 # the review measured `$x` on 2 MB of lines at 8.5-10.3 s under load -- so the
 # hook stops itself first, at 7 s, and denies.
 _DEADLINE_SECONDS = 7.0
+_DEADLINE_ARMED = []
 _DEADLINE_REASON = (
     "This guard ran out of time checking this command; split it or write "
     "large content with the Write tool.")
@@ -6915,6 +7210,8 @@ def _arm_deadline():
     `try` that would swallow SystemExit. Writes straight to fd 1 for the same
     reason. A platform without setitimer runs without the deadline, as before.
     """
+    if _DEADLINE_ARMED:
+        return
     import signal as _signal
     if not hasattr(_signal, "setitimer"):
         return
@@ -6941,6 +7238,7 @@ def _arm_deadline():
     _signal.signal(_signal.SIGALRM, _expired)
     _signal.setitimer(_signal.ITIMER_REAL, _deadline_seconds(
         os.environ.get("HARDEN_HOOK_DEADLINE")))
+    _DEADLINE_ARMED.append(True)
 
 
 def _disarm_deadline():
@@ -6948,6 +7246,7 @@ def _disarm_deadline():
     import signal as _signal
     if hasattr(_signal, "setitimer"):
         _signal.setitimer(_signal.ITIMER_REAL, 0)
+    _DEADLINE_ARMED.clear()
 
 
 # Non-empty once _emit has started. A list, so no `global` is needed.
@@ -6968,8 +7267,8 @@ def _add_alias_note(spec):
     """Put a sentence before a deny reason in *spec*: the runner sentence
     when the noted command sets a config key or environment variable that
     makes git run another program (and no alias source), else the alias
-    sentence when it sets a git alias or include. Never raises: a crash
-    here would turn the deny into exit 1, which lets the command run."""
+    sentence when it sets a git alias or include. The crash guard exits 2 on
+    an uncaught exception. Catch note errors here to preserve the deny reason."""
     try:
         if (len(_NOTED_COMMAND) == 2 and
                 _sets_git_runner_config(_NOTED_COMMAND[0]) and
@@ -7259,7 +7558,7 @@ def _git_common_dir(path):
         proc = _subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
              "--git-common-dir"],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, timeout=5)
     except (OSError, ValueError, _subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
@@ -7402,6 +7701,8 @@ def _effective_cwd(cmd, default, verb=None, base=None):
     return resolved
 # --- END shared repo identity v1 ---
 
+from urllib.parse import unquote
+
 # Stop before the harness timeout, which would let the tool call through.
 # Armed before the input is read, so a stdin that never closes is bounded too
 # (#152) -- see _arm_deadline. Only when run as the hook itself: a test that
@@ -7424,11 +7725,8 @@ if _input_problem:
     sys.exit(0)
 
 if not isinstance(input_data, dict):
-    # Valid JSON that is not an object reaches `.get` and raises
-    # AttributeError, which the JSONDecodeError/ValueError handler above does
-    # not catch -- exit 1, a non-blocking error, so the push proceeds.
-    # Pre-existing, and the harness always sends an object, but this is the
-    # same fail-closed shape already adopted for `tool_input` and `command`.
+    # The crash guard exits 2 on an uncaught exception. Check the payload
+    # before calling .get() so the deny identifies the malformed input.
     _emit({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -7442,7 +7740,7 @@ if not isinstance(input_data, dict):
 
 tool_name = input_data.get("tool_name", "")
 tool_input = input_data.get("tool_input", {})
-# Only validate git push commands.
+# Only validate Bash commands.
 #
 # Resolve the real `git push` statement (issue #43) rather than substring
 # matching, so a push quoted inside a heredoc or a PR/issue body does not trip
@@ -7458,10 +7756,8 @@ if tool_name != "Bash":
 # and a non-Bash call is not this hook's business.
 command = tool_input.get("command", "") if isinstance(tool_input, dict) else None
 if not isinstance(command, str):
-    # The `""` default only covers an ABSENT key. A present non-string value
-    # flowed into the scanner and raised, and under the hook contract any exit
-    # other than 0 or 2 is a non-blocking error -- the push proceeds. Denying
-    # matches how the invalid-JSON handler above already fails closed.
+    # The `""` default only covers an absent key. Identify a non-string
+    # value here before it can raise in the scanner and trigger exit 2.
     _emit({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -7485,6 +7781,470 @@ if _command_too_large(command):
     })
     sys.exit(0)
 _note_command(command, "git push")
+
+_GH_API = ["gh", "api"]
+_GH_API_FIELDS = {"-f", "-F", "--field", "--raw-field"}
+_GH_API_VALUE_OPTS = _GH_API_FIELDS | {
+    "-X", "--method", "-H", "--header", "--input", "-q", "--jq", "-t",
+    "--template", "--cache", "--hostname", "-p", "--preview",
+}
+_GH_API_REFS = re.compile(r"git/refs", re.IGNORECASE | re.ASCII)
+_GH_API_META = re.compile(r"[$`{]")
+# A segment of an endpoint built from variables is read as text only when it
+# has none of these.
+_GH_API_SEGMENT_META = re.compile(r"[$`{}()*?\[]")
+# Paths a write may name when its endpoint is built from variables.
+# Probed 2026-11-24 with gh 2.102.0 (GET only): gh sends `..` verbatim.
+# GitHub returned 404 for issues/../git/refs/heads/main and the %2E%2E
+# forms, so a variable after issues/ cannot climb to git/refs. Accepted
+# residual: repos/$O/issues/$P when the repo is literally named issues.
+_GH_API_SAFE_SEGMENTS = frozenset((
+    "issues", "pulls", "labels", "milestones", "releases", "comments",
+    "reactions", "assignees"))
+# Any of these as a literal segment means the path can reach a branch.
+_GH_API_BRANCH_SEGMENTS = frozenset((
+    "git", "refs", "heads", "contents", "merges", "branches", "merge", "rename"))
+_GH_API_REF_REASON = (
+    "`gh api` writes to main/develop refs are blocked like a direct push. "
+    "Open a PR instead. To delete a feature branch, name it literally with "
+    "`gh api -X DELETE repos/<o>/<r>/git/refs/heads/feature/<name>`. A "
+    "write to an endpoint built from variables must name a literal issues, "
+    "pulls, labels, milestones, releases, comments, reactions or assignees "
+    "path.")
+_GH_API_SERVER_WRITE_REASON = (
+    "`gh api` writes that can change main or develop on the server (a file "
+    "commit, a merge, a branch rename, a fork sync or a GraphQL ref mutation) are blocked "
+    "like a direct push. Open a PR and merge it with `gh pr merge`. To write to "
+    "a feature branch, name it literally and use no query string: contents "
+    "`-f branch=<feature branch>`, merges `-f base=<feature branch>`, rename "
+    "`-f new_name=<feature branch>`, merge-upstream `-f branch=<feature branch>`.")
+_GH_API_PROTECTED = frozenset(("main", "develop", "refs/heads/main", "refs/heads/develop"))
+_GH_API_QUERY_WORD = re.compile(r"""query=(?:'[^']*'|"[^"$`\\]*")""")
+_GH_API_OPAQUE_TARGET = re.compile(r"\b(mergePullRequest|enqueuePullRequest|updateRefs?|deleteRef)\b")
+_GH_API_NAMED_TARGET = re.compile(r"\b(createRef|createCommitOnBranch|mergeBranch)\b")
+_GH_API_PROTECTED_IN_QUERY = re.compile(
+    r"(?<![\w/.-])(?:refs/heads/)?(?:main|develop)(?![\w/.-])")
+
+
+def _gh_api_arguments(argv):
+    """Yield (option, value, raw word), with None for a positional's option."""
+    args = _statement_args(argv, _GH_API)
+    raw = _raw_args(argv, _GH_API)
+    words = iter(zip(args, raw if raw is not None else [None] * len(args)))
+    for word, raw_word in words:
+        if not word.startswith("-"):
+            yield None, word, raw_word
+            continue
+        if word.startswith("--"):
+            option, attached, value = word.partition("=")
+        else:
+            # Read a short cluster like getopt: letters that take no value
+            # are flags (`-i`); the first value letter takes the rest of the
+            # cluster, or the next word when nothing follows it.
+            option = attached = value = ""
+            for at, letter in enumerate(word[1:], 1):
+                if "-" + letter in _GH_API_VALUE_OPTS:
+                    option, attached = "-" + letter, word[at + 1:]
+                    value = attached[1:] if attached.startswith("=") else attached
+                    break
+        if option in _GH_API_VALUE_OPTS:
+            if not attached:
+                value, raw_word = next(words, ("", None))
+            yield option, value, raw_word
+
+
+def _gh_api_expansion_at(raw, at, endpoint):
+    """Whether the meta character of RAW at *at* is an unreadable expansion.
+
+    `{owner}` and `{repo}` are gh's own placeholders. They are readable only
+    as the owner and repo segments right after `repos/`, and only in an
+    endpoint (never in a field value).
+    """
+    if endpoint and raw[at] == "{":
+        before = raw[:at].replace('"', "").replace("'", "")
+        if raw.startswith("{owner}", at) and before.endswith("repos/"):
+            return False
+        if raw.startswith("{repo}", at) and re.search(r"repos/[^/]+/$", before):
+            return False
+    return True
+
+
+def _gh_api_single_quoted(raw):
+    """The indexes of RAW inside single quotes, where `$` and a backtick are
+    literal text. A backslash outside quotes escapes the next character; inside
+    double quotes `'` is plain. Anything this misreads takes the safe side:
+    a character it thinks is unquoted is judged as an expansion.
+    """
+    inside, quote, escaped = set(), None, False
+    for at, ch in enumerate(raw):
+        if escaped:
+            escaped = False
+        elif quote == "'":
+            if ch == "'":
+                quote = None
+            else:
+                inside.add(at)
+        elif ch == "\\":
+            escaped = True
+        elif quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+    return inside
+
+
+def _gh_api_unreadable(raw, endpoint):
+    if raw is None:
+        return True
+    literal = _gh_api_single_quoted(raw) if "'" in raw else ()
+    return any(
+        _gh_api_expansion_at(raw, m.start(), endpoint)
+        for m in _GH_API_META.finditer(raw)
+        if not (m.start() in literal and raw[m.start()] in "$`"))
+
+
+def _has_unquoted_glob(raw):
+    """Whether RAW (the word as typed) has a `?`, `*` or `[` outside quotes."""
+    quote = None
+    escaped = False
+    for ch in raw:
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "?*[":
+            return True
+    return False
+
+
+def _gh_api_segments(text, glob):
+    """TEXT split at each `/` that is outside an expansion, or None.
+
+    The query (from the first `?` or `#`) is dropped, unless *glob* says the
+    word has an unquoted wildcard: then `?` is not a query. Brackets and
+    backticks must balance, or the word is not positively readable.
+    """
+    segments, current, depth, tick = [], [], 0, False
+    for ch in text:
+        if ch == "`":
+            tick = not tick
+        elif not tick:
+            if ch in "({":
+                depth += 1
+            elif ch in ")}":
+                depth -= 1
+                if depth < 0:
+                    return None
+            elif ch in "?#" and depth == 0 and not glob:
+                break
+        if ch == "/" and depth == 0 and not tick:
+            segments.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if depth or tick:
+        return None
+    segments.append("".join(current))
+    return segments
+
+
+def _gh_api_variable_write_ok(word, raw, method=None):
+    """Whether a write to an endpoint that is not fully literal names a path
+    that cannot reach a branch: a literal segment from _GH_API_SAFE_SEGMENTS,
+    and no literal segment from _GH_API_BRANCH_SEGMENTS. The word is decoded
+    first, so `%2F` and `%67` build the segments they spell.
+    """
+    return _gh_api_variable_write_reason(word, raw, method) is None
+
+
+def _gh_api_variable_write_reason(word, raw, method):
+    if raw is None:
+        return _GH_API_REF_REASON
+    segments = _gh_api_segments(unquote(word), _has_unquoted_glob(raw))
+    if segments is None:
+        return _GH_API_REF_REASON
+    literal = {seg.lower() for seg in segments
+               if not _GH_API_SEGMENT_META.search(seg)}
+    branch_segments = literal & _GH_API_BRANCH_SEGMENTS
+    route = _gh_api_route_start(segments)
+    if route not in _GH_API_SAFE_SEGMENTS or branch_segments - {"merge", "rename"}:
+        return _GH_API_REF_REASON
+    if branch_segments or (route == "pulls" and method in ("PUT", "?")):
+        return _GH_API_SERVER_WRITE_REASON
+    return None
+
+
+def _gh_api_route_start(segments):
+    """The first route segment after the owner and repo slots, or None.
+
+    The endpoint must start with `repos` (after an optional `scheme://host`
+    or a leading `/`). The route then starts at the 3rd segment after
+    `repos`. When the 1st segment holds an expansion it may carry
+    `owner/repo` together, so the 2nd segment may start the route too: that
+    one is returned when it is allowlisted. A segment with any expansion or
+    wildcard is never a route start. Named residual: a repo literally named
+    after an allowed path while the owner is a variable (`repos/$O/issues/$P`).
+    """
+    parts = list(segments)
+    if len(parts) > 2 and parts[0].endswith(":") and not parts[1]:
+        parts = parts[3:]
+    elif parts and not parts[0]:
+        parts = parts[1:]
+    if not parts or parts[0].lower() != "repos":
+        return None
+    slots = parts[1:]
+    starts = []
+    if len(slots) > 2:
+        starts.append(slots[2])
+    if len(slots) > 1 and _GH_API_META.search(slots[0]):
+        starts.append(slots[1])
+    for start in starts:
+        if (not _GH_API_SEGMENT_META.search(start)
+                and start.lower() in _GH_API_SAFE_SEGMENTS):
+            return start.lower()
+    return None
+
+
+def _gh_api_literal_endpoint(raw):
+    return (raw is not None and not _gh_api_unreadable(raw, True)
+            and not _has_unquoted_glob(raw))
+
+
+def _gh_api_ref_endpoint_blocked(word, raw, blocked_create, method=None):
+    if not _gh_api_literal_endpoint(raw):
+        return not _gh_api_variable_write_ok(word, raw, method=method)
+    # A fully literal endpoint: judge the `git/refs` tail itself.
+    endpoint = unquote(word)
+    # `git/refs` can also sit in the owner or repo name: judge every one.
+    for marker in _GH_API_REFS.finditer(endpoint):
+        tail = endpoint[marker.end():]
+        for cut in "?#":
+            tail = tail.partition(cut)[0]
+        tail = tail.strip("/")
+        if not tail:
+            if blocked_create:
+                return True
+        elif tail.startswith("heads/"):
+            branch = tail[len("heads/"):]
+            if branch in ("main", "develop") or any(ch in branch for ch in "*?["):
+                return True
+    return False
+
+
+def _gh_api_field_expands(option, value):
+    return option in ("-F", "--field") and (
+        value.startswith("@")
+        or any(token in value for token in ("{branch}", "{owner}", "{repo}")))
+
+
+def _gh_api_field_unreadable(option, value, raw):
+    return _gh_api_unreadable(raw, False) or _gh_api_field_expands(option, value)
+
+
+def _gh_api_bad_branch(branch):
+    return branch in _GH_API_PROTECTED or any(ch in branch for ch in "*?[")
+
+
+def _gh_api_branch_field_blocked(fields, target):
+    found = False
+    for option, name, value, raw in fields:
+        if name == target:
+            found = True
+            if (_gh_api_field_unreadable(option, value, raw)
+                    or _gh_api_bad_branch(unquote(value))):
+                return True
+    return not found
+
+
+def _gh_api_graphql_blocked(fields, has_input):
+    if has_input:
+        return True
+    has_query = check_variables = False
+    for option, name, query, raw in fields:
+        if name != "query":
+            continue
+        has_query = True
+        # The raw quotes establish which text reaches GraphQL. Braces and
+        # GraphQL variables inside a single-quoted query are literal.
+        if raw is None or _gh_api_field_expands(option, query):
+            return True
+        if not _GH_API_QUERY_WORD.fullmatch(raw):
+            # A document starting with a query can run a mutation only as a
+            # second operation, which GraphQL requires operationName to select.
+            if (not re.match(r"""^[\s'"]*(?:\{|query\b)""", query)
+                    or any(key == "operationName" for _, key, _, _ in fields)
+                    or "mutation" in raw or "subscription" in raw
+                    or _GH_API_OPAQUE_TARGET.search(raw) or _GH_API_NAMED_TARGET.search(raw)):
+                return True
+        if _GH_API_OPAQUE_TARGET.search(query):
+            return True
+        if re.search(r"\bcreateCommitOnBranch\b", query):
+            if (not re.search(r"\bbranchName[\s,]*:", query)
+                    or re.search(r"\bid[\s,]*:", query) or "#" in query):
+                return True
+            if any("id" in field_name.lower() or "[" in field_name
+                   for _, field_name, _, _ in fields if field_name != "query"):
+                return True
+        if _GH_API_NAMED_TARGET.search(query):
+            if "\\" in query or _GH_API_PROTECTED_IN_QUERY.search(query):
+                return True
+            check_variables = True
+    return not has_query or (check_variables and any(
+        _gh_api_field_unreadable(option, value, raw) or _GH_API_PROTECTED_IN_QUERY.search(value)
+        for option, name, value, raw in fields if name != "query"))
+
+
+def _gh_api_route_blocked(word, raw, method, fields, has_input):
+    if not _gh_api_literal_endpoint(raw):
+        return False
+    endpoint = unquote(word)
+    path = re.split(r"[?#]", endpoint, maxsplit=1)[0]
+    graphql_path = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/]*", "", path)
+    if graphql_path.lstrip("/").lower() in ("graphql", "api/graphql"):
+        return _gh_api_graphql_blocked(fields, has_input)
+
+    segments = [part for part in graphql_path.split("/") if part]
+    routes = [part.lower() for part in segments]
+    # Read the route from its REST position, so a repo named `contents` or a
+    # file path ending in `merges` is not taken for the route. A path with
+    # neither prefix keeps the match-anywhere rules (fail closed).
+    offset = 2 if routes[:2] == ["api", "v3"] else 0
+    first = routes[offset] if len(routes) > offset else None
+    if first == "repos":
+        pos = offset + 3
+    elif first == "repositories":
+        pos = offset + 2
+    else:
+        pos = None
+    if pos is not None:
+        here = routes[pos] if len(routes) > pos else None
+        if here == "pulls":
+            return len(routes) > pos + 2 and routes[pos + 2] == "merge"
+        merge_routes = (here,)
+    else:
+        if "pulls" in routes and "merge" in routes[routes.index("pulls") + 1:]:
+            return True
+        merge_routes = routes
+    has_query = "?" in endpoint
+    for route, field in (("contents", "branch"), ("merges", "base"),
+                         ("merge-upstream", "branch")):
+        if route in merge_routes and (
+                has_input or has_query or _gh_api_branch_field_blocked(fields, field)):
+            return True
+    if "branches" in merge_routes and routes[-1] == "rename":
+        if has_input or has_query or _gh_api_branch_field_blocked(fields, "new_name"):
+            return True
+        # A repo or branch can itself be named "branches". A wildcard after
+        # any occurrence counts, and only the last can precede a protected name.
+        start = 0
+        for at in range(pos or 0, len(routes)):
+            route = routes[at]
+            if route == "branches":
+                start = at + 1
+            elif start and any(ch in route for ch in "*?["):
+                return True
+        return "/".join(segments[start:-1]) in _GH_API_PROTECTED
+    return False
+
+
+def _gh_api_statement_blocked(argv):
+    method = None
+    method_writes = None
+    has_body = False
+    has_input = False
+    blocked_create = False
+    positionals = []
+    fields = []
+    for option, value, raw in _gh_api_arguments(argv):
+        if option is None:
+            positionals.append((value, raw))
+        elif option in ("-X", "--method"):
+            method = "?" if raw is None or "$" in raw or "`" in raw else value.upper()
+            method_writes = method not in ("GET", "HEAD")
+        elif option == "--input":
+            has_body = has_input = blocked_create = True
+        elif option in _GH_API_FIELDS:
+            has_body = True
+            name, _, field_value = value.partition("=")
+            fields.append((option, name, field_value, raw))
+            # An expansion anywhere in the word (the name too) can build
+            # `ref=...`. Only a literal `sha=` field may carry one.
+            if (value.startswith("ref=@") or
+                    value in ("ref=refs/heads/main", "ref=refs/heads/develop") or
+                    (not value.startswith("sha=") and
+                     _gh_api_unreadable(raw, False))):
+                blocked_create = True
+    if method_writes is False or (method_writes is None and not has_body):
+        return False
+    for word, raw in positionals:
+        if _gh_api_ref_endpoint_blocked(word, raw, blocked_create, method=method):
+            if not _gh_api_literal_endpoint(raw):
+                return _gh_api_variable_write_reason(word, raw, method)
+            return _GH_API_REF_REASON
+        if _gh_api_route_blocked(word, raw, method, fields, has_input):
+            return _GH_API_SERVER_WRITE_REASON
+    return False
+
+
+def _gh_api_may_name_refs(command):
+    """Whether *command* could be denied below, read cheaply.
+
+    A literal endpoint can name a ref or a server-side write route. One
+    that is not literal needs a `$`, backtick, `{`, `%` (URL
+    escapes) or a wildcard (`?`, `*`, `[`). A command with none of them skips
+    the extra verb scan, which cost 30% on large commands. The letters view
+    drops quotes and backslashes (`r'ef's`).
+    """
+    letters = _letters_only(command).lower()
+    return (any(marker in letters for marker in (
+                "refs", "heads", "contents", "merge", "rename", "graphql",
+                "updateref", "createref", "deleteref", "commitonbranch"))
+            or any(ch in command for ch in "$`{%?*["))
+
+
+def _gh_api_ref_write_reason(command):
+    """Judge each API request independently of git push scope and exemptions."""
+    if not _gh_api_may_name_refs(command):
+        return None
+    lowered = command.lower()
+    mentions_git_refs = "git/refs" in lowered
+    mentions_server_write = any(marker in lowered for marker in (
+        "contents/", "/merges", "/merge", "/rename", "graphql"))
+    try:
+        statements = _find_statements(command, _GH_API)
+    except ValueError:
+        return _UNPARSEABLE_REASON if mentions_git_refs or mentions_server_write else None
+    for argv in statements:
+        if isinstance(argv, _HiddenVerbArgv):
+            if mentions_git_refs:
+                return _GH_API_REF_REASON
+            if mentions_server_write and re.search(
+                    r"""(?:^|[\s'"])(?:-[A-Za-z]*[XfF]|--(?:method|field|raw-field|input)(?=[\s=]|$))""",
+                    command):
+                return _GH_API_SERVER_WRITE_REASON
+        else:
+            reason = _gh_api_statement_blocked(argv)
+            if reason:
+                return reason
+    return None
+
+
+_gh_api_reason = _gh_api_ref_write_reason(command)
+if _gh_api_reason:
+    _emit({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": _gh_api_reason
+        }
+    })
+    sys.exit(0)
 
 _BRACE_RANGE_RE = re.compile(r"\{[^{}]*\.\.[^{}]*\}")
 _BRACE_GROUP_RE = re.compile(r"\{([^{}]*,[^{}]*)\}")
@@ -7898,10 +8658,14 @@ if _PUSH_SCOPE is _SCOPE_UNKNOWN and not any(
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 "Cannot tell which directory or repository this push runs "
-                "in. Only `cd /absolute/path && ...` at the very start of "
-                "the command moves it, and a plain `&& cd -` may end it. Any "
-                "other cd, pushd, popd or zsh chdir (nested, conditional, "
-                "relative, quoted, or after the push); a computed command "
+                "in. Only `cd /abs`, `cd \"/abs\"`, `cd '/abs'` or "
+                "`cd relative/path` at the very start of the command, "
+                "followed by `&&`, moves the push. A relative path needs a "
+                "usable Bash tool cwd and an existing directory, and `..` "
+                "must not cross a symlink; with CDPATH set, write "
+                "`./name`. A plain `&& cd -` may "
+                "end it. Any other cd, pushd, popd or zsh chdir (nested, "
+                "conditional, or after the push); a computed command "
                 "word; a builtin such as source, "
                 "eval, trap, alias or setopt; a function definition; a "
                 "HOME, BASH_ENV, ZDOTDIR or ENV assignment; a background "
@@ -8279,7 +9043,7 @@ def _git_config(cwd):
         try:
             raw = subprocess.check_output(
                 ["git", "-C", cwd, "config", "--list", "-z"],
-                stderr=subprocess.DEVNULL, text=True, timeout=10)
+                stderr=subprocess.DEVNULL, text=True, timeout=5)
         except (subprocess.CalledProcessError, subprocess.SubprocessError,
                 OSError, ValueError):
             _CONFIG_CACHE[cwd] = ({}, False, {})
@@ -8330,8 +9094,8 @@ def _git_current_branch(cwd):
         try:
             branch = subprocess.check_output(
                 ["git", "-C", cwd, "branch", "--show-current"],
-                stderr=subprocess.DEVNULL, text=True).strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
+                stderr=subprocess.DEVNULL, text=True, timeout=5).strip()
+        except (subprocess.SubprocessError, OSError, ValueError):
             _BRANCH_CACHE[cwd] = ("", False)
         else:
             _BRANCH_CACHE[cwd] = (branch, True)
@@ -9837,13 +10601,15 @@ if current_branch in ["main", "develop"] and _push_stays_on_current_branch():
             ["git", "-C", _HOOK_CWD, "rev-parse", "--verify", "--quiet",
              "HEAD^2"],
             stderr=subprocess.DEVNULL,
-            text=True
+            text=True,
+            timeout=5
         )
         # Check if the merge message references a Git Flow branch
         merge_msg = subprocess.check_output(
             ["git", "-C", _HOOK_CWD, "log", "-1", "--format=%s", "HEAD"],
             stderr=subprocess.DEVNULL,
-            text=True
+            text=True,
+            timeout=5
         ).strip()
         # main: only release/hotfix merges (features never merge to main)
         # develop: feature/release/hotfix merges + main sync
@@ -9854,47 +10620,65 @@ if current_branch in ["main", "develop"] and _push_stays_on_current_branch():
         if any(pattern in merge_msg for pattern in allowed) \
                 and not _is_destructive_push:
             sys.exit(0)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        # A git that times out or cannot run proves nothing.
+        # Fall through to the deny below.
+        pass
     except subprocess.CalledProcessError:
         # HEAD is not a merge commit — check for version bump after Git Flow finish
         if current_branch == "develop":
+            # None skips the parent-merge check if git times out or cannot run.
+            recent_msgs = None
             try:
                 recent_msgs = subprocess.check_output(
                     ["git", "-C", _HOOK_CWD, "log", "-5", "--format=%s", "HEAD"],
                     stderr=subprocess.DEVNULL,
-                    text=True
+                    text=True,
+                    timeout=5
                 ).strip()
                 if any(p in recent_msgs for p in ["release/", "hotfix/"]) \
                         and not _is_destructive_push:
                     sys.exit(0)
-            except subprocess.CalledProcessError:
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                # A git that times out or cannot run proves nothing.
+                # Fall through to the deny below.
                 pass
-            # The version-bump commit a release leaves on top of its
-            # `Merge main into develop` back-merge has no `release/` in its
-            # subject, so develop's own finish push was denied
-            # (techno-design-system#82). Accepted only when HEAD's parent IS
-            # that merge -- a real merge commit, not a subject anywhere in
-            # the last five -- so at most one local commit rides along.
-            # Matching the subject in the last five would let four
-            # unreviewed commits on top of a pulled back-merge go straight
-            # to develop.
-            try:
-                subprocess.check_output(
-                    ["git", "-C", _HOOK_CWD, "rev-parse", "--verify",
-                     "--quiet", "HEAD~1^2"],
-                    stderr=subprocess.DEVNULL,
-                    text=True
-                )
-                parent_msg = subprocess.check_output(
-                    ["git", "-C", _HOOK_CWD, "log", "-1", "--format=%s",
-                     "HEAD~1"],
-                    stderr=subprocess.DEVNULL,
-                    text=True
-                ).strip()
-                if "Merge main into develop" in parent_msg \
-                        and not _is_destructive_push:
-                    sys.exit(0)
             except subprocess.CalledProcessError:
-                pass
+                recent_msgs = ""
+            if recent_msgs is not None:
+                # The version-bump commit a release leaves on top of its
+                # `Merge main into develop` back-merge has no `release/` in its
+                # subject, so develop's own finish push was denied
+                # (techno-design-system#82). Accepted only when HEAD's parent IS
+                # that merge -- a real merge commit, not a subject anywhere in
+                # the last five -- so at most one local commit rides along.
+                # Matching the subject in the last five would let four
+                # unreviewed commits on top of a pulled back-merge go straight
+                # to develop.
+                try:
+                    subprocess.check_output(
+                        ["git", "-C", _HOOK_CWD, "rev-parse", "--verify",
+                         "--quiet", "HEAD~1^2"],
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=5
+                    )
+                    parent_msg = subprocess.check_output(
+                        ["git", "-C", _HOOK_CWD, "log", "-1", "--format=%s",
+                         "HEAD~1"],
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=5
+                    ).strip()
+                    if "Merge main into develop" in parent_msg \
+                            and not _is_destructive_push:
+                        sys.exit(0)
+                except (subprocess.TimeoutExpired, OSError, ValueError):
+                    # A git that times out or cannot run proves nothing.
+                    # Fall through to the deny below.
+                    pass
+                except subprocess.CalledProcessError:
+                    pass
 
 # An unreadable destination is an UNKNOWN destination, and unknown fails
 # closed. This sits BELOW the release/hotfix and Git-Flow-finish exemptions on

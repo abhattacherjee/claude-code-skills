@@ -351,8 +351,8 @@ if [ ${#EXTRA_EXCLUDES[@]} -gt 0 ]; then
   # `:!$EXCLUDES_FILE` on BOTH sides — the trigger only. Without it the data
   # file's own staged diff sits on the actual side and suppresses the notice on
   # the widen-and-land-in-one-commit case this exists to catch; see above.
-  if ! SCAN_BASELINE_DIFF=$(git diff --cached -- "${SHIPPED_EXCLUDES[@]}" ":!$EXCLUDES_FILE" 2>/dev/null) ||
-     ! SCAN_ACTUAL_DIFF=$(git diff --cached -- "${EXCLUDES[@]}" ":!$EXCLUDES_FILE" 2>/dev/null); then
+  if ! SCAN_BASELINE_DIFF=$(git diff --cached --output-indicator-new='>' -- "${SHIPPED_EXCLUDES[@]}" ":!$EXCLUDES_FILE" 2>/dev/null) ||
+     ! SCAN_ACTUAL_DIFF=$(git diff --cached --output-indicator-new='>' -- "${EXCLUDES[@]}" ":!$EXCLUDES_FILE" 2>/dev/null); then
     echo ""
     echo "❌ ERROR: Failed to read staged diffs for secret scanning."
     exit 1
@@ -360,8 +360,8 @@ if [ ${#EXTRA_EXCLUDES[@]} -gt 0 ]; then
   # `grep -q` is deliberately not used: it closes the pipe on its first match,
   # and under `pipefail` the producer's SIGPIPE would become the status of the
   # whole pipeline. Capture and test for emptiness instead.
-  BASELINE_CONTENT=$(printf '%s\n' "$SCAN_BASELINE_DIFF" | grep '^+' | grep -v '^+++') || BASELINE_CONTENT=""
-  ACTUAL_CONTENT=$(printf '%s\n' "$SCAN_ACTUAL_DIFF" | grep '^+' | grep -v '^+++') || ACTUAL_CONTENT=""
+  BASELINE_CONTENT=$(printf '%s\n' "$SCAN_BASELINE_DIFF" | grep '^>') || BASELINE_CONTENT=""
+  ACTUAL_CONTENT=$(printf '%s\n' "$SCAN_ACTUAL_DIFF" | grep '^>') || ACTUAL_CONTENT=""
   if [ -n "$BASELINE_CONTENT" ] && [ -z "$ACTUAL_CONTENT" ]; then
     if ! SCAN_BASELINE=$(git diff --cached --name-only -- "${SHIPPED_EXCLUDES[@]}" 2>/dev/null) ||
        ! SCAN_ACTUAL=$(git diff --cached --name-only -- "${EXCLUDES[@]}" 2>/dev/null); then
@@ -400,39 +400,20 @@ if [ ${#EXTRA_EXCLUDES[@]} -gt 0 ]; then
   fi
 fi
 
-# Same `2>/dev/null` discipline as the guard above. Benign here rather than
-# load-bearing — an injected `fatal:` line does not start with '+', so the grep
-# below drops it — but the value is used for a decision, and relying on the
-# shape of git's error text to stay harmless is not a property worth depending
-# on.
-if ! STAGED_DIFF=$(git diff --cached -- "${EXCLUDES[@]}" 2>/dev/null); then
+# Keep Git diagnostics out of the captured diff. Only added lines start with '>'.
+if ! STAGED_DIFF=$(git diff --cached --output-indicator-new='>' -- "${EXCLUDES[@]}" 2>/dev/null); then
   echo ""
   echo "❌ ERROR: Failed to read staged diff for secret scanning."
   exit 1
 fi
 
-# Hoisted out of the pipeline below so its exit status can be read separately
-# from the two structural greps, and so the failure path can be exercised by
-# substituting a pattern that does not compile.
-SECRET_PATTERN="(sk-[a-zA-Z0-9_-]{20,}|AKIA[0-9A-Z]{16}|private_key|-----BEGIN.*PRIVATE KEY-----|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|xox[bsapr]-[a-zA-Z0-9-]+|password\s*[:=]\s*['\"][^'\"]{8,})"
+# Keep the pattern separate so tests can substitute an invalid regex.
+SECRET_PATTERN="(sk-[a-zA-Z0-9_-]{20,}|AKIA[0-9A-Z]{16}|private[_]key|-----BEGIN.*PRIVATE[ ]KEY-----|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|xox[bsapr]-[a-zA-Z0-9-]+|password\s*[:=]\s*['\"][^'\"]{8,})"
 
-# grep exit 1 is "no match"; grep exit 2 is "grep itself FAILED". Run as one
-# pipeline ending in `2>/dev/null` the two were indistinguishable, and a failure
-# fell straight through to "✅ No secret content detected" — the entire content
-# scan silently disabled while the run reported success over an uninspected
-# diff. Invalid UTF-8 in staged content cannot reach it (measured: BSD grep on
-# macOS exits 1 on that), so the realistic trigger is a future edit to
-# SECRET_PATTERN that does not compile as an ERE — the one change whose blast
-# radius is the whole scan.
-#
-# Split into one grep per statement rather than kept as a single pipeline
-# because `pipefail` reports the RIGHTMOST non-zero status: a 2 from `grep '^+'`
-# followed by a legitimate 1 from `grep -v '^+++'` would be reported as 1 and
-# read as "no match". Per stage they cannot be confused. A 1 from either
-# structural grep is legitimate — a staged diff with no added lines — and must
-# stay "no match"; a 2 from ANY stage is fatal. grep's own stderr is
-# deliberately not discarded here: "brackets ([ ]) not balanced" is the whole
-# diagnosis, and nothing is captured with `2>&1`, so it cannot corrupt a value.
+# Check the added-line and pattern stages separately. In one pipeline, a
+# later grep exit of 1 can hide an earlier grep failure even with pipefail.
+# Exit 1 means no match. Exit 2 or higher stops the commit.
+# Leave grep's error output visible so it can explain the failure.
 scan_grep_failed() {
   echo ""
   echo "❌ ERROR: the secret content scan could not run."
@@ -447,15 +428,9 @@ scan_grep_failed() {
 }
 
 scan_status=0
-SCAN_ADDED=$(printf '%s\n' "$STAGED_DIFF" | grep '^+') || scan_status=$?
+SCAN_ADDED=$(printf '%s\n' "$STAGED_DIFF" | grep '^>') || scan_status=$?
 if [ "$scan_status" -ge 2 ]; then
   scan_grep_failed "added-line" "$scan_status"
-fi
-
-scan_status=0
-SCAN_ADDED=$(printf '%s\n' "$SCAN_ADDED" | grep -v '^+++') || scan_status=$?
-if [ "$scan_status" -ge 2 ]; then
-  scan_grep_failed "diff-header" "$scan_status"
 fi
 
 scan_status=0
@@ -472,7 +447,7 @@ if [ "$scan_status" -eq 0 ]; then
   echo "Found patterns that look like:"
   echo "  - OpenAI API keys (sk-...)"
   echo "  - AWS access keys (AKIA...)"
-  echo "  - Private keys (-----BEGIN...PRIVATE KEY-----)"
+  echo "  - Private keys (a BEGIN ... PRIVATE KEY header)"
   echo "  - GitHub tokens (ghp_..., gho_..., github_pat_...)"
   echo "  - Slack tokens (xox...)"
   echo "  - Password assignments"

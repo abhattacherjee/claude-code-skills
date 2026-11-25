@@ -2,8 +2,10 @@
 """
 PreToolUse Hook: Validate Git Flow Branch Naming
 
-Enforces branch naming conventions: feature/*, release/v*, hotfix/*.
-Validates semantic versioning for release branches.
+Allows feature/*, release/*, hotfix/* and the repo's configured prefixes.
+Checks release names against the repo's release style. Checks every command that
+creates a branch: git checkout, git switch, git branch, git worktree add and
+git stash branch.
 
 Installed by /harden-repo into target repo's .claude/hooks/
 """
@@ -11,6 +13,31 @@ import json
 import os
 import sys
 import re
+
+
+# --- BEGIN crash guard v1 (keep in sync across all hook copies) ---
+def _deny_on_crash(exc_type, exc, tb):
+    # Exit 1 lets the call run. os._exit(2) blocks and drops buffered stdout.
+    try:
+        import traceback
+        traceback.print_exception(exc_type, exc, tb, file=sys.stderr)
+    except Exception:
+        pass
+    try:
+        sys.stderr.write(f"BLOCKED: this guard hook crashed ({exc_type.__name__}); "
+                         "blocking as a safety measure.\n")
+    except Exception:
+        pass
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(2)
+
+
+if __name__ == "__main__":
+    sys.excepthook = _deny_on_crash
+# --- END crash guard v1 ---
 
 
 # --- BEGIN shared command scanner v1 (keep in sync across all hook copies) ---
@@ -41,19 +68,10 @@ import re
 #   * the body of a heredoc fed to a shell RUNNER (`bash <<EOF`, `sh -s <<EOF`,
 #     `cat <<EOF | bash`), which is a script rather than data — and is
 #     therefore scanned whether or not the delimiter was quoted.
-# Recursion is capped at _MAX_SCAN_DEPTH levels of nesting to bound work on
-# adversarial input: a payload nested deeper than that is still emitted as an
-# opaque token but is not parsed further. Three levels covers every realistic
-# wrapper stack (`sudo bash -c "eval ..."` is only two).
-#
-# ACCEPTED LIMIT: executed code nested 4+ levels deep — `$($($($(cmd))))` or
-# four stacked `bash -c` payloads — is NOT parsed, so a verb hidden that deep
-# is not matched. This is adversarial-only: no legitimate workflow nests that
-# far, and removing the cap makes work grow with attacker-controlled nesting
-# depth. See specs/043-parse-dont-grep-hook-commands.md. One partial
-# exception: an unparsed `$( ... )` left in COMMAND position with the verb as
-# a whole word inside it is reported as a possible verb by _may_hide_verb, so
-# `$($($($(git push origin main))))` does match, fail-closed.
+# Recursion is capped at _MAX_SCAN_DEPTH to bound work on adversarial input.
+# If a runner payload, substitution body, or any heredoc remains unread at
+# the cap, the scan raises ValueError. Each hook then denies the command
+# when its text names the hook's guarded verb (#95).
 #
 # Fail-closed contract: _scan_commands raises ValueError when it cannot parse
 # reliably (unbalanced quotes, an unterminated substitution). Callers MUST
@@ -1815,6 +1833,15 @@ def _extra_stdin_runner(argv):
         return False
     if not _extra_shell_reads(argv)[1]:
         return False
+    # A wrapper option can take a program name as its value. Only skip
+    # this fallback for a lookup behind plain wrapper names.
+    for index, word in enumerate(argv):
+        if _ENV_ASSIGN_RE.match(word):
+            continue
+        if word == "command" and _command_lookup(argv, index):
+            return False
+        if word not in _RUN_WRAPPERS:
+            break
     raw = getattr(argv, "raw", None)
     if not raw:
         return not any("<<" in word for word in argv)
@@ -2436,6 +2463,12 @@ def _scan_reading(cmd, _depth):
     """The statements of one reading of *cmd*: see _scan_commands_uncached."""
     scanned = []
     stripped, heredocs = _split_heredocs(cmd)
+    at_depth_limit = _depth >= _MAX_SCAN_DEPTH
+    # Skipping nested code at the cap could turn a guarded command into an ALLOW.
+    if at_depth_limit and (
+            any(marker in stripped for marker in ("$(", "`", "<(", ">("))
+            or heredocs):
+        raise ValueError("nested deeper than the scan limit")
     for statement in _split_statements(stripped):
         argv = _Argv(_split_words(statement))
         if not argv:
@@ -2444,17 +2477,17 @@ def _scan_reading(cmd, _depth):
         argv.top = not _depth
         argv.code = cmd  # the whole text this statement was split from
         scanned.append(argv)
-        if _depth >= _MAX_SCAN_DEPTH:
-            continue
         nested = _runner_payload(argv)
         # A tuple holds candidate payloads, each scanned alone (see
         # _payload_after_flag).
         for payload in nested if isinstance(nested, tuple) else (nested,):
             if payload:
+                if at_depth_limit:
+                    raise ValueError("nested deeper than the scan limit")
                 # Propagate ValueError: an unparseable payload must reach
                 # the caller, which denies it, not be silently dropped.
                 scanned.extend(_scan_commands(payload, _depth + 1))
-    if _depth < _MAX_SCAN_DEPTH:
+    if not at_depth_limit:
         # Extracted from the heredoc-STRIPPED text, so a `$(...)` inside a
         # heredoc with a QUOTED delimiter stays excluded — bash performs no
         # expansion there. An UNQUOTED delimiter is the opposite case: bash
@@ -3453,14 +3486,29 @@ def _stdin_shell_fed(argv):
             any(_STDIN_FEED_RE.match(word) for word in rest))
 
 
+def _command_lookup(argv, index):
+    """Whether the options immediately following `command` request a lookup."""
+    for position in range(index + 1, len(argv)):
+        option = argv[position]
+        if option == "--" or not option.startswith("-"):
+            break
+        if not option.startswith("--") and ("v" in option or "V" in option):
+            return True
+    return False
+
+
 def _wrapped_command_index(argv):
     """The index of the first word of *argv* that is not a `VAR=value`
     word, a _RUN_WRAPPERS name or an option, or None. That is the command
     when every wrapper in front of it takes no option value: `sudo -u root
-    x` stops at `root`."""
+    x` stops at `root`. A `v` or `V` in a short option of `command`
+    requests a lookup, so there is no command to run."""
     for index, word in enumerate(argv):
+        base = _program_base(word)
+        if base == "command" and _command_lookup(argv, index):
+            return None
         if (_ENV_ASSIGN_RE.match(word) or
-                _program_base(word) in _RUN_WRAPPERS or word.startswith("-")):
+                base in _RUN_WRAPPERS or word.startswith("-")):
             continue
         return index
     return None
@@ -5502,10 +5550,13 @@ def _is_absolute_cd_target(target):
     return _normalised_cd_target(target) is not None
 
 
-# The ONE `cd` shape that moves the scope (#107): the command opens with a
-# plain `cd`, one literal absolute path from a safe alphabet, then `&&`.
-# Matched on the RAW text, before any quote removal or normalising.
-_EXACT_CD_RE = re.compile(r"[ \t]*cd[ \t]+(/[A-Za-z0-9._/@+-]*)[ \t]*&&")
+# One leading `cd`, one whole absolute or relative path word, then `&&`.
+# Match the raw text so only a single pair of quotes can admit spaces.
+_EXACT_CD_RE = re.compile(
+    r"[ \t]*cd[ \t]+(?:"
+    r"(?P<bare>[A-Za-z0-9._/@][A-Za-z0-9._/@+-]*)|"
+    r"""(?P<quote>["'])(?P<quoted>[A-Za-z0-9._/@][A-Za-z0-9._/@+ -]*)(?P=quote)"""
+    r")[ \t]*&&")
 # The one `cd` allowed after it: a plain `&& cd -` that ENDS the command
 # (#156 G-7). It runs after every other statement, so it moves none of them.
 # No leading `[ \t]*`: searched, that rescans every run of blanks (quadratic).
@@ -5656,14 +5707,100 @@ _ZSH_PAREN_RE = re.compile(r"[^\s$<>;&|(){}]\(")
 _ARRAY_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=$")
 
 
+# Measured with zsh 5.9: `${(e)X}` evaluates X's text. `${~X}` and `$~X`
+# turn X's text into a pattern whose glob qualifier can run code. We can
+# match the braced forms by their first character alone: bash rejects
+# `${(`, `${~`, `${=` and `${^` as bad substitutions, so this wider match
+# costs no working bash expansion. The unbraced `$~`, `$=` and `$^` are
+# matched too. Bash prints them literally; denying them is the accepted
+# over-match. The GLOB_SUBST option is read from dequoted words instead
+# (_sets_glob_subst), because quoting cannot hide its name.
+def _zsh_param_code(raw):
+    """Whether *raw* holds a zsh parameter form (`${(e)X}`, `${~X}`, `$~X`,
+    `$=X`, `$^X`) outside single quotes, also inside an unquoted heredoc
+    body. A backslash before the `$` does not hide it (see below)."""
+    if re.search(r"\$\{?[(~=^]", raw) is None:
+        return False
+
+    def has_expansion(text, quoting=True):
+        quote = None
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "\\" and quote != "'":
+                if text[i + 1:i + 2] == "$":
+                    # A shell payload in double quotes reaches here with
+                    # its `\$` kept (the tokenizer matches shlex), but the
+                    # outer shell turns `\$` into `$` before zsh reads it:
+                    # `zsh -c "X='\$(cmd)'; echo \${(e)X}"` runs cmd.
+                    # So the `$` stays live.
+                    i += 1
+                    continue
+                i += 2
+                continue
+            if quoting and ch in ("'", '"'):
+                if quote is None:
+                    quote = ch
+                elif quote == ch:
+                    quote = None
+            elif ch == "$" and quote != "'" and text.startswith(
+                    ("${(", "${~", "${=", "${^", "$~", "$=", "$^"), i):
+                return True
+            i += 1
+        return False
+
+    try:
+        text, heredocs = _split_heredocs(raw)
+    except ValueError:
+        return has_expansion(raw)
+    return has_expansion(text) or any(
+        has_expansion(body, quoting=False)
+        for _, quoted_delim, body, _ in heredocs if not quoted_delim)
+
+
+# Measured with zsh 5.9, an unquoted `=name` expands to the command's
+# full path. Bash never runs such a word as a command. As an argument it
+# is rare, so denying it is safe. Skip the test operators `= ` and `==`
+# and the `[[ ]]` regex operator `=~`.
+def _zsh_equals_word(raw):
+    """Whether *raw* holds an unquoted word that starts with `=` and has a
+    name after it (`=git`). The `=` must follow whitespace or one of
+    `;&|(){}` and a backtick, and must not be escaped (`foo\\ =git` is one
+    word)."""
+    if not isinstance(raw, str) or "=" not in raw:
+        return False
+    try:
+        text = _strip_heredocs(raw)
+    except ValueError:
+        text = raw
+    # zsh drops a backslash-newline before it splits words, so
+    # `true; \<newline>=git` runs =git. Drop each unescaped one first.
+    text = re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", text)
+    mask, _quote = _quote_mask(text)
+    for i, ch in enumerate(text):
+        if ch != "=" or mask[i] or i + 1 == len(text):
+            continue
+        if i and (mask[i - 1] or not (
+                text[i - 1].isspace() or text[i - 1] in ";&|(){}`")):
+            continue
+        following = text[i + 1]
+        if not following.isspace() and following not in "=~":
+            return True
+    return False
+
+
 def _zsh_code_word(raw):
-    """Whether text *raw* holds a word with zsh code in an unquoted `(` --
-    see _ARRAY_ASSIGN_RE's comment. A `(` inside `[[ ... ]]` is a bash
+    """Whether *raw* uses zsh parameter code, expands `=word`, or holds code
+    in an unquoted `(` (see _ARRAY_ASSIGN_RE). A `(` inside `[[ ... ]]` is a bash
     regex group (`[[ $b =~ ^(a|b)$ ]]`) and does not count.
 
     Checked on the WHOLE command by _find_statements and _cd_target: the
     statement splitter reads `(` and `)` as a subshell, so no single
     statement keeps the word whole."""
+    if _zsh_param_code(raw):
+        return True
+    if _zsh_equals_word(raw):
+        return True
     if not _ZSH_PAREN_RE.search(raw):
         return False  # fast path: no `(` glued to a word character
     raw = _strip_heredocs(raw)
@@ -5692,14 +5829,111 @@ def _zsh_code_word(raw):
     return False
 
 
+_ZSH_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+_ZSH_SPECIAL_ARRAY_RE = re.compile(
+    r"^(?:functions|functions_source|aliases|galiases|saliases|dis_aliases|"
+    r"dis_galiases|dis_saliases|dis_functions|commands|nameddirs|userdirs|"
+    r"options|builtins|dis_builtins|reswords|dis_reswords)(?:\[[^\]]*\])?\+?=")
+
+
+# Measured with zsh 5.9, eval expands a newly defined alias, writing to
+# functions defines a callable function, and hash binds a name to a path.
+# The hook cannot follow a name defined in the command. Profile aliases
+# defined before the command are outside this check's scope (see #246).
+# A structural word the scanner leaves at the head (`then`, `do`, `{`, `!`)
+# is skipped, so `if true; then alias tt=git; fi` is still seen.
+def _defines_command_name(argv):
+    """Whether statement *argv* defines a command name zsh will later run:
+    `alias`, `hash`, or a write to a special array (`functions[tt]=...`)."""
+    index = 0
+    while index < len(argv) and (_ZSH_ASSIGNMENT_RE.match(argv[index])
+                                 or argv[index] in _HEAD_LEAD_WORDS):
+        if _ZSH_SPECIAL_ARRAY_RE.match(argv[index]):
+            return True
+        index += 1
+    while index < len(argv) and (
+            argv[index] in _HEAD_LEAD_WORDS or argv[index] in (
+                "builtin", "command", "noglob", "nocorrect", "exec", "-")):
+        index += 1
+    if index == len(argv):
+        return False
+
+    head = argv[index]
+    if head == "alias":
+        return any("=" in word for word in argv[index + 1:])
+    if head == "hash":
+        return any("=" in word or (word.startswith("-")
+                                   and not word.startswith("--")
+                                   and ("p" in word or "d" in word))
+                   for word in argv[index + 1:])
+    if head in ("typeset", "declare", "local", "export", "readonly",
+                "integer", "float"):
+        return any(_ZSH_SPECIAL_ARRAY_RE.match(word)
+                   for word in argv[index + 1:])
+    return False
+
+
+# Measured with zsh 5.9: zsh removes quotes and backslashes before `setopt`
+# reads its argument, so `setopt glob'subst'`, `glob""subst` and `glob\subst`
+# all turn GLOB_SUBST on. With it on, `X='*(e:cmd:)'; echo $X` runs cmd.
+# _scan_commands already yields quote-removed words, so a word that merely
+# NAMES the option is enough to deny: it may come from `setopt`, `unsetopt`,
+# `emulate`, `set -o` or `zsh -o`, and the `no` form turns it on in an
+# `unsetopt`. A word holding an expansion after those commands
+# (`setopt $o`, `set -o $o`) can name it at run time, so it is denied too.
+_GLOB_SUBST_NAMES = ("globsubst", "noglobsubst", "oglobsubst",
+                     "onoglobsubst")
+_OPTION_COMMANDS = ("setopt", "unsetopt", "emulate")
+
+
+def _sets_glob_subst(argv):
+    """Whether statement *argv* names the GLOB_SUBST option, or may name it
+    through an expansion (`setopt $o`). Over-matches: `echo globsubst`
+    does too, and is denied."""
+    for word in argv:
+        name = word.lower().replace("_", "").lstrip("-+")
+        if name in _GLOB_SUBST_NAMES or (
+                word[:1] in ("-", "+") and name.endswith("globsubst")):
+            return True
+    index = 0
+    while index < len(argv) and (
+            _ZSH_ASSIGNMENT_RE.match(argv[index])
+            or argv[index] in _HEAD_LEAD_WORDS
+            or argv[index] in ("builtin", "command", "noglob", "nocorrect",
+                               "exec", "-")):
+        index += 1
+        # `command -p setopt $o`: skip the precommand's own options.
+        while (index < len(argv) and argv[index - 1] in ("command", "exec")
+               and argv[index].startswith("-") and argv[index] != "-"):
+            index += 1
+    if index == len(argv):
+        return False
+    rest = argv[index + 1:]
+    if argv[index] in _OPTION_COMMANDS:
+        return any(_carries_expansion(word) for word in rest)
+    if argv[index] == "set":
+        if "--" in rest:
+            rest = rest[:rest.index("--")]  # then positional arguments
+        # `set -o $o`, and a bundle holding o (`set -eo $o`).
+        takes_name = any(word[:1] in ("-", "+") and word[1:2] != "-"
+                         and "o" in word[1:] for word in rest)
+        return takes_name and any(_carries_expansion(word) for word in rest)
+    return False
+
+
 def _zsh_code_in(cmd):
     """Whether *cmd*, or any code it runs -- a shell payload, `eval`, a
-    `$( )` body, a heredoc fed to a shell -- holds a zsh code word. Inside
-    quotes the outer check cannot see it: `zsh -c "echo /tmp(e:'cmd':)"`
-    runs cmd (PR #121 review, measured). Propagates ValueError."""
+    `$( )` body, a heredoc fed to a shell -- defines a command name or
+    holds a zsh code word. Inside quotes the outer check cannot see it:
+    `zsh -c "echo /tmp(e:'cmd':)"` runs cmd (PR #121 review, measured).
+    Propagates ValueError."""
     if _zsh_code_word(cmd):
         return True
-    texts = {getattr(argv, "code", None) for argv in _scan_commands(cmd)}
+    texts = set()
+    for argv in _scan_commands(cmd):
+        if _defines_command_name(argv) or _sets_glob_subst(argv):
+            return True
+        texts.add(getattr(argv, "code", None))
     return any(text and text != cmd and _zsh_code_word(text)
                for text in texts)
 
@@ -5949,6 +6183,11 @@ def _verb_runs_after_chain(cmd, verb):
                for argv in scanned)
 
 
+def _exact_cd_path(match):
+    """The literal path word of an exact cd, with any quotes removed."""
+    return match.group("bare") or match.group("quoted")
+
+
 # How many nested whole-command subshells _cd_target unwraps. Deeper is
 # _SCOPE_UNKNOWN: 1,100 nested `( ... )` once recursed past Python's limit,
 # and the crash let the command through (PR #121 review).
@@ -5965,10 +6204,11 @@ def _cd_target(cmd, verb=None):
     that never runs (`false && cd /tmp; git push origin main`), and `$C X`
     with C=cd. Each read as a push in another project while it ran HERE.
 
-    1. The command opens with a plain `cd`, ONE literal absolute path in
-       [A-Za-z0-9._/@+-] (no quotes, `~`, `$`, globs or backslashes), then
-       `&&` -- checked on the RAW text. If the `cd` fails, `&&` skips the
-       next command, but a later `;`, `||` or newline still runs it HERE,
+    1. The command opens with a plain `cd`, ONE literal absolute or relative
+       path word, then `&&`. The raw word uses the _EXACT_CD_RE alphabet.
+       A single pair of matching quotes also permits spaces after the first
+       character. Leading `-` and `+` are excluded. If the `cd` fails, `&&`
+       skips the next command, but a later `;`, `||` or newline still runs it HERE,
        so every run of *verb* must sit inside the unbroken `&&` chain
        (_verb_runs_after_chain, #154). A background `&` or
        `coproc` anywhere voids the shape. The answer is that path. The
@@ -5994,10 +6234,9 @@ def _cd_target(cmd, verb=None):
        is taken from the shorter command; anything else is read from the
        whole command.
 
-    Legitimate multi-`cd` shapes (`cd /a && npm ci && cd /a && git push`,
-    `cd sub && git push`) are unknown now; that cost was accepted. A file
-    the command sources, or a script it runs, may change directory too; that
-    is outside the command text and not read.
+    Legitimate multi-`cd` shapes like `cd /a && npm ci && cd /a && git push`
+    are unknown. A sourced file or script may also change directory outside
+    the visible command text.
 
     *verb* is the run rule 2a checks; with none, any nested statement
     counts. Propagates ValueError from the scanner.
@@ -6028,15 +6267,16 @@ def _cd_target(cmd, verb=None):
     hidden = (_defines_function(cmd) or _EXPORTED_FUNCTION in cmd or
               _zsh_code_in(cmd))
     match = _EXACT_CD_RE.match(cmd)
+    path = _exact_cd_path(match) if match else None
     # A background job cannot move this shell, so it voids only the exact
     # shape: `cd /x && true & cmd` runs the cd in the background.
-    if (match and not hidden and movers == [0] and
+    if (path is not None and not hidden and movers == [0] and
             not _runs_in_background(cmd) and
-            list(scanned[0]) == ["cd", match.group(1)]):
+            list(scanned[0]) == ["cd", path]):
         if (_verb_runs_nested(cmd, scanned, verb) or
                 _verb_runs_after_chain(cmd, verb)):
             return _SCOPE_UNKNOWN
-        return match.group(1)
+        return path
     if movers or hidden:
         return _SCOPE_UNKNOWN
     return None
@@ -6048,6 +6288,8 @@ def _git_redirect_target(argv, words):
     None means "no redirect option": the run obeys the shell's cwd, so the
     `cd` rules answer for it. _SCOPE_UNKNOWN means a redirect IS present but
     does not name one resolvable directory -- callers read that as this repo.
+    A path carrying expansion or starting with `~` returns _SCOPE_UNKNOWN
+    because the shell's environment can differ from the hook's.
 
     git applies `-C` first and resolves `--git-dir` / `--work-tree` from
     there, and a push updates the GIT DIR, so `--git-dir` decides when it is
@@ -6107,6 +6349,8 @@ def _git_redirect_target(argv, words):
     if "-C" in seen and len(seen) > 1:
         return _SCOPE_UNKNOWN
     path = gitdir if gitdir is not None else chdir
+    if path is not None and (_carries_expansion(path) or path.startswith("~")):
+        return _SCOPE_UNKNOWN
     if (path is not None and not path.startswith(("/", "~")) and
             (env_gitdir or _RELATIVE_REDIRECT_RE.fullmatch(path))):
         # A literal relative GIT_DIR, `-C` or `--git-dir` names a directory
@@ -6619,6 +6863,60 @@ def _anchor(path, base):
     return None
 
 
+def _resolve_cd_scope(target, base):
+    """Resolve a relative cd logically from the payload cwd, if enterable."""
+    if target is None or target is _SCOPE_UNKNOWN:
+        return target
+    absolute = _normalised_cd_target(target) is not None
+    if not absolute and os.environ.get("CDPATH") and (
+            target not in (".", "..") and
+            not target.startswith(("./", "../"))):
+        return _SCOPE_UNKNOWN
+    try:
+        if ".." in target.split("/"):
+            # Measured on macOS: from `/`, bash and zsh run
+            # `cd ./var/../tftpboot/..` and land in /private, because
+            # /tftpboot is missing so the shell falls back to the physical
+            # path. A shell run with `set -P` (bash) or `setopt chase_dots`
+            # (zsh) is physical too, and the hook cannot see that. So a `..`
+            # is only read logically when logical and physical agree.
+            if not _dotdot_is_stable(target, base, absolute):
+                return _SCOPE_UNKNOWN
+        if absolute:
+            return target
+        # _anchor rejects NUL and requires an absolute base for a relative
+        # path. A missing relative target may still be found via a
+        # shell-only CDPATH.
+        joined = _anchor(target, base)
+        if (joined is not None and os.path.isdir(joined) and
+                os.access(joined, os.X_OK)):
+            return joined
+    except (OSError, ValueError):
+        pass
+    return _SCOPE_UNKNOWN
+
+
+def _dotdot_is_stable(target, base, absolute):
+    """Whether every `..` in *target* reads the same logically and
+    physically: each prefix before a `..` is an existing directory, and the
+    folded path resolves to the same place as the raw one."""
+    if _has_nul(target) or _has_nul(base):
+        return False
+    raw = os.path.expandvars(os.path.expanduser(target))
+    if not absolute:
+        if not (isinstance(base, str) and base.startswith("/")):
+            return False
+        raw = os.path.join(base, raw)
+    parts = raw.split("/")
+    for index, part in enumerate(parts):
+        if part == "..":
+            prefix = "/".join(parts[:index]) or "/"
+            if not os.path.isdir(prefix):
+                return False
+    return (os.path.realpath(os.path.normpath(raw)) ==
+            os.path.realpath(raw))
+
+
 def _physical_path(path, base):
     """*path* resolved as the KERNEL resolves it -- `env -C`, `GIT_DIR`,
     `git -C` all chdir(2) or open through it -- so `link/..` is the
@@ -6713,10 +7011,9 @@ def _command_scope_uncached(cmd, verb=None, base=None):
     scope = _command_scope_raw(cmd, verb, base)
     if _has_nul(scope):
         return _SCOPE_UNKNOWN  # see _has_nul: no directory to follow
-    if (isinstance(scope, str) and base is not None and
-            _normalised_cd_target(scope) is None):
+    if isinstance(scope, str) and not scope.startswith("/"):
         anchored = _anchor(scope, base)
-        return anchored if anchored is not None else scope
+        return anchored if anchored is not None else _SCOPE_UNKNOWN
     return scope
 
 
@@ -6743,12 +7040,13 @@ def _command_scope_raw(cmd, verb=None, base=None):
     command. A hidden git run (#98) scores as unknown -- see the loop.
     *base* is the absolute payload cwd, or None. A relative GIT_DIR or
     `env -C` is anchored to it or to an absolute `cd`, else unknown.
-    _cd_target itself returns only an absolute path, None or unknown.
+    A relative `cd` is resolved against *base* before scoring the runs.
 
     Propagates ValueError like _cd_target does.
     """
     words = list(verb) if verb else []
     target = _cd_target(cmd, words or None)
+    target = _resolve_cd_scope(target, base)
     if not words:
         return target
     statements = _find_statements(cmd, words)
@@ -6857,13 +7155,11 @@ _MAX_INPUT_BYTES = 8 * _MAX_COMMAND_BYTES
 def _read_hook_input():
     """``(data, problem)`` from the hook's stdin (#152).
 
-    *problem* is None, or a phrase each hook puts in its own deny. A raise
-    here would exit 1, a NON-BLOCKING error, and the call would run, so every
-    failure is caught: a closed stdin (`sys.stdin` is None), a closed file
-    (ValueError), a non-blocking stdin with no data (read returns None),
-    invalid UTF-8, and the parse, where deep nesting raises RecursionError,
-    not a ValueError. *data* is whatever the JSON holds; each
-    hook still checks its shape.
+    *problem* is None, or a phrase each hook puts in its own deny. The crash
+    guard exits 2 on an uncaught exception. Catching read and parse failures
+    here gives the deny a specific reason, including for closed stdin,
+    invalid UTF-8, and JSON nested deeply enough to raise RecursionError.
+    *data* is whatever the JSON holds. Each hook still checks its shape.
     """
     try:
         raw = sys.stdin.buffer.read(_MAX_INPUT_BYTES + 1)
@@ -6885,6 +7181,7 @@ def _read_hook_input():
 # the review measured `$x` on 2 MB of lines at 8.5-10.3 s under load -- so the
 # hook stops itself first, at 7 s, and denies.
 _DEADLINE_SECONDS = 7.0
+_DEADLINE_ARMED = []
 _DEADLINE_REASON = (
     "This guard ran out of time checking this command; split it or write "
     "large content with the Write tool.")
@@ -6913,6 +7210,8 @@ def _arm_deadline():
     `try` that would swallow SystemExit. Writes straight to fd 1 for the same
     reason. A platform without setitimer runs without the deadline, as before.
     """
+    if _DEADLINE_ARMED:
+        return
     import signal as _signal
     if not hasattr(_signal, "setitimer"):
         return
@@ -6939,6 +7238,7 @@ def _arm_deadline():
     _signal.signal(_signal.SIGALRM, _expired)
     _signal.setitimer(_signal.ITIMER_REAL, _deadline_seconds(
         os.environ.get("HARDEN_HOOK_DEADLINE")))
+    _DEADLINE_ARMED.append(True)
 
 
 def _disarm_deadline():
@@ -6946,6 +7246,7 @@ def _disarm_deadline():
     import signal as _signal
     if hasattr(_signal, "setitimer"):
         _signal.setitimer(_signal.ITIMER_REAL, 0)
+    _DEADLINE_ARMED.clear()
 
 
 # Non-empty once _emit has started. A list, so no `global` is needed.
@@ -6966,8 +7267,8 @@ def _add_alias_note(spec):
     """Put a sentence before a deny reason in *spec*: the runner sentence
     when the noted command sets a config key or environment variable that
     makes git run another program (and no alias source), else the alias
-    sentence when it sets a git alias or include. Never raises: a crash
-    here would turn the deny into exit 1, which lets the command run."""
+    sentence when it sets a git alias or include. The crash guard exits 2 on
+    an uncaught exception. Catch note errors here to preserve the deny reason."""
     try:
         if (len(_NOTED_COMMAND) == 2 and
                 _sets_git_runner_config(_NOTED_COMMAND[0]) and
@@ -7257,7 +7558,7 @@ def _git_common_dir(path):
         proc = _subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
              "--git-common-dir"],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, timeout=5)
     except (OSError, ValueError, _subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
@@ -7400,11 +7701,130 @@ def _effective_cwd(cmd, default, verb=None, base=None):
     return resolved
 # --- END shared repo identity v1 ---
 
-def _targets_this_project(cmd: str, base=None) -> bool:
+
+# --- BEGIN shared repo config v1 (keep in sync across all hook copies) ---
+import json as _cfg_json
+import os as _cfg_os
+import re as _cfg_re
+import stat as _cfg_stat
+
+_REPO_CONFIG_NAME = "harden-repo.json"
+_CFG_MAX_BYTES = 16384
+
+
+def _repo_config_path():
+    hook_dir = _cfg_os.path.dirname(_cfg_os.path.abspath(__file__))
+    return _cfg_os.path.join(_cfg_os.path.dirname(hook_dir), _REPO_CONFIG_NAME)
+
+
+def _cfg_unique_keys(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError(f"duplicate key {key!r}")
+        obj[key] = value
+    return obj
+
+
+def _cfg_bad_constant(value):
+    raise ValueError(f"{value} is not a JSON number")
+
+
+def _cfg_object(value, name, keys):
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    for key in value:
+        if key not in keys:
+            raise ValueError(f"unknown key {key!r} in {name}")
+    return value
+
+
+def _cfg_names(values, name, minimum, maximum, pattern, reserved=()):
+    if not isinstance(values, list) or not minimum <= len(values) <= maximum:
+        raise ValueError(f"{name} must be a list with {minimum} to {maximum} entries")
+    seen = set()
+    for index, item in enumerate(values):
+        if not isinstance(item, str) or not _cfg_re.fullmatch(pattern, item):
+            raise ValueError(f"{name}[{index}] must be a string matching {pattern}")
+        if item in reserved:
+            raise ValueError(f"{name}[{index}] {item!r} is reserved")
+        if item in seen:
+            raise ValueError(f"{name}[{index}] repeats {item!r}")
+        seen.add(item)
+    return tuple(values)
+
+
+def _load_repo_config(path=None):
+    config = {"branch_prefixes": (), "release_style": "version",
+              "package_dirs": ("packages",), "allow_skip_env": True}
+    try:
+        path = _repo_config_path() if path is None else path
+        try:
+            info = _cfg_os.lstat(path)
+        except FileNotFoundError:
+            return config, None
+        if not _cfg_stat.S_ISREG(info.st_mode):
+            raise ValueError("expected a regular file")
+        flags = _cfg_os.O_RDONLY | _cfg_os.O_NOFOLLOW | getattr(_cfg_os, "O_NONBLOCK", 0)
+        fd = _cfg_os.open(path, flags)
+        try:
+            # The file may have changed since lstat.
+            if not _cfg_stat.S_ISREG(_cfg_os.fstat(fd).st_mode):
+                raise ValueError("expected a regular file")
+            data = bytearray()
+            while chunk := _cfg_os.read(fd, _CFG_MAX_BYTES + 1 - len(data)):
+                data.extend(chunk)
+                if len(data) > _CFG_MAX_BYTES:
+                    raise ValueError(f"file exceeds {_CFG_MAX_BYTES} bytes")
+        finally:
+            _cfg_os.close(fd)
+        obj = _cfg_json.loads(data.decode("utf-8"), object_pairs_hook=_cfg_unique_keys,
+                              parse_constant=_cfg_bad_constant)
+        _cfg_object(obj, "config", ("version", "branch_prefixes", "releases", "preflight"))
+        version = obj.get("version", 1)
+        if type(version) is not int or version != 1:
+            raise ValueError("version must be the integer 1")
+        if "branch_prefixes" in obj:
+            config["branch_prefixes"] = _cfg_names(
+                obj["branch_prefixes"], "branch_prefixes", 0, 16, r"[a-z][a-z0-9-]{0,31}",
+                ("feature", "release", "hotfix", "main", "master", "develop"))
+        releases = _cfg_object(obj.get("releases", {}), "releases", ("style", "package_dirs"))
+        style = releases.get("style", config["release_style"])
+        if style not in ("version", "package"):
+            raise ValueError("releases.style must be 'version' or 'package'")
+        config["release_style"] = style
+        if "package_dirs" in releases:
+            if style != "package":
+                raise ValueError("releases.package_dirs requires style 'package'")
+            config["package_dirs"] = _cfg_names(releases["package_dirs"], "releases.package_dirs",
+                                                1, 8, r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")
+        preflight = _cfg_object(obj.get("preflight", {}), "preflight", ("allow_skip_env",))
+        config["allow_skip_env"] = preflight.get("allow_skip_env", config["allow_skip_env"])
+        if not isinstance(config["allow_skip_env"], bool):
+            raise ValueError("preflight.allow_skip_env must be a boolean")
+        return config, None
+    except Exception as exc:  # noqa: BLE001 -- Fail closed on any read or config error.
+        return None, " ".join(str(exc).splitlines()) or type(exc).__name__
+
+
+def _repo_config_reason(problem):
+    return (f"❌ {_repo_config_path()}: {problem}. This hook denies the command until "
+            "you fix or remove the file. A missing file means defaults.")
+# --- END shared repo config v1 ---
+
+_CHECKOUT = ["git", "checkout"]
+_SWITCH = ["git", "switch"]
+_BRANCH = ["git", "branch"]
+_WORKTREE_ADD = ["git", "worktree", "add"]
+_STASH_BRANCH = ["git", "stash", "branch"]
+
+
+def _targets_this_project(cmd: str, base=None, verb=_CHECKOUT) -> bool:
     """Check if the command targets a repo within this project.
 
     Hooks run in their own process (cwd = project dir), so git commands in
-    the hook inspect the wrong repo when Claude does 'cd /other/repo && git checkout -b'.
+    the hook inspect the wrong repo when Claude does 'cd /other/repo && git
+    switch -c' (or any other branch-creating verb).
     Parse the cd target from the command to determine the effective repo.
     """
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
@@ -7416,7 +7836,7 @@ def _targets_this_project(cmd: str, base=None) -> bool:
     # Issue #43: locate `cd` among real statements, so a path inside a heredoc
     # body or a quoted string cannot veto this guard.
     try:
-        target = _command_scope(cmd, ["git", "checkout"], base)
+        target = _command_scope(cmd, verb, base)
     except ValueError:
         # The caller parsed this command already, so this cannot happen;
         # if it ever does, run the guard rather than skip it.
@@ -7466,7 +7886,7 @@ def _targets_this_project(cmd: str, base=None) -> bool:
 
 
 def _branch_is_valid(name):
-    """Mirror of the validation below, for picking which name to report.
+    """Check a branch name against this repo's naming rules.
 
     INCIDENTAL SAFETY, do not simplify this away. An opaque branch name --
     `git checkout -b $(echo main)`, `` -b `echo main` ``, `-b ${BR}` -- is
@@ -7488,11 +7908,12 @@ def _branch_is_valid(name):
     """
     if name in ("main", "develop"):
         return True
-    if not re.match(r'^(feature|release|hotfix)/', name):
-        return False
     if name.startswith("release/"):
+        if _REPO_CONFIG["release_style"] == "package":
+            return re.fullmatch(r"release/[a-z0-9]+(?:-[a-z0-9]+)*-v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?",
+                                name) is not None
         return bool(re.match(r'^release/v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$', name))
-    return True
+    return name.startswith(_ALLOWED_PREFIXES)
 
 
 # Stop before the harness timeout, which would let the tool call through.
@@ -7517,7 +7938,11 @@ if _input_problem:
     sys.exit(0)
 
 def _deny_malformed(what):
-    """A crash is exit 1, a NON-BLOCKING error, so a bad payload is denied."""
+    """Deny a malformed payload before reading its fields.
+
+    The crash guard exits 2 on an uncaught exception. Checking the input
+    here lets the deny identify the malformed field or payload.
+    """
     _emit({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -7538,7 +7963,7 @@ tool_input = input_data.get("tool_input", {})
 command = (tool_input.get("command", "")
            if isinstance(tool_input, dict) else None)
 
-# Only validate git checkout -b commands.
+# Only validate Bash commands that may create a branch.
 #
 # Resolve the real statement (issue #43) so a branch name quoted inside a
 # heredoc or an issue body does not trip this guard. A command that cannot be
@@ -7560,10 +7985,10 @@ if _command_too_large(command):
         }
     })
     sys.exit(0)
-_note_command(command, "git checkout -b")
+_note_command(command, "a branch-creating git command")
 
 def _deny_unknown_branch_name():
-    """Deny a checkout whose new branch name this hook cannot read.
+    """Deny a command whose new branch name this hook cannot read.
 
     This gate is an allowlist of Git Flow names, so a name it cannot read
     has to be refused, not waved through: `git${IFS}checkout${IFS}-b bad`
@@ -7578,80 +8003,519 @@ def _deny_unknown_branch_name():
                 "that feeds it arguments (xargs, find -exec, parallel), "
                 "inline code in another language (python -c, perl -e), "
                 "or a command that could not be parsed may hide the "
-                "checkout. Write the command "
-                "literally: git checkout -b feature/<name>")
+                "branch it creates. Write the command "
+                "literally: git switch -c feature/<name>")
         }
     })
     sys.exit(0)
 
 
-def _checkout_branch_names(argv):
-    """Branch names created by one `git checkout` statement.
+def _long_option_prefixes(*names):
+    return {"--" + name[:end]
+            for name in names for end in range(1, len(name) + 1)}
 
-    -B creates/resets a branch exactly as -b creates one, and git accepts the
-    value ATTACHED to the short option (`git checkout -bNAME` really creates
-    NAME), so anchoring on a literal `-b` token let `-bBADNAME` through.
-    (`git checkout --branch` does not exist; `git branch <name>` and
-    `git switch -c` are separate coverage, tracked elsewhere.)
 
-    Short options also BUNDLE: `git checkout -qb NAME` and `git checkout -fb
-    NAME` really create NAME (verified on git 2.50.1), so any cluster ending in
-    `b`/`B` counts, not just the bare flag. The pattern needs a letter straight
-    after the single `-`, so a `--long-option` can never match it.
+_CHECKOUT_CREATE = _long_option_prefixes("orphan")
+# --force is an exact switch option, so it never abbreviates --force-create.
+_SWITCH_CREATE = _long_option_prefixes("create", "force-create", "orphan") - {"--force"}
+# `git worktree add --rea` is the shortest unique prefix of --reason (`--re`
+# also fits --relative-paths, which git refuses as ambiguous).
+_WORKTREE_REASON = {p for p in _long_option_prefixes("reason") if len(p) >= 5}
+
+
+# A RAW word with ANSI-C (`$'...'`) or locale (`$"..."`) quoting: bash decodes
+# it, but the parsed word keeps a stray `$` and drops the quotes (`$'-b'` reads
+# as `$-b`), so the walk would not see the option. `git stash branch` needs no
+# check: its name and selector alphabets already reject that `$`.
+_ANSI_QUOTED = re.compile(r"\$['\"]")
+
+
+def _paired_args(argv, words):
+    """The words after the verb run as (parsed, raw) pairs, or None.
+
+    _statement_args and _raw_args cut the same redirections, so their words
+    line up by index; _raw_args alone stops at a `#` comment, so the parsed
+    list is cut to the raw one. None when they do not line up, or for a
+    hidden run: the caller then treats the words as unreadable.
     """
-    names = []
-    rest = _statement_args(argv, ["git", "checkout"])
-    for index, token in enumerate(rest):
-        if token == "--":
-            break  # end of options: everything after is a pathspec
-        # Non-greedy: `-bbadname` is -b with value "badname", NOT the cluster
-        # "-bb" with value "adname".
-        match = re.match(r"^-[a-zA-Z]*?[bB]", token)
-        if not match:
+    raw = _raw_args(argv, words)
+    if raw is None:
+        return None
+    parsed = _statement_args(argv, words)
+    if len(parsed) < len(raw):
+        return None
+    return list(zip(parsed, raw))
+
+
+def _option_branch_values(pairs, short_pattern, long_options=(), value_options=()):
+    """Collect every branch option's value as (parsed, raw), repeats included.
+
+    One walk serves both the name reader and the readability check, so they
+    cannot disagree about which word is a name. Options are recognised on the
+    PARSED word (a quoted `"--"` or `'-b'` is still that option); the RAW
+    word beside it is what readability is judged on. For an attached value
+    (`-bNAME`, `--orphan=NAME`) the raw word is the whole word. A missing
+    value is (None, None).
+
+    *value_options* are other long options that take the next word as their
+    value, even `--`, so that word is never read as an option.
+    """
+    values = []
+    args = iter(pairs)
+    for token, raw in args:
+        if raw is not None and _ANSI_QUOTED.search(raw):
+            # `$'-b'` is `-b` after quote removal, and `$'...'` hides any
+            # other word the same way: unreadable, so never skipped.
+            values.append((None, None))
             continue
-        value = token[match.end():]
-        if value:
-            names.append(value)
-        elif index + 1 < len(rest):
-            names.append(rest[index + 1])  # shlex already removed quotes
-        break
-    return names
+        if token == "--":
+            break
+        if token.startswith("--"):
+            option, equals, value = token.partition("=")
+            if option in value_options and not equals:
+                next(args, None)
+                continue
+            if option not in long_options:
+                continue
+            if equals:
+                values.append((value, raw))
+                continue
+        else:
+            # Non-greedy: -qb takes the next word, and -bbad takes "bad".
+            match = re.match(short_pattern, token)
+            if not match:
+                continue
+            value = token[match.end():]
+            if value:
+                values.append((value, raw))
+                continue
+        following = next(args, None)
+        values.append(following if following is not None else (None, None))
+        if following is None:
+            break
+    return values
 
 
-# The characters a checkout argument may hold and still be read exactly as
-# bash will pass it. Anything else -- `$`, a backtick, `*?[`, braces, `~`,
-# a backslash -- may expand into other words, including a second `-b NAME`.
+def _option_branch_names(rest, short_pattern, long_options=(), value_options=()):
+    """The names of _option_branch_values, for words with no raw text."""
+    return [value for value, _raw in _option_branch_values(
+        [(word, None) for word in rest], short_pattern, long_options,
+        value_options) if value is not None]
+
+
+def _checkout_branch_names(argv):
+    return _option_branch_names(_statement_args(argv, _CHECKOUT),
+                                r"^-[a-zA-Z]*?[bB]", _CHECKOUT_CREATE)
+
+
+def _switch_branch_names(argv):
+    return _option_branch_names(_statement_args(argv, _SWITCH),
+                                r"^-[a-zA-Z]*?[cC]", _SWITCH_CREATE)
+
+
+def _worktree_branch_values(argv):
+    pairs = _paired_args(argv, _WORKTREE_ADD)
+    if pairs is None:
+        return None
+    return _option_branch_values(pairs, r"^-[a-zA-Z]*?[bB]", (),
+                                 _WORKTREE_REASON)
+
+
+def _worktree_branch_names(argv):
+    values = _worktree_branch_values(argv)
+    return [] if values is None else [
+        value for value, _raw in values if value is not None]
+
+
+# A stash selector after the new name: a literal `stash@{...}` (no brace,
+# `$` or backtick inside), `refs/stash` or a bare number.
+_STASH_SELECTOR = re.compile(r"stash@\{[^{}$`]*\}|refs/stash|[0-9]+", re.ASCII)
+
+
+def _stash_branch_pairs(argv):
+    """`git stash branch` operands as (parsed, raw) after one leading `--`."""
+    pairs = _paired_args(argv, _STASH_BRANCH)
+    if pairs and pairs[0][0] == "--":
+        pairs = pairs[1:]
+    return pairs
+
+
+def _stash_branch_names(argv):
+    # `git stash branch <name> [<stash>]`: the name is the first operand.
+    pairs = _stash_branch_pairs(argv)
+    return [pairs[0][0]] if pairs else []
+
+
+def _stash_unreadable(argv):
+    """Whether the new name, or a word after it, may hide a second name.
+
+    Every word after the name must read as a stash selector.
+    """
+    pairs = _stash_branch_pairs(argv)
+    if pairs is None:
+        return True
+    return bool(pairs) and (
+        _branch_word_unreadable(pairs[0][1])
+        or any(not _STASH_SELECTOR.fullmatch(word) for word, _raw in pairs[1:]))
+
+
+_BRANCH_FILTERS = {"--contains", "--no-contains", "--merged", "--no-merged"}
+_BRANCH_EXEMPT_OPTIONS = _BRANCH_FILTERS | {
+    "-l", "--list", "-a", "--all", "-r", "--remotes", "--show-current",
+    "--unset-upstream", "--edit-description", "-u", "--set-upstream-to", "--points-at",
+}
+_BRANCH_VALUE_OPTIONS = {"-u", "--set-upstream-to", "--sort", "--format", "--points-at"}
+_BRANCH_KEEP_EXEMPT = {
+    "--no-contains", "--no-merged", "--no-color", "--no-column",
+    "--no-abbrev", "--no-track",
+}
+# `--li` and longer: git abbreviates --list, and `--l` is too short to trust.
+_BRANCH_LIST = {p for p in _long_option_prefixes("list") if len(p) >= 4}
+_BRANCH_MOVE = _long_option_prefixes("move")
+_BRANCH_COPY = _long_option_prefixes("copy")
+_BRANCH_MOVE_COPY = _BRANCH_MOVE | _BRANCH_COPY
+# `--no-move` and `--no-copy` clear their mode (last wins). Prefixes shorter
+# than these are ambiguous with --no-merged, --no-color and the like.
+_BRANCH_NO_MOVE = {p for p in _long_option_prefixes("no-move") if len(p) >= 7}
+_BRANCH_NO_COPY = {p for p in _long_option_prefixes("no-copy") if len(p) >= 8}
+
+
+def _branch_destination(rest):
+    """Return (exempt, destination index) for git branch's mode and operands."""
+    exempt = cancels_exemption = move = copy = False
+    positionals = []
+    args = iter(enumerate(rest))
+    for index, token in args:
+        if token == "--":
+            positionals.extend(i for i, _ in args)
+            break
+        if not token.startswith("-"):
+            positionals.append(index)
+            continue
+
+        option = token.partition("=")[0]
+        if (option in _BRANCH_EXEMPT_OPTIONS or option in _BRANCH_LIST
+                or token == "--delete"):
+            exempt = True
+        if option.startswith("--no-") and option not in _BRANCH_KEEP_EXEMPT:
+            cancels_exemption = True
+        if option in _BRANCH_MOVE:
+            move = True
+        elif option in _BRANCH_COPY:
+            copy = True
+        elif option in _BRANCH_NO_MOVE:
+            move = False
+        elif option in _BRANCH_NO_COPY:
+            copy = False
+        elif re.fullmatch(r"-[a-zA-Z]+", token):
+            letters = set(token[1:])
+            if letters <= set("dDfqr") and letters.intersection("dD"):
+                exempt = True
+            elif letters <= set("alrvqi") and letters.intersection("alr"):
+                # A list flag bundled with display flags: `-vl 'f*'`.
+                exempt = True
+            if letters.intersection("mM"):
+                move = True
+            if letters.intersection("cC"):
+                copy = True
+
+        if token in _BRANCH_VALUE_OPTIONS:
+            next(args, None)
+        elif (token in _BRANCH_FILTERS and index + 1 < len(rest)
+              and not rest[index + 1].startswith("-")):
+            next(args)
+
+    if exempt and not cancels_exemption:
+        return True, None
+    if not positionals:
+        return False, None
+    return False, positionals[-1] if move or copy else positionals[0]
+
+
+def _branch_branch_names(argv):
+    rest = _statement_args(argv, _BRANCH)
+    _, index = _branch_destination(rest)
+    return [] if index is None else [rest[index]]
+
+
+# The characters an argument of a branch-creating verb may hold and still be
+# read exactly as bash will pass it. Anything else -- `$`, a backtick, `*?[`, braces, a
+# backslash -- may expand into other words, including a second `-b NAME`.
+# `~` is not here: _name_unreadable allows it only directly after an ASCII
+# letter, digit, `@`, `^` or `~` (a revision suffix such as `HEAD~1`, #229).
+# A leading `~`, or one after `=` or `:`, is tilde expansion.
 _CHECKOUT_ALPHABET = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/@^:+=-")
+_BRANCH_WORD_ALPHABET = _CHECKOUT_ALPHABET | {"~"}
 
 
-def _name_unreadable(argv):
-    """Whether this checkout may create a branch whose name we cannot read.
+def _branch_word_unreadable(word):
+    return (not _raw_is_literal(word, _BRANCH_WORD_ALPHABET)
+            or re.search(r"(?<![A-Za-z0-9@^~])~", word) is not None)
 
-    An exact alphabet, not a list of shapes: every checkout argument before
-    `--`, read RAW, must be plain _CHECKOUT_ALPHABET text (quotes are fine
-    around such text). Each of these creates `bad` in bash, measured with a
-    fake git, and each holds a character outside the alphabet:
+
+def _args_unreadable(argv, words):
+    """Whether this option-based command could hide a branch name.
+
+    An exact alphabet, not a list of shapes: every argument of the verb before
+    `--`, read RAW, must use _CHECKOUT_ALPHABET plus revision-suffix tildes
+    (quotes are fine around such text). Each of these creates `bad` in bash,
+    measured with a fake git, and each holds a character outside the alphabet:
 
         git checkout -b feature/ok $X        X="-b bad" word-splits
         git checkout -b feature/{ok,bad}     brace expansion
         f=-b; git checkout $f bad            the `-b` itself is hidden
 
-    A hidden checkout (#98) is unreadable by definition. Accepted cost, for a
-    naming lint: `git checkout $BRANCH`, a `$START` start point and
-    `HEAD~1` before `--` deny too.
+    A hidden checkout (#98) is unreadable by definition. A tilde in `HEAD~1`
+    follows a literal revision character. A leading tilde or one after `=`
+    or `:` can trigger shell expansion and is unreadable, as is `$START`.
     """
     if isinstance(argv, _HiddenVerbArgv):
         return True
-    raw_args = _raw_args(argv, ["git", "checkout"])
+    raw_args = _raw_args(argv, words)
     if raw_args is None:
         return True
     for word in raw_args:
         if word == "--":
             break
-        if not _raw_is_literal(word, _CHECKOUT_ALPHABET):
+        if _branch_word_unreadable(word):
             return True
     return False
+
+
+def _name_unreadable(argv):
+    return _args_unreadable(argv, _CHECKOUT)
+
+
+def _branch_unreadable(argv):
+    if isinstance(argv, _HiddenVerbArgv):
+        return True
+    raw_args = _raw_args(argv, _BRANCH)
+    if raw_args is None:
+        return True
+    rest = _statement_args(argv, _BRANCH)
+    exempt, index = _branch_destination(rest[:len(raw_args)])
+    if exempt:
+        return False
+    return (any("$" in word or "`" in word for word in raw_args)
+            or (index is not None and _branch_word_unreadable(raw_args[index])))
+
+
+_WT_SAFE_ENV = ("HOME", "PWD", "OLDPWD", "TMPDIR")
+_WT_DECL_HEADS = ("export", "local", "declare", "typeset", "readonly")
+_WT_WRITER_HEADS = _WT_DECL_HEADS + (
+    "read", "mapfile", "readarray", "getopts", "printf", "unset")
+_WT_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
+# mktemp keeps a leading dash in a template, so a word starting with `-` is
+# safe only as one of the plain flags below. `--` is never safe.
+_WT_MKTEMP_CALL = (r'"?\$\(mktemp(?:[ \t]+(?:-[dqut]|[A-Za-z0-9_./%+][A-Za-z0-9_./%+-]*))*\)"?')
+_WT_MKTEMP_RE = re.compile("^" + _WT_MKTEMP_CALL + "$")
+# A pipe or background `&` in the assignment's own statement runs it in a
+# child shell. A redirect such as `2>&1` or `&>f` is not one.
+_WT_PIPE_RE = re.compile(r"(?<!\|)\|(?!\|)|(?<![&<>])&(?![&>])")
+
+
+def _wt_scoped_at(command, offset):
+    """Whether the assignment at *offset* runs in a child shell: inside
+    `( )` or backticks, or in a statement (the text between `;`, `&&`, `||`
+    and newlines at depth 0) that holds a pipe or a lone `&`. Pipes and
+    subshells elsewhere in the command do not matter.
+    """
+    depth, tick, start, at = 0, False, 0, 0
+    while at < len(command):
+        ch = command[at]
+        if at == offset and (depth or tick):
+            return True
+        step = 1
+        if ch == "`":
+            tick = not tick
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(depth - 1, 0)
+        elif not depth and not tick and (
+                ch in ";\n" or command.startswith(("&&", "||"), at)):
+            step = 1 if ch in ";\n" else 2
+            if at < offset:
+                start = at + step
+            else:
+                return bool(_WT_PIPE_RE.search(command[start:at]))
+        at += step
+    return bool(_WT_PIPE_RE.search(command[start:]))
+
+
+_WT_PLAIN_RE = re.compile(
+    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_\[:]))")
+_WT_TRACE_MEMO = {}
+
+
+def _wt_text_ok(raw, traceable, depth):
+    """Check an expansion word or assignment value for splitting and options."""
+    if _WT_MKTEMP_RE.fullmatch(raw):
+        return True
+    if not raw or any(ch in raw for ch in " \t\n*?[`\\"):
+        return False
+    bare = raw.replace('"', "").replace("'", "")
+    if not bare or bare.startswith("-") or "$" in _WT_PLAIN_RE.sub("", raw):
+        return False
+    return all(traceable(match.group(1) or match.group(2), depth + 1)
+               for match in _WT_PLAIN_RE.finditer(raw))
+
+
+def _wt_traceable(command):
+    """Build the variable lookup once for all worktree statements in command."""
+    return _memo_call(_WT_TRACE_MEMO, command, lambda: _wt_traceable_uncached(command))
+
+
+def _wt_traceable_uncached(command):
+    def untraceable(name, depth=0):
+        return False
+
+    if re.search(r"\bIFS\b", command, re.ASCII):
+        return untraceable
+    assignments = {}
+    for argv in _scan_commands(command):
+        if not argv:
+            continue
+        head_index = next((i for i, word in enumerate(argv) if word not in _SHELL_KEYWORDS), None)
+        if head_index is None:
+            continue
+        head = argv[head_index]
+        if head in ("eval", "source", ".", "let"):
+            return untraceable
+        if head in _WT_WRITER_HEADS:
+            args = argv[head_index + 1:]
+            if head == "printf":
+                names = []
+                for i, word in enumerate(args):
+                    if word.startswith("-v") or re.fullmatch(r"-[A-Za-z]*v[A-Za-z]*", word):
+                        attached = word.partition("v")[2]
+                        names.extend([attached] if attached else args[i + 1:i + 2])
+            elif head in _WT_DECL_HEADS:
+                names = [word.partition("=")[0] for word in args if not word.startswith("-")]
+            else:
+                names = args
+            if any("$" in name or "`" in name for name in names):
+                return untraceable
+        words = _aligned_raw_words(argv) or list(argv)
+        body = words[1:] if words[0] in _WT_DECL_HEADS else words
+        matches = [_WT_ASSIGN_RE.fullmatch(word) for word in body]
+        # A prefix assignment leaves the expansion in that command unchanged.
+        if all(matches):
+            for match in matches:
+                assignments.setdefault(match.group(1), []).append(match.group(2))
+
+    reads = {}
+    first_read = {}
+    for match in _WT_PLAIN_RE.finditer(command):
+        name = match.group(1) or match.group(2)
+        reads[name] = reads.get(name, 0) + 1
+        first_read.setdefault(name, match.start())
+
+    def check(name, depth):
+        values = assignments.get(name, ())
+        if not values and name not in _WT_SAFE_ENV:
+            return False
+        if values and name in first_read:
+            # An assignment counts only when it comes before the first use,
+            # and only when it is not itself scoped to a child shell.
+            assigned = list(re.finditer(
+                r"(?<![A-Za-z0-9_-])%s=" % re.escape(name), command))
+            if (not assigned or assigned[0].start() > first_read[name]
+                    or any(_wt_scoped_at(command, m.start()) for m in assigned)):
+                return False
+        ident = re.compile(r"(?<![A-Za-z0-9_-])%s(?![A-Za-z0-9_])" % re.escape(name))
+        cluster = re.compile(r"(?<![A-Za-z0-9_])-[A-Za-z]+%s(?![A-Za-z0-9_])" % re.escape(name))
+        # A flag like pytest's -W is incidental, but printf -vW can write W.
+        total = len(ident.findall(command)) + len(cluster.findall(command))
+        if total != len(values) + reads.get(name, 0):
+            return False
+        if name in _WT_SAFE_ENV:
+            return not values
+        return all(_wt_text_ok(value, traceable, depth) for value in values)
+
+    memo = {}
+
+    def traceable(name, depth=0):
+        if depth > 3:
+            return False
+        by_depth = memo.setdefault(name, {})
+        if by_depth is False:
+            return False  # already visiting this name
+        if depth not in by_depth:
+            memo[name] = False
+            by_depth[depth] = check(name, depth)
+            memo[name] = by_depth
+        return by_depth[depth]
+
+    return traceable
+
+
+def _wt_word_ok(raw, traceable):
+    return ("$" not in raw and "`" not in raw) or _wt_text_ok(raw, traceable, 0)
+
+
+def _worktree_unreadable(argv):
+    """Whether a `git worktree add` may create a branch we cannot read.
+
+    A variable word is readable only when traced to a safe assignment in the
+    same command or a read-only use of a trusted environment variable. Bash
+    splits an unquoted `$W`, and `"$W"` holding `-bbad` is one option word
+    in both bash and zsh.
+    """
+    values = _worktree_branch_values(argv)
+    if values is None or any(
+            raw is None or _branch_word_unreadable(raw) for _value, raw in values):
+        return True
+    raw_args = _raw_args(argv, _WORKTREE_ADD)
+    if raw_args is None:
+        return True
+    traceable = _wt_traceable(command)
+    return any(not _wt_word_ok(word, traceable) for word in raw_args)
+
+
+_SAFE_HIDDEN_HEADS = (frozenset(_NON_EXECUTING_HEADS) - {"man", "less", "more"}
+                      | {"cmp", "diff", "shasum", "for", None})
+
+
+def _source_runs_other_verb(statement, verb):
+    """Whether a hidden *verb* run comes from a statement that literally runs
+    another branch verb at its head (`GIT_CONFIG_GLOBAL=/tmp/e git checkout
+    -b feature/ok` hides `git switch` only because its config is unread).
+    That statement is judged as the verb it runs. The head check keeps
+    `$G switch -c bad git checkout` hidden: there `checkout` is an argument.
+    """
+    src = statement.source
+    if not isinstance(src, _Argv):
+        return False
+    head = _env_prefix_len(src)
+    return any(other is not verb and _match_index(src, other) == head
+               for other in (_CHECKOUT, _SWITCH, _BRANCH, _WORKTREE_ADD,
+                             _STASH_BRANCH))
+
+
+def _hidden_run_cannot_run_git(statement, command):
+    """Check the original source of a synthetic branch-verb match (#248)."""
+    src = statement.source
+    # Only a statement of plain words whose head runs no program is cleared.
+    # Inline code in another language, or a source that is a string, can build
+    # the word `git` at run time, so it stays hidden.
+    if not isinstance(src, _Argv) or not src.raw:
+        return False
+    if _has_feeder_or_interpreter(src):
+        return False
+    head = next((word for word in _raw_split(src.raw)
+                 if not _ENV_ASSIGN_RE.match(word) and word not in _SHELL_KEYWORDS), None)
+    return head in _SAFE_HIDDEN_HEADS
+
+
+_BRANCH_VERBS = (
+    (_CHECKOUT, _checkout_branch_names, _name_unreadable),
+    (_SWITCH, _switch_branch_names, lambda argv: _args_unreadable(argv, _SWITCH)),
+    (_BRANCH, _branch_branch_names, _branch_unreadable),
+    (_WORKTREE_ADD, _worktree_branch_names, _worktree_unreadable),
+    (_STASH_BRANCH, _stash_branch_names, _stash_unreadable),
+)
 
 
 # bash expands `{a,b}` before word splitting, and the statement splitter
@@ -7661,14 +8525,23 @@ def _name_unreadable(argv):
 command = _neutralise_brace_expansion(command)
 
 try:
-    _names = []
-    _unreadable = False
-    for _argv in _find_statements(command, ["git", "checkout"]):
-        _found = _checkout_branch_names(_argv)
-        _unreadable = _unreadable or _name_unreadable(_argv)
-        _names.extend(_found)
+    _candidates = []
+    for _verb, _read_names, _check_unreadable in _BRANCH_VERBS:
+        _names = []
+        _unreadable = False
+        for _argv in _find_statements(command, _verb):
+            if (isinstance(_argv, _HiddenVerbArgv)
+                    and (_source_runs_other_verb(_argv, _verb)
+                         or _hidden_run_cannot_run_git(_argv, command))):
+                continue
+            _found = _read_names(_argv)
+            _names.extend(_found)
+            _unreadable = _unreadable or _check_unreadable(_argv)
+        if _names or _unreadable:
+            _candidates.append((_verb, _names, _unreadable))
 except ValueError:
-    if not _deny_unparseable(command, ["git", "checkout"]):
+    _unparseable = [_deny_unparseable(command, verb) for verb, _, _ in _BRANCH_VERBS]
+    if not any(_unparseable):
         sys.exit(0)
     _emit({
         "hookSpecificOutput": {
@@ -7679,66 +8552,76 @@ except ValueError:
     })
     sys.exit(0)
 
-if _unreadable:
-    if _targets_this_project(command, _payload_cwd(input_data)):
-        _deny_unknown_branch_name()
+# Resolve scope per verb so a redirect on one command cannot exempt another.
+if not _candidates:
     sys.exit(0)
-if not _names:
+_base = _payload_cwd(input_data)
+_project_names = []
+for _verb, _names, _unreadable in _candidates:
+    if _targets_this_project(command, _base, _verb):
+        if _unreadable:
+            _deny_unknown_branch_name()
+        _project_names.extend(_names)
+if not _project_names:
     sys.exit(0)
-# Report the first NON-conforming name, so a chained
-# `git checkout -b ok && git checkout -b bad` is still caught.
-branch_name = _names[0]
-for _n in _names:
-    if not _branch_is_valid(_n):
-        branch_name = _n
+_REPO_CONFIG, _problem = _load_repo_config()
+if _problem:
+    _emit({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": _repo_config_reason(_problem),
+        }
+    })
+    sys.exit(0)
+
+_ALLOWED_PREFIXES = tuple(prefix + "/" for prefix in
+                          ("feature", "release", "hotfix", *_REPO_CONFIG["branch_prefixes"]))
+for branch_name in _project_names:
+    if not _branch_is_valid(branch_name):
         break
-
-# Skip if targeting a different repo
-if not _targets_this_project(command, _payload_cwd(input_data)):
+else:
     sys.exit(0)
 
-# Allow main and develop branches
-if branch_name in ["main", "develop"]:
-    sys.exit(0)
-
-# Validate Git Flow naming convention
-if not re.match(r'^(feature|release|hotfix)/', branch_name):
+if not branch_name.startswith("release/"):
+    _package_style = _REPO_CONFIG["release_style"] == "package"
+    _release_pattern = ("release/<package>-v<MAJOR>.<MINOR>.<PATCH>" if _package_style
+                        else "release/v<MAJOR>.<MINOR>.<PATCH>")
+    _release_example = "release/kit-v0.1.0" if _package_style else "release/v1.2.0"
+    _extra_patterns = "".join(f"\n  • {prefix}/<descriptive-name>"
+                              for prefix in _REPO_CONFIG["branch_prefixes"])
+    # A prefix the repo allows is not an invalid example.
+    _invalid_examples = "".join(
+        f"\n  ❌ {example} ({hint})"
+        for prefix, example, hint in (
+            ("feat", "feat/something", "use 'feature/' not 'feat/'"),
+            ("fix", "fix/bug", "use 'hotfix/' not 'fix/'"))
+        if prefix not in _REPO_CONFIG["branch_prefixes"])
     reason = f"""❌ Invalid Git Flow branch name: {branch_name}
 
 Git Flow branches must follow these patterns:
   • feature/<descriptive-name>
-  • release/v<MAJOR>.<MINOR>.<PATCH>
-  • hotfix/<descriptive-name>
+  • {_release_pattern}
+  • hotfix/<descriptive-name>{_extra_patterns}
 
 Examples:
   ✅ feature/user-authentication
-  ✅ release/v1.2.0
+  ✅ {_release_example}
   ✅ hotfix/critical-security-fix
 
 Invalid:
-  ❌ {branch_name} (missing Git Flow prefix)
-  ❌ feat/something (use 'feature/' not 'feat/')
-  ❌ fix/bug (use 'hotfix/' not 'fix/')
+  ❌ {branch_name} (missing Git Flow prefix){_invalid_examples}
 
 💡 Use Git Flow commands instead:
   /feature <name>  - Create feature branch
   /release <version> - Create release branch
   /hotfix <name>   - Create hotfix branch"""
-
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason
-        }
-    }
-    _emit(output)
-    sys.exit(0)
-
-# Validate release version format
-if branch_name.startswith("release/"):
-    if not re.match(r'^release/v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$', branch_name):
-        reason = f"""❌ Invalid release version: {branch_name}
+elif _REPO_CONFIG["release_style"] == "package":
+    reason = (f"❌ Invalid release version: {branch_name}\n\n"
+              "Use release/<package>-vMAJOR.MINOR.PATCH[-prerelease].\n"
+              "For example, release/kit-v0.1.0.")
+else:
+    reason = f"""❌ Invalid release version: {branch_name}
 
 Release branches must follow semantic versioning:
   release/vMAJOR.MINOR.PATCH[-prerelease]
@@ -7755,15 +8638,11 @@ Invalid:
 
 💡 Use: /release v1.2.0"""
 
-        output = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason
-            }
-        }
-        _emit(output)
-        sys.exit(0)
-
-# Allow the command
+_emit({
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }
+})
 sys.exit(0)
