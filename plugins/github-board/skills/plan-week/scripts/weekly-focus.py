@@ -522,7 +522,7 @@ def add(num, pid, fields, key, labels, focus):
 
 def open_issues():
     q = ("query($endCursor:String){search(query:\"user:%s is:issue is:open\",type:ISSUE,first:100,"
-         "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number "
+         "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{id number "
          "createdAt url repository{name} milestone{title} labels(first:20){totalCount nodes{name}}}}}}") % OWNER
     out = {}
     for i in gql_search(q, "open issues"):
@@ -552,14 +552,10 @@ def gql(query, jq, **variables):
 
 
 SEARCH_CAP = 1000   # GitHub search returns at most this many results, however many match
+SPLIT_MAX_PROBES = 64
 
 
-def gql_search(query, what):
-    """gql() for a `search(...)` query that selects issueCount; returns the nodes.
-
-    Prints a warning on stderr when the result was cut short (issueCount above the nodes
-    returned, or the 1000-result search cap), so a truncated list is never silent.
-    """
+def _search_results(query):
     rows = gql(query, ".data.search | ({__issueCount: .issueCount}, .nodes[])")
     total, nodes = None, []
     for r in rows:
@@ -567,11 +563,100 @@ def gql_search(query, what):
             total = max(total or 0, r["__issueCount"] or 0)
         else:
             nodes.append(r)
-    if (total is not None and total > len(nodes)) or len(nodes) >= SEARCH_CAP:
+    return total, nodes
+
+
+def _node_key(node):
+    """What makes a search node the same node: its GraphQL id, else its whole JSON."""
+    if isinstance(node, dict) and node.get("id"):
+        return node["id"]
+    return json.dumps(node, sort_keys=True)
+
+
+def _split_search(query):
+    search = re.search(r'search\(query:"([^"]*)"', query)
+    if not search:
+        return None, False, 0
+    type_match = re.search(r"\btype\s*:\s*(\w+)", query[search.end():])
+    search_type = type_match[1] if type_match else "ISSUE"
+
+    day = datetime.timedelta(days=1)
+    pending = [(datetime.date(2008, 1, 1), _now().date() + day)]
+    nodes, seen = [], set()
+    short_ranges = 0   # ranges whose own fetch counted more matches than it returned
+    for _ in range(SPLIT_MAX_PROBES):
+        if not pending:
+            break
+        start, end = pending.pop()
+        qualifier = f" created:{start}..{end}"
+        probe = (f'query{{search(query:"{search[1]}{qualifier}",type:{search_type},'
+                 'first:1){issueCount}}')
+        raw = gh("api", "graphql", "-f", f"query={probe}", "--jq", ".data.search.issueCount",
+                 parse=False)
+        try:
+            count = int(raw)
+        except (TypeError, ValueError):
+            return None, False, 0
+        if count == 0:
+            continue
+        if count > SEARCH_CAP and start < end:
+            mid = start + (end - start) // 2
+            pending.extend([(mid + day, end), (start, mid)])
+            continue
+
+        insert_at = search.end(1)
+        range_total, range_nodes = _search_results(query[:insert_at] + qualifier + query[insert_at:])
+        if range_total is not None and range_total > len(range_nodes):
+            short_ranges += 1   # the range grew after its probe, or was cut off
+        for node in range_nodes:
+            key = _node_key(node)
+            if key not in seen:
+                seen.add(key)
+                nodes.append(node)
+    return nodes, bool(pending), short_ranges
+
+
+class SearchNodes(list):
+    """Search nodes. `complete` is False when some matches were not read."""
+    complete = True
+
+
+def gql_search(query, what):
+    """Return nodes from a search that selects issueCount, splitting over-cap searches
+    into inclusive UTC creation-date ranges. A split that reads fewer than the total
+    keeps the first search's nodes too, so it never returns less than before. Warn, and
+    set `complete` False, when fewer rows were read than matched (a short range counts),
+    or, with no count, when SEARCH_CAP rows came back.
+    """
+    total, nodes = _search_results(query)
+    split_nodes, budget_spent, short_ranges = None, False, 0
+    if total is not None and total > SEARCH_CAP:
+        try:
+            split_nodes, budget_spent, short_ranges = _split_search(query)
+        except (GhError, subprocess.SubprocessError) as err:   # incl. TimeoutExpired
+            print(f"weekly-focus: warning: the search split for {what} failed ({err}); "
+                  f"using the first {len(nodes)} results", file=sys.stderr)
+        if split_nodes is not None:
+            if len(split_nodes) < total:
+                # The split's copy is newer, so it wins; add only what it missed.
+                seen = {_node_key(n) for n in split_nodes}
+                split_nodes = split_nodes + [n for n in nodes if _node_key(n) not in seen]
+            nodes = split_nodes
+    nodes = SearchNodes(nodes)
+    # With a known count, only the count decides. Without one, SEARCH_CAP rows may be a cut-off.
+    if total is not None:
+        incomplete = total > len(nodes) or short_ranges > 0
+    else:
+        incomplete = len(nodes) >= SEARCH_CAP
+    if incomplete:
+        nodes.complete = False
         print(f"weekly-focus: warning: the search for {what} matched "
               f"{total if total is not None else 'at least ' + str(len(nodes))} "
               f"but only {len(nodes)} were read (GitHub search stops at {SEARCH_CAP}); "
               f"the rest are missing from this run", file=sys.stderr)
+    if budget_spent:
+        print(f"weekly-focus: warning: the search split stopped after {SPLIT_MAX_PROBES} probes",
+              file=sys.stderr)
     return nodes
 
 
@@ -592,7 +677,7 @@ PROJECT_ITEMS_Q = (
     "repository{name owner{login}}}}}}}}}")
 _PR_LINKED_Q = (
     "query($endCursor:String){search(query:\"is:pr is:open author:%s\",type:ISSUE,first:100,"
-    "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on PullRequest{body isDraft "
+    "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on PullRequest{id body isDraft "
     "repository{name owner{login}} "
     "closingIssuesReferences(first:20){nodes{number state repository{name owner{login}}}}}}}}")
 # GitHub fills closingIssuesReferences only for PRs into the default branch. Feature PRs
@@ -606,7 +691,7 @@ CLOSING_RE = re.compile(
 NON_TEXT_RE = re.compile(r"<!--.*?-->|```.*?```|~~~.*?~~~|`[^`\n]*`", re.S)
 CLOSED_Q = (
     "query($endCursor:String){search(query:\"user:%s is:issue is:closed closed:>=%s\",type:ISSUE,"
-    "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number closedAt "
+    "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{id number closedAt "
     "stateReason labels(first:20){nodes{name}} repository{name}}}}}")
 
 
@@ -689,7 +774,13 @@ def body_closing_keys(pr):
 
 
 def pr_linked(open_keys=None):
-    """Open issues that one of OWNER's open, non-draft PRs closes.
+    """Open issues that one of OWNER's open, non-draft PRs closes (see _pr_linked)."""
+    return _pr_linked(open_keys)[0]
+
+
+def _pr_linked(open_keys=None):
+    """(keys, complete): open issues that one of OWNER's open, non-draft PRs closes, and
+    whether the PR search read every match.
 
     Uses GitHub's closing references and the closing keywords in the PR body. Body
     matches carry no state, so they count only when they are in open_keys (all of
@@ -697,7 +788,8 @@ def pr_linked(open_keys=None):
     work, so it does not count (#234): otherwise it pins its issue to This week.
     """
     keys = set()
-    for pr in gql_search(PR_LINKED_Q, "open pull requests"):
+    prs = gql_search(PR_LINKED_Q, "open pull requests")
+    for pr in prs:
         if pr.get("isDraft"):
             continue
         for c in ((pr.get("closingIssuesReferences") or {}).get("nodes") or []):
@@ -708,13 +800,19 @@ def pr_linked(open_keys=None):
             # Match case-insensitively, but return the issue's own spelling of the repo.
             canon = {k.lower(): k for k in open_keys}
             keys |= {canon[k.lower()] for k in body_closing_keys(pr) if k.lower() in canon}
-    return keys
+    return keys, getattr(prs, "complete", True)
 
 
 def in_progress_keys(open_keys=None):
-    """(keys, stale, failed): work in progress, stale board cards, boards that failed to read."""
-    pr = pr_linked(open_keys)
+    """(keys, stale, failed): work in progress, stale board cards, what failed to read.
+
+    An incomplete PR search adds a label to `failed`: a PR may have been missed, so
+    sync must not reset a card to Todo.
+    """
+    pr, complete = _pr_linked(open_keys)
     keys, stale, failed = board_in_progress(pr)
+    if not complete:
+        failed = list(failed) + ["open pull requests (search incomplete)"]
     return keys | pr, stale, failed
 
 
@@ -1047,7 +1145,7 @@ def sync(as_json=False):
 
 def _finish_sync(failed_boards):
     if failed_boards:
-        print("weekly-focus: error: sync finished but could not read board(s): "
+        print("weekly-focus: error: sync finished but could not read: "
               + ", ".join(failed_boards), file=sys.stderr)
         sys.exit(1)
 
