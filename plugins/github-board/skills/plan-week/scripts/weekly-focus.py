@@ -613,6 +613,11 @@ def _split_search(query):
     return nodes, bool(pending)
 
 
+class SearchNodes(list):
+    """Search nodes. `complete` is False when some matches were not read."""
+    complete = True
+
+
 def gql_search(query, what):
     """Return nodes from a search that selects issueCount, splitting over-cap searches
     into inclusive UTC creation-date ranges. A split that reads fewer than the total
@@ -633,8 +638,10 @@ def gql_search(query, what):
                 seen = {_node_key(n) for n in split_nodes}
                 split_nodes = split_nodes + [n for n in nodes if _node_key(n) not in seen]
             nodes = split_nodes
+    nodes = SearchNodes(nodes)
     if ((total is not None and total > len(nodes))
             or (split_nodes is None and len(nodes) >= SEARCH_CAP)):
+        nodes.complete = False
         print(f"weekly-focus: warning: the search for {what} matched "
               f"{total if total is not None else 'at least ' + str(len(nodes))} "
               f"but only {len(nodes)} were read (GitHub search stops at {SEARCH_CAP}); "
@@ -759,7 +766,13 @@ def body_closing_keys(pr):
 
 
 def pr_linked(open_keys=None):
-    """Open issues that one of OWNER's open, non-draft PRs closes.
+    """Open issues that one of OWNER's open, non-draft PRs closes (see _pr_linked)."""
+    return _pr_linked(open_keys)[0]
+
+
+def _pr_linked(open_keys=None):
+    """(keys, complete): open issues that one of OWNER's open, non-draft PRs closes, and
+    whether the PR search read every match.
 
     Uses GitHub's closing references and the closing keywords in the PR body. Body
     matches carry no state, so they count only when they are in open_keys (all of
@@ -767,7 +780,8 @@ def pr_linked(open_keys=None):
     work, so it does not count (#234): otherwise it pins its issue to This week.
     """
     keys = set()
-    for pr in gql_search(PR_LINKED_Q, "open pull requests"):
+    prs = gql_search(PR_LINKED_Q, "open pull requests")
+    for pr in prs:
         if pr.get("isDraft"):
             continue
         for c in ((pr.get("closingIssuesReferences") or {}).get("nodes") or []):
@@ -778,13 +792,19 @@ def pr_linked(open_keys=None):
             # Match case-insensitively, but return the issue's own spelling of the repo.
             canon = {k.lower(): k for k in open_keys}
             keys |= {canon[k.lower()] for k in body_closing_keys(pr) if k.lower() in canon}
-    return keys
+    return keys, getattr(prs, "complete", True)
 
 
 def in_progress_keys(open_keys=None):
-    """(keys, stale, failed): work in progress, stale board cards, boards that failed to read."""
-    pr = pr_linked(open_keys)
+    """(keys, stale, failed): work in progress, stale board cards, what failed to read.
+
+    An incomplete PR search adds a label to `failed`: a PR may have been missed, so
+    sync must not reset a card to Todo.
+    """
+    pr, complete = _pr_linked(open_keys)
     keys, stale, failed = board_in_progress(pr)
+    if not complete:
+        failed = list(failed) + ["open pull requests (search incomplete)"]
     return keys | pr, stale, failed
 
 
@@ -1117,7 +1137,7 @@ def sync(as_json=False):
 
 def _finish_sync(failed_boards):
     if failed_boards:
-        print("weekly-focus: error: sync finished but could not read board(s): "
+        print("weekly-focus: error: sync finished but could not read: "
               + ", ".join(failed_boards), file=sys.stderr)
         sys.exit(1)
 

@@ -380,3 +380,69 @@ def test_an_issue_with_20_or_fewer_labels_does_not_warn(wf, monkeypatch, capsys)
     _search_gh(wf, monkeypatch, 1, [_labelled(20, 20)])
     wf.open_issues()
     assert capsys.readouterr().err == ""
+
+
+# ---- X-008: an incomplete PR search must not reset In Progress cards ----------
+
+def test_gql_search_is_complete_for_an_under_cap_search(wf, monkeypatch, capsys):
+    _search_gh(wf, monkeypatch, 1, [_labelled(1, 1)])
+    nodes = wf.gql_search(wf.PR_LINKED_Q, "open pull requests")
+    assert nodes.complete is True and len(nodes) == 1
+
+
+def test_gql_search_is_complete_when_the_split_read_everything(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1114)]
+    _range_search_gh(wf, monkeypatch, issues)
+    nodes = wf.gql_search(wf.PR_LINKED_Q, "open pull requests")
+    assert len(nodes) == 1113 and nodes.complete is True
+
+
+def test_gql_search_is_incomplete_when_the_probe_budget_runs_out(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, probe_count=5000)
+    assert wf.gql_search(wf.PR_LINKED_Q, "open pull requests").complete is False
+
+
+def test_gql_search_is_incomplete_after_a_one_day_overflow(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(0)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues)
+    assert wf.gql_search(wf.PR_LINKED_Q, "open pull requests").complete is False
+
+
+def test_gql_search_is_incomplete_when_the_split_hits_a_gh_error(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, raise_on_probe=3)
+    assert wf.gql_search(wf.PR_LINKED_Q, "open pull requests").complete is False
+
+
+def _stub_pr_search(wf, monkeypatch, complete):
+    nodes = wf.SearchNodes([])
+    nodes.complete = complete
+    monkeypatch.setattr(wf, "gql_search", lambda query, what: nodes)
+    monkeypatch.setattr(wf, "board_in_progress", lambda pr_keys=None, now=None: (set(), [], []))
+
+
+def test_in_progress_keys_flags_an_incomplete_pr_search(wf, monkeypatch):
+    _stub_pr_search(wf, monkeypatch, False)
+    assert wf.in_progress_keys(set())[2] == ["open pull requests (search incomplete)"]
+
+
+def test_in_progress_keys_does_not_flag_a_complete_pr_search(wf, monkeypatch):
+    _stub_pr_search(wf, monkeypatch, True)
+    assert wf.in_progress_keys(set())[2] == []
+
+
+def test_sync_with_an_incomplete_pr_search_exits_1_and_skips_the_reset(wf, monkeypatch, capsys):
+    from test_weekly_focus import Board, _iss
+    real_in_progress_keys = wf.in_progress_keys
+    b = Board(wf, monkeypatch,
+              items={"app#1": {"id": "i1", "focus": "This week", "status": "In Progress"}},
+              issues={"app#1": _iss("app", "v1.0")}, current={"app": "v1.0"}, in_progress=set())
+    monkeypatch.setattr(wf, "in_progress_keys", real_in_progress_keys)
+    _stub_pr_search(wf, monkeypatch, False)
+    with pytest.raises(SystemExit) as e:
+        wf.sync(as_json=True)
+    assert e.value.code == 1
+    cap = capsys.readouterr()
+    assert "open pull requests (search incomplete)" in cap.err
+    assert b.sets == []       # the missed PR must not make the card look stopped
