@@ -522,7 +522,7 @@ def add(num, pid, fields, key, labels, focus):
 
 def open_issues():
     q = ("query($endCursor:String){search(query:\"user:%s is:issue is:open\",type:ISSUE,first:100,"
-         "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number "
+         "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{id number "
          "createdAt url repository{name} milestone{title} labels(first:20){totalCount nodes{name}}}}}}") % OWNER
     out = {}
     for i in gql_search(q, "open issues"):
@@ -566,6 +566,13 @@ def _search_results(query):
     return total, nodes
 
 
+def _node_key(node):
+    """What makes a search node the same node: its GraphQL id, else its whole JSON."""
+    if isinstance(node, dict) and node.get("id"):
+        return node["id"]
+    return json.dumps(node, sort_keys=True)
+
+
 def _split_search(query):
     search = re.search(r'search\(query:"([^"]*)"', query)
     if not search:
@@ -599,7 +606,7 @@ def _split_search(query):
         insert_at = search.end(1)
         _, range_nodes = _search_results(query[:insert_at] + qualifier + query[insert_at:])
         for node in range_nodes:
-            key = json.dumps(node, sort_keys=True)
+            key = _node_key(node)
             if key not in seen:
                 seen.add(key)
                 nodes.append(node)
@@ -615,12 +622,16 @@ def gql_search(query, what):
     total, nodes = _search_results(query)
     split_nodes, budget_spent = None, False
     if total is not None and total > SEARCH_CAP:
-        split_nodes, budget_spent = _split_search(query)
+        try:
+            split_nodes, budget_spent = _split_search(query)
+        except GhError as err:
+            print(f"weekly-focus: warning: the search split for {what} failed ({err}); "
+                  f"using the first {len(nodes)} results", file=sys.stderr)
         if split_nodes is not None:
             if len(split_nodes) < total:
-                seen = {json.dumps(n, sort_keys=True) for n in split_nodes}
-                split_nodes = split_nodes + [n for n in nodes
-                                             if json.dumps(n, sort_keys=True) not in seen]
+                # The split's copy is newer, so it wins; add only what it missed.
+                seen = {_node_key(n) for n in split_nodes}
+                split_nodes = split_nodes + [n for n in nodes if _node_key(n) not in seen]
             nodes = split_nodes
     if ((total is not None and total > len(nodes))
             or (split_nodes is None and len(nodes) >= SEARCH_CAP)):
@@ -651,7 +662,7 @@ PROJECT_ITEMS_Q = (
     "repository{name owner{login}}}}}}}}}")
 _PR_LINKED_Q = (
     "query($endCursor:String){search(query:\"is:pr is:open author:%s\",type:ISSUE,first:100,"
-    "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on PullRequest{body isDraft "
+    "after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on PullRequest{id body isDraft "
     "repository{name owner{login}} "
     "closingIssuesReferences(first:20){nodes{number state repository{name owner{login}}}}}}}}")
 # GitHub fills closingIssuesReferences only for PRs into the default branch. Feature PRs
@@ -665,7 +676,7 @@ CLOSING_RE = re.compile(
 NON_TEXT_RE = re.compile(r"<!--.*?-->|```.*?```|~~~.*?~~~|`[^`\n]*`", re.S)
 CLOSED_Q = (
     "query($endCursor:String){search(query:\"user:%s is:issue is:closed closed:>=%s\",type:ISSUE,"
-    "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{number closedAt "
+    "first:100,after:$endCursor){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{id number closedAt "
     "stateReason labels(first:20){nodes{name}} repository{name}}}}}")
 
 

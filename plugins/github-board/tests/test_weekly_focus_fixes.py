@@ -48,7 +48,8 @@ def _search_gh(wf, monkeypatch, total, nodes):
 
 
 def _closed(n):
-    return {"number": n, "closedAt": "2026-09-29T12:00:00Z", "repository": {"name": "app"}}
+    return {"id": f"I_{n}", "number": n, "closedAt": "2026-09-29T12:00:00Z",
+            "repository": {"name": "app"}}
 
 
 def test_a_truncated_closed_issue_search_warns(wf, monkeypatch, capsys):
@@ -88,13 +89,24 @@ def test_a_truncated_pr_search_warns(wf, monkeypatch, capsys):
     assert "1200" in capsys.readouterr().err
 
 
-def _range_search_gh(wf, monkeypatch, nodes, probe_count=None):
+def _range_search_gh(wf, monkeypatch, nodes, probe_count=None, raise_on_probe=None,
+                     raise_on_fetch=False, range_drop=(), range_override=None):
+    """A range-aware fake gh. Probes and range fetches must keep the first query's search
+    terms and add a created: range. raise_on_probe=N raises GhError on the Nth probe;
+    raise_on_fetch raises on a range fetch; range_drop leaves those numbers out of range
+    fetches; range_override swaps a node (by id) in range fetches."""
     seen = []
+    state = {"base": None, "probes": 0}
 
     def fake(*args, parse=True, **kw):
         seen.append(args)
         query = next(a for a in args if a.startswith("query="))
+        terms = re.search(r'search\(query:"([^"]*)"', query)[1]
         dates = re.search(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", query)
+        if state["base"] is None:
+            assert not dates
+            state["base"] = terms
+        assert re.sub(r" created:\S+", "", terms) == state["base"]
         matches = nodes
         if dates:
             start, end = dates.groups()
@@ -103,7 +115,17 @@ def _range_search_gh(wf, monkeypatch, nodes, probe_count=None):
         if "first:1){issueCount}" in query:
             assert args == ("api", "graphql", "-f", query, "--jq", ".data.search.issueCount")
             assert dates and ",type:ISSUE," in query
+            state["probes"] += 1
+            if state["probes"] == raise_on_probe:
+                raise wf.GhError("probe boom")
             return str(len(matches) if probe_count is None else probe_count)
+        if dates:
+            if raise_on_fetch:
+                raise wf.GhError("fetch boom")
+            matches = [(range_override or {}).get(n["id"], n) for n in matches
+                       if n.get("number") not in range_drop]
+        if not re.search(r"\.\.\. on (Issue|PullRequest)\{id ", query):
+            matches = [{k: v for k, v in n.items() if k != "id"} for n in matches]   # id not selected
         rows = [{"__issueCount": len(matches)}] + matches[:1000]
         return "\n".join(json.dumps(row) for row in rows)
 
@@ -112,7 +134,7 @@ def _range_search_gh(wf, monkeypatch, nodes, probe_count=None):
 
 
 def _open_issue(n, day):
-    return {"number": n, "createdAt": f"{day}T12:00:00Z", "url": "u",
+    return {"id": f"I_{n}", "number": n, "createdAt": f"{day}T12:00:00Z", "url": "u",
             "repository": {"name": "app"}, "milestone": None, "labels": {"nodes": []}}
 
 
@@ -173,7 +195,7 @@ def test_closed_and_pr_searches_split_too(wf, monkeypatch, capsys):
     _range_search_gh(wf, monkeypatch, issues)
     assert set(wf.closed_since(datetime.date(2026, 9, 28))) == expected
 
-    prs = [{"createdAt": issue["createdAt"], "closingIssuesReferences": {"nodes": [
+    prs = [{"id": f"PR_{issue['number']}", "createdAt": issue["createdAt"], "closingIssuesReferences": {"nodes": [
         {"number": issue["number"], "state": "OPEN",
          "repository": {"name": "app", "owner": {"login": wf.OWNER}}}]}} for issue in issues]
     _range_search_gh(wf, monkeypatch, prs)
@@ -189,6 +211,105 @@ def test_the_split_includes_the_first_github_date_and_today_utc(wf, monkeypatch,
     assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1003)}
     assert f"created:2008-01-01..{today + datetime.timedelta(days=1)}" in seen[1][3]
     assert capsys.readouterr().err == ""
+
+
+def _probed_ranges(seen):
+    """(start, end) of every created: range a probe asked about."""
+    out = []
+    for args in seen:
+        if args[-1] == ".data.search.issueCount":
+            d = re.search(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", args[3])
+            out.append(tuple(datetime.date.fromisoformat(x) for x in d.groups()))
+    return out
+
+
+def test_a_gh_error_in_a_probe_keeps_the_first_search(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, raise_on_probe=3)
+    assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1001)}
+    err = capsys.readouterr().err
+    assert "the search split for open issues failed (probe boom); using the first 1000 results" in err
+    assert "matched 1200 but only 1000 were read" in err
+
+
+def test_a_gh_error_in_a_range_fetch_keeps_the_first_search(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, raise_on_fetch=True)
+    assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1001)}
+    err = capsys.readouterr().err
+    assert "the search split for open issues failed (fetch boom)" in err
+    assert "matched 1200 but only 1000 were read" in err
+
+
+def test_two_prs_with_the_same_fields_but_different_ids_both_survive(wf, monkeypatch, capsys):
+    twin = {"createdAt": "2024-01-01T12:00:00Z", "body": "b", "isDraft": False,
+            "repository": {"name": "app", "owner": {"login": wf.OWNER}},
+            "closingIssuesReferences": {"nodes": []}}
+    prs = [dict(twin, id="PR_a"), dict(twin, id="PR_b")]
+    prs += [dict(twin, id=f"PR_{n}", body=str(n), createdAt=f"{_creation_day(n)}T12:00:00Z")
+            for n in range(1100)]
+    _range_search_gh(wf, monkeypatch, prs)
+    nodes = wf.gql_search(wf.PR_LINKED_Q, "open pull requests")
+    assert len(nodes) == 1102
+    assert capsys.readouterr().err == ""
+
+
+def test_the_selections_ask_for_the_node_id(wf):
+    assert "... on PullRequest{id " in wf.PR_LINKED_Q
+    assert "... on Issue{id number " in wf.CLOSED_Q
+
+
+def test_the_split_copy_wins_and_each_issue_counts_once(wf, monkeypatch, capsys):
+    # The split misses 1101..1106, so it is short and the first search's rows are merged in.
+    # Issue 5 changed milestone between the reads: the split's (newer) copy must win.
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    newer = dict(issues[4], milestone={"title": "v2"})
+    _range_search_gh(wf, monkeypatch, issues, range_drop=range(1101, 1107),
+                     range_override={"I_5": newer})
+    out = wf.open_issues()
+    assert out["app#5"]["milestone"] == "v2"
+    assert len(out) == 1194
+    assert "matched 1200 but only 1194 were read" in capsys.readouterr().err
+
+
+def test_a_short_split_returns_the_union_of_both_searches(wf, monkeypatch, capsys):
+    # The split reads some ranges but misses 1..50, which only the first search has.
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, range_drop=range(1, 51))
+    assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1201)}
+    assert capsys.readouterr().err == ""
+    _range_search_gh(wf, monkeypatch, issues, range_drop=list(range(1, 51)) + [1150])
+    assert len(wf.open_issues()) == 1199
+    assert "matched 1200 but only 1199 were read" in capsys.readouterr().err
+
+
+def test_the_leaf_ranges_are_disjoint_and_cover_every_day(wf, monkeypatch, capsys):
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    seen = _range_search_gh(wf, monkeypatch, issues)
+    wf.open_issues()
+    leaves = []
+    for start, end in _probed_ranges(seen):
+        count = sum(1 for n in issues if str(start) <= n["createdAt"][:10] <= str(end))
+        if count <= wf.SEARCH_CAP or start == end:
+            leaves.append((start, end))
+    leaves.sort()
+    assert leaves[0][0] == datetime.date(2008, 1, 1)
+    assert leaves[-1][1] == today + datetime.timedelta(days=1)
+    for prev, nxt in zip(leaves, leaves[1:]):
+        assert nxt[0] == prev[1] + datetime.timedelta(days=1)
+
+
+def test_exactly_the_cap_makes_one_call_and_one_more_splits(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1001)]
+    seen = _range_search_gh(wf, monkeypatch, issues)
+    assert len(wf.open_issues()) == 1000
+    assert len(seen) == 1
+    capsys.readouterr()
+    issues.append(_open_issue(1001, _creation_day(1001)))
+    seen = _range_search_gh(wf, monkeypatch, issues)
+    assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1002)}
+    assert len(_probed_ranges(seen)) >= 1
 
 
 def _labelled(n_nodes, total):
