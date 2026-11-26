@@ -158,6 +158,15 @@ def test_the_split_stops_at_the_probe_budget(wf, monkeypatch, capsys):
     assert f"split stopped after {wf.SPLIT_MAX_PROBES} probes" in err
 
 
+def test_an_incomplete_split_keeps_what_the_first_search_read(wf, monkeypatch, capsys):
+    # Every probe says 5000, so the split spends its budget and reads nothing. The 1,000
+    # issues the first, unsplit search returned must not be thrown away (found live: 0 read).
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, probe_count=5000)
+    assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1001)}
+    assert "matched 1200 but only 1000 were read" in capsys.readouterr().err
+
+
 def test_closed_and_pr_searches_split_too(wf, monkeypatch, capsys):
     issues = [dict(_closed(n), createdAt=f"{_creation_day(n)}T12:00:00Z") for n in range(1, 1114)]
     expected = {f"app#{n}" for n in range(1, 1114)}

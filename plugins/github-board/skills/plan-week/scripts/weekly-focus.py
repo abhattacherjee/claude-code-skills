@@ -608,14 +608,19 @@ def _split_search(query):
 
 def gql_search(query, what):
     """Return nodes from a search that selects issueCount, splitting over-cap searches
-    into inclusive UTC creation-date ranges. Warn if results are missing or an
-    unsplit search reads SEARCH_CAP nodes.
+    into inclusive UTC creation-date ranges. A split that reads fewer than the total
+    keeps the first search's nodes too, so it never returns less than before. Warn if
+    results are missing or an unsplit search reads SEARCH_CAP nodes.
     """
     total, nodes = _search_results(query)
     split_nodes, budget_spent = None, False
     if total is not None and total > SEARCH_CAP:
         split_nodes, budget_spent = _split_search(query)
         if split_nodes is not None:
+            if len(split_nodes) < total:
+                seen = {json.dumps(n, sort_keys=True) for n in split_nodes}
+                split_nodes = split_nodes + [n for n in nodes
+                                             if json.dumps(n, sort_keys=True) not in seen]
             nodes = split_nodes
     if ((total is not None and total > len(nodes))
             or (split_nodes is None and len(nodes) >= SEARCH_CAP)):
