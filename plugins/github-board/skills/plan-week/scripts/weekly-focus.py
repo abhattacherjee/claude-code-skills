@@ -552,14 +552,10 @@ def gql(query, jq, **variables):
 
 
 SEARCH_CAP = 1000   # GitHub search returns at most this many results, however many match
+SPLIT_MAX_PROBES = 64
 
 
-def gql_search(query, what):
-    """gql() for a `search(...)` query that selects issueCount; returns the nodes.
-
-    Prints a warning on stderr when the result was cut short (issueCount above the nodes
-    returned, or the 1000-result search cap), so a truncated list is never silent.
-    """
+def _search_results(query):
     rows = gql(query, ".data.search | ({__issueCount: .issueCount}, .nodes[])")
     total, nodes = None, []
     for r in rows:
@@ -567,11 +563,69 @@ def gql_search(query, what):
             total = max(total or 0, r["__issueCount"] or 0)
         else:
             nodes.append(r)
-    if (total is not None and total > len(nodes)) or len(nodes) >= SEARCH_CAP:
+    return total, nodes
+
+
+def _split_search(query):
+    search = re.search(r'search\(query:"([^"]*)"', query)
+    if not search:
+        return None, False
+    type_match = re.search(r"\btype\s*:\s*(\w+)", query[search.end():])
+    search_type = type_match[1] if type_match else "ISSUE"
+
+    day = datetime.timedelta(days=1)
+    pending = [(datetime.date(2008, 1, 1), _now().date() + day)]
+    nodes, seen = [], set()
+    for _ in range(SPLIT_MAX_PROBES):
+        if not pending:
+            break
+        start, end = pending.pop()
+        qualifier = f" created:{start}..{end}"
+        probe = (f'query{{search(query:"{search[1]}{qualifier}",type:{search_type},'
+                 'first:1){issueCount}}')
+        raw = gh("api", "graphql", "-f", f"query={probe}", "--jq", ".data.search.issueCount",
+                 parse=False)
+        try:
+            count = int(raw)
+        except (TypeError, ValueError):
+            return None, False
+        if count == 0:
+            continue
+        if count > SEARCH_CAP and start < end:
+            mid = start + (end - start) // 2
+            pending.extend([(mid + day, end), (start, mid)])
+            continue
+
+        insert_at = search.end(1)
+        _, range_nodes = _search_results(query[:insert_at] + qualifier + query[insert_at:])
+        for node in range_nodes:
+            key = json.dumps(node, sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                nodes.append(node)
+    return nodes, bool(pending)
+
+
+def gql_search(query, what):
+    """Return nodes from a search that selects issueCount, splitting over-cap searches
+    into inclusive UTC creation-date ranges. Warn if results are missing or an
+    unsplit search reads SEARCH_CAP nodes.
+    """
+    total, nodes = _search_results(query)
+    split_nodes, budget_spent = None, False
+    if total is not None and total > SEARCH_CAP:
+        split_nodes, budget_spent = _split_search(query)
+        if split_nodes is not None:
+            nodes = split_nodes
+    if ((total is not None and total > len(nodes))
+            or (split_nodes is None and len(nodes) >= SEARCH_CAP)):
         print(f"weekly-focus: warning: the search for {what} matched "
               f"{total if total is not None else 'at least ' + str(len(nodes))} "
               f"but only {len(nodes)} were read (GitHub search stops at {SEARCH_CAP}); "
               f"the rest are missing from this run", file=sys.stderr)
+    if budget_spent:
+        print(f"weekly-focus: warning: the search split stopped after {SPLIT_MAX_PROBES} probes",
+              file=sys.stderr)
     return nodes
 
 

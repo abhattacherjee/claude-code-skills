@@ -2,6 +2,12 @@
 
 All notable changes to the **github-board** plugin are documented here.
 
+## [1.5.1] - 2026-11-26
+
+### Fixed
+
+- `plan-week` 2.3.1: `sync` reads every match when a search finds more than 1,000 (#347). GitHub search returns at most 1,000 results, so with 1,113 open issues every sync dropped 113 of them, and which ones depended on search order. Now, when a search's count is over 1,000, `gql_search()` splits it into `created:` date ranges, halves any range still over 1,000, and merges the results without duplicates. The open-issue, closed-since-Monday and open-PR searches all get it. A search with 1,000 or fewer matches makes the same single call as before. A single day with more than 1,000 matches, or a split that runs out of its 64 count probes, still prints the "only N were read" warning. On the live account the open-issue search read all 1,106 open issues for 26 GraphQL points.
+
 ## [1.5.0] - 2026-11-15
 
 ### Added
