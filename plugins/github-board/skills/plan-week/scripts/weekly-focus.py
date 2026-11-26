@@ -576,13 +576,14 @@ def _node_key(node):
 def _split_search(query):
     search = re.search(r'search\(query:"([^"]*)"', query)
     if not search:
-        return None, False
+        return None, False, 0
     type_match = re.search(r"\btype\s*:\s*(\w+)", query[search.end():])
     search_type = type_match[1] if type_match else "ISSUE"
 
     day = datetime.timedelta(days=1)
     pending = [(datetime.date(2008, 1, 1), _now().date() + day)]
     nodes, seen = [], set()
+    short_ranges = 0   # ranges whose own fetch counted more matches than it returned
     for _ in range(SPLIT_MAX_PROBES):
         if not pending:
             break
@@ -595,7 +596,7 @@ def _split_search(query):
         try:
             count = int(raw)
         except (TypeError, ValueError):
-            return None, False
+            return None, False, 0
         if count == 0:
             continue
         if count > SEARCH_CAP and start < end:
@@ -604,13 +605,15 @@ def _split_search(query):
             continue
 
         insert_at = search.end(1)
-        _, range_nodes = _search_results(query[:insert_at] + qualifier + query[insert_at:])
+        range_total, range_nodes = _search_results(query[:insert_at] + qualifier + query[insert_at:])
+        if range_total is not None and range_total > len(range_nodes):
+            short_ranges += 1   # the range grew after its probe, or was cut off
         for node in range_nodes:
             key = _node_key(node)
             if key not in seen:
                 seen.add(key)
                 nodes.append(node)
-    return nodes, bool(pending)
+    return nodes, bool(pending), short_ranges
 
 
 class SearchNodes(list):
@@ -621,14 +624,15 @@ class SearchNodes(list):
 def gql_search(query, what):
     """Return nodes from a search that selects issueCount, splitting over-cap searches
     into inclusive UTC creation-date ranges. A split that reads fewer than the total
-    keeps the first search's nodes too, so it never returns less than before. Warn if
-    results are missing or an unsplit search reads SEARCH_CAP nodes.
+    keeps the first search's nodes too, so it never returns less than before. Warn, and
+    set `complete` False, when fewer rows were read than matched (a short range counts),
+    or, with no count, when SEARCH_CAP rows came back.
     """
     total, nodes = _search_results(query)
-    split_nodes, budget_spent = None, False
+    split_nodes, budget_spent, short_ranges = None, False, 0
     if total is not None and total > SEARCH_CAP:
         try:
-            split_nodes, budget_spent = _split_search(query)
+            split_nodes, budget_spent, short_ranges = _split_search(query)
         except (GhError, subprocess.SubprocessError) as err:   # incl. TimeoutExpired
             print(f"weekly-focus: warning: the search split for {what} failed ({err}); "
                   f"using the first {len(nodes)} results", file=sys.stderr)
@@ -639,8 +643,12 @@ def gql_search(query, what):
                 split_nodes = split_nodes + [n for n in nodes if _node_key(n) not in seen]
             nodes = split_nodes
     nodes = SearchNodes(nodes)
-    if ((total is not None and total > len(nodes))
-            or (split_nodes is None and len(nodes) >= SEARCH_CAP)):
+    # With a known count, only the count decides. Without one, SEARCH_CAP rows may be a cut-off.
+    if total is not None:
+        incomplete = total > len(nodes) or short_ranges > 0
+    else:
+        incomplete = len(nodes) >= SEARCH_CAP
+    if incomplete:
         nodes.complete = False
         print(f"weekly-focus: warning: the search for {what} matched "
               f"{total if total is not None else 'at least ' + str(len(nodes))} "

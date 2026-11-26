@@ -69,11 +69,23 @@ def test_a_complete_search_does_not_warn(wf, monkeypatch, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_the_search_cap_warns_even_when_the_count_matches(wf, monkeypatch, capsys):
+def test_the_search_cap_with_a_matching_count_does_not_warn(wf, monkeypatch, capsys):
     import datetime
     _search_gh(wf, monkeypatch, 1000, [_closed(i) for i in range(1, 1001)])
     wf.closed_since(datetime.date(2026, 9, 28))
-    assert "1000" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
+    _search_gh(wf, monkeypatch, 1000, [_closed(i) for i in range(1, 1001)])
+    assert wf.gql_search(wf.CLOSED_Q % (wf.OWNER, "2026-09-27"), "closed issues").complete is True
+
+
+def test_the_search_cap_warns_when_the_count_is_unknown(wf, monkeypatch, capsys):
+    # No __issueCount row: 1000 nodes may be a cut-off, so warn and mark incomplete.
+    def fake(*args, parse=True, **kw):
+        return "\n".join(json.dumps(_closed(i)) for i in range(1, 1001))
+    monkeypatch.setattr(wf, "gh", fake)
+    nodes = wf.gql_search(wf.CLOSED_Q % (wf.OWNER, "2026-09-27"), "closed issues")
+    assert nodes.complete is False
+    assert "were read" in capsys.readouterr().err
 
 
 def test_a_truncated_open_issue_search_warns(wf, monkeypatch, capsys):
@@ -91,12 +103,13 @@ def test_a_truncated_pr_search_warns(wf, monkeypatch, capsys):
 
 
 def _range_search_gh(wf, monkeypatch, nodes, probe_count=None, raise_on_probe=None,
-                     raise_on_fetch=False, range_drop=(), range_override=None, exc=None):
+                     raise_on_fetch=False, range_drop=(), range_override=None, exc=None, range_grow=False):
     """A range-aware fake gh. Probes and range fetches must keep the first query's search
     terms and add a created: range. raise_on_probe=N raises GhError on the Nth probe;
     raise_on_fetch raises on a range fetch; exc swaps the exception raised (default GhError);
     a call without --paginate returns one page (100 rows); range_drop leaves those numbers out of range
-    fetches; range_override swaps a node (by id) in range fetches."""
+    fetches; range_override swaps a node (by id) in range fetches; range_grow makes each range
+    fetch report one more match than it returns (the range grew after its probe)."""
     seen = []
     state = {"base": None, "probes": 0}
 
@@ -129,7 +142,8 @@ def _range_search_gh(wf, monkeypatch, nodes, probe_count=None, raise_on_probe=No
         if not re.search(r"\.\.\. on (Issue|PullRequest)\{id ", query):
             matches = [{k: v for k, v in n.items() if k != "id"} for n in matches]   # id not selected
         page = 1000 if "--paginate" in args else 100   # one page without --paginate
-        rows = [{"__issueCount": len(matches)}] + matches[:page]
+        grown = 1 if (range_grow and dates) else 0
+        rows = [{"__issueCount": len(matches) + grown}] + matches[:page]
         return "\n".join(json.dumps(row) for row in rows)
 
     monkeypatch.setattr(wf, "gh", fake)
@@ -352,9 +366,8 @@ def test_exactly_the_cap_makes_one_call_and_one_more_splits(wf, monkeypatch, cap
     seen = _range_search_gh(wf, monkeypatch, issues)
     assert len(wf.open_issues()) == 1000
     assert len(seen) == 1
-    # Deliberate: at exactly the cap the count can't tell "complete" from "cut off", so the
-    # conservative warning still fires (see test_the_search_cap_warns_even_when_the_count_matches).
-    assert "were read" in capsys.readouterr().err
+    # The count says 1,000 and 1,000 were read, so nothing is missing: no warning.
+    assert "were read" not in capsys.readouterr().err
     issues.append(_open_issue(1001, _creation_day(1001)))
     seen = _range_search_gh(wf, monkeypatch, issues)
     assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1002)}
@@ -413,6 +426,25 @@ def test_gql_search_is_incomplete_when_the_split_hits_a_gh_error(wf, monkeypatch
     issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
     _range_search_gh(wf, monkeypatch, issues, raise_on_probe=3)
     assert wf.gql_search(wf.PR_LINKED_Q, "open pull requests").complete is False
+
+
+def test_gql_search_is_incomplete_when_a_range_grew_after_its_probe(wf, monkeypatch, capsys):
+    # Every range fetch reports one more match than it returned, yet the merged rows still
+    # reach the first search's total. The short range must still make the result incomplete.
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, range_grow=True)
+    nodes = wf.gql_search(wf.PR_LINKED_Q, "open pull requests")
+    assert len(nodes) == 1200 and nodes.complete is False
+    assert "matched 1200 but only 1200 were read" in capsys.readouterr().err
+
+
+def test_a_grown_range_keeps_the_in_progress_card_from_being_reset(wf, monkeypatch, capsys):
+    real_in_progress_keys = wf.in_progress_keys
+    monkeypatch.setattr(wf, "in_progress_keys", real_in_progress_keys)
+    monkeypatch.setattr(wf, "board_in_progress", lambda pr_keys=None, now=None: (set(), [], []))
+    prs = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, prs, range_grow=True)
+    assert wf.in_progress_keys(set())[2] == ["open pull requests (search incomplete)"]
 
 
 def _stub_pr_search(wf, monkeypatch, complete):
