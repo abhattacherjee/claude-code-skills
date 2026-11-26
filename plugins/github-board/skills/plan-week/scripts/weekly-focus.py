@@ -624,7 +624,7 @@ def gql_search(query, what):
     if total is not None and total > SEARCH_CAP:
         try:
             split_nodes, budget_spent = _split_search(query)
-        except GhError as err:
+        except (GhError, subprocess.SubprocessError) as err:   # incl. TimeoutExpired
             print(f"weekly-focus: warning: the search split for {what} failed ({err}); "
                   f"using the first {len(nodes)} results", file=sys.stderr)
         if split_nodes is not None:

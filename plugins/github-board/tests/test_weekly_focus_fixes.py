@@ -2,6 +2,7 @@
 import datetime
 import json
 import re
+import subprocess
 
 import pytest
 
@@ -90,10 +91,11 @@ def test_a_truncated_pr_search_warns(wf, monkeypatch, capsys):
 
 
 def _range_search_gh(wf, monkeypatch, nodes, probe_count=None, raise_on_probe=None,
-                     raise_on_fetch=False, range_drop=(), range_override=None):
+                     raise_on_fetch=False, range_drop=(), range_override=None, exc=None):
     """A range-aware fake gh. Probes and range fetches must keep the first query's search
     terms and add a created: range. raise_on_probe=N raises GhError on the Nth probe;
-    raise_on_fetch raises on a range fetch; range_drop leaves those numbers out of range
+    raise_on_fetch raises on a range fetch; exc swaps the exception raised (default GhError);
+    a call without --paginate returns one page (100 rows); range_drop leaves those numbers out of range
     fetches; range_override swaps a node (by id) in range fetches."""
     seen = []
     state = {"base": None, "probes": 0}
@@ -117,16 +119,17 @@ def _range_search_gh(wf, monkeypatch, nodes, probe_count=None, raise_on_probe=No
             assert dates and ",type:ISSUE," in query
             state["probes"] += 1
             if state["probes"] == raise_on_probe:
-                raise wf.GhError("probe boom")
+                raise (exc or wf.GhError)("probe boom")
             return str(len(matches) if probe_count is None else probe_count)
         if dates:
             if raise_on_fetch:
-                raise wf.GhError("fetch boom")
+                raise (exc or wf.GhError)("fetch boom")
             matches = [(range_override or {}).get(n["id"], n) for n in matches
                        if n.get("number") not in range_drop]
         if not re.search(r"\.\.\. on (Issue|PullRequest)\{id ", query):
             matches = [{k: v for k, v in n.items() if k != "id"} for n in matches]   # id not selected
-        rows = [{"__issueCount": len(matches)}] + matches[:1000]
+        page = 1000 if "--paginate" in args else 100   # one page without --paginate
+        rows = [{"__issueCount": len(matches)}] + matches[:page]
         return "\n".join(json.dumps(row) for row in rows)
 
     monkeypatch.setattr(wf, "gh", fake)
@@ -241,6 +244,38 @@ def test_a_gh_error_in_a_range_fetch_keeps_the_first_search(wf, monkeypatch, cap
     assert "matched 1200 but only 1000 were read" in err
 
 
+def _timeout(msg):
+    return subprocess.TimeoutExpired(["gh"], 60)
+
+
+def test_a_timeout_in_a_probe_keeps_the_first_search(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, raise_on_probe=3, exc=_timeout)
+    assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1001)}
+    err = capsys.readouterr().err
+    assert "the search split for open issues failed" in err
+    assert "matched 1200 but only 1000 were read" in err
+
+
+def test_a_timeout_in_a_range_fetch_keeps_the_first_search(wf, monkeypatch, capsys):
+    issues = [_open_issue(n, _creation_day(n)) for n in range(1, 1201)]
+    _range_search_gh(wf, monkeypatch, issues, raise_on_fetch=True, exc=_timeout)
+    assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1001)}
+    err = capsys.readouterr().err
+    assert "the search split for open issues failed" in err
+    assert "matched 1200 but only 1000 were read" in err
+
+
+def test_a_range_fetch_paginates_past_one_page(wf, monkeypatch, capsys):
+    # 150 issues share one day, so one range holds more than a page (100 rows). The split
+    # reads them all only if range fetches pass --paginate.
+    issues = [_open_issue(n, "2024-05-05") for n in range(1, 151)]
+    issues += [_open_issue(n, _creation_day(n)) for n in range(151, 1201)]
+    _range_search_gh(wf, monkeypatch, issues)
+    assert len(wf.open_issues()) == 1200
+    assert "were read" not in capsys.readouterr().err
+
+
 def test_two_prs_with_the_same_fields_but_different_ids_both_survive(wf, monkeypatch, capsys):
     twin = {"createdAt": "2024-01-01T12:00:00Z", "body": "b", "isDraft": False,
             "repository": {"name": "app", "owner": {"login": wf.OWNER}},
@@ -298,6 +333,18 @@ def test_the_leaf_ranges_are_disjoint_and_cover_every_day(wf, monkeypatch, capsy
     assert leaves[-1][1] == today + datetime.timedelta(days=1)
     for prev, nxt in zip(leaves, leaves[1:]):
         assert nxt[0] == prev[1] + datetime.timedelta(days=1)
+    # The paginated range fetches must also be pairwise disjoint, each range fetched once.
+    fetched = []
+    for args in seen:
+        d = re.search(r"created:(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})",
+                      next(a for a in args if a.startswith("query="))) \
+            if "--paginate" in args else None
+        if d:
+            fetched.append(tuple(datetime.date.fromisoformat(x) for x in d.groups()))
+    assert fetched and len(fetched) == len(set(fetched))
+    fetched.sort()
+    for prev, nxt in zip(fetched, fetched[1:]):
+        assert nxt[0] > prev[1]
 
 
 def test_exactly_the_cap_makes_one_call_and_one_more_splits(wf, monkeypatch, capsys):
@@ -305,11 +352,14 @@ def test_exactly_the_cap_makes_one_call_and_one_more_splits(wf, monkeypatch, cap
     seen = _range_search_gh(wf, monkeypatch, issues)
     assert len(wf.open_issues()) == 1000
     assert len(seen) == 1
-    capsys.readouterr()
+    # Deliberate: at exactly the cap the count can't tell "complete" from "cut off", so the
+    # conservative warning still fires (see test_the_search_cap_warns_even_when_the_count_matches).
+    assert "were read" in capsys.readouterr().err
     issues.append(_open_issue(1001, _creation_day(1001)))
     seen = _range_search_gh(wf, monkeypatch, issues)
     assert set(wf.open_issues()) == {f"app#{n}" for n in range(1, 1002)}
     assert len(_probed_ranges(seen)) >= 1
+    assert "were read" not in capsys.readouterr().err
 
 
 def _labelled(n_nodes, total):
